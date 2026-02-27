@@ -169,8 +169,8 @@ use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::McpManager;
 use crate::mcp::auth::compute_auth_statuses;
-use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -319,6 +319,7 @@ impl Codex {
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
+        mcp_manager: Arc<McpManager>,
         file_watcher: Arc<FileWatcher>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
@@ -330,7 +331,7 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_plugins = plugins_manager.plugins_for_config(&config);
+        plugins_manager.plugins_for_config(&config);
         let loaded_skills = skills_manager.skills_for_config(&config);
 
         for err in &loaded_skills.errors {
@@ -339,19 +340,6 @@ impl Codex {
                 err.path.display(),
                 err.message
             );
-        }
-        for plugin in loaded_plugins
-            .plugins
-            .iter()
-            .filter(|plugin| plugin.error.is_some())
-        {
-            if let Some(error) = plugin.error.as_deref() {
-                warn!(
-                    plugin = plugin.config_name,
-                    path = %plugin.root.display(),
-                    "failed to load plugin: {error}"
-                );
-            }
         }
 
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
@@ -482,6 +470,7 @@ impl Codex {
             session_source_clone,
             skills_manager,
             plugins_manager,
+            mcp_manager,
             file_watcher,
             agent_control,
         )
@@ -1124,6 +1113,7 @@ impl Session {
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
+        mcp_manager: Arc<McpManager>,
         file_watcher: Arc<FileWatcher>,
         agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
@@ -1215,11 +1205,10 @@ impl Session {
         };
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
-        let plugins_manager_for_mcp = Arc::clone(&plugins_manager);
+        let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_servers =
-                effective_mcp_servers(&config_for_mcp, auth.as_ref(), &plugins_manager_for_mcp);
+            let mcp_servers = mcp_manager_for_mcp.effective_servers(&config_for_mcp, auth.as_ref());
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
@@ -1470,6 +1459,7 @@ impl Session {
             execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager,
             plugins_manager,
+            mcp_manager,
             file_watcher,
             agent_control,
             network_proxy,
@@ -3887,7 +3877,6 @@ mod handlers {
 
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
-    use crate::mcp::effective_mcp_servers;
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::session_index;
     use crate::tasks::CompactTask;
@@ -4217,11 +4206,10 @@ mod handlers {
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
         let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
         let auth = sess.services.auth_manager.auth().await;
-        let mcp_servers = effective_mcp_servers(
-            config,
-            auth.as_ref(),
-            sess.services.plugins_manager.as_ref(),
-        );
+        let mcp_servers = sess
+            .services
+            .mcp_manager
+            .effective_servers(config, auth.as_ref());
         let snapshot = collect_mcp_snapshot_from_manager(
             &mcp_connection_manager,
             compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode)
@@ -8412,6 +8400,7 @@ mod tests {
         let (tx_event, _rx_event) = async_channel::unbounded();
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new(
             config.codex_home.clone(),
             Arc::clone(&plugins_manager),
@@ -8428,6 +8417,7 @@ mod tests {
             SessionSource::Exec,
             skills_manager,
             plugins_manager,
+            mcp_manager,
             Arc::new(FileWatcher::noop()),
             AgentControl::default(),
         )
@@ -8510,6 +8500,7 @@ mod tests {
 
         let state = SessionState::new(session_configuration.clone());
         let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new(
             config.codex_home.clone(),
             Arc::clone(&plugins_manager),
@@ -8548,6 +8539,7 @@ mod tests {
             execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager,
             plugins_manager,
+            mcp_manager,
             file_watcher,
             agent_control,
             network_proxy: None,
@@ -8675,6 +8667,7 @@ mod tests {
 
         let state = SessionState::new(session_configuration.clone());
         let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new(
             config.codex_home.clone(),
             Arc::clone(&plugins_manager),
@@ -8713,6 +8706,7 @@ mod tests {
             execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager,
             plugins_manager,
+            mcp_manager,
             file_watcher,
             agent_control,
             network_proxy: None,

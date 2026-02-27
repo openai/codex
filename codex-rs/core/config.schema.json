@@ -370,6 +370,9 @@
             "personality": {
               "type": "boolean"
             },
+            "plugins": {
+              "type": "boolean"
+            },
             "powershell_utf8": {
               "type": "boolean"
             },
@@ -1707,6 +1710,9 @@
           "type": "boolean"
         },
         "personality": {
+          "type": "boolean"
+        },
+        "plugins": {
           "type": "boolean"
         },
         "powershell_utf8": {

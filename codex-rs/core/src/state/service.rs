@@ -9,6 +9,7 @@ use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::file_watcher::FileWatcher;
+use crate::mcp::McpManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
@@ -50,6 +51,7 @@ pub(crate) struct SessionServices {
     pub(crate) execve_session_approvals: RwLock<HashMap<AbsolutePathBuf, ExecveSessionApproval>>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
+    pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,
     pub(crate) network_proxy: Option<StartedNetworkProxy>,

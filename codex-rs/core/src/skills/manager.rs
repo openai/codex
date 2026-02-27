@@ -51,12 +51,7 @@ impl SkillsManager {
             return outcome;
         }
 
-        let loaded_plugins = self.plugins_manager.plugins_for_config(config);
-        let roots = skill_roots(
-            &config.config_layer_stack,
-            &config.cwd,
-            loaded_plugins.effective_skill_roots(),
-        );
+        let roots = self.skill_roots_for_config(config);
         let outcome =
             finalize_skill_outcome(load_skills_from_roots(roots), &config.config_layer_stack);
         let mut cache = match self.cache_by_cwd.write() {
@@ -65,6 +60,15 @@ impl SkillsManager {
         };
         cache.insert(cwd.to_path_buf(), outcome.clone());
         outcome
+    }
+
+    pub(crate) fn skill_roots_for_config(&self, config: &Config) -> Vec<SkillRoot> {
+        let loaded_plugins = self.plugins_manager.plugins_for_config(config);
+        skill_roots(
+            &config.config_layer_stack,
+            &config.cwd,
+            loaded_plugins.effective_skill_roots(),
+        )
     }
 
     pub async fn skills_for_cwd(&self, cwd: &Path, force_reload: bool) -> SkillLoadOutcome {
@@ -122,10 +126,7 @@ impl SkillsManager {
             }
         };
 
-        let loaded_plugins = self
-            .plugins_manager
-            .plugins_for_cwd(cwd, force_reload)
-            .await;
+        let loaded_plugins = self.plugins_manager.plugins(force_reload).await;
         let mut roots = skill_roots(
             &config_layer_stack,
             cwd,

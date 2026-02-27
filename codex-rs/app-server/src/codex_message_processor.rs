@@ -223,7 +223,6 @@ use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::mcp::collect_mcp_snapshot;
-use codex_core::mcp::configured_mcp_servers;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
@@ -4071,8 +4070,10 @@ impl CodexMessageProcessor {
             }
         };
 
-        let configured_servers =
-            configured_mcp_servers(&config, self.thread_manager.plugins_manager().as_ref());
+        let configured_servers = self
+            .thread_manager
+            .mcp_manager()
+            .configured_servers(&config);
         let mcp_servers = match serde_json::to_value(configured_servers) {
             Ok(value) => value,
             Err(err) => {
@@ -4134,8 +4135,10 @@ impl CodexMessageProcessor {
             timeout_secs,
         } = params;
 
-        let configured_servers =
-            configured_mcp_servers(&config, self.thread_manager.plugins_manager().as_ref());
+        let configured_servers = self
+            .thread_manager
+            .mcp_manager()
+            .configured_servers(&config);
         let Some(server) = configured_servers.get(&name) else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
