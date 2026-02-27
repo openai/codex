@@ -612,9 +612,6 @@ pub(crate) struct ChatWidget {
     // The bottom pane shows these above queued drafts until core records the
     // corresponding user message and emits the matching raw response item.
     pending_nudges: VecDeque<RenderedUserMessageEvent>,
-    // Number of legacy `EventMsg::AgentMessage` events to ignore because the
-    // corresponding `item.completed` already finalized the streamed message.
-    pending_suppressed_legacy_agent_messages: usize,
     /// Terminal-appropriate keybinding for popping the most-recently queued
     /// message back into the composer.  Determined once at construction time via
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
@@ -1277,10 +1274,6 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
-        if self.pending_suppressed_legacy_agent_messages > 0 {
-            self.pending_suppressed_legacy_agent_messages -= 1;
-            return;
-        }
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
         if self.stream_controller.is_none() && !message.is_empty() {
@@ -2306,7 +2299,6 @@ impl ChatWidget {
     /// phase for legacy models) clears the flag to preserve historical behavior.
     fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
         if self.stream_controller.is_some() {
-            self.pending_suppressed_legacy_agent_messages += item.content.len();
             self.flush_answer_stream_with_separator();
             self.handle_stream_finished();
         }
@@ -2863,7 +2855,6 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_nudges: VecDeque::new(),
-            pending_suppressed_legacy_agent_messages: 0,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
@@ -3043,7 +3034,6 @@ impl ChatWidget {
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
             pending_nudges: VecDeque::new(),
-            pending_suppressed_legacy_agent_messages: 0,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
@@ -3204,7 +3194,6 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_nudges: VecDeque::new(),
-            pending_suppressed_legacy_agent_messages: 0,
             queued_message_edit_binding,
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
@@ -4348,9 +4337,12 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
-            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. })
+                if from_replay || self.stream_controller.is_none() =>
+            {
                 self.on_agent_message(message)
             }
+            EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }
