@@ -106,7 +106,7 @@ impl Session {
             };
 
         for item in rollout_items.iter().rev() {
-            let mut should_buffer_item = true;
+            let mut should_push_to_rollout_suffix = true;
             match item {
                 RolloutItem::Compacted(compacted) => {
                     let active_segment =
@@ -123,7 +123,7 @@ impl Session {
                         && let Some(replacement_history) = &compacted.replacement_history
                     {
                         active_segment.base_replacement_history = Some(replacement_history.clone());
-                        should_buffer_item = false;
+                        should_push_to_rollout_suffix = false;
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -214,7 +214,7 @@ impl Session {
                 break;
             }
 
-            if should_buffer_item {
+            if should_push_to_rollout_suffix {
                 rollout_suffix_items_rev.push(item.clone());
             }
         }
