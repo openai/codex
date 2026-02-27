@@ -1020,23 +1020,6 @@ impl HistoryCell for TooltipHistoryCell {
     }
 }
 
-#[derive(Debug)]
-pub struct SessionInfoCell(CompositeHistoryCell);
-
-impl HistoryCell for SessionInfoCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.0.display_lines(width)
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.0.desired_height(width)
-    }
-
-    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.0.transcript_lines(width)
-    }
-}
-
 pub(crate) fn new_session_info_body(
     config: &Config,
     requested_model: &str,

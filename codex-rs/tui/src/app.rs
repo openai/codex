@@ -752,7 +752,7 @@ impl App {
     fn replace_startup_header(
         &mut self,
         tui: &mut tui::Tui,
-        cell: Arc<dyn HistoryCell>,
+        session: &SessionConfiguredEvent,
     ) -> Result<()> {
         let Some(first_cell) = self.transcript_cells.first() else {
             return Ok(());
@@ -768,6 +768,12 @@ impl App {
             return Ok(());
         }
 
+        let cell = Arc::new(history_cell::SessionHeaderHistoryCell::new(
+            session.model.clone(),
+            session.reasoning_effort,
+            session.cwd.clone(),
+            CODEX_CLI_VERSION,
+        )) as Arc<dyn HistoryCell>;
         self.transcript_cells[0] = cell.clone();
         if matches!(&self.overlay, Some(Overlay::Transcript(_))) {
             self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
@@ -2958,13 +2964,7 @@ impl App {
             self.pending_shutdown_exit_thread_id = None;
         }
         if let EventMsg::SessionConfigured(session) = &event.msg {
-            let header = Arc::new(history_cell::SessionHeaderHistoryCell::new(
-                session.model.clone(),
-                session.reasoning_effort,
-                session.cwd.clone(),
-                CODEX_CLI_VERSION,
-            )) as Arc<dyn HistoryCell>;
-            self.replace_startup_header(tui, header)?;
+            self.replace_startup_header(tui, session)?;
         }
         self.handle_codex_event_now(event);
         if self.backtrack_render_pending {
