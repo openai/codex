@@ -125,7 +125,7 @@ pub struct ModelPreset {
     pub show_in_picker: bool,
     /// Whether to show NUX for this preset.
     #[serde(default)]
-    pub show_nux_new: bool,
+    pub show_nux: bool,
     /// whether this model is supported in the api
     pub supported_in_api: bool,
     /// Input modalities accepted when composing user turns for this preset.
@@ -229,7 +229,7 @@ pub struct ModelInfo {
     pub supported_in_api: bool,
     pub priority: i32,
     #[serde(default)]
-    pub show_nux_new: bool,
+    pub show_nux: bool,
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -415,7 +415,7 @@ impl From<ModelInfo> for ModelPreset {
                 migration_markdown: Some(upgrade.migration_markdown.clone()),
             }),
             show_in_picker: info.visibility == ModelVisibility::List,
-            show_nux_new: info.show_nux_new,
+            show_nux: info.show_nux,
             supported_in_api: info.supported_in_api,
             input_modalities: info.input_modalities,
         }
@@ -501,7 +501,7 @@ mod tests {
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
-            show_nux_new: false,
+            show_nux: false,
             upgrade: None,
             base_instructions: "base".to_string(),
             model_messages: spec,
@@ -677,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn model_info_defaults_show_nux_new_to_false_when_omitted() {
+    fn model_info_defaults_show_nux_to_false_when_omitted() {
         let model: ModelInfo = serde_json::from_value(serde_json::json!({
             "slug": "test-model",
             "display_name": "Test Model",
@@ -709,16 +709,16 @@ mod tests {
         }))
         .expect("deserialize model info");
 
-        assert!(!model.show_nux_new);
+        assert!(!model.show_nux);
     }
 
     #[test]
-    fn model_preset_preserves_show_nux_new() {
+    fn model_preset_preserves_show_nux() {
         let preset = ModelPreset::from(ModelInfo {
-            show_nux_new: true,
+            show_nux: true,
             ..test_model(None)
         });
 
-        assert!(preset.show_nux_new);
+        assert!(preset.show_nux);
     }
 }
