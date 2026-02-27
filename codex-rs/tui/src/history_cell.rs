@@ -2593,7 +2593,8 @@ mod tests {
 
     #[tokio::test]
     async fn session_info_availability_nux_tooltip_snapshot() {
-        let config = test_config().await;
+        let mut config = test_config().await;
+        config.cwd = PathBuf::from("/tmp/project");
         let cell = new_session_info(
             &config,
             "gpt-5",
