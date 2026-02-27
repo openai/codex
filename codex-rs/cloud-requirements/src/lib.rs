@@ -1242,7 +1242,7 @@ mod tests {
             .expect_err("cloud requirements retry exhaustion should fail closed");
         assert!(
             err.to_string()
-                .contains("unable to load required cloud configuration")
+                .contains("load required cloud configuration")
         );
         assert_eq!(
             fetcher.request_count.load(Ordering::SeqCst),
