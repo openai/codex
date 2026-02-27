@@ -1,3 +1,4 @@
+use codex_utils_absolute_path::AbsolutePathBuf;
 use multimap::MultiMap;
 use shlex;
 use starlark::any::ProvidesStaticType;
@@ -13,6 +14,8 @@ use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
 use std::cell::RefCell;
 use std::cell::RefMut;
+use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::decision::Decision;
@@ -74,6 +77,7 @@ impl PolicyParser {
 struct PolicyBuilder {
     rules_by_program: MultiMap<String, RuleRef>,
     network_rules: Vec<NetworkRule>,
+    host_executables_by_name: HashMap<String, Arc<[AbsolutePathBuf]>>,
 }
 
 impl PolicyBuilder {
@@ -81,6 +85,7 @@ impl PolicyBuilder {
         Self {
             rules_by_program: MultiMap::new(),
             network_rules: Vec::new(),
+            host_executables_by_name: HashMap::new(),
         }
     }
 
@@ -93,8 +98,16 @@ impl PolicyBuilder {
         self.network_rules.push(rule);
     }
 
+    fn add_host_executable(&mut self, name: String, paths: Vec<AbsolutePathBuf>) {
+        self.host_executables_by_name.insert(name, paths.into());
+    }
+
     fn build(self) -> crate::policy::Policy {
-        crate::policy::Policy::from_parts(self.rules_by_program, self.network_rules)
+        crate::policy::Policy::from_parts(
+            self.rules_by_program,
+            self.network_rules,
+            self.host_executables_by_name,
+        )
     }
 }
 
@@ -148,6 +161,36 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
 
 fn parse_examples<'v>(examples: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>>> {
     examples.items.into_iter().map(parse_example).collect()
+}
+
+fn parse_literal_absolute_path(raw: &str) -> Result<AbsolutePathBuf> {
+    if !Path::new(raw).is_absolute() {
+        return Err(Error::InvalidRule(format!(
+            "host_executable paths must be absolute (got {raw})"
+        )));
+    }
+
+    AbsolutePathBuf::try_from(raw.to_string())
+        .map_err(|error| Error::InvalidRule(format!("invalid absolute path `{raw}`: {error}")))
+}
+
+fn validate_host_executable_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::InvalidRule(
+            "host_executable name cannot be empty".to_string(),
+        ));
+    }
+
+    let path = Path::new(name);
+    if path.components().count() != 1
+        || path.file_name().and_then(|value| value.to_str()) != Some(name)
+    {
+        return Err(Error::InvalidRule(format!(
+            "host_executable name must be a bare executable name (got {name})"
+        )));
+    }
+
+    Ok(())
 }
 
 fn parse_network_rule_decision(raw: &str) -> Result<Decision> {
@@ -306,6 +349,37 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             decision,
             justification,
         });
+        Ok(NoneType)
+    }
+
+    fn host_executable<'v>(
+        name: &'v str,
+        paths: UnpackList<Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<NoneType> {
+        validate_host_executable_name(name)?;
+
+        let mut parsed_paths = Vec::new();
+        for value in paths.items {
+            let raw = value.unpack_str().ok_or_else(|| {
+                Error::InvalidRule(format!(
+                    "host_executable paths must be strings (got {})",
+                    value.get_type()
+                ))
+            })?;
+            let path = parse_literal_absolute_path(raw)?;
+            if path.as_path().file_name().and_then(|value| value.to_str()) != Some(name) {
+                return Err(Error::InvalidRule(format!(
+                    "host_executable path `{raw}` must have basename `{name}`"
+                ))
+                .into());
+            }
+            if !parsed_paths.iter().any(|existing| existing == &path) {
+                parsed_paths.push(path);
+            }
+        }
+
+        policy_builder(eval).add_host_executable(name.to_string(), parsed_paths);
         Ok(NoneType)
     }
 }
