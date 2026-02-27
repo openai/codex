@@ -2,10 +2,12 @@
 use base64::Engine as _;
 #[cfg(not(target_os = "android"))]
 use std::ffi::OsStr;
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), unix))]
 use std::fs::OpenOptions;
 #[cfg(not(target_os = "android"))]
 use std::io::Write;
+#[cfg(all(not(target_os = "android"), windows))]
+use std::io::stdout;
 #[cfg(all(not(target_os = "android"), target_os = "linux"))]
 use std::process::Stdio;
 
@@ -30,16 +32,27 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
     ) {
         ClipboardCopyPath::Osc52 => {
             let sequence = osc52_sequence(text, std::env::var_os("TMUX").is_some());
+            #[cfg(unix)]
             let mut tty = OpenOptions::new()
                 .write(true)
                 .open("/dev/tty")
                 .map_err(|e| {
                     format!("clipboard unavailable: failed to open /dev/tty for OSC 52 copy: {e}")
                 })?;
+            #[cfg(unix)]
             tty.write_all(sequence.as_bytes()).map_err(|e| {
                 format!("clipboard unavailable: failed to write OSC 52 escape sequence: {e}")
             })?;
+            #[cfg(unix)]
             tty.flush().map_err(|e| {
+                format!("clipboard unavailable: failed to flush OSC 52 escape sequence: {e}")
+            })?;
+            #[cfg(windows)]
+            stdout().write_all(sequence.as_bytes()).map_err(|e| {
+                format!("clipboard unavailable: failed to write OSC 52 escape sequence: {e}")
+            })?;
+            #[cfg(windows)]
+            stdout().flush().map_err(|e| {
                 format!("clipboard unavailable: failed to flush OSC 52 escape sequence: {e}")
             })?;
             Ok(())
