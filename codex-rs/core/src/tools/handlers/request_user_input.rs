@@ -132,6 +132,7 @@ mod tests {
     fn request_user_input_mode_availability_defaults_to_plan_only() {
         assert!(ModeKind::Plan.allows_request_user_input());
         assert!(!ModeKind::Default.allows_request_user_input());
+        assert!(!ModeKind::Realtime.allows_request_user_input());
         assert!(!ModeKind::Execute.allows_request_user_input());
         assert!(!ModeKind::PairProgramming.allows_request_user_input());
     }
@@ -149,6 +150,10 @@ mod tests {
         assert_eq!(
             request_user_input_unavailable_message(ModeKind::Default, true),
             None
+        );
+        assert_eq!(
+            request_user_input_unavailable_message(ModeKind::Realtime, false),
+            Some("request_user_input is unavailable in Realtime mode".to_string())
         );
         assert_eq!(
             request_user_input_unavailable_message(ModeKind::Execute, false),

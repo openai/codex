@@ -173,6 +173,7 @@ pub enum AltScreenMode {
 #[serde(rename_all = "snake_case")]
 pub enum ModeKind {
     Plan,
+    Realtime,
     #[default]
     #[serde(
         alias = "code",
@@ -199,6 +200,7 @@ impl ModeKind {
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::Plan => "Plan",
+            Self::Realtime => "Realtime",
             Self::Default => "Default",
             Self::PairProgramming => "Pair Programming",
             Self::Execute => "Execute",
@@ -347,6 +349,15 @@ mod tests {
     }
 
     #[test]
+    fn mode_kind_serializes_and_deserializes_realtime() {
+        let json = serde_json::to_string(&ModeKind::Realtime).expect("serialize mode");
+        assert_eq!(json, "\"realtime\"");
+
+        let mode: ModeKind = serde_json::from_str(&json).expect("deserialize mode");
+        assert_eq!(mode, ModeKind::Realtime);
+    }
+
+    #[test]
     fn tui_visible_collaboration_modes_match_mode_kind_visibility() {
         let expected = [ModeKind::Default, ModeKind::Plan];
         assert_eq!(expected, TUI_VISIBLE_COLLABORATION_MODES);
@@ -355,6 +366,7 @@ mod tests {
             assert!(mode.is_tui_visible());
         }
 
+        assert!(!ModeKind::Realtime.is_tui_visible());
         assert!(!ModeKind::PairProgramming.is_tui_visible());
         assert!(!ModeKind::Execute.is_tui_visible());
     }

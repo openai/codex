@@ -545,6 +545,89 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn collaboration_mode_update_emits_empty_marker_when_instructions_clear() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+
+    let test = test_codex().build(&server).await?;
+    let realtime_text = "realtime mode instructions";
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: Some(collab_mode_with_mode_and_instructions(
+                ModeKind::Realtime,
+                Some(realtime_text),
+            )),
+            personality: None,
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: Some(collab_mode_with_mode_and_instructions(
+                ModeKind::Default,
+                None,
+            )),
+            personality: None,
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let input = req2.single_request().input();
+    let dev_texts = developer_texts(&input);
+    assert_eq!(count_exact(&dev_texts, &collab_xml(realtime_text)), 1);
+    assert_eq!(count_exact(&dev_texts, &collab_xml("")), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -702,7 +785,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
+async fn empty_collaboration_instructions_emit_empty_marker() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -749,9 +832,9 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
 
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
-    assert_eq!(dev_texts.len(), 1);
+    assert_eq!(dev_texts.len(), 2);
     let collab_text = collab_xml("");
-    assert_eq!(count_exact(&dev_texts, &collab_text), 0);
+    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
 
     Ok(())
 }

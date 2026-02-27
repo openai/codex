@@ -198,6 +198,11 @@ pub(crate) async fn handle_start(
             return Ok(());
         }
     };
+    if let Err(err) = sess.enter_realtime_collaboration_mode().await {
+        let _ = sess.conversation.shutdown().await;
+        send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
+        return Ok(());
+    }
 
     info!("realtime conversation started");
 
@@ -238,13 +243,13 @@ pub(crate) async fn handle_start(
         }
         if let Some(()) = sess_clone.conversation.running_state().await {
             info!("realtime conversation transport closed");
-            sess_clone
-                .send_event_raw(ev(EventMsg::RealtimeConversationClosed(
-                    RealtimeConversationClosedEvent {
-                        reason: Some("transport_closed".to_string()),
-                    },
-                )))
-                .await;
+            close_realtime_and_reset_mode(
+                &sess_clone,
+                ev,
+                "transport_closed",
+                Some(sub_id.clone()),
+            )
+            .await;
         }
     });
 
@@ -298,20 +303,51 @@ pub(crate) async fn handle_text(
 }
 
 pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
-    match sess.conversation.shutdown().await {
-        Ok(()) => {
-            sess.send_event_raw(Event {
-                id: sub_id,
-                msg: EventMsg::RealtimeConversationClosed(RealtimeConversationClosedEvent {
-                    reason: Some("requested".to_string()),
-                }),
-            })
-            .await;
-        }
-        Err(err) => {
+    let error_sub_id = sub_id.clone();
+    close_realtime_and_reset_mode(
+        sess,
+        |msg| Event {
+            id: sub_id.clone(),
+            msg,
+        },
+        "requested",
+        Some(error_sub_id),
+    )
+    .await;
+}
+
+async fn close_realtime_and_reset_mode<F>(
+    sess: &Arc<Session>,
+    event_builder: F,
+    reason: &str,
+    error_sub_id: Option<String>,
+) where
+    F: Fn(EventMsg) -> Event,
+{
+    if let Err(err) = sess.conversation.shutdown().await {
+        if let Some(sub_id) = error_sub_id {
             send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
+        } else {
+            warn!("failed to shutdown realtime conversation: {err}");
         }
+        return;
     }
+
+    if let Err(err) = sess.reset_to_default_collaboration_mode().await {
+        if let Some(sub_id) = error_sub_id {
+            send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
+        } else {
+            warn!("failed to reset collaboration mode after realtime close: {err}");
+        }
+        return;
+    }
+
+    sess.send_event_raw(event_builder(EventMsg::RealtimeConversationClosed(
+        RealtimeConversationClosedEvent {
+            reason: Some(reason.to_string()),
+        },
+    )))
+    .await;
 }
 
 fn spawn_realtime_input_task(

@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/model_visible_layout.rs
+assertion_line: 361
 expression: "format_labeled_requests_snapshot(\"First post-resume turn where resumed config model differs from rollout and personality changes.\",\n&[(\"Last Request Before Resume\", &initial_request),\n(\"First Request After Resume\", &resumed_request),])"
 ---
 Scenario: First post-resume turn where resumed config model differs from rollout and personality changes.
@@ -18,8 +19,9 @@ Scenario: First post-resume turn where resumed config model differs from rollout
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:seed resume history
 03:message/assistant:recorded before resume
-04:message/developer[2]:
+04:message/developer[3]:
     [01] <model_switch>\nThe user was previously using a different model. Please continue the conversatio...
     [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <collaboration_mode></collaboration_mode>
 05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
 06:message/user:resume and change personality

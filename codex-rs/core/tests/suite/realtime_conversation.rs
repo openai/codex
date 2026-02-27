@@ -76,7 +76,6 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     .await
     .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
     assert!(started.session_id.is_some());
-
     let session_created = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
             payload: RealtimeEvent::SessionCreated { session_id },
@@ -157,7 +156,6 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         closed.reason.as_deref(),
         Some("requested" | "transport_closed")
     ));
-
     server.shutdown().await;
     Ok(())
 }
@@ -191,7 +189,6 @@ async fn conversation_transport_close_emits_closed_event() -> Result<()> {
     .await
     .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
     assert!(started.session_id.is_some());
-
     let session_created = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
             payload: RealtimeEvent::SessionCreated { session_id },
@@ -207,7 +204,6 @@ async fn conversation_transport_close_emits_closed_event() -> Result<()> {
     })
     .await;
     assert_eq!(closed.reason.as_deref(), Some("transport_closed"));
-
     server.shutdown().await;
     Ok(())
 }

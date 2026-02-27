@@ -3035,6 +3035,47 @@ impl Session {
         state.session_configuration.collaboration_mode.clone()
     }
 
+    pub(crate) async fn enter_realtime_collaboration_mode(&self) -> ConstraintResult<()> {
+        let current = self.collaboration_mode().await;
+        let collaboration_mode = self
+            .services
+            .models_manager
+            .list_collaboration_modes()
+            .into_iter()
+            .find(|mask| mask.mode == Some(ModeKind::Realtime))
+            .map(|mask| current.apply_mask(&mask))
+            .unwrap_or_else(|| CollaborationMode {
+                mode: ModeKind::Realtime,
+                settings: Settings {
+                    model: current.model().to_string(),
+                    reasoning_effort: current.reasoning_effort(),
+                    developer_instructions: None,
+                },
+            });
+
+        self.update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(collaboration_mode),
+            ..Default::default()
+        })
+        .await
+    }
+
+    pub(crate) async fn reset_to_default_collaboration_mode(&self) -> ConstraintResult<()> {
+        let current = self.collaboration_mode().await;
+        self.update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: current.model().to_string(),
+                    reasoning_effort: current.reasoning_effort(),
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        })
+        .await
+    }
+
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
             self.send_event(
@@ -4551,6 +4592,9 @@ mod handlers {
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
         let _ = sess.conversation.shutdown().await;
+        if let Err(err) = sess.reset_to_default_collaboration_mode().await {
+            warn!("failed to reset collaboration mode during shutdown: {err}");
+        }
         sess.services
             .unified_exec_manager
             .terminate_all_processes()
@@ -6594,6 +6638,8 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
 
+    use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
+    use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
@@ -8920,6 +8966,72 @@ mod tests {
             .expect("environment update item should be emitted");
         assert!(environment_update.contains("<current_date>2026-02-27</current_date>"));
         assert!(environment_update.contains("<timezone>Europe/Berlin</timezone>"));
+    }
+
+    #[tokio::test]
+    async fn build_settings_update_items_emits_empty_collaboration_marker_when_instructions_clear()
+    {
+        let (session, previous_context) = make_session_and_context().await;
+        let previous_context = Arc::new(previous_context);
+        let mut current_context = previous_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+        current_context.collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model: previous_context.collaboration_mode.model().to_string(),
+                reasoning_effort: previous_context.collaboration_mode.reasoning_effort(),
+                developer_instructions: None,
+            },
+        };
+
+        let mut previous_context_item = previous_context.to_turn_context_item();
+        previous_context_item.collaboration_mode = Some(CollaborationMode {
+            mode: ModeKind::Realtime,
+            settings: Settings {
+                model: previous_context.collaboration_mode.model().to_string(),
+                reasoning_effort: previous_context.collaboration_mode.reasoning_effort(),
+                developer_instructions: Some("realtime instructions".to_string()),
+            },
+        });
+
+        let update_items = session.build_settings_update_items(
+            Some(&previous_context_item),
+            None,
+            &current_context,
+        );
+
+        let developer_update = update_items
+            .iter()
+            .find_map(|item| match item {
+                ResponseItem::Message { role, content, .. } if role == "developer" => {
+                    let [ContentItem::InputText { text }] = content.as_slice() else {
+                        return None;
+                    };
+                    Some(text)
+                }
+                _ => None,
+            })
+            .expect("developer update item should be emitted");
+        assert!(developer_update.contains(&format!(
+            "{COLLABORATION_MODE_OPEN_TAG}{COLLABORATION_MODE_CLOSE_TAG}"
+        )));
+    }
+
+    #[tokio::test]
+    async fn shutdown_resets_realtime_collaboration_mode_to_default() {
+        let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+        session
+            .enter_realtime_collaboration_mode()
+            .await
+            .expect("enter realtime collaboration mode");
+        assert_eq!(session.collaboration_mode().await.mode, ModeKind::Realtime);
+
+        assert!(handlers::shutdown(&session, "shutdown-test".to_string()).await);
+        assert_eq!(session.collaboration_mode().await.mode, ModeKind::Default);
     }
 
     #[tokio::test]

@@ -6,6 +6,8 @@ use codex_protocol::openai_models::ReasoningEffort;
 const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboration_mode/plan.md");
 const COLLABORATION_MODE_DEFAULT: &str =
     include_str!("../../templates/collaboration_mode/default.md");
+const COLLABORATION_MODE_REALTIME: &str =
+    include_str!("../../templates/collaboration_mode/realtime.md");
 const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
 const REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER: &str = "{{REQUEST_USER_INPUT_AVAILABILITY}}";
 const ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER: &str = "{{ASKING_QUESTIONS_GUIDANCE}}";
@@ -24,7 +26,11 @@ pub struct CollaborationModesConfig {
 pub(crate) fn builtin_collaboration_mode_presets(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
-    vec![plan_preset(), default_preset(collaboration_modes_config)]
+    vec![
+        plan_preset(),
+        default_preset(collaboration_modes_config),
+        realtime_preset(),
+    ]
 }
 
 fn plan_preset() -> CollaborationModeMask {
@@ -44,6 +50,16 @@ fn default_preset(collaboration_modes_config: CollaborationModesConfig) -> Colla
         model: None,
         reasoning_effort: None,
         developer_instructions: Some(Some(default_mode_instructions(collaboration_modes_config))),
+    }
+}
+
+fn realtime_preset() -> CollaborationModeMask {
+    CollaborationModeMask {
+        name: ModeKind::Realtime.display_name().to_string(),
+        mode: Some(ModeKind::Realtime),
+        model: None,
+        reasoning_effort: None,
+        developer_instructions: Some(Some(COLLABORATION_MODE_REALTIME.to_string())),
     }
 }
 
@@ -118,6 +134,8 @@ mod tests {
             plan_preset().reasoning_effort,
             Some(Some(ReasoningEffort::Medium))
         );
+        assert_eq!(realtime_preset().name, ModeKind::Realtime.display_name());
+        assert_eq!(realtime_preset().reasoning_effort, None);
     }
 
     #[test]
@@ -154,6 +172,21 @@ mod tests {
         assert!(
             default_instructions
                 .contains("ask the user directly with a concise plain-text question")
+        );
+    }
+
+    #[test]
+    fn realtime_preset_only_sets_developer_instructions() {
+        let realtime = realtime_preset();
+        assert_eq!(realtime.mode, Some(ModeKind::Realtime));
+        assert_eq!(realtime.model, None);
+        assert_eq!(realtime.reasoning_effort, None);
+        assert!(
+            realtime
+                .developer_instructions
+                .expect("realtime preset should include instructions")
+                .expect("realtime instructions should be set")
+                .contains("Realtime mode")
         );
     }
 }

@@ -8,6 +8,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::protocol::COLLABORATION_MODE_CLOSE_TAG;
+use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
 use codex_protocol::protocol::TurnContextItem;
 
 fn build_environment_update_item(
@@ -54,14 +56,19 @@ fn build_collaboration_mode_update_item(
 ) -> Option<DeveloperInstructions> {
     let prev = previous?;
     if prev.collaboration_mode.as_ref() != Some(&next.collaboration_mode) {
-        // If the next mode has empty developer instructions, this returns None and we emit no
-        // update, so prior collaboration instructions remain in the prompt history.
-        Some(DeveloperInstructions::from_collaboration_mode(
-            &next.collaboration_mode,
-        )?)
+        Some(
+            DeveloperInstructions::from_collaboration_mode(&next.collaboration_mode)
+                .unwrap_or_else(empty_collaboration_mode_update),
+        )
     } else {
         None
     }
+}
+
+fn empty_collaboration_mode_update() -> DeveloperInstructions {
+    DeveloperInstructions::new(format!(
+        "{COLLABORATION_MODE_OPEN_TAG}{COLLABORATION_MODE_CLOSE_TAG}"
+    ))
 }
 
 fn build_personality_update_item(
