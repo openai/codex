@@ -1037,6 +1037,7 @@ impl HistoryCell for SessionInfoCell {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn new_session_info(
     config: &Config,
     requested_model: &str,
@@ -1110,6 +1111,82 @@ pub(crate) fn new_session_info(
     }
 
     SessionInfoCell(CompositeHistoryCell { parts })
+}
+
+pub(crate) fn new_loading_session_header(directory: PathBuf) -> SessionHeaderHistoryCell {
+    let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+    SessionHeaderHistoryCell::new_with_style(
+        "loading".to_string(),
+        placeholder_style,
+        None,
+        directory,
+        CODEX_CLI_VERSION,
+    )
+}
+
+pub(crate) fn new_session_info_body(
+    config: &Config,
+    requested_model: &str,
+    event: &SessionConfiguredEvent,
+    is_first_event: bool,
+    auth_plan: Option<PlanType>,
+) -> Option<Box<dyn HistoryCell>> {
+    let mut parts: Vec<Box<dyn HistoryCell>> = Vec::new();
+
+    if is_first_event {
+        let help_lines: Vec<Line<'static>> = vec![
+            "  To get started, describe a task or try one of these commands:"
+                .dim()
+                .into(),
+            Line::from(""),
+            Line::from(vec![
+                "  ".into(),
+                "/init".into(),
+                " - create an AGENTS.md file with instructions for Codex".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
+                "/status".into(),
+                " - show current session configuration".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
+                "/permissions".into(),
+                " - choose what Codex is allowed to do".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
+                "/model".into(),
+                " - choose what model and reasoning effort to use".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
+                "/review".into(),
+                " - review any changes and find issues".dim(),
+            ]),
+        ];
+        parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
+    } else {
+        if config.show_tooltips
+            && let Some(tooltips) = tooltips::get_tooltip(auth_plan).map(TooltipHistoryCell::new)
+        {
+            parts.push(Box::new(tooltips));
+        }
+        if requested_model != event.model {
+            let lines = vec![
+                "model changed:".magenta().bold().into(),
+                format!("requested: {requested_model}").into(),
+                format!("used: {}", event.model).into(),
+            ];
+            parts.push(Box::new(PlainHistoryCell { lines }));
+        }
+    }
+
+    match parts.len() {
+        0 => None,
+        1 => parts.into_iter().next(),
+        _ => Some(Box::new(CompositeHistoryCell::new(parts))),
+    }
 }
 
 pub(crate) fn new_user_prompt(

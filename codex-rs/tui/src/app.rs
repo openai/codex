@@ -612,6 +612,7 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+    startup_header_pending_replacement: bool,
 }
 
 #[derive(Default)]
@@ -712,6 +713,57 @@ impl App {
             .add_info_message(format!("Opened {url} in your browser."), None);
     }
 
+    fn insert_history_cell(&mut self, tui: &mut tui::Tui, cell: Arc<dyn HistoryCell>) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        if !display.is_empty() {
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            if self.overlay.is_some() {
+                self.deferred_history_lines.extend(display);
+            } else {
+                tui.insert_history_lines(display);
+            }
+        }
+    }
+
+    fn insert_startup_header(&mut self, tui: &mut tui::Tui) {
+        let header = Arc::new(history_cell::new_loading_session_header(
+            self.config.cwd.clone(),
+        )) as Arc<dyn HistoryCell>;
+        self.insert_history_cell(tui, header);
+        self.startup_header_pending_replacement = true;
+    }
+
+    fn replace_startup_header(
+        &mut self,
+        tui: &mut tui::Tui,
+        cell: Arc<dyn HistoryCell>,
+    ) -> Result<()> {
+        if !self.startup_header_pending_replacement || self.transcript_cells.is_empty() {
+            return Ok(());
+        }
+
+        self.transcript_cells[0] = cell.clone();
+        if matches!(&self.overlay, Some(Overlay::Transcript(_))) {
+            self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+            tui.frame_requester().schedule_frame();
+        }
+        let display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        tui.replace_top_visible_history_lines(display)?;
+        self.startup_header_pending_replacement = false;
+        Ok(())
+    }
+
     fn clear_ui_header_lines_with_version(
         &self,
         width: u16,
@@ -773,6 +825,7 @@ impl App {
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
+        self.startup_header_pending_replacement = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
     }
@@ -1078,6 +1131,7 @@ impl App {
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
+        self.startup_header_pending_replacement = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
         tui.terminal.clear_scrollback()?;
@@ -1125,6 +1179,7 @@ impl App {
         };
         self.chat_widget = ChatWidget::new(init, self.server.clone());
         self.reset_thread_event_state();
+        self.insert_startup_header(tui);
         if let Some(summary) = summary {
             let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
             if let Some(command) = summary.resume_command {
@@ -1237,7 +1292,8 @@ impl App {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        emit_project_config_warnings(&app_event_tx, &config);
+        let should_insert_startup_header =
+            matches!(&session_selection, SessionSelection::StartFresh);
         tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
@@ -1405,6 +1461,7 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
+        emit_project_config_warnings(&app_event_tx, &config);
 
         let mut app = Self {
             server: thread_manager.clone(),
@@ -1441,7 +1498,12 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            startup_header_pending_replacement: false,
         };
+
+        if should_insert_startup_header {
+            app.insert_startup_header(tui);
+        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -1793,29 +1855,7 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
-                    }
-                }
+                self.insert_history_cell(tui, cell);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -2906,6 +2946,15 @@ impl App {
             // thread, so unrelated shutdowns cannot consume this marker.
             self.pending_shutdown_exit_thread_id = None;
         }
+        if let EventMsg::SessionConfigured(session) = &event.msg {
+            let header = Arc::new(history_cell::SessionHeaderHistoryCell::new(
+                session.model.clone(),
+                session.reasoning_effort,
+                session.cwd.clone(),
+                CODEX_CLI_VERSION,
+            )) as Arc<dyn HistoryCell>;
+            self.replace_startup_header(tui, header)?;
+        }
         self.handle_codex_event_now(event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
@@ -3736,6 +3785,7 @@ mod tests {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            startup_header_pending_replacement: false,
         }
     }
 
@@ -3795,6 +3845,7 @@ mod tests {
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                startup_header_pending_replacement: false,
             },
             rx,
             op_rx,

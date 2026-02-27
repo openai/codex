@@ -143,8 +143,6 @@ use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -1137,16 +1135,17 @@ impl ChatWidget {
         );
         self.refresh_model_display();
         self.sync_personality_command_enabled();
-        let session_info_cell = history_cell::new_session_info(
+        if let Some(session_info_body) = history_cell::new_session_info_body(
             &self.config,
             &model_for_header,
-            event,
+            &event,
             self.show_welcome_banner,
             self.auth_manager
                 .auth_cached()
                 .and_then(|auth| auth.account_plan_type()),
-        );
-        self.apply_session_info_cell(session_info_cell);
+        ) {
+            self.add_boxed_history(session_info_body);
+        }
 
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
@@ -2779,7 +2778,7 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let active_cell = None;
 
         let current_cwd = Some(config.cwd.clone());
         let queued_message_edit_binding =
@@ -2808,7 +2807,7 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(header_model),
+            session_header: SessionHeader::new(DEFAULT_MODEL_DISPLAY_NAME.to_string()),
             initial_user_message,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
@@ -2956,7 +2955,7 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let active_cell = None;
         let current_cwd = Some(config.cwd.clone());
 
         let queued_message_edit_binding =
@@ -2985,7 +2984,7 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(header_model),
+            session_header: SessionHeader::new(DEFAULT_MODEL_DISPLAY_NAME.to_string()),
             initial_user_message,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
@@ -3948,15 +3947,7 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
-        // Keep the placeholder session header as the active cell until real session info arrives,
-        // so we can merge headers instead of committing a duplicate box to history.
-        let keep_placeholder_header_active = !self.is_session_configured()
-            && self
-                .active_cell
-                .as_ref()
-                .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
-
-        if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
+        if !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
             self.needs_final_message_separator = true;
@@ -6760,7 +6751,9 @@ impl ChatWidget {
 
     fn refresh_model_display(&mut self) {
         let effective = self.effective_collaboration_mode();
-        self.session_header.set_model(effective.model());
+        if self.is_session_configured() {
+            self.session_header.set_model(effective.model());
+        }
         // Keep composer paste affordances aligned with the currently effective model.
         self.sync_image_paste_enabled();
     }
@@ -6888,46 +6881,6 @@ impl ChatWidget {
         match &self.connectors_cache {
             ConnectorsCacheState::Ready(snapshot) => Some(snapshot.connectors.as_slice()),
             _ => None,
-        }
-    }
-
-    /// Build a placeholder header cell while the session is configuring.
-    fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
-        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
-        Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
-            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
-            placeholder_style,
-            None,
-            config.cwd.clone(),
-            CODEX_CLI_VERSION,
-        ))
-    }
-
-    /// Merge the real session info cell with any placeholder header to avoid double boxes.
-    fn apply_session_info_cell(&mut self, cell: history_cell::SessionInfoCell) {
-        let mut session_info_cell = Some(Box::new(cell) as Box<dyn HistoryCell>);
-        let merged_header = if let Some(active) = self.active_cell.take() {
-            if active
-                .as_any()
-                .is::<history_cell::SessionHeaderHistoryCell>()
-            {
-                // Reuse the existing placeholder header to avoid rendering two boxes.
-                if let Some(cell) = session_info_cell.take() {
-                    self.active_cell = Some(cell);
-                }
-                true
-            } else {
-                self.active_cell = Some(active);
-                false
-            }
-        } else {
-            false
-        };
-
-        self.flush_active_cell();
-
-        if !merged_header && let Some(cell) = session_info_cell {
-            self.add_boxed_history(cell);
         }
     }
 
