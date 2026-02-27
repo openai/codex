@@ -242,6 +242,8 @@ impl Session {
                 }
                 RolloutItem::Compacted(compacted) => {
                     if let Some(replacement_history) = &compacted.replacement_history {
+                        // This should actually never happen, because the reverse loop above (to build rollout_suffix)
+                        // should stop before any compaction that has Some replacement_history
                         history.replace(replacement_history.clone());
                     } else {
                         saw_legacy_compaction_without_replacement_history = true;
@@ -251,6 +253,8 @@ impl Session {
                         // `reference_context_item`, reinject canonical context at the end of the
                         // resumed conversation, and accept the temporary out-of-distribution
                         // prompt shape.
+                        // TODO(ccunningham): if we drop support for None replacement_history compaction items,
+                        // we can get rid of this second loop entirely and just build `history` directly in the first loop.
                         let user_messages = collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
                             Vec::new(),
