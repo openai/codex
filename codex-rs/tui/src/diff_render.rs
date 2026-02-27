@@ -908,8 +908,8 @@ fn has_force_color_override() -> bool {
     std::env::var_os("FORCE_COLOR").is_some()
 }
 
-/// Map a raw [`StdoutColorLevel`] to a [`DiffColorLevel`], promoting
-/// ANSI-16 to truecolor when running inside Windows Terminal.
+/// Map a raw [`StdoutColorLevel`] to a [`DiffColorLevel`] using
+/// Windows Terminal-specific truecolor promotion rules.
 ///
 /// This helper is intentionally pure (no env access) so tests can validate
 /// the policy table by passing explicit inputs.
@@ -948,7 +948,7 @@ fn diff_color_level_for_terminal(
 
     // Outside `WT_SESSION`, keep the existing Windows Terminal promotion for
     // ANSI-16 sessions that likely support truecolor.
-    if base == DiffColorLevel::Ansi16
+    if stdout_level == StdoutColorLevel::Ansi16
         && terminal_name == TerminalName::WindowsTerminal
         && !has_force_color_override
     {
@@ -1731,6 +1731,19 @@ mod tests {
                 false,
             ),
             DiffColorLevel::TrueColor
+        );
+    }
+
+    #[test]
+    fn non_wt_windows_terminal_keeps_unknown_color_level_conservative() {
+        assert_eq!(
+            diff_color_level_for_terminal(
+                StdoutColorLevel::Unknown,
+                TerminalName::WindowsTerminal,
+                false,
+                false,
+            ),
+            DiffColorLevel::Ansi16
         );
     }
 
