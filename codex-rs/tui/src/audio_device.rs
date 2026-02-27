@@ -5,6 +5,9 @@ use tracing::warn;
 
 use crate::app_event::RealtimeAudioDeviceKind;
 
+const PREFERRED_INPUT_SAMPLE_RATE: u32 = 24_000;
+const PREFERRED_INPUT_CHANNELS: u16 = 1;
+
 pub(crate) fn list_realtime_audio_device_names(
     kind: RealtimeAudioDeviceKind,
 ) -> Result<Vec<String>, String> {
@@ -33,6 +36,35 @@ pub(crate) fn select_configured_output_device_and_config(
     select_device_and_config(RealtimeAudioDeviceKind::Speaker, config)
 }
 
+pub(crate) fn preferred_input_config(
+    device: &cpal::Device,
+) -> Result<cpal::SupportedStreamConfig, String> {
+    let supported_configs = device
+        .supported_input_configs()
+        .map_err(|err| format!("failed to enumerate input audio configs: {err}"))?;
+
+    supported_configs
+        .filter_map(|range| {
+            let sample_format_rank = match range.sample_format() {
+                cpal::SampleFormat::I16 => 0u8,
+                cpal::SampleFormat::U16 => 1u8,
+                cpal::SampleFormat::F32 => 2u8,
+                _ => return None,
+            };
+            let sample_rate = preferred_input_sample_rate(&range);
+            let sample_rate_penalty = sample_rate.0.abs_diff(PREFERRED_INPUT_SAMPLE_RATE);
+            let channel_penalty = range.channels().abs_diff(PREFERRED_INPUT_CHANNELS);
+            Some((
+                (sample_rate_penalty, channel_penalty, sample_format_rank),
+                range.with_sample_rate(sample_rate),
+            ))
+        })
+        .min_by_key(|(score, _)| *score)
+        .map(|(_, config)| config)
+        .or_else(|| device.default_input_config().ok())
+        .ok_or_else(|| "failed to get default input config".to_string())
+}
+
 fn select_device_and_config(
     kind: RealtimeAudioDeviceKind,
     config: &Config,
@@ -53,7 +85,10 @@ fn select_device_and_config(
         })
         .ok_or_else(|| missing_device_error(kind, configured_name))?;
 
-    let stream_config = default_config(&selected, kind)?;
+    let stream_config = match kind {
+        RealtimeAudioDeviceKind::Microphone => preferred_input_config(&selected)?,
+        RealtimeAudioDeviceKind::Speaker => default_config(&selected, kind)?,
+    };
     Ok((selected, stream_config))
 }
 
@@ -106,6 +141,18 @@ fn default_config(
         RealtimeAudioDeviceKind::Speaker => device
             .default_output_config()
             .map_err(|err| format!("failed to get default output config: {err}")),
+    }
+}
+
+fn preferred_input_sample_rate(range: &cpal::SupportedStreamConfigRange) -> cpal::SampleRate {
+    let min = range.min_sample_rate().0;
+    let max = range.max_sample_rate().0;
+    if (min..=max).contains(&PREFERRED_INPUT_SAMPLE_RATE) {
+        cpal::SampleRate(PREFERRED_INPUT_SAMPLE_RATE)
+    } else if PREFERRED_INPUT_SAMPLE_RATE < min {
+        cpal::SampleRate(min)
+    } else {
+        cpal::SampleRate(max)
     }
 }
 
