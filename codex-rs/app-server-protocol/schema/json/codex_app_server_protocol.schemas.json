@@ -10281,6 +10281,16 @@
               "string",
               "null"
             ]
+          },
+          "upgradeInfo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelUpgradeInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -10396,6 +10406,35 @@
           "turnId"
         ],
         "title": "ModelReroutedNotification",
+        "type": "object"
+      },
+      "ModelUpgradeInfo": {
+        "properties": {
+          "migrationMarkdown": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "modelLink": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upgradeCopy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "model"
+        ],
         "type": "object"
       },
       "NetworkAccess": {
