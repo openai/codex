@@ -29,6 +29,7 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
+use codex_core::test_support::construct_model_info_offline;
 use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -43,6 +44,7 @@ use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand;
@@ -78,6 +80,7 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::StreamErrorEvent;
@@ -1834,6 +1837,100 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+#[tokio::test]
+async fn session_configured_first_session_shows_model_nux_and_increments_display_count() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    let mut model_info = construct_model_info_offline("gpt-5.1", &chat.config);
+    model_info.display_name = "GPT Test".to_string();
+    model_info.description = Some("Fast, high-reliability coding model.".to_string());
+    model_info.show_nux_new = true;
+    chat.models_manager = Arc::new(ModelsManager::new(
+        chat.config.codex_home.clone(),
+        chat.auth_manager.clone(),
+        Some(ModelsResponse {
+            models: vec![model_info],
+        }),
+        CollaborationModesConfig::default(),
+    ));
+
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "gpt-5.1".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.first().expect("session info cell"));
+    assert!(rendered.contains("To get started, describe a task"));
+    assert!(rendered.contains("You're using GPT Test."));
+    assert!(rendered.contains("compare or switch anytime."));
+    assert_eq!(
+        Some(&1),
+        chat.config
+            .notices
+            .model_new_nux_display_counts
+            .get("gpt-5.1")
+    );
+}
+
+#[tokio::test]
+async fn session_configured_ineligible_model_does_not_increment_display_count() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    let mut model_info = construct_model_info_offline("gpt-5.1", &chat.config);
+    model_info.show_nux_new = false;
+    chat.models_manager = Arc::new(ModelsManager::new(
+        chat.config.codex_home.clone(),
+        chat.auth_manager.clone(),
+        Some(ModelsResponse {
+            models: vec![model_info],
+        }),
+        CollaborationModesConfig::default(),
+    ));
+
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "gpt-5.1".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: None,
+        }),
+    });
+
+    let _ = drain_insert_history(&mut rx);
+    assert_eq!(
+        None,
+        chat.config
+            .notices
+            .model_new_nux_display_counts
+            .get("gpt-5.1")
+    );
 }
 
 fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
@@ -6019,6 +6116,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         is_default: false,
         upgrade: None,
         show_in_picker,
+        show_nux_new: false,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };
@@ -6287,6 +6385,7 @@ async fn single_reasoning_option_skips_selection() {
         is_default: false,
         upgrade: None,
         show_in_picker: true,
+        show_nux_new: false,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };

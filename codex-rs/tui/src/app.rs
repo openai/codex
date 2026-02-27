@@ -2689,6 +2689,24 @@ impl App {
                     ));
                 }
             }
+            AppEvent::PersistModelNewNuxDisplayed { model } => {
+                let count = self
+                    .config
+                    .notices
+                    .model_new_nux_display_counts
+                    .entry(model.clone())
+                    .or_default();
+                *count += 1;
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .record_model_new_nux_display(model.as_str())
+                    .apply()
+                    .await
+                {
+                    tracing::error!(error = %err, "failed to persist model-new startup tip display");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to save model tip preference: {err}"));
+                }
+            }
             AppEvent::OpenApprovalsPopup => {
                 self.chat_widget.open_approvals_popup();
             }
@@ -3807,7 +3825,6 @@ mod tests {
                 rollout_path: Some(PathBuf::new()),
             };
             Arc::new(new_session_info(
-                app.chat_widget.config_ref(),
                 app.chat_widget.current_model(),
                 event,
                 is_first,
@@ -3853,6 +3870,47 @@ mod tests {
         rendered
     }
 
+    fn render_session_info_snapshot(
+        requested_model: &str,
+        actual_model: &str,
+        is_first_event: bool,
+        selected_startup_tip: Option<&str>,
+    ) -> String {
+        let event = SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: actual_model.to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/tmp/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::High),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        };
+        let cell = new_session_info(
+            requested_model,
+            event,
+            is_first_event,
+            selected_startup_tip.map(str::to_string),
+        );
+
+        cell.display_lines(80)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[tokio::test]
     async fn clear_ui_after_long_transcript_snapshots_fresh_header_only() {
         let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
@@ -3863,6 +3921,37 @@ mod tests {
     async fn ctrl_l_clear_ui_after_long_transcript_reuses_clear_header_snapshot() {
         let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
         assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
+    }
+
+    #[test]
+    fn first_session_header_with_model_nux_matches_snapshot() {
+        let rendered = render_session_info_snapshot(
+            "gpt-test",
+            "gpt-test",
+            true,
+            Some(
+                "New You're using GPT Test. Fast, high-reliability coding model. Use /model to compare or switch anytime.",
+            ),
+        );
+        assert_snapshot!("first_session_header_with_model_nux", rendered);
+    }
+
+    #[test]
+    fn later_session_header_with_model_nux_matches_snapshot() {
+        let rendered = render_session_info_snapshot(
+            "gpt-test",
+            "gpt-test",
+            false,
+            Some("New You're using GPT Test. Use /model to compare or switch anytime."),
+        );
+        assert_snapshot!("later_session_header_with_model_nux", rendered);
+    }
+
+    #[test]
+    fn later_session_header_after_model_nux_exhaustion_matches_snapshot() {
+        let rendered =
+            render_session_info_snapshot("requested-model", "resolved-model", false, None);
+        assert_snapshot!("later_session_header_after_model_nux_exhaustion", rendered);
     }
 
     async fn make_test_app() -> App {
@@ -4304,7 +4393,6 @@ mod tests {
                 rollout_path: Some(PathBuf::new()),
             };
             Arc::new(new_session_info(
-                app.chat_widget.config_ref(),
                 app.chat_widget.current_model(),
                 event,
                 is_first,

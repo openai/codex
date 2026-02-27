@@ -1,7 +1,9 @@
 use codex_core::features::FEATURES;
 use codex_protocol::account::PlanType;
+use codex_protocol::openai_models::ModelPreset;
 use lazy_static::lazy_static;
 use rand::Rng;
+use std::collections::BTreeMap;
 
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
@@ -46,44 +48,137 @@ fn experimental_tooltips() -> Vec<&'static str> {
         .collect()
 }
 
-/// Pick a random tooltip to show to the user when starting Codex.
-pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
-    let mut rng = rand::rng();
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StartupTip {
+    Generic(String),
+    ModelNew { model: String, message: String },
+}
 
-    if let Some(announcement) = announcement::fetch_announcement_tip() {
+impl StartupTip {
+    pub(crate) fn message(self) -> String {
+        match self {
+            Self::Generic(message) | Self::ModelNew { message, .. } => message,
+        }
+    }
+}
+
+pub(crate) fn get_startup_tip(
+    model: Option<&ModelPreset>,
+    model_new_nux_display_counts: &BTreeMap<String, u32>,
+    plan: Option<PlanType>,
+    is_first_session: bool,
+) -> Option<StartupTip> {
+    let mut rng = rand::rng();
+    get_startup_tip_with_rng(
+        model,
+        model_new_nux_display_counts,
+        plan,
+        is_first_session,
+        announcement::fetch_announcement_tip(),
+        &mut rng,
+    )
+}
+
+fn get_startup_tip_with_rng<R: Rng + ?Sized>(
+    model: Option<&ModelPreset>,
+    model_new_nux_display_counts: &BTreeMap<String, u32>,
+    plan: Option<PlanType>,
+    is_first_session: bool,
+    announcement_tip: Option<String>,
+    rng: &mut R,
+) -> Option<StartupTip> {
+    let model_new_tip = model.and_then(|preset| {
+        let display_count = model_new_nux_display_counts
+            .get(&preset.model)
+            .copied()
+            .unwrap_or(0);
+        (preset.show_nux_new && display_count < 4).then(|| StartupTip::ModelNew {
+            model: preset.model.clone(),
+            message: model_new_tooltip(preset),
+        })
+    });
+
+    if is_first_session {
+        return model_new_tip;
+    }
+
+    let Some(model_new_tip) = model_new_tip else {
+        return get_generic_tooltip_with_rng(plan, announcement_tip, rng).map(StartupTip::Generic);
+    };
+
+    let mut weighted_candidates = vec![
+        model_new_tip.clone(),
+        model_new_tip.clone(),
+        model_new_tip.clone(),
+        model_new_tip,
+    ];
+    if let Some(announcement_tip) = announcement_tip {
+        weighted_candidates.push(StartupTip::Generic(announcement_tip));
+    }
+    if let Some(plan_tip) = plan_tooltip(plan) {
+        weighted_candidates.push(StartupTip::Generic(plan_tip.to_string()));
+    }
+    if let Some(random_tip) = pick_tooltip(rng) {
+        weighted_candidates.push(StartupTip::Generic(random_tip.to_string()));
+    }
+
+    weighted_candidates
+        .get(rng.random_range(0..weighted_candidates.len()))
+        .cloned()
+}
+
+fn get_generic_tooltip_with_rng<R: Rng + ?Sized>(
+    plan: Option<PlanType>,
+    announcement_tip: Option<String>,
+    rng: &mut R,
+) -> Option<String> {
+    if let Some(announcement) = announcement_tip {
         return Some(announcement);
     }
 
     // Leave small chance for a random tooltip to be shown.
-    if rng.random_ratio(8, 10) {
-        match plan {
-            Some(PlanType::Plus)
-            | Some(PlanType::Business)
-            | Some(PlanType::Team)
-            | Some(PlanType::Enterprise)
-            | Some(PlanType::Pro) => {
-                let tooltip = if IS_MACOS {
-                    PAID_TOOLTIP
-                } else {
-                    PAID_TOOLTIP_NON_MAC
-                };
-                return Some(tooltip.to_string());
-            }
-            Some(PlanType::Go) | Some(PlanType::Free) => {
-                return Some(FREE_GO_TOOLTIP.to_string());
-            }
-            _ => {
-                let tooltip = if IS_MACOS {
-                    OTHER_TOOLTIP
-                } else {
-                    OTHER_TOOLTIP_NON_MAC
-                };
-                return Some(tooltip.to_string());
-            }
+    if rng.random_ratio(8, 10)
+        && let Some(tooltip) = plan_tooltip(plan) {
+            return Some(tooltip.to_string());
         }
-    }
 
-    pick_tooltip(&mut rng).map(str::to_string)
+    pick_tooltip(rng).map(str::to_string)
+}
+
+fn plan_tooltip(plan: Option<PlanType>) -> Option<&'static str> {
+    match plan {
+        Some(PlanType::Plus)
+        | Some(PlanType::Business)
+        | Some(PlanType::Team)
+        | Some(PlanType::Enterprise)
+        | Some(PlanType::Pro)
+        | Some(PlanType::Edu) => Some(if IS_MACOS {
+            PAID_TOOLTIP
+        } else {
+            PAID_TOOLTIP_NON_MAC
+        }),
+        Some(PlanType::Go) | Some(PlanType::Free) => Some(FREE_GO_TOOLTIP),
+        Some(PlanType::Unknown) | None => Some(if IS_MACOS {
+            OTHER_TOOLTIP
+        } else {
+            OTHER_TOOLTIP_NON_MAC
+        }),
+    }
+}
+
+fn model_new_tooltip(model: &ModelPreset) -> String {
+    let description = model.description.trim();
+    if description.is_empty() {
+        format!(
+            "*New* You're using **{}**. Use /model to compare or switch anytime.",
+            model.display_name
+        )
+    } else {
+        format!(
+            "*New* You're using **{}**. {} Use /model to compare or switch anytime.",
+            model.display_name, description
+        )
+    }
 }
 
 fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
@@ -247,6 +342,24 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
+    fn model_preset(show_nux_new: bool, description: &str) -> ModelPreset {
+        ModelPreset {
+            id: "gpt-test".to_string(),
+            model: "gpt-test".to_string(),
+            display_name: "GPT Test".to_string(),
+            description: description.to_string(),
+            default_reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![],
+            supports_personality: false,
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+            show_nux_new,
+            supported_in_api: true,
+            input_modalities: codex_protocol::openai_models::default_input_modalities(),
+        }
+    }
+
     #[test]
     fn random_tooltip_returns_some_tip_when_available() {
         let mut rng = StdRng::seed_from_u64(42);
@@ -362,5 +475,132 @@ content = "This is a test announcement"
             Some("This is a test announcement".to_string()),
             parse_announcement_tip_toml(toml)
         );
+    }
+
+    #[test]
+    fn first_session_eligible_model_returns_model_tip() {
+        let preset = model_preset(true, "Fast, high-reliability coding model.");
+        let mut rng = StdRng::seed_from_u64(1);
+
+        let tip = get_startup_tip_with_rng(
+            Some(&preset),
+            &BTreeMap::new(),
+            Some(PlanType::Plus),
+            true,
+            Some("announcement".to_string()),
+            &mut rng,
+        );
+
+        assert_eq!(
+            Some(StartupTip::ModelNew {
+                model: "gpt-test".to_string(),
+                message: "*New* You're using **GPT Test**. Fast, high-reliability coding model. Use /model to compare or switch anytime.".to_string(),
+            }),
+            tip
+        );
+    }
+
+    #[test]
+    fn first_session_ineligible_model_skips_tip() {
+        let preset = model_preset(false, "");
+        let mut rng = StdRng::seed_from_u64(1);
+
+        let tip = get_startup_tip_with_rng(
+            Some(&preset),
+            &BTreeMap::new(),
+            Some(PlanType::Plus),
+            true,
+            Some("announcement".to_string()),
+            &mut rng,
+        );
+
+        assert_eq!(None, tip);
+    }
+
+    #[test]
+    fn later_session_can_select_model_tip_from_weighted_pool() {
+        let preset = model_preset(true, "");
+        let mut rng = StdRng::seed_from_u64(5);
+
+        let tip = get_startup_tip_with_rng(
+            Some(&preset),
+            &BTreeMap::new(),
+            Some(PlanType::Plus),
+            false,
+            Some("announcement".to_string()),
+            &mut rng,
+        );
+
+        assert_eq!(
+            Some(StartupTip::ModelNew {
+                model: "gpt-test".to_string(),
+                message:
+                    "*New* You're using **GPT Test**. Use /model to compare or switch anytime."
+                        .to_string(),
+            }),
+            tip
+        );
+    }
+
+    #[test]
+    fn later_session_count_limit_disables_model_tip() {
+        let preset = model_preset(true, "");
+        let counts = BTreeMap::from([("gpt-test".to_string(), 4)]);
+        let mut rng = StdRng::seed_from_u64(5);
+
+        let tip = get_startup_tip_with_rng(
+            Some(&preset),
+            &counts,
+            Some(PlanType::Plus),
+            false,
+            Some("announcement".to_string()),
+            &mut rng,
+        );
+
+        assert_eq!(Some(StartupTip::Generic("announcement".to_string())), tip);
+    }
+
+    #[test]
+    fn later_session_eligible_model_includes_announcement_and_generic_candidates() {
+        let preset = model_preset(true, "");
+        let mut saw_announcement = false;
+        let mut saw_plan_tip = false;
+        let mut saw_random_tip = false;
+        let mut saw_model_tip = false;
+
+        for seed in 0..64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let tip = get_startup_tip_with_rng(
+                Some(&preset),
+                &BTreeMap::new(),
+                Some(PlanType::Plus),
+                false,
+                Some("announcement".to_string()),
+                &mut rng,
+            )
+            .expect("tip");
+
+            match tip {
+                StartupTip::Generic(message) if message == "announcement" => {
+                    saw_announcement = true;
+                }
+                StartupTip::Generic(message)
+                    if message == plan_tooltip(Some(PlanType::Plus)).unwrap() =>
+                {
+                    saw_plan_tip = true;
+                }
+                StartupTip::Generic(_) => {
+                    saw_random_tip = true;
+                }
+                StartupTip::ModelNew { .. } => {
+                    saw_model_tip = true;
+                }
+            }
+        }
+
+        assert!(saw_announcement);
+        assert!(saw_plan_tip);
+        assert!(saw_random_tip);
+        assert!(saw_model_tip);
     }
 }

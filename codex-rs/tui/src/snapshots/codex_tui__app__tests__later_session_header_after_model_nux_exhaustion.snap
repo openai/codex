@@ -1,0 +1,14 @@
+---
+source: tui/src/app.rs
+expression: rendered
+---
+╭───────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)                          │
+│                                                   │
+│ model:     resolved-model high   /model to change │
+│ directory: /tmp/project                           │
+╰───────────────────────────────────────────────────╯
+
+model changed:
+requested: requested-model
+used: resolved-model

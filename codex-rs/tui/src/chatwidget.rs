@@ -247,6 +247,7 @@ use crate::status::RateLimitSnapshotDisplay;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
+use crate::tooltips::StartupTip;
 use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
@@ -1095,6 +1096,7 @@ impl ChatWidget {
 
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
+        let requested_model = self.current_model().to_string();
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
@@ -1129,6 +1131,27 @@ impl ChatWidget {
         self.last_copyable_output = None;
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
+        let startup_tip = if self.config.show_tooltips {
+            let active_model = self
+                .models_manager
+                .try_list_models()
+                .ok()
+                .and_then(|models| {
+                    models
+                        .into_iter()
+                        .find(|preset| preset.model == model_for_header)
+                });
+            crate::tooltips::get_startup_tip(
+                active_model.as_ref(),
+                &self.config.notices.model_new_nux_display_counts,
+                self.auth_manager
+                    .auth_cached()
+                    .and_then(|auth| auth.account_plan_type()),
+                self.show_welcome_banner,
+            )
+        } else {
+            None
+        };
         self.session_header.set_model(&model_for_header);
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(model_for_header.clone()),
@@ -1137,16 +1160,25 @@ impl ChatWidget {
         );
         self.refresh_model_display();
         self.sync_personality_command_enabled();
+        let selected_startup_tip = startup_tip.clone().map(StartupTip::message);
         let session_info_cell = history_cell::new_session_info(
-            &self.config,
-            &model_for_header,
+            &requested_model,
             event,
             self.show_welcome_banner,
-            self.auth_manager
-                .auth_cached()
-                .and_then(|auth| auth.account_plan_type()),
+            selected_startup_tip,
         );
         self.apply_session_info_cell(session_info_cell);
+        if let Some(StartupTip::ModelNew { model, .. }) = startup_tip {
+            let count = self
+                .config
+                .notices
+                .model_new_nux_display_counts
+                .entry(model.clone())
+                .or_default();
+            *count += 1;
+            self.app_event_tx
+                .send(AppEvent::PersistModelNewNuxDisplayed { model });
+        }
 
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);

@@ -836,6 +836,16 @@
           "default": {},
           "description": "Tracks acknowledged model migrations as old->new model slug mappings.",
           "type": "object"
+        },
+        "model_new_nux_display_counts": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "default": {},
+          "description": "Tracks how many times the TUI actually displayed the model-new startup tip.",
+          "type": "object"
         }
       },
       "type": "object"

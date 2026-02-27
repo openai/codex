@@ -39,6 +39,8 @@ pub enum ConfigEdit {
     SetNoticeHideModelMigrationPrompt(String, bool),
     /// Record that a migration prompt was shown for an old->new model mapping.
     RecordModelMigrationSeen { from: String, to: String },
+    /// Record that the model-new startup tip was displayed for a model.
+    RecordModelNewNuxDisplay { model: String },
     /// Replace the entire `[mcp_servers]` table.
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
     /// Set or clear a skill config entry under `[[skills.config]]`.
@@ -331,6 +333,21 @@ impl ConfigDocument {
                 &[Notice::TABLE_KEY, "model_migrations", from.as_str()],
                 value(to.clone()),
             )),
+            ConfigEdit::RecordModelNewNuxDisplay { model } => {
+                let resolved = self.scoped_segments(
+                    Scope::Global,
+                    &[Notice::TABLE_KEY, "model_new_nux_display_counts"],
+                );
+                let Some(table) = self.descend(&resolved, TraversalMode::Create) else {
+                    return Ok(false);
+                };
+                let current = table
+                    .get(model.as_str())
+                    .and_then(toml_edit::Item::as_integer)
+                    .unwrap_or(0);
+                table[model.as_str()] = value(current + 1);
+                Ok(true)
+            }
             ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged) => Ok(self.write_value(
                 Scope::Global,
                 &["windows_wsl_setup_acknowledged"],
@@ -784,6 +801,13 @@ impl ConfigEditsBuilder {
         self.edits.push(ConfigEdit::RecordModelMigrationSeen {
             from: from.to_string(),
             to: to.to_string(),
+        });
+        self
+    }
+
+    pub fn record_model_new_nux_display(mut self, model: &str) -> Self {
+        self.edits.push(ConfigEdit::RecordModelNewNuxDisplay {
+            model: model.to_string(),
         });
         self
     }
@@ -1430,6 +1454,40 @@ existing = "value"
 
 [notice.model_migrations]
 gpt-5 = "gpt-5.1"
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn blocking_record_model_new_nux_display_increments_count() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"[notice]
+existing = "value"
+
+[notice.model_new_nux_display_counts]
+gpt-5 = 1
+"#,
+        )
+        .expect("seed");
+        apply_blocking(
+            codex_home,
+            None,
+            &[ConfigEdit::RecordModelNewNuxDisplay {
+                model: "gpt-5".to_string(),
+            }],
+        )
+        .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[notice]
+existing = "value"
+
+[notice.model_new_nux_display_counts]
+gpt-5 = 2
 "#;
         assert_eq!(contents, expected);
     }

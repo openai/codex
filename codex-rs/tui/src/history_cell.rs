@@ -29,7 +29,6 @@ use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
-use crate::tooltips;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
@@ -41,7 +40,6 @@ use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
-use codex_protocol::account::PlanType;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::WebSearchAction;
@@ -1037,24 +1035,20 @@ impl HistoryCell for SessionInfoCell {
 }
 
 pub(crate) fn new_session_info(
-    config: &Config,
     requested_model: &str,
     event: SessionConfiguredEvent,
     is_first_event: bool,
-    auth_plan: Option<PlanType>,
+    selected_startup_tip: Option<String>,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
+        cwd,
         reasoning_effort,
         ..
     } = event;
     // Header box rendered as history (so it appears at the very top)
-    let header = SessionHeaderHistoryCell::new(
-        model.clone(),
-        reasoning_effort,
-        config.cwd.clone(),
-        CODEX_CLI_VERSION,
-    );
+    let header =
+        SessionHeaderHistoryCell::new(model.clone(), reasoning_effort, cwd, CODEX_CLI_VERSION);
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
     if is_first_event {
@@ -1092,11 +1086,12 @@ pub(crate) fn new_session_info(
         ];
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
+        if let Some(selected_startup_tip) = selected_startup_tip {
+            parts.push(Box::new(TooltipHistoryCell::new(selected_startup_tip)));
+        }
     } else {
-        if config.show_tooltips
-            && let Some(tooltips) = tooltips::get_tooltip(auth_plan).map(TooltipHistoryCell::new)
-        {
-            parts.push(Box::new(tooltips));
+        if let Some(selected_startup_tip) = selected_startup_tip {
+            parts.push(Box::new(TooltipHistoryCell::new(selected_startup_tip)));
         }
         if requested_model != model {
             let lines = vec![

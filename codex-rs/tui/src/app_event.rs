@@ -293,6 +293,11 @@ pub(crate) enum AppEvent {
         to_model: String,
     },
 
+    /// Persist that the model-new startup tip was displayed for a model.
+    PersistModelNewNuxDisplayed {
+        model: String,
+    },
+
     /// Skip the next world-writable scan (one-shot) after a user-confirmed continue.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     SkipNextWorldWritableScan,
