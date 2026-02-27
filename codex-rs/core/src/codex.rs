@@ -443,6 +443,7 @@ impl Codex {
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
+            app_server_client_name: None,
             session_source,
             dynamic_tools,
             persist_extended_history,
@@ -530,6 +531,18 @@ impl Codex {
         self.session.steer_input(input, expected_turn_id).await
     }
 
+    pub(crate) async fn set_app_server_client_name(
+        &self,
+        app_server_client_name: Option<String>,
+    ) -> ConstraintResult<()> {
+        self.session
+            .update_settings(SessionSettingsUpdate {
+                app_server_client_name,
+                ..Default::default()
+            })
+            .await
+    }
+
     pub(crate) async fn agent_status(&self) -> AgentStatus {
         self.agent_status.borrow().clone()
     }
@@ -599,6 +612,7 @@ pub(crate) struct TurnContext {
     pub(crate) cwd: PathBuf,
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
+    pub(crate) app_server_client_name: Option<String>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
@@ -685,6 +699,7 @@ impl TurnContext {
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
+            app_server_client_name: self.app_server_client_name.clone(),
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
             user_instructions: self.user_instructions.clone(),
@@ -812,6 +827,7 @@ pub(crate) struct SessionConfiguration {
     original_config_do_not_use: Arc<Config>,
     /// Optional service name tag for session metrics.
     metrics_service_name: Option<String>,
+    app_server_client_name: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
     dynamic_tools: Vec<DynamicToolSpec>,
@@ -859,6 +875,9 @@ impl SessionConfiguration {
         if let Some(cwd) = updates.cwd.clone() {
             next_configuration.cwd = cwd;
         }
+        if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
+            next_configuration.app_server_client_name = Some(app_server_client_name);
+        }
         Ok(next_configuration)
     }
 }
@@ -873,6 +892,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
+    pub(crate) app_server_client_name: Option<String>,
 }
 
 impl Session {
@@ -1049,6 +1069,7 @@ impl Session {
             cwd,
             current_date: Some(current_date),
             timezone: Some(timezone),
+            app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
@@ -3948,6 +3969,7 @@ mod handlers {
                         reasoning_summary: summary,
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
+                        app_server_client_name: None,
                     },
                 )
             }
@@ -4699,6 +4721,7 @@ async fn spawn_review_thread(
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         current_date: parent_turn_context.current_date.clone(),
         timezone: parent_turn_context.timezone.clone(),
+        app_server_client_name: parent_turn_context.app_server_client_name.clone(),
         developer_instructions: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
@@ -5084,6 +5107,7 @@ pub(crate) async fn run_turn(
                         .dispatch(HookPayload {
                             session_id: sess.conversation_id,
                             cwd: turn_context.cwd.clone(),
+                            client: turn_context.app_server_client_name.clone(),
                             triggered_at: chrono::Utc::now(),
                             hook_event: HookEvent::AfterAgent {
                                 event: HookEventAfterAgent {
@@ -7893,6 +7917,7 @@ mod tests {
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name: None,
+            app_server_client_name: None,
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
@@ -7985,6 +8010,7 @@ mod tests {
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name: None,
+            app_server_client_name: None,
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
@@ -8296,6 +8322,7 @@ mod tests {
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name: None,
+            app_server_client_name: None,
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
@@ -8349,6 +8376,7 @@ mod tests {
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name: None,
+            app_server_client_name: None,
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
@@ -8430,6 +8458,7 @@ mod tests {
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name: None,
+            app_server_client_name: None,
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
@@ -8589,6 +8618,7 @@ mod tests {
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name: None,
+            app_server_client_name: None,
             session_source: SessionSource::Exec,
             dynamic_tools,
             persist_extended_history: false,
