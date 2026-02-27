@@ -488,11 +488,8 @@ async fn prepare_startup_tooltip_override(
         return None;
     }
 
-    let Some(tooltip_override) =
-        select_model_availability_nux(available_models, &config.model_availability_nux)
-    else {
-        return None;
-    };
+    let tooltip_override =
+        select_model_availability_nux(available_models, &config.model_availability_nux)?;
 
     let shown_count = config
         .model_availability_nux
