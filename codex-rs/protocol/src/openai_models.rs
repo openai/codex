@@ -123,7 +123,7 @@ pub struct ModelPreset {
     pub upgrade: Option<ModelUpgrade>,
     /// Whether this preset should appear in the picker UI.
     pub show_in_picker: bool,
-    /// Whether the TUI should surface the new-model startup tip for this preset.
+    /// Whether to show NUX for this preset.
     #[serde(default)]
     pub show_nux_new: bool,
     /// whether this model is supported in the api
