@@ -31,7 +31,7 @@ struct ActiveReplaySegment {
     counts_as_user_turn: bool,
     previous_model: Option<String>,
     reference_context_item: TurnReferenceContextItem,
-    replacement_history_index: Option<usize>,
+    base_replacement_history: Option<Vec<ResponseItem>>,
 }
 
 fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
@@ -48,23 +48,24 @@ impl Session {
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
-        // are both known; then replay only that suffix forward to preserve exact history semantics.
-        // Index of the earliest rollout item that still needs forward materialization. Once reverse
-        // replay finds a surviving `replacement_history` checkpoint, everything before that index
-        // is obsolete for rebuilt history.
-        let mut replay_start_index = None;
+        // are both known; then replay only the buffered surviving tail forward to preserve exact
+        // history semantics.
+        let mut base_replacement_history = None;
         let mut previous_model = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
+        // Rollout items that survive after the newest replacement-history checkpoint, stored in
+        // reverse scan order so they can later be replayed forward on top of that checkpoint.
+        let mut rollout_suffix_items_rev = Vec::new();
         // Reverse replay accumulates rollout items into the newest in-progress turn segment until
         // we hit its matching `TurnStarted`, at which point the segment can be finalized.
         let mut active_segment: Option<ActiveReplaySegment> = None;
 
         let finalize_active_segment =
             |active_segment: ActiveReplaySegment,
-             replay_start_index: &mut Option<usize>,
+             base_replacement_history: &mut Option<Vec<ResponseItem>>,
              previous_model: &mut Option<String>,
              reference_context_item: &mut TurnReferenceContextItem,
              pending_rollback_turns: &mut usize| {
@@ -79,11 +80,11 @@ impl Session {
 
                 // A surviving replacement-history checkpoint is a complete history base. Once we
                 // know the newest surviving one, older rollout items do not affect rebuilt history.
-                if replay_start_index.is_none()
-                    && let Some(replacement_history_index) =
-                        active_segment.replacement_history_index
+                if base_replacement_history.is_none()
+                    && let Some(segment_base_replacement_history) =
+                        active_segment.base_replacement_history
                 {
-                    *replay_start_index = Some(replacement_history_index);
+                    *base_replacement_history = Some(segment_base_replacement_history);
                 }
 
                 // `previous_model` comes from the newest surviving user turn that established one.
@@ -104,7 +105,8 @@ impl Session {
                 }
             };
 
-        for (index, item) in rollout_items.iter().enumerate().rev() {
+        for item in rollout_items.iter().rev() {
+            let mut should_buffer_item = true;
             match item {
                 RolloutItem::Compacted(compacted) => {
                     let active_segment =
@@ -117,10 +119,11 @@ impl Session {
                     ) {
                         active_segment.reference_context_item = TurnReferenceContextItem::Cleared;
                     }
-                    if active_segment.replacement_history_index.is_none()
-                        && compacted.replacement_history.is_some()
+                    if active_segment.base_replacement_history.is_none()
+                        && let Some(replacement_history) = &compacted.replacement_history
                     {
-                        active_segment.replacement_history_index = Some(index);
+                        active_segment.base_replacement_history = Some(replacement_history.clone());
+                        should_buffer_item = false;
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -138,7 +141,7 @@ impl Session {
                     {
                         finalize_active_segment(
                             active_segment,
-                            &mut replay_start_index,
+                            &mut base_replacement_history,
                             &mut previous_model,
                             &mut reference_context_item,
                             &mut pending_rollback_turns,
@@ -201,20 +204,25 @@ impl Session {
                 | RolloutItem::SessionMeta(_) => {}
             }
 
-            if replay_start_index.is_some()
+            if base_replacement_history.is_some()
                 && previous_model.is_some()
                 && !matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
             {
-                // At this point we have both eager resume metadata values and a history checkpoint
-                // for the surviving suffix, so older rollout items cannot affect this result.
+                // At this point we have both eager resume metadata values and the replacement-
+                // history base for the surviving tail, so older rollout items cannot affect this
+                // result.
                 break;
+            }
+
+            if should_buffer_item {
+                rollout_suffix_items_rev.push(item.clone());
             }
         }
 
         if let Some(active_segment) = active_segment.take() {
             finalize_active_segment(
                 active_segment,
-                &mut replay_start_index,
+                &mut base_replacement_history,
                 &mut previous_model,
                 &mut reference_context_item,
                 &mut pending_rollback_turns,
@@ -223,10 +231,14 @@ impl Session {
 
         let initial_context = self.build_initial_context(turn_context, None).await;
         let mut history = ContextManager::new();
-        // Temporary eager bridge: rebuild exact history semantics from only the surviving suffix
+        if let Some(base_replacement_history) = base_replacement_history {
+            history.replace(base_replacement_history);
+        }
+        // Temporary eager bridge: rebuild exact history semantics from the buffered surviving tail
         // discovered by reverse replay. This keeps the history result stable while the control
-        // flow moves toward the future lazy reverse loader design.
-        for item in &rollout_items[replay_start_index.unwrap_or(0)..] {
+        // flow moves toward the future lazy reverse loader design without depending on absolute
+        // rollout indices.
+        for item in rollout_suffix_items_rev.iter().rev() {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_items(
