@@ -1827,14 +1827,20 @@ fn drain_insert_history(
 }
 
 fn raw_user_message_event(text: &str) -> Event {
-    let response_item: codex_protocol::models::ResponseItem =
-        codex_protocol::models::ResponseInputItem::from(vec![UserInput::Text {
+    raw_user_message_event_for_inputs(
+        format!("raw-user-{text}"),
+        vec![UserInput::Text {
             text: text.to_string(),
             text_elements: Vec::new(),
-        }])
-        .into();
+        }],
+    )
+}
+
+fn raw_user_message_event_for_inputs(id: String, items: Vec<UserInput>) -> Event {
+    let response_item: codex_protocol::models::ResponseItem =
+        codex_protocol::models::ResponseInputItem::from(items).into();
     Event {
-        id: format!("raw-user-{text}"),
+        id,
         msg: EventMsg::RawResponseItem(RawResponseItemEvent {
             item: response_item,
         }),
@@ -3499,6 +3505,36 @@ async fn steer_enter_uses_pending_nudges_while_plan_stream_is_active() {
 }
 
 #[tokio::test]
+async fn steer_enter_uses_pending_nudges_while_turn_is_running_without_streaming() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+
+    chat.bottom_pane
+        .set_composer_text("queued while running".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.pending_nudges.len(), 1);
+    assert_eq!(
+        chat.pending_nudges.front().unwrap().message(),
+        "queued while running"
+    );
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_codex_event(raw_user_message_event("queued while running"));
+
+    assert!(chat.pending_nudges.is_empty());
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("queued while running"));
+}
+
+#[tokio::test]
 async fn steer_enter_uses_pending_nudges_while_final_answer_stream_is_active() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
@@ -3532,6 +3568,34 @@ async fn steer_enter_uses_pending_nudges_while_final_answer_stream_is_active() {
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("queued while streaming"));
+}
+
+#[tokio::test]
+async fn raw_response_item_with_canonicalized_user_payload_clears_pending_nudge() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let items = vec![
+        UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: vec![TextElement::new((1..4).into(), Some("ell".to_string()))],
+        },
+        UserInput::Text {
+            text: " world".to_string(),
+            text_elements: vec![TextElement::new((1..6).into(), Some("world".to_string()))],
+        },
+    ];
+    chat.pending_nudges
+        .push_back(ChatWidget::rendered_user_message_event_from_inputs(&items));
+    chat.refresh_pending_input_preview();
+
+    chat.handle_codex_event(raw_user_message_event_for_inputs(
+        "raw-user-canonicalized".to_string(),
+        items,
+    ));
+
+    assert!(chat.pending_nudges.is_empty());
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("hello world"));
 }
 
 #[tokio::test]

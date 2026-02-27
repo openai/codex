@@ -3359,29 +3359,18 @@ impl ChatWidget {
                     else {
                         return;
                     };
+                    let has_user_content = !user_message.text.is_empty()
+                        || !user_message.local_images.is_empty()
+                        || !user_message.remote_image_urls.is_empty();
+                    let has_images = !user_message.local_images.is_empty()
+                        || !user_message.remote_image_urls.is_empty();
                     let should_preview_as_pending_nudge = self.is_session_configured()
-                        && (self.is_plan_streaming_in_tui() || self.stream_controller.is_some())
-                        && (!user_message.text.is_empty()
-                            || !user_message.local_images.is_empty()
-                            || !user_message.remote_image_urls.is_empty())
+                        && self.bottom_pane.is_task_running()
+                        && !self.is_review_mode
+                        && has_user_content
                         && user_message.text.strip_prefix('!').is_none()
-                        && ((user_message.local_images.is_empty()
-                            && user_message.remote_image_urls.is_empty())
-                            || self.current_model_supports_images());
+                        && (!has_images || self.current_model_supports_images());
                     if should_preview_as_pending_nudge {
-                        self.pending_nudges.push_back(
-                            Self::rendered_user_message_event_from_parts(
-                                user_message.text.clone(),
-                                user_message.text_elements.clone(),
-                                user_message
-                                    .local_images
-                                    .iter()
-                                    .map(|image| image.path.clone())
-                                    .collect(),
-                                user_message.remote_image_urls.clone(),
-                            ),
-                        );
-                        self.refresh_pending_input_preview();
                         self.submit_user_message_without_local_history(user_message);
                     } else if self.is_session_configured() {
                         // Submitted is only emitted when steer is enabled.
@@ -4166,6 +4155,8 @@ impl ChatWidget {
         } else {
             None
         };
+        let pending_nudge =
+            (!render_in_history).then(|| Self::rendered_user_message_event_from_inputs(&items));
         let personality = self
             .config
             .personality
@@ -4203,6 +4194,11 @@ impl ChatWidget {
                 .unwrap_or_else(|e| {
                     tracing::error!("failed to send AddHistory op: {e}");
                 });
+        }
+
+        if let Some(pending_nudge) = pending_nudge {
+            self.pending_nudges.push_back(pending_nudge);
+            self.refresh_pending_input_preview();
         }
 
         // Show replayable user content in conversation history.
