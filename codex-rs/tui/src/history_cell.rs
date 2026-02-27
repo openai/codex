@@ -1038,7 +1038,7 @@ pub(crate) fn new_session_info(
     requested_model: &str,
     event: SessionConfiguredEvent,
     is_first_event: bool,
-    selected_startup_tip: Option<String>,
+    startup_tips: Vec<String>,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
@@ -1086,12 +1086,12 @@ pub(crate) fn new_session_info(
         ];
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
-        if let Some(selected_startup_tip) = selected_startup_tip {
-            parts.push(Box::new(TooltipHistoryCell::new(selected_startup_tip)));
+        for startup_tip in startup_tips {
+            parts.push(Box::new(TooltipHistoryCell::new(startup_tip)));
         }
     } else {
-        if let Some(selected_startup_tip) = selected_startup_tip {
-            parts.push(Box::new(TooltipHistoryCell::new(selected_startup_tip)));
+        for startup_tip in startup_tips {
+            parts.push(Box::new(TooltipHistoryCell::new(startup_tip)));
         }
         if requested_model != model {
             let lines = vec![

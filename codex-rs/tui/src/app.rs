@@ -2689,16 +2689,16 @@ impl App {
                     ));
                 }
             }
-            AppEvent::PersistModelNewNuxDisplayed { model } => {
+            AppEvent::PersistAvailabilityNuxDisplayed { id } => {
                 let count = self
                     .config
                     .notices
-                    .model_new_nux_display_counts
-                    .entry(model.clone())
+                    .availability_nux_display_counts
+                    .entry(id.clone())
                     .or_default();
                 *count += 1;
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .record_model_new_nux_display(model.as_str())
+                    .record_availability_nux_display(id.as_str())
                     .apply()
                     .await
                 {
@@ -3828,7 +3828,7 @@ mod tests {
                 app.chat_widget.current_model(),
                 event,
                 is_first,
-                None,
+                Vec::new(),
             )) as Arc<dyn HistoryCell>
         };
 
@@ -3874,7 +3874,7 @@ mod tests {
         requested_model: &str,
         actual_model: &str,
         is_first_event: bool,
-        selected_startup_tip: Option<&str>,
+        startup_tips: &[&str],
     ) -> String {
         let event = SessionConfiguredEvent {
             session_id: ThreadId::new(),
@@ -3896,7 +3896,7 @@ mod tests {
             requested_model,
             event,
             is_first_event,
-            selected_startup_tip.map(str::to_string),
+            startup_tips.iter().map(|tip| (*tip).to_string()).collect(),
         );
 
         cell.display_lines(80)
@@ -3929,11 +3929,23 @@ mod tests {
             "gpt-test",
             "gpt-test",
             true,
-            Some(
-                "New You're using GPT Test. Fast, high-reliability coding model. Use /model to compare or switch anytime.",
-            ),
+            &["New Spark is now available to you."],
         );
         assert_snapshot!("first_session_header_with_model_nux", rendered);
+    }
+
+    #[test]
+    fn first_session_header_with_multiple_model_nux_matches_snapshot() {
+        let rendered = render_session_info_snapshot(
+            "gpt-test",
+            "gpt-test",
+            true,
+            &[
+                "New Spark is now available to you.",
+                "New Canvas is now available to you.",
+            ],
+        );
+        assert_snapshot!("first_session_header_with_multiple_model_nux", rendered);
     }
 
     #[test]
@@ -3942,7 +3954,7 @@ mod tests {
             "gpt-test",
             "gpt-test",
             false,
-            Some("New You're using GPT Test. Use /model to compare or switch anytime."),
+            &["New Spark is now available to you."],
         );
         assert_snapshot!("later_session_header_with_model_nux", rendered);
     }
@@ -3950,7 +3962,7 @@ mod tests {
     #[test]
     fn later_session_header_after_model_nux_exhaustion_matches_snapshot() {
         let rendered =
-            render_session_info_snapshot("requested-model", "resolved-model", false, None);
+            render_session_info_snapshot("requested-model", "resolved-model", false, &[]);
         assert_snapshot!("later_session_header_after_model_nux_exhaustion", rendered);
     }
 
@@ -4396,7 +4408,7 @@ mod tests {
                 app.chat_widget.current_model(),
                 event,
                 is_first,
-                None,
+                Vec::new(),
             )) as Arc<dyn HistoryCell>
         };
 

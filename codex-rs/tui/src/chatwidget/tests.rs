@@ -43,6 +43,7 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -1845,7 +1846,12 @@ async fn session_configured_first_session_shows_model_nux_and_increments_display
     let mut model_info = construct_model_info_offline("gpt-5.1", &chat.config);
     model_info.display_name = "GPT Test".to_string();
     model_info.description = Some("Fast, high-reliability coding model.".to_string());
-    model_info.show_nux = true;
+    model_info.availability_nux = Some(ModelAvailabilityNux {
+        id: "try_spark".to_string(),
+        message:
+            "*New* You're using **GPT Test**. Fast, high-reliability coding model. Use /model to compare or switch anytime."
+                .to_string(),
+    });
     chat.models_manager = Arc::new(ModelsManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
@@ -1884,8 +1890,8 @@ async fn session_configured_first_session_shows_model_nux_and_increments_display
         Some(&1),
         chat.config
             .notices
-            .model_new_nux_display_counts
-            .get("gpt-5.1")
+            .availability_nux_display_counts
+            .get("try_spark")
     );
 }
 
@@ -1893,7 +1899,7 @@ async fn session_configured_first_session_shows_model_nux_and_increments_display
 async fn session_configured_ineligible_model_does_not_increment_display_count() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
     let mut model_info = construct_model_info_offline("gpt-5.1", &chat.config);
-    model_info.show_nux = false;
+    model_info.availability_nux = None;
     chat.models_manager = Arc::new(ModelsManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
@@ -1928,8 +1934,8 @@ async fn session_configured_ineligible_model_does_not_increment_display_count() 
         None,
         chat.config
             .notices
-            .model_new_nux_display_counts
-            .get("gpt-5.1")
+            .availability_nux_display_counts
+            .get("try_spark")
     );
 }
 
@@ -6116,7 +6122,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         is_default: false,
         upgrade: None,
         show_in_picker,
-        show_nux: false,
+        availability_nux: None,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };
@@ -6385,7 +6391,7 @@ async fn single_reasoning_option_skips_selection() {
         is_default: false,
         upgrade: None,
         show_in_picker: true,
-        show_nux: false,
+        availability_nux: None,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };

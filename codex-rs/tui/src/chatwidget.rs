@@ -1131,26 +1131,18 @@ impl ChatWidget {
         self.last_copyable_output = None;
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
-        let startup_tip = if self.config.show_tooltips {
-            let active_model = self
-                .models_manager
-                .try_list_models()
-                .ok()
-                .and_then(|models| {
-                    models
-                        .into_iter()
-                        .find(|preset| preset.model == model_for_header)
-                });
-            crate::tooltips::get_startup_tip(
-                active_model.as_ref(),
-                &self.config.notices.model_new_nux_display_counts,
+        let startup_tips = if self.config.show_tooltips {
+            let models = self.models_manager.try_list_models().unwrap_or_default();
+            crate::tooltips::get_startup_tips(
+                &models,
+                &self.config.notices.availability_nux_display_counts,
                 self.auth_manager
                     .auth_cached()
                     .and_then(|auth| auth.account_plan_type()),
                 self.show_welcome_banner,
             )
         } else {
-            None
+            Default::default()
         };
         self.session_header.set_model(&model_for_header);
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
@@ -1160,24 +1152,51 @@ impl ChatWidget {
         );
         self.refresh_model_display();
         self.sync_personality_command_enabled();
-        let selected_startup_tip = startup_tip.clone().map(StartupTip::message);
+        let displayed_startup_tips = if self.show_welcome_banner {
+            startup_tips
+                .first_session_tips
+                .iter()
+                .map(StartupTip::message)
+                .collect()
+        } else {
+            startup_tips
+                .selected_tip
+                .iter()
+                .map(StartupTip::message)
+                .collect()
+        };
         let session_info_cell = history_cell::new_session_info(
             &requested_model,
             event,
             self.show_welcome_banner,
-            selected_startup_tip,
+            displayed_startup_tips,
         );
         self.apply_session_info_cell(session_info_cell);
-        if let Some(StartupTip::ModelNew { model, .. }) = startup_tip {
+        let displayed_availability_nux_ids: Vec<String> = if self.show_welcome_banner {
+            startup_tips
+                .first_session_tips
+                .iter()
+                .filter_map(StartupTip::availability_nux_id)
+                .map(str::to_string)
+                .collect()
+        } else {
+            startup_tips
+                .selected_tip
+                .iter()
+                .filter_map(StartupTip::availability_nux_id)
+                .map(str::to_string)
+                .collect()
+        };
+        for id in displayed_availability_nux_ids {
             let count = self
                 .config
                 .notices
-                .model_new_nux_display_counts
-                .entry(model.clone())
+                .availability_nux_display_counts
+                .entry(id.clone())
                 .or_default();
             *count += 1;
             self.app_event_tx
-                .send(AppEvent::PersistModelNewNuxDisplayed { model });
+                .send(AppEvent::PersistAvailabilityNuxDisplayed { id });
         }
 
         if let Some(messages) = initial_messages {

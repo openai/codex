@@ -1,9 +1,11 @@
 use codex_core::features::FEATURES;
 use codex_protocol::account::PlanType;
+use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use lazy_static::lazy_static;
 use rand::Rng;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
@@ -51,27 +53,40 @@ fn experimental_tooltips() -> Vec<&'static str> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StartupTip {
     Generic(String),
-    ModelNew { model: String, message: String },
+    AvailabilityNux { id: String, message: String },
 }
 
 impl StartupTip {
-    pub(crate) fn message(self) -> String {
+    pub(crate) fn message(&self) -> String {
         match self {
-            Self::Generic(message) | Self::ModelNew { message, .. } => message,
+            Self::Generic(message) | Self::AvailabilityNux { message, .. } => message.clone(),
+        }
+    }
+
+    pub(crate) fn availability_nux_id(&self) -> Option<&str> {
+        match self {
+            Self::Generic(_) => None,
+            Self::AvailabilityNux { id, .. } => Some(id.as_str()),
         }
     }
 }
 
-pub(crate) fn get_startup_tip(
-    model: Option<&ModelPreset>,
-    model_new_nux_display_counts: &BTreeMap<String, u32>,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct StartupTips {
+    pub(crate) first_session_tips: Vec<StartupTip>,
+    pub(crate) selected_tip: Option<StartupTip>,
+}
+
+pub(crate) fn get_startup_tips(
+    models: &[ModelPreset],
+    availability_nux_display_counts: &BTreeMap<String, u32>,
     plan: Option<PlanType>,
     is_first_session: bool,
-) -> Option<StartupTip> {
+) -> StartupTips {
     let mut rng = rand::rng();
-    get_startup_tip_with_rng(
-        model,
-        model_new_nux_display_counts,
+    get_startup_tips_with_rng(
+        models,
+        availability_nux_display_counts,
         plan,
         is_first_session,
         announcement::fetch_announcement_tip(),
@@ -79,39 +94,38 @@ pub(crate) fn get_startup_tip(
     )
 }
 
-fn get_startup_tip_with_rng<R: Rng + ?Sized>(
-    model: Option<&ModelPreset>,
-    model_new_nux_display_counts: &BTreeMap<String, u32>,
+fn get_startup_tips_with_rng<R: Rng + ?Sized>(
+    models: &[ModelPreset],
+    availability_nux_display_counts: &BTreeMap<String, u32>,
     plan: Option<PlanType>,
     is_first_session: bool,
     announcement_tip: Option<String>,
     rng: &mut R,
-) -> Option<StartupTip> {
-    let model_new_tip = model.and_then(|preset| {
-        let display_count = model_new_nux_display_counts
-            .get(&preset.model)
-            .copied()
-            .unwrap_or(0);
-        (preset.show_nux && display_count < 4).then(|| StartupTip::ModelNew {
-            model: preset.model.clone(),
-            message: model_new_tooltip(preset),
-        })
-    });
+) -> StartupTips {
+    let availability_nux_tips = availability_nux_tips(models, availability_nux_display_counts);
 
     if is_first_session {
-        return model_new_tip;
+        return StartupTips {
+            first_session_tips: availability_nux_tips,
+            selected_tip: None,
+        };
     }
 
-    let Some(model_new_tip) = model_new_tip else {
-        return get_generic_tooltip_with_rng(plan, announcement_tip, rng).map(StartupTip::Generic);
-    };
+    if availability_nux_tips.is_empty() {
+        return StartupTips {
+            first_session_tips: Vec::new(),
+            selected_tip: get_generic_tooltip_with_rng(plan, announcement_tip, rng)
+                .map(StartupTip::Generic),
+        };
+    }
 
-    let mut weighted_candidates = vec![
-        model_new_tip.clone(),
-        model_new_tip.clone(),
-        model_new_tip.clone(),
-        model_new_tip,
-    ];
+    let mut weighted_candidates = Vec::new();
+    for availability_nux_tip in &availability_nux_tips {
+        weighted_candidates.push(availability_nux_tip.clone());
+        weighted_candidates.push(availability_nux_tip.clone());
+        weighted_candidates.push(availability_nux_tip.clone());
+        weighted_candidates.push(availability_nux_tip.clone());
+    }
     if let Some(announcement_tip) = announcement_tip {
         weighted_candidates.push(StartupTip::Generic(announcement_tip));
     }
@@ -122,9 +136,12 @@ fn get_startup_tip_with_rng<R: Rng + ?Sized>(
         weighted_candidates.push(StartupTip::Generic(random_tip.to_string()));
     }
 
-    weighted_candidates
-        .get(rng.random_range(0..weighted_candidates.len()))
-        .cloned()
+    StartupTips {
+        first_session_tips: Vec::new(),
+        selected_tip: weighted_candidates
+            .get(rng.random_range(0..weighted_candidates.len()))
+            .cloned(),
+    }
 }
 
 fn get_generic_tooltip_with_rng<R: Rng + ?Sized>(
@@ -167,18 +184,31 @@ fn plan_tooltip(plan: Option<PlanType>) -> Option<&'static str> {
     }
 }
 
-fn model_new_tooltip(model: &ModelPreset) -> String {
-    let description = model.description.trim();
-    if description.is_empty() {
-        format!(
-            "*New* You're using **{}**. Use /model to compare or switch anytime.",
-            model.display_name
-        )
-    } else {
-        format!(
-            "*New* You're using **{}**. {} Use /model to compare or switch anytime.",
-            model.display_name, description
-        )
+fn availability_nux_tips(
+    models: &[ModelPreset],
+    availability_nux_display_counts: &BTreeMap<String, u32>,
+) -> Vec<StartupTip> {
+    let mut seen_ids = HashSet::new();
+
+    models
+        .iter()
+        .filter_map(|preset| preset.availability_nux.as_ref())
+        .filter(|availability_nux| {
+            availability_nux_display_counts
+                .get(&availability_nux.id)
+                .copied()
+                .unwrap_or(0)
+                < 4
+        })
+        .filter(|availability_nux| seen_ids.insert(availability_nux.id.clone()))
+        .map(startup_tip_from_availability_nux)
+        .collect()
+}
+
+fn startup_tip_from_availability_nux(availability_nux: &ModelAvailabilityNux) -> StartupTip {
+    StartupTip::AvailabilityNux {
+        id: availability_nux.id.clone(),
+        message: availability_nux.message.clone(),
     }
 }
 
@@ -343,7 +373,7 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
-    fn model_preset(show_nux: bool, description: &str) -> ModelPreset {
+    fn model_preset(availability_nux: Option<(&str, &str)>, description: &str) -> ModelPreset {
         ModelPreset {
             id: "gpt-test".to_string(),
             model: "gpt-test".to_string(),
@@ -355,7 +385,10 @@ mod tests {
             is_default: false,
             upgrade: None,
             show_in_picker: true,
-            show_nux,
+            availability_nux: availability_nux.map(|(id, message)| ModelAvailabilityNux {
+                id: id.to_string(),
+                message: message.to_string(),
+            }),
             supported_in_api: true,
             input_modalities: codex_protocol::openai_models::default_input_modalities(),
         }
@@ -479,12 +512,15 @@ content = "This is a test announcement"
     }
 
     #[test]
-    fn first_session_eligible_model_returns_model_tip() {
-        let preset = model_preset(true, "Fast, high-reliability coding model.");
+    fn first_session_eligible_model_returns_all_availability_nux_tips() {
+        let preset = model_preset(
+            Some(("try_spark", "*New* Spark is now available to you.")),
+            "Fast, high-reliability coding model.",
+        );
         let mut rng = StdRng::seed_from_u64(1);
 
-        let tip = get_startup_tip_with_rng(
-            Some(&preset),
+        let tips = get_startup_tips_with_rng(
+            &[preset],
             &BTreeMap::new(),
             Some(PlanType::Plus),
             true,
@@ -493,21 +529,24 @@ content = "This is a test announcement"
         );
 
         assert_eq!(
-            Some(StartupTip::ModelNew {
-                model: "gpt-test".to_string(),
-                message: "*New* You're using **GPT Test**. Fast, high-reliability coding model. Use /model to compare or switch anytime.".to_string(),
-            }),
-            tip
+            StartupTips {
+                first_session_tips: vec![StartupTip::AvailabilityNux {
+                    id: "try_spark".to_string(),
+                    message: "*New* Spark is now available to you.".to_string(),
+                }],
+                selected_tip: None,
+            },
+            tips
         );
     }
 
     #[test]
     fn first_session_ineligible_model_skips_tip() {
-        let preset = model_preset(false, "");
+        let preset = model_preset(None, "");
         let mut rng = StdRng::seed_from_u64(1);
 
-        let tip = get_startup_tip_with_rng(
-            Some(&preset),
+        let tips = get_startup_tips_with_rng(
+            &[preset],
             &BTreeMap::new(),
             Some(PlanType::Plus),
             true,
@@ -515,16 +554,68 @@ content = "This is a test announcement"
             &mut rng,
         );
 
-        assert_eq!(None, tip);
+        assert_eq!(StartupTips::default(), tips);
     }
 
     #[test]
-    fn later_session_can_select_model_tip_from_weighted_pool() {
-        let preset = model_preset(true, "");
+    fn first_session_dedupes_multiple_availability_nuxes_by_id() {
+        let mut rng = StdRng::seed_from_u64(1);
+        let models = vec![
+            model_preset(
+                Some(("try_spark", "*New* Spark is now available to you.")),
+                "",
+            ),
+            model_preset(
+                Some(("try_spark", "*New* Spark is now available to you.")),
+                "",
+            ),
+            ModelPreset {
+                model: "gpt-other".to_string(),
+                availability_nux: Some(ModelAvailabilityNux {
+                    id: "try_canvas".to_string(),
+                    message: "*New* Canvas is now available to you.".to_string(),
+                }),
+                ..model_preset(None, "")
+            },
+        ];
+
+        let tips = get_startup_tips_with_rng(
+            &models,
+            &BTreeMap::new(),
+            Some(PlanType::Plus),
+            true,
+            Some("announcement".to_string()),
+            &mut rng,
+        );
+
+        assert_eq!(
+            StartupTips {
+                first_session_tips: vec![
+                    StartupTip::AvailabilityNux {
+                        id: "try_spark".to_string(),
+                        message: "*New* Spark is now available to you.".to_string(),
+                    },
+                    StartupTip::AvailabilityNux {
+                        id: "try_canvas".to_string(),
+                        message: "*New* Canvas is now available to you.".to_string(),
+                    },
+                ],
+                selected_tip: None,
+            },
+            tips
+        );
+    }
+
+    #[test]
+    fn later_session_can_select_availability_nux_from_weighted_pool() {
+        let preset = model_preset(
+            Some(("try_spark", "*New* Spark is now available to you.")),
+            "",
+        );
         let mut rng = StdRng::seed_from_u64(5);
 
-        let tip = get_startup_tip_with_rng(
-            Some(&preset),
+        let tips = get_startup_tips_with_rng(
+            &[preset],
             &BTreeMap::new(),
             Some(PlanType::Plus),
             false,
@@ -533,24 +624,28 @@ content = "This is a test announcement"
         );
 
         assert_eq!(
-            Some(StartupTip::ModelNew {
-                model: "gpt-test".to_string(),
-                message:
-                    "*New* You're using **GPT Test**. Use /model to compare or switch anytime."
-                        .to_string(),
-            }),
-            tip
+            StartupTips {
+                first_session_tips: Vec::new(),
+                selected_tip: Some(StartupTip::AvailabilityNux {
+                    id: "try_spark".to_string(),
+                    message: "*New* Spark is now available to you.".to_string(),
+                }),
+            },
+            tips
         );
     }
 
     #[test]
-    fn later_session_count_limit_disables_model_tip() {
-        let preset = model_preset(true, "");
-        let counts = BTreeMap::from([("gpt-test".to_string(), 4)]);
+    fn later_session_count_limit_disables_availability_nux() {
+        let preset = model_preset(
+            Some(("try_spark", "*New* Spark is now available to you.")),
+            "",
+        );
+        let counts = BTreeMap::from([("try_spark".to_string(), 4)]);
         let mut rng = StdRng::seed_from_u64(5);
 
-        let tip = get_startup_tip_with_rng(
-            Some(&preset),
+        let tips = get_startup_tips_with_rng(
+            &[preset],
             &counts,
             Some(PlanType::Plus),
             false,
@@ -558,27 +653,37 @@ content = "This is a test announcement"
             &mut rng,
         );
 
-        assert_eq!(Some(StartupTip::Generic("announcement".to_string())), tip);
+        assert_eq!(
+            StartupTips {
+                first_session_tips: Vec::new(),
+                selected_tip: Some(StartupTip::Generic("announcement".to_string())),
+            },
+            tips
+        );
     }
 
     #[test]
     fn later_session_eligible_model_includes_announcement_and_generic_candidates() {
-        let preset = model_preset(true, "");
+        let preset = model_preset(
+            Some(("try_spark", "*New* Spark is now available to you.")),
+            "",
+        );
         let mut saw_announcement = false;
         let mut saw_plan_tip = false;
         let mut saw_random_tip = false;
-        let mut saw_model_tip = false;
+        let mut saw_availability_nux_tip = false;
 
         for seed in 0..64 {
             let mut rng = StdRng::seed_from_u64(seed);
-            let tip = get_startup_tip_with_rng(
-                Some(&preset),
+            let tip = get_startup_tips_with_rng(
+                std::slice::from_ref(&preset),
                 &BTreeMap::new(),
                 Some(PlanType::Plus),
                 false,
                 Some("announcement".to_string()),
                 &mut rng,
             )
+            .selected_tip
             .expect("tip");
 
             match tip {
@@ -593,8 +698,8 @@ content = "This is a test announcement"
                 StartupTip::Generic(_) => {
                     saw_random_tip = true;
                 }
-                StartupTip::ModelNew { .. } => {
-                    saw_model_tip = true;
+                StartupTip::AvailabilityNux { .. } => {
+                    saw_availability_nux_tip = true;
                 }
             }
         }
@@ -602,6 +707,6 @@ content = "This is a test announcement"
         assert!(saw_announcement);
         assert!(saw_plan_tip);
         assert!(saw_random_tip);
-        assert!(saw_model_tip);
+        assert!(saw_availability_nux_tip);
     }
 }

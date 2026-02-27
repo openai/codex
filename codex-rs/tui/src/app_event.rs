@@ -293,9 +293,9 @@ pub(crate) enum AppEvent {
         to_model: String,
     },
 
-    /// Persist that the model-new startup tip was displayed for a model.
-    PersistModelNewNuxDisplayed {
-        model: String,
+    /// Persist that an availability NUX was displayed.
+    PersistAvailabilityNuxDisplayed {
+        id: String,
     },
 
     /// Skip the next world-writable scan (one-shot) after a user-confirmed continue.

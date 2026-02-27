@@ -722,9 +722,9 @@ pub struct Notice {
     /// Tracks acknowledged model migrations as old->new model slug mappings.
     #[serde(default)]
     pub model_migrations: BTreeMap<String, String>,
-    /// Tracks how many times the TUI actually displayed the model-new startup tip.
+    /// Tracks how many times the TUI actually displayed each availability NUX.
     #[serde(default)]
-    pub model_new_nux_display_counts: BTreeMap<String, u32>,
+    pub availability_nux_display_counts: BTreeMap<String, u32>,
 }
 
 impl Notice {
