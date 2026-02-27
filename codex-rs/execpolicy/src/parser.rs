@@ -1,6 +1,8 @@
+use codex_utils_absolute_path::AbsolutePathBuf;
 use multimap::MultiMap;
 use shlex;
 use starlark::any::ProvidesStaticType;
+use starlark::codemap::FileSpan;
 use starlark::environment::GlobalsBuilder;
 use starlark::environment::Module;
 use starlark::eval::Evaluator;
@@ -13,11 +15,18 @@ use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
 use std::cell::RefCell;
 use std::cell::RefMut;
+use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::decision::Decision;
 use crate::error::Error;
+use crate::error::ErrorLocation;
 use crate::error::Result;
+use crate::error::TextPosition;
+use crate::error::TextRange;
+use crate::executable_name::executable_lookup_key;
+use crate::executable_name::executable_path_lookup_key;
 use crate::rule::NetworkRule;
 use crate::rule::NetworkRuleProtocol;
 use crate::rule::PatternToken;
@@ -47,6 +56,7 @@ impl PolicyParser {
     /// Parses a policy, tagging parser errors with `policy_identifier` so failures include the
     /// identifier alongside line numbers.
     pub fn parse(&mut self, policy_identifier: &str, policy_file_contents: &str) -> Result<()> {
+        let pending_validation_count = self.builder.borrow().pending_example_validations.len();
         let mut dialect = Dialect::Extended.clone();
         dialect.enable_f_strings = true;
         let ast = AstModule::parse(
@@ -62,6 +72,9 @@ impl PolicyParser {
             eval.extra = Some(&self.builder);
             eval.eval_module(ast, &globals).map_err(Error::Starlark)?;
         }
+        self.builder
+            .borrow()
+            .validate_pending_examples_from(pending_validation_count)?;
         Ok(())
     }
 
@@ -74,6 +87,8 @@ impl PolicyParser {
 struct PolicyBuilder {
     rules_by_program: MultiMap<String, RuleRef>,
     network_rules: Vec<NetworkRule>,
+    host_executables_by_name: HashMap<String, Arc<[AbsolutePathBuf]>>,
+    pending_example_validations: Vec<PendingExampleValidation>,
 }
 
 impl PolicyBuilder {
@@ -81,6 +96,8 @@ impl PolicyBuilder {
         Self {
             rules_by_program: MultiMap::new(),
             network_rules: Vec::new(),
+            host_executables_by_name: HashMap::new(),
+            pending_example_validations: Vec::new(),
         }
     }
 
@@ -93,9 +110,62 @@ impl PolicyBuilder {
         self.network_rules.push(rule);
     }
 
-    fn build(self) -> crate::policy::Policy {
-        crate::policy::Policy::from_parts(self.rules_by_program, self.network_rules)
+    fn add_host_executable(&mut self, name: String, paths: Vec<AbsolutePathBuf>) {
+        self.host_executables_by_name.insert(name, paths.into());
     }
+
+    fn add_pending_example_validation(
+        &mut self,
+        rules: Vec<RuleRef>,
+        matches: Vec<Vec<String>>,
+        not_matches: Vec<Vec<String>>,
+        location: Option<ErrorLocation>,
+    ) {
+        self.pending_example_validations
+            .push(PendingExampleValidation {
+                rules,
+                matches,
+                not_matches,
+                location,
+            });
+    }
+
+    fn validate_pending_examples_from(&self, start: usize) -> Result<()> {
+        for validation in &self.pending_example_validations[start..] {
+            let mut rules_by_program = MultiMap::new();
+            for rule in &validation.rules {
+                rules_by_program.insert(rule.program().to_string(), rule.clone());
+            }
+
+            let policy = crate::policy::Policy::from_parts(
+                rules_by_program,
+                Vec::new(),
+                self.host_executables_by_name.clone(),
+            );
+            validate_not_match_examples(&policy, &validation.rules, &validation.not_matches)
+                .map_err(|error| attach_validation_location(error, validation.location.clone()))?;
+            validate_match_examples(&policy, &validation.rules, &validation.matches)
+                .map_err(|error| attach_validation_location(error, validation.location.clone()))?;
+        }
+
+        Ok(())
+    }
+
+    fn build(self) -> crate::policy::Policy {
+        crate::policy::Policy::from_parts(
+            self.rules_by_program,
+            self.network_rules,
+            self.host_executables_by_name,
+        )
+    }
+}
+
+#[derive(Debug)]
+struct PendingExampleValidation {
+    rules: Vec<RuleRef>,
+    matches: Vec<Vec<String>>,
+    not_matches: Vec<Vec<String>>,
+    location: Option<ErrorLocation>,
 }
 
 fn parse_pattern<'v>(pattern: UnpackList<Value<'v>>) -> Result<Vec<PatternToken>> {
@@ -150,10 +220,64 @@ fn parse_examples<'v>(examples: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>
     examples.items.into_iter().map(parse_example).collect()
 }
 
+fn parse_literal_absolute_path(raw: &str) -> Result<AbsolutePathBuf> {
+    if !Path::new(raw).is_absolute() {
+        return Err(Error::InvalidRule(format!(
+            "host_executable paths must be absolute (got {raw})"
+        )));
+    }
+
+    AbsolutePathBuf::try_from(raw.to_string())
+        .map_err(|error| Error::InvalidRule(format!("invalid absolute path `{raw}`: {error}")))
+}
+
+fn validate_host_executable_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::InvalidRule(
+            "host_executable name cannot be empty".to_string(),
+        ));
+    }
+
+    let path = Path::new(name);
+    if path.components().count() != 1
+        || path.file_name().and_then(|value| value.to_str()) != Some(name)
+    {
+        return Err(Error::InvalidRule(format!(
+            "host_executable name must be a bare executable name (got {name})"
+        )));
+    }
+
+    Ok(())
+}
+
 fn parse_network_rule_decision(raw: &str) -> Result<Decision> {
     match raw {
         "deny" => Ok(Decision::Forbidden),
         other => Decision::parse(other),
+    }
+}
+
+fn error_location_from_file_span(span: FileSpan) -> ErrorLocation {
+    let resolved = span.resolve_span();
+    ErrorLocation {
+        path: span.filename().to_string(),
+        range: TextRange {
+            start: TextPosition {
+                line: resolved.begin.line + 1,
+                column: resolved.begin.column + 1,
+            },
+            end: TextPosition {
+                line: resolved.end.line + 1,
+                column: resolved.end.column + 1,
+            },
+        },
+    }
+}
+
+fn attach_validation_location(error: Error, location: Option<ErrorLocation>) -> Error {
+    match location {
+        Some(location) => error.with_location(location),
+        None => error,
     }
 }
 
@@ -251,6 +375,9 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             .map(parse_examples)
             .transpose()?
             .unwrap_or_default();
+        let location = eval
+            .call_stack_top_location()
+            .map(error_location_from_file_span);
 
         let mut builder = policy_builder(eval);
 
@@ -275,9 +402,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             })
             .collect();
 
-        validate_not_match_examples(&rules, &not_matches)?;
-        validate_match_examples(&rules, &matches)?;
-
+        builder.add_pending_example_validation(rules.clone(), matches, not_matches, location);
         rules.into_iter().for_each(|rule| builder.add_rule(rule));
         Ok(NoneType)
     }
@@ -306,6 +431,43 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             decision,
             justification,
         });
+        Ok(NoneType)
+    }
+
+    fn host_executable<'v>(
+        name: &'v str,
+        paths: UnpackList<Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<NoneType> {
+        validate_host_executable_name(name)?;
+
+        let mut parsed_paths = Vec::new();
+        for value in paths.items {
+            let raw = value.unpack_str().ok_or_else(|| {
+                Error::InvalidRule(format!(
+                    "host_executable paths must be strings (got {})",
+                    value.get_type()
+                ))
+            })?;
+            let path = parse_literal_absolute_path(raw)?;
+            let Some(path_name) = executable_path_lookup_key(path.as_path()) else {
+                return Err(Error::InvalidRule(format!(
+                    "host_executable path `{raw}` must have basename `{name}`"
+                ))
+                .into());
+            };
+            if path_name != executable_lookup_key(name) {
+                return Err(Error::InvalidRule(format!(
+                    "host_executable path `{raw}` must have basename `{name}`"
+                ))
+                .into());
+            }
+            if !parsed_paths.iter().any(|existing| existing == &path) {
+                parsed_paths.push(path);
+            }
+        }
+
+        policy_builder(eval).add_host_executable(executable_lookup_key(name), parsed_paths);
         Ok(NoneType)
     }
 }
