@@ -751,3 +751,71 @@ async fn shell_zsh_fork_still_enforces_workspace_write_sandbox() -> Result<()> {
 
     Ok(())
 }
+
+/// This verifies the current prefix-rule contract end to end: a matched
+/// `allow` rule is rerun outside the inherited turn sandbox rather than merely
+/// allowed to continue inside it.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_prefix_rule_runs_unsandboxed() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork prefix rule unsandboxed test")? else {
+        return Ok(());
+    };
+
+    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let outside_path = outside_dir
+        .path()
+        .join("zsh-fork-prefix-rule-unsandboxed.txt");
+    let outside_path_quoted = shlex::try_join([outside_path.to_string_lossy().as_ref()])?;
+    let outside_path_for_hook = outside_path.clone();
+    let policy_contents = "prefix_rule(pattern=[\"touch\"], decision=\"allow\")\n".to_string();
+    let workspace_write_policy = restrictive_workspace_write_policy();
+
+    let server = start_mock_server().await;
+    let tool_call_id = "zsh-fork-prefix-rule-unsandboxed";
+    let test = build_zsh_fork_test(
+        &server,
+        runtime,
+        AskForApproval::Never,
+        workspace_write_policy.clone(),
+        move |home| {
+            let _ = fs::remove_file(&outside_path_for_hook);
+            let rules_dir = home.join("rules");
+            fs::create_dir_all(&rules_dir).unwrap();
+            fs::write(rules_dir.join("default.rules"), &policy_contents).unwrap();
+        },
+    )
+    .await?;
+
+    let command = format!("touch {outside_path_quoted}");
+    let arguments = shell_command_arguments(&command)?;
+    let mocks =
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
+            .await;
+
+    submit_turn_with_policies(
+        &test,
+        "run allowed touch under zsh fork",
+        AskForApproval::Never,
+        workspace_write_policy,
+    )
+    .await?;
+
+    wait_for_turn_complete(&test).await;
+
+    let call_output = mocks
+        .completion
+        .single_request()
+        .function_call_output(tool_call_id)["output"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        outside_path.exists(),
+        "expected matched prefix_rule to rerun touch unsandboxed; output: {call_output:?}"
+    );
+
+    Ok(())
+}
