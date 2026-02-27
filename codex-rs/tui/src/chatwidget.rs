@@ -4457,11 +4457,16 @@ impl ChatWidget {
                     && let EventMsg::UserMessage(user_message) = item.as_legacy_event()
                 {
                     let rendered = Self::rendered_user_message_event_from_event(&user_message);
-                    if self.pending_nudges.front() == Some(&rendered) {
+                    let should_render = if self.pending_nudges.front() == Some(&rendered) {
                         self.pending_nudges.pop_front();
                         self.refresh_pending_input_preview();
+                        true
+                    } else {
+                        self.last_rendered_user_message_event.as_ref() != Some(&rendered)
+                    };
+                    if should_render {
+                        self.on_user_message_event(user_message);
                     }
-                    self.on_user_message_event(user_message);
                 }
             }
             EventMsg::EnteredReviewMode(review_request) => {

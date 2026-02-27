@@ -3618,6 +3618,24 @@ async fn raw_response_item_with_canonicalized_user_payload_clears_pending_nudge(
 }
 
 #[tokio::test]
+async fn raw_response_item_does_not_duplicate_locally_rendered_user_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("hello"));
+
+    chat.handle_codex_event(raw_user_message_event("hello"));
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
 async fn raw_response_item_only_pops_front_pending_nudge() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.pending_nudges
