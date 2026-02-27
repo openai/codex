@@ -642,6 +642,79 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
 }
 
 #[tokio::test]
+async fn reconstruct_history_legacy_compaction_without_replacement_history_does_not_inject_current_initial_context()
+ {
+    let (session, turn_context) = make_session_and_context().await;
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("before compact")),
+        RolloutItem::ResponseItem(assistant_message("assistant reply")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "legacy summary".to_string(),
+            replacement_history: None,
+        }),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(
+        reconstructed.history,
+        vec![
+            user_message("before compact"),
+            user_message("legacy summary"),
+        ]
+    );
+    assert!(reconstructed.reference_context_item.is_none());
+}
+
+#[tokio::test]
+async fn reconstruct_history_legacy_compaction_without_replacement_history_clears_later_reference_context_item()
+ {
+    let (session, turn_context) = make_session_and_context().await;
+    let current_context_item = turn_context.to_turn_context_item();
+    let current_turn_id = current_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("before compact")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "legacy summary".to_string(),
+            replacement_history: None,
+        }),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: current_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "after legacy compact".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(current_context_item),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: current_turn_id,
+                last_agent_message: None,
+            },
+        )),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert!(reconstructed.reference_context_item.is_none());
+}
+
+#[tokio::test]
 async fn record_initial_history_resumed_turn_context_after_compaction_reestablishes_reference_context_item()
  {
     let (session, turn_context) = make_session_and_context().await;

@@ -223,8 +223,8 @@ impl Session {
             );
         }
 
-        let initial_context = self.build_initial_context(turn_context, None).await;
         let mut history = ContextManager::new();
+        let mut saw_legacy_compaction_without_replacement_history = false;
         if let Some(base_replacement_history) = base_replacement_history {
             history.replace(base_replacement_history.to_vec());
         }
@@ -243,9 +243,16 @@ impl Session {
                     if let Some(replacement_history) = &compacted.replacement_history {
                         history.replace(replacement_history.clone());
                     } else {
+                        saw_legacy_compaction_without_replacement_history = true;
+                        // Legacy rollouts without `replacement_history` should rebuild the
+                        // historical TurnContext at the correct insertion point from persisted
+                        // `TurnContextItem`s. These are rare enough that we currently just clear
+                        // `reference_context_item`, reinject canonical context at the end of the
+                        // resumed conversation, and accept the temporary out-of-distribution
+                        // prompt shape.
                         let user_messages = collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
-                            initial_context.clone(),
+                            Vec::new(),
                             &user_messages,
                             &compacted.message,
                         );
@@ -266,6 +273,11 @@ impl Session {
             TurnReferenceContextItem::Latest(turn_reference_context_item) => {
                 Some(*turn_reference_context_item)
             }
+        };
+        let reference_context_item = if saw_legacy_compaction_without_replacement_history {
+            None
+        } else {
+            reference_context_item
         };
 
         RolloutReconstruction {
