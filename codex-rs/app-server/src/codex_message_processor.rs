@@ -7316,6 +7316,7 @@ async fn read_feedback_logs_from_state_db_context(
     let thread_id_text = thread_id.to_string();
 
     match state_db_ctx.query_feedback_logs(&thread_id_text).await {
+        Ok(logs) if logs.is_empty() => None,
         Ok(logs) => Some(logs),
         Err(err) => {
             warn!(
@@ -7697,6 +7698,7 @@ mod tests {
     use anyhow::Result;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_state::StateRuntime;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -7920,6 +7922,23 @@ mod tests {
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_feedback_logs_from_state_db_context_returns_none_for_empty_logs() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let state_db = StateRuntime::init(
+            temp_dir.path().to_path_buf(),
+            "test-provider".to_string(),
+            None,
+        )
+        .await?;
+        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+
+        let logs = read_feedback_logs_from_state_db_context(Some(&state_db), Some(thread_id)).await;
+
+        assert_eq!(logs, None);
         Ok(())
     }
 
