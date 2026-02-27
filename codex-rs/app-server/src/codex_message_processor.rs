@@ -6717,6 +6717,12 @@ impl CodexMessageProcessor {
 
         let snapshot = self.feedback.snapshot(conversation_id);
         let thread_id = snapshot.thread_id.clone();
+        let sqlite_feedback_logs = if include_logs {
+            let state_db_ctx = get_state_db(&self.config, None).await;
+            read_feedback_logs_from_state_db_context(state_db_ctx.as_ref(), conversation_id).await
+        } else {
+            None
+        };
 
         let validated_rollout_path = if include_logs {
             match conversation_id {
@@ -6740,6 +6746,7 @@ impl CodexMessageProcessor {
                 include_logs,
                 &attachment_paths,
                 Some(session_source),
+                sqlite_feedback_logs,
             )
         })
         .await;
@@ -7298,6 +7305,25 @@ async fn read_summary_from_state_db_context_by_thread_id(
         metadata.git_branch,
         metadata.git_origin_url,
     ))
+}
+
+async fn read_feedback_logs_from_state_db_context(
+    state_db_ctx: Option<&StateDbHandle>,
+    thread_id: Option<ThreadId>,
+) -> Option<Vec<u8>> {
+    let state_db_ctx = state_db_ctx?;
+    let thread_id = thread_id?;
+    let thread_id_text = thread_id.to_string();
+
+    match state_db_ctx.query_feedback_logs(&thread_id_text).await {
+        Ok(logs) => Some(logs),
+        Err(err) => {
+            warn!(
+                "failed to query feedback logs from sqlite for thread_id={thread_id_text}: {err}"
+            );
+            None
+        }
+    }
 }
 
 async fn summary_from_thread_list_item(

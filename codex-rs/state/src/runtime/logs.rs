@@ -285,6 +285,53 @@ WHERE id IN (
         Ok(rows)
     }
 
+    /// Query per-thread feedback logs, capped to the per-thread SQLite retention budget.
+    pub async fn query_feedback_logs(&self, thread_id: &str) -> anyhow::Result<Vec<u8>> {
+        let max_bytes = LOG_PARTITION_SIZE_LIMIT_BYTES;
+        let lines = sqlx::query_scalar::<_, String>(
+            r#"
+WITH thread_logs AS (
+    SELECT
+        message || CASE
+            WHEN substr(message, -1, 1) = char(10) THEN ''
+            ELSE char(10)
+        END AS line,
+        length(CAST(
+            message || CASE
+                WHEN substr(message, -1, 1) = char(10) THEN ''
+                ELSE char(10)
+            END AS BLOB
+        )) AS line_bytes,
+        ts,
+        ts_nanos,
+        id
+    FROM logs
+    WHERE thread_id = ? AND message IS NOT NULL
+)
+SELECT line
+FROM (
+    SELECT
+        line,
+        ts,
+        ts_nanos,
+        id,
+        SUM(line_bytes) OVER (
+            ORDER BY ts DESC, ts_nanos DESC, id DESC
+        ) AS cumulative_bytes
+    FROM thread_logs
+)
+WHERE cumulative_bytes <= ?
+ORDER BY ts ASC, ts_nanos ASC, id ASC
+"#,
+        )
+        .bind(thread_id)
+        .bind(max_bytes)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+
+        Ok(lines.concat().into_bytes())
+    }
+
     /// Return the max log id matching optional filters.
     pub async fn max_log_id(&self, query: &LogQuery) -> anyhow::Result<i64> {
         let mut builder =
@@ -709,6 +756,116 @@ mod tests {
             .expect("query threadless logs");
 
         assert!(rows.is_empty());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn query_feedback_logs_returns_newest_lines_within_limit_in_order() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("alpha".to_string()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("bravo".to_string()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 3,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("charlie".to_string()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let bytes = runtime
+            .query_feedback_logs("thread-1")
+            .await
+            .expect("query feedback logs");
+
+        assert_eq!(
+            String::from_utf8(bytes).expect("valid utf-8"),
+            "alpha\nbravo\ncharlie\n"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn query_feedback_logs_excludes_oversized_newest_row() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+        let eleven_mebibytes = "z".repeat(11 * 1024 * 1024);
+
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("small".to_string()),
+                    thread_id: Some("thread-oversized".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(eleven_mebibytes),
+                    thread_id: Some("thread-oversized".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let bytes = runtime
+            .query_feedback_logs("thread-oversized")
+            .await
+            .expect("query feedback logs");
+
+        assert_eq!(bytes, Vec::<u8>::new());
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
