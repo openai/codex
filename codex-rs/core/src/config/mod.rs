@@ -2411,7 +2411,6 @@ mod tests {
     use crate::config::types::MemoriesConfig;
     use crate::config::types::MemoriesToml;
     use crate::config::types::ModelAvailabilityNuxConfig;
-    use crate::config::types::ModelAvailabilityNuxMode;
     use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
@@ -2548,9 +2547,6 @@ phase_2_model = "gpt-5"
     fn config_toml_deserializes_model_availability_nux() {
         let toml = r#"
 [tui.model_availability_nux]
-mode = "per_model"
-
-[tui.model_availability_nux.shown_count]
 "gpt-foo" = 2
 "gpt-bar" = 4
 "#;
@@ -2568,7 +2564,6 @@ mode = "per_model"
                 status_line: None,
                 theme: None,
                 model_availability_nux: ModelAvailabilityNuxConfig {
-                    mode: ModelAvailabilityNuxMode::PerModel,
                     shown_count: HashMap::from([
                         ("gpt-bar".to_string(), 4),
                         ("gpt-foo".to_string(), 2),

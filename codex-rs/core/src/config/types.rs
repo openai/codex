@@ -657,22 +657,11 @@ impl fmt::Display for NotificationMethod {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelAvailabilityNuxMode {
-    #[default]
-    PerModel,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelAvailabilityNuxConfig {
-    /// Controls how startup availability NUX exposure is tracked.
-    #[serde(default)]
-    pub mode: ModelAvailabilityNuxMode,
-
     /// Number of times a startup availability NUX has been shown per model slug.
-    #[serde(default)]
+    #[serde(default, flatten)]
     pub shown_count: HashMap<String, u32>,
 }
 

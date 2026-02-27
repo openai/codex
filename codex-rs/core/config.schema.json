@@ -652,35 +652,12 @@
       "type": "object"
     },
     "ModelAvailabilityNuxConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "mode": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ModelAvailabilityNuxMode"
-            }
-          ],
-          "default": "per_model",
-          "description": "Controls how startup availability NUX exposure is tracked."
-        },
-        "shown_count": {
-          "additionalProperties": {
-            "format": "uint32",
-            "minimum": 0.0,
-            "type": "integer"
-          },
-          "default": {},
-          "description": "Number of times a startup availability NUX has been shown per model slug.",
-          "type": "object"
-        }
+      "additionalProperties": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
       },
       "type": "object"
-    },
-    "ModelAvailabilityNuxMode": {
-      "enum": [
-        "per_model"
-      ],
-      "type": "string"
     },
     "ModelProviderInfo": {
       "additionalProperties": false,
@@ -1449,10 +1426,7 @@
               "$ref": "#/definitions/ModelAvailabilityNuxConfig"
             }
           ],
-          "default": {
-            "mode": "per_model",
-            "shown_count": {}
-          },
+          "default": {},
           "description": "Startup tooltip availability NUX state persisted by the TUI."
         },
         "notification_method": {

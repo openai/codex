@@ -47,7 +47,6 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
-use codex_core::config::types::ModelAvailabilityNuxMode;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -466,20 +465,18 @@ fn select_model_availability_nux(
     available_models: &[ModelPreset],
     nux_config: &ModelAvailabilityNuxConfig,
 ) -> Option<StartupTooltipOverride> {
-    match nux_config.mode {
-        ModelAvailabilityNuxMode::PerModel => available_models.iter().find_map(|preset| {
-            let ModelAvailabilityNux { message } = preset.availability_nux.as_ref()?;
-            let shown_count = nux_config
-                .shown_count
-                .get(&preset.model)
-                .copied()
-                .unwrap_or_default();
-            (shown_count < MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT).then(|| StartupTooltipOverride {
-                model_slug: preset.model.clone(),
-                message: message.clone(),
-            })
-        }),
-    }
+    available_models.iter().find_map(|preset| {
+        let ModelAvailabilityNux { message } = preset.availability_nux.as_ref()?;
+        let shown_count = nux_config
+            .shown_count
+            .get(&preset.model)
+            .copied()
+            .unwrap_or_default();
+        (shown_count < MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT).then(|| StartupTooltipOverride {
+            model_slug: preset.model.clone(),
+            message: message.clone(),
+        })
+    })
 }
 
 async fn prepare_startup_tooltip_override(
@@ -504,9 +501,11 @@ async fn prepare_startup_tooltip_override(
         .copied()
         .unwrap_or_default();
     let next_count = shown_count.saturating_add(1);
+    let mut updated_shown_count = config.model_availability_nux.shown_count.clone();
+    updated_shown_count.insert(tooltip_override.model_slug.clone(), next_count);
 
     if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
-        .set_model_availability_nux_count(&tooltip_override.model_slug, next_count)
+        .set_model_availability_nux_count(&updated_shown_count)
         .apply()
         .await
     {
@@ -518,10 +517,7 @@ async fn prepare_startup_tooltip_override(
         return Some(tooltip_override.message);
     }
 
-    config
-        .model_availability_nux
-        .shown_count
-        .insert(tooltip_override.model_slug, next_count);
+    config.model_availability_nux.shown_count = updated_shown_count;
     Some(tooltip_override.message)
 }
 
@@ -3495,7 +3491,6 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::types::ModelAvailabilityNuxConfig;
-    use codex_core::config::types::ModelAvailabilityNuxMode;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -4155,7 +4150,6 @@ mod tests {
 
     fn model_availability_nux_config(shown_count: &[(&str, u32)]) -> ModelAvailabilityNuxConfig {
         ModelAvailabilityNuxConfig {
-            mode: ModelAvailabilityNuxMode::PerModel,
             shown_count: shown_count
                 .iter()
                 .map(|(model, count)| ((*model).to_string(), *count))
