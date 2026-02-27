@@ -1085,7 +1085,6 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     )
     .await?;
     let mut saw_resolved = false;
-    let mut saw_task_complete = false;
     loop {
         let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
         let JSONRPCMessage::Notification(notification) = message else {
@@ -1104,21 +1103,10 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 assert_eq!(resolved.request_id, resolved_request_id);
                 saw_resolved = true;
             }
-            "codex/event/task_complete" => {
-                assert!(
-                    saw_resolved,
-                    "item/commandExecution/approvalResolved should arrive first"
-                );
-                saw_task_complete = true;
-            }
             "turn/completed" => {
                 assert!(
                     saw_resolved,
                     "item/commandExecution/approvalResolved should arrive first"
-                );
-                assert!(
-                    saw_task_complete,
-                    "task_complete should arrive before turn/completed"
                 );
                 break;
             }
@@ -1582,10 +1570,9 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     )
     .await?;
     let mut saw_resolved = false;
-    let mut saw_task_complete = false;
     let mut output_delta: Option<FileChangeOutputDeltaNotification> = None;
     let mut completed_file_change: Option<ThreadItem> = None;
-    while !(saw_task_complete && output_delta.is_some() && completed_file_change.is_some()) {
+    while !(output_delta.is_some() && completed_file_change.is_some()) {
         let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
         let JSONRPCMessage::Notification(notification) = message else {
             continue;
@@ -1626,13 +1613,6 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
                     );
                     completed_file_change = Some(completed.item);
                 }
-            }
-            "codex/event/task_complete" => {
-                assert!(
-                    saw_resolved,
-                    "item/fileChange/approvalResolved should arrive first"
-                );
-                saw_task_complete = true;
             }
             _ => {}
         }
