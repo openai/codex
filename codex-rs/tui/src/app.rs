@@ -749,41 +749,6 @@ impl App {
         self.insert_history_cell(tui, header);
     }
 
-    fn replace_startup_header(
-        &mut self,
-        tui: &mut tui::Tui,
-        session: &SessionConfiguredEvent,
-    ) -> Result<()> {
-        let Some(first_cell) = self.transcript_cells.first() else {
-            return Ok(());
-        };
-        let Some(startup_header) = first_cell
-            .as_ref()
-            .as_any()
-            .downcast_ref::<history_cell::SessionHeaderHistoryCell>()
-        else {
-            return Ok(());
-        };
-        if !startup_header.is_loading_placeholder() {
-            return Ok(());
-        }
-
-        let cell = Arc::new(history_cell::SessionHeaderHistoryCell::new(
-            session.model.clone(),
-            session.reasoning_effort,
-            session.cwd.clone(),
-            CODEX_CLI_VERSION,
-        )) as Arc<dyn HistoryCell>;
-        self.transcript_cells[0] = cell.clone();
-        if matches!(&self.overlay, Some(Overlay::Transcript(_))) {
-            self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
-            tui.frame_requester().schedule_frame();
-        }
-        let display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-        tui.replace_top_visible_history_lines(display)?;
-        Ok(())
-    }
-
     fn clear_ui_header_lines_with_version(
         &self,
         width: u16,
@@ -2963,8 +2928,29 @@ impl App {
             // thread, so unrelated shutdowns cannot consume this marker.
             self.pending_shutdown_exit_thread_id = None;
         }
-        if let EventMsg::SessionConfigured(session) = &event.msg {
-            self.replace_startup_header(tui, session)?;
+        if let EventMsg::SessionConfigured(session) = &event.msg
+            && let Some(first_cell) = self.transcript_cells.first_mut()
+            && matches!(
+                first_cell
+                    .as_ref()
+                    .as_any()
+                    .downcast_ref::<history_cell::SessionHeaderHistoryCell>(),
+                Some(startup_header) if startup_header.is_loading_placeholder()
+            )
+        {
+            let cell = Arc::new(history_cell::SessionHeaderHistoryCell::new(
+                session.model.clone(),
+                session.reasoning_effort,
+                session.cwd.clone(),
+                CODEX_CLI_VERSION,
+            )) as Arc<dyn HistoryCell>;
+            *first_cell = cell.clone();
+            if matches!(&self.overlay, Some(Overlay::Transcript(_))) {
+                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+                tui.frame_requester().schedule_frame();
+            }
+            let display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+            tui.replace_top_visible_history_lines(display)?;
         }
         self.handle_codex_event_now(event);
         if self.backtrack_render_pending {
@@ -3669,7 +3655,7 @@ mod tests {
                 true,
             )) as Arc<dyn HistoryCell>
         };
-        let make_header = |is_first| -> Arc<dyn HistoryCell> {
+        let make_header = |_is_first| -> Arc<dyn HistoryCell> {
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
                 forked_from_id: None,
@@ -3686,7 +3672,6 @@ mod tests {
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             };
-            let _ = is_first;
             Arc::new(SessionHeaderHistoryCell::new(
                 event.model,
                 event.reasoning_effort,
@@ -4166,7 +4151,7 @@ mod tests {
             )) as Arc<dyn HistoryCell>
         };
 
-        let make_header = |is_first| {
+        let make_header = |_is_first| {
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
                 forked_from_id: None,
@@ -4183,7 +4168,6 @@ mod tests {
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             };
-            let _ = is_first;
             Arc::new(SessionHeaderHistoryCell::new(
                 event.model,
                 event.reasoning_effort,
