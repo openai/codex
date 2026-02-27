@@ -29,12 +29,12 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) config_snapshot: ThreadConfigSnapshot,
 }
 
-// ThreadListenerCommand is used to perform operations in the context of thread listener, for serialization purposes.
+// ThreadListenerCommand is used to perform operations in the context of the thread listener, for serialization purposes.
 pub(crate) enum ThreadListenerCommand {
-    // SendThreadResumeResponse is used to resume an already running thread by sending thread's history to the client and atomically subscribe for new updates.
+    // SendThreadResumeResponse is used to resume an already running thread by sending the thread's history to the client and atomically subscribing for new updates.
     SendThreadResumeResponse(Box<PendingThreadResumeRequest>),
-    // ResolveServerRequest is used to notify the client that request has been resolved.
-    // It is executed in the thread listener's context to ensure that resolved notification ordered in regard of the request itself.
+    // ResolveServerRequest is used to notify the client that the request has been resolved.
+    // It is executed in the thread listener's context to ensure that the resolved notification is ordered with regard to the request itself.
     ResolveServerRequest {
         request_id: RequestId,
         completion_tx: oneshot::Sender<()>,
