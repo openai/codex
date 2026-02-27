@@ -22,7 +22,7 @@ enum TurnReferenceContextItem {
     /// A previously established baseline was invalidated by later compaction.
     Cleared,
     /// The latest baseline established by this replay span.
-    LatestSet(Box<TurnContextItem>),
+    Latest(Box<TurnContextItem>),
 }
 
 #[derive(Debug, Default)]
@@ -195,7 +195,7 @@ impl Session {
                             TurnReferenceContextItem::NeverSet
                         ) {
                             active_segment.reference_context_item =
-                                TurnReferenceContextItem::LatestSet(Box::new(ctx.clone()));
+                                TurnReferenceContextItem::Latest(Box::new(ctx.clone()));
                         }
                     }
                 }
@@ -270,7 +270,7 @@ impl Session {
 
         let reference_context_item = match reference_context_item {
             TurnReferenceContextItem::NeverSet | TurnReferenceContextItem::Cleared => None,
-            TurnReferenceContextItem::LatestSet(turn_reference_context_item) => {
+            TurnReferenceContextItem::Latest(turn_reference_context_item) => {
                 Some(*turn_reference_context_item)
             }
         };
