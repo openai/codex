@@ -21,6 +21,7 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+use crate::model_labels::reasoning_label_for;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
@@ -2386,16 +2387,10 @@ impl App {
                             .map(|selected_effort| selected_effort.to_string())
                             .unwrap_or_else(|| "default".to_string());
                         tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
-                        let mut message = format!("Model changed to {model}");
-                        if let Some(label) = Self::reasoning_label_for(&model, effort) {
-                            message.push(' ');
-                            message.push_str(label);
-                        }
-                        if let Some(profile) = profile {
-                            message.push_str(" for ");
-                            message.push_str(profile);
-                            message.push_str(" profile");
-                        }
+                        let toggle_target =
+                            self.chat_widget.other_recent_model_entry_details(&model);
+                        let message =
+                            Self::model_change_message(&model, effort, profile, toggle_target);
                         self.chat_widget.add_info_message(message, None);
                     }
                     Err(err) => {
@@ -3142,22 +3137,33 @@ impl App {
         Ok(())
     }
 
-    fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
-        match reasoning_effort {
-            Some(ReasoningEffortConfig::Minimal) => "minimal",
-            Some(ReasoningEffortConfig::Low) => "low",
-            Some(ReasoningEffortConfig::Medium) => "medium",
-            Some(ReasoningEffortConfig::High) => "high",
-            Some(ReasoningEffortConfig::XHigh) => "xhigh",
-            None | Some(ReasoningEffortConfig::None) => "default",
-        }
-    }
-
-    fn reasoning_label_for(
+    fn model_change_message(
         model: &str,
-        reasoning_effort: Option<ReasoningEffortConfig>,
-    ) -> Option<&'static str> {
-        (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
+        effort: Option<ReasoningEffortConfig>,
+        profile: Option<&str>,
+        toggle_target: Option<(String, Option<ReasoningEffortConfig>)>,
+    ) -> String {
+        let describe_model = |model_name: &str, model_effort: Option<ReasoningEffortConfig>| {
+            if let Some(label) = reasoning_label_for(model_name, model_effort) {
+                format!("{model_name} {label}")
+            } else {
+                model_name.to_string()
+            }
+        };
+
+        let mut message = format!("Model changed to {}", describe_model(model, effort));
+        if let Some(profile) = profile {
+            message.push_str(" for ");
+            message.push_str(profile);
+            message.push_str(" profile");
+        }
+        message.push('.');
+        if let Some((toggle_model, toggle_effort)) = toggle_target {
+            message.push_str(" Press ctrl+o to toggle with ");
+            message.push_str(&describe_model(toggle_model.as_str(), toggle_effort));
+            message.push('.');
+        }
+        message
     }
 
     pub(crate) fn token_usage(&self) -> codex_protocol::protocol::TokenUsage {
@@ -3509,6 +3515,39 @@ mod tests {
         assert_eq!(
             App::should_handle_active_thread_events(wait_for_initial_session, true),
             true
+        );
+    }
+
+    #[test]
+    fn model_change_message_includes_ctrl_o_hint_with_alternate_model() {
+        let message = App::model_change_message(
+            "gpt-5.3-codex-spark",
+            Some(ReasoningEffortConfig::High),
+            None,
+            Some((
+                "gpt-5.3-codex".to_string(),
+                Some(ReasoningEffortConfig::Medium),
+            )),
+        );
+
+        assert_eq!(
+            message,
+            "Model changed to gpt-5.3-codex-spark high. Press ctrl+o to toggle with gpt-5.3-codex medium."
+        );
+    }
+
+    #[test]
+    fn model_change_message_keeps_profile_suffix_without_toggle_hint() {
+        let message = App::model_change_message(
+            "gpt-5.3-codex-spark",
+            Some(ReasoningEffortConfig::High),
+            Some("work"),
+            None,
+        );
+
+        assert_eq!(
+            message,
+            "Model changed to gpt-5.3-codex-spark high for work profile."
         );
     }
 

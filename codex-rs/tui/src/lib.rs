@@ -91,6 +91,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 mod mention_codec;
+mod model_labels;
 mod model_migration;
 mod multi_agents;
 mod notifications;
