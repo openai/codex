@@ -3354,24 +3354,20 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
                     };
-                    let Some(user_message) =
-                        self.maybe_defer_user_message_for_realtime(user_message)
-                    else {
-                        return;
-                    };
                     if user_message.text.is_empty()
                         && user_message.local_images.is_empty()
                         && user_message.remote_image_urls.is_empty()
                     {
                         return;
                     }
-                    let has_images = !user_message.local_images.is_empty()
-                        || !user_message.remote_image_urls.is_empty();
+                    let Some(user_message) =
+                        self.maybe_defer_user_message_for_realtime(user_message)
+                    else {
+                        return;
+                    };
                     let should_preview_as_pending_nudge = self.is_session_configured()
                         && self.bottom_pane.is_task_running()
-                        && !self.is_review_mode
-                        && user_message.text.strip_prefix('!').is_none()
-                        && (!has_images || self.current_model_supports_images());
+                        && !self.is_review_mode;
                     if should_preview_as_pending_nudge {
                         self.submit_user_message_internal(user_message, false);
                     } else if self.is_session_configured() {
@@ -4173,9 +4169,9 @@ impl ChatWidget {
             personality,
         };
 
-        self.codex_op_tx.send(op).unwrap_or_else(|e| {
-            tracing::error!("failed to send message: {e}");
-        });
+        if !self.submit_op(op) {
+            return;
+        }
 
         // Persist the text to cross-session message history.
         if !text.is_empty() {

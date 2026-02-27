@@ -3571,6 +3571,25 @@ async fn steer_enter_uses_pending_nudges_while_final_answer_stream_is_active() {
 }
 
 #[tokio::test]
+async fn failed_pending_nudge_submit_does_not_add_pending_preview() {
+    let (mut chat, mut rx, op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    drop(op_rx);
+
+    chat.bottom_pane.set_composer_text(
+        "queued while streaming".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.pending_nudges.is_empty());
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
 async fn raw_response_item_with_canonicalized_user_payload_clears_pending_nudge() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let items = vec![
