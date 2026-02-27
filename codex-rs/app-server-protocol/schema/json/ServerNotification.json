@@ -1449,6 +1449,10 @@
         }
       ]
     },
+    "SkillsUpdatedNotification": {
+      "description": "Notification emitted when the server's local skill view changes.\n\nThe payload is intentionally empty because clients should treat this as a refresh hint and call `skills/list` again, typically with `forceReload: true`, instead of trying to apply an incremental update.",
+      "type": "object"
+    },
     "SubAgentSource": {
       "oneOf": [
         {
@@ -3520,6 +3524,26 @@
         "params"
       ],
       "title": "App/list/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "skills/updated"
+          ],
+          "title": "Skills/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Skills/updatedNotification",
       "type": "object"
     },
     {

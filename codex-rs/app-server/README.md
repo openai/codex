@@ -576,7 +576,7 @@ Notes:
 
 ## Events
 
-Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `thread/closed`, `turn/*`, and `item/*` notifications.
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `thread/closed`, `turn/*`, `item/*`, and `skills/updated` notifications.
 
 Thread realtime uses a separate thread-scoped notification surface. `thread/realtime/*` notifications are ephemeral transport events, not `ThreadItem`s, and are not returned by `thread/read`, `thread/resume`, or `thread/fork`.
 
@@ -804,6 +804,7 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, wi
 You can also add `perCwdExtraUserRoots` to scan additional absolute paths as `user` scope for specific `cwd` entries.
 Entries whose `cwd` is not present in `cwds` are ignored.
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
+The server emits `skills/updated` when local skill files or skill configuration changes. The empty payload is a refresh hint rather than a delta, so re-run `skills/list` (typically with `forceReload: true`) when that notification arrives.
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
@@ -835,8 +836,12 @@ Entries whose `cwd` is not present in `cwds` are ignored.
             }
         ],
         "errors": []
-    }]
+  }]
 } }
+```
+
+```json
+{ "method": "skills/updated", "params": {} }
 ```
 
 To enable or disable a skill by path:

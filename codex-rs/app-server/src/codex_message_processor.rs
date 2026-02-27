@@ -123,6 +123,7 @@ use codex_app_server_protocol::SkillsRemoteReadParams;
 use codex_app_server_protocol::SkillsRemoteReadResponse;
 use codex_app_server_protocol::SkillsRemoteWriteParams;
 use codex_app_server_protocol::SkillsRemoteWriteResponse;
+use codex_app_server_protocol::SkillsUpdatedNotification;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -5468,6 +5469,23 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    /// Sends the direct-mutation refresh hint back to the initiating v2 client.
+    ///
+    /// `skills/list` responses are cached per `cwd`, so direct app-server
+    /// writes notify the caller immediately. The filesystem watcher path can
+    /// still fan the same invalidation out to other subscribed clients later.
+    async fn send_skills_updated_notification(
+        outgoing: &Arc<OutgoingMessageSender>,
+        connection_id: ConnectionId,
+    ) {
+        outgoing
+            .send_server_notification_to_connections(
+                &[connection_id],
+                ServerNotification::SkillsUpdated(SkillsUpdatedNotification::default()),
+            )
+            .await;
+    }
+
     async fn skills_list(&self, request_id: ConnectionRequestId, params: SkillsListParams) {
         let SkillsListParams {
             cwds,
@@ -5587,6 +5605,8 @@ impl CodexMessageProcessor {
 
         match response {
             Ok(downloaded) => {
+                let connection_id = request_id.connection_id;
+                self.thread_manager.skills_manager().clear_cache();
                 self.outgoing
                     .send_response(
                         request_id,
@@ -5596,6 +5616,7 @@ impl CodexMessageProcessor {
                         },
                     )
                     .await;
+                Self::send_skills_updated_notification(&self.outgoing, connection_id).await;
             }
             Err(err) => {
                 self.send_internal_error(
@@ -5621,6 +5642,7 @@ impl CodexMessageProcessor {
 
         match result {
             Ok(()) => {
+                let connection_id = request_id.connection_id;
                 self.thread_manager.skills_manager().clear_cache();
                 self.outgoing
                     .send_response(
@@ -5630,6 +5652,7 @@ impl CodexMessageProcessor {
                         },
                     )
                     .await;
+                Self::send_skills_updated_notification(&self.outgoing, connection_id).await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -7668,6 +7691,8 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outgoing_message::OutgoingEnvelope;
+    use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
@@ -7696,6 +7721,29 @@ mod tests {
             input_schema: json!({"properties": {}}),
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[tokio::test]
+    async fn send_skills_updated_notification_targets_requesting_connection() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let connection_id = ConnectionId(7);
+
+        CodexMessageProcessor::send_skills_updated_notification(&outgoing, connection_id).await;
+
+        let envelope = rx.recv().await.expect("notification envelope");
+        match envelope {
+            OutgoingEnvelope::ToConnection {
+                connection_id: actual_connection_id,
+                message:
+                    OutgoingMessage::AppServerNotification(ServerNotification::SkillsUpdated(payload)),
+            } => {
+                assert_eq!(actual_connection_id, connection_id);
+                assert_eq!(payload, SkillsUpdatedNotification::default());
+            }
+            other => panic!("unexpected envelope: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
