@@ -46,8 +46,9 @@ fn finalize_active_segment<'a>(
     reference_context_item: &mut TurnReferenceContextItem,
     pending_rollback_turns: &mut usize,
 ) {
-    // Thread rollback always targets the newest surviving user turns, so consume that
-    // skip budget before letting this segment contribute metadata or a compaction base.
+    // Thread rollback drops the newest surviving real user-message boundaries. In replay, that
+    // means skipping the next finalized segments that contain a non-contextual
+    // `EventMsg::UserMessage`.
     if *pending_rollback_turns > 0 {
         if active_segment.counts_as_user_turn {
             *pending_rollback_turns -= 1;
