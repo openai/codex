@@ -25,6 +25,6 @@
     "requestId",
     "threadId"
   ],
-  "title": "CommandExecutionApprovalResolvedNotification",
+  "title": "ServerRequestResolvedNotification",
   "type": "object"
 }

@@ -5,11 +5,11 @@ use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
-use codex_app_server_protocol::CommandExecutionApprovalResolvedNotification;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -209,14 +209,14 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
 
     let resolved_notification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/commandExecution/approvalResolved"),
+        mcp.read_stream_until_notification_message("serverRequest/resolved"),
     )
     .await??;
-    let resolved: CommandExecutionApprovalResolvedNotification = serde_json::from_value(
+    let resolved: ServerRequestResolvedNotification = serde_json::from_value(
         resolved_notification
             .params
             .clone()
-            .expect("item/commandExecution/approvalResolved params must be present"),
+            .expect("serverRequest/resolved params must be present"),
     )?;
     assert_eq!(resolved.thread_id, thread.id);
     assert_eq!(resolved.request_id, request_id);

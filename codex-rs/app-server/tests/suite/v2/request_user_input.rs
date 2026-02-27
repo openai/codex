@@ -8,9 +8,9 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ToolRequestUserInputResolvedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -106,22 +106,19 @@ async fn request_user_input_round_trip() -> Result<()> {
             continue;
         };
         match notification.method.as_str() {
-            "item/tool/requestUserInputResolved" => {
-                let resolved: ToolRequestUserInputResolvedNotification = serde_json::from_value(
+            "serverRequest/resolved" => {
+                let resolved: ServerRequestResolvedNotification = serde_json::from_value(
                     notification
                         .params
                         .clone()
-                        .expect("item/tool/requestUserInputResolved params"),
+                        .expect("serverRequest/resolved params"),
                 )?;
                 assert_eq!(resolved.thread_id, thread.id);
                 assert_eq!(resolved.request_id, resolved_request_id);
                 saw_resolved = true;
             }
             "turn/completed" => {
-                assert!(
-                    saw_resolved,
-                    "item/tool/requestUserInputResolved should arrive first"
-                );
+                assert!(saw_resolved, "serverRequest/resolved should arrive first");
                 break;
             }
             _ => {}

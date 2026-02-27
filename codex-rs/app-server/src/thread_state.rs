@@ -1,6 +1,5 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
-use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::Turn;
@@ -30,25 +29,22 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) config_snapshot: ThreadConfigSnapshot,
 }
 
+// ThreadListenerCommand is used to perform operations in the context of thread listener, for serialization purposes.
 pub(crate) enum ThreadListenerCommand {
+    // SendThreadResumeResponse is used to resume an already running thread by sending thread's history to the client and atomically subscribe for new updates.
     SendThreadResumeResponse(Box<PendingThreadResumeRequest>),
+    // ResolveServerRequest is used to notify the client that request has been resolved.
+    // It is executed in the thread listener's context to ensure that resolved notification ordered in regard of the request itself.
     ResolveServerRequest {
         request_id: RequestId,
-        request_type: ServerRequestType,
         completion_tx: oneshot::Sender<()>,
     },
-}
-
-pub(crate) enum ServerRequestType {
-    CommandExecutionRequestApproval,
-    FileChangeRequestApproval,
-    ToolRequestUserInput,
 }
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
-    pub(crate) file_change_started: HashMap<String, Vec<FileUpdateChange>>,
+    pub(crate) file_change_started: HashSet<String>,
     pub(crate) command_execution_started: HashSet<String>,
     pub(crate) last_error: Option<TurnError>,
 }

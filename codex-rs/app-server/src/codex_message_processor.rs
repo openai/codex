@@ -12,7 +12,6 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
-use crate::thread_state::ServerRequestType;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
 use chrono::DateTime;
@@ -40,7 +39,6 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
-use codex_app_server_protocol::CommandExecutionApprovalResolvedNotification;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
@@ -51,7 +49,6 @@ use codex_app_server_protocol::ExperimentalFeatureListResponse;
 use codex_app_server_protocol::ExperimentalFeatureStage as ApiExperimentalFeatureStage;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
-use codex_app_server_protocol::FileChangeApprovalResolvedNotification;
 use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::ForkConversationResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
@@ -116,6 +113,7 @@ use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
@@ -170,7 +168,6 @@ use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
-use codex_app_server_protocol::ToolRequestUserInputResolvedNotification;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -6767,18 +6764,11 @@ async fn handle_thread_listener_command(
             .await;
         }
         ThreadListenerCommand::ResolveServerRequest {
-            request_type,
             request_id,
             completion_tx,
         } => {
-            resolve_pending_server_request(
-                conversation_id,
-                thread_state,
-                outgoing,
-                request_type,
-                request_id,
-            )
-            .await;
+            resolve_pending_server_request(conversation_id, thread_state, outgoing, request_id)
+                .await;
             let _ = completion_tx.send(());
         }
     }
@@ -6883,7 +6873,6 @@ async fn resolve_pending_server_request(
     conversation_id: ThreadId,
     thread_state: &Arc<Mutex<ThreadState>>,
     outgoing: &Arc<OutgoingMessageSender>,
-    request_type: ServerRequestType,
     request_id: RequestId,
 ) {
     let thread_id = conversation_id.to_string();
@@ -6893,31 +6882,14 @@ async fn resolve_pending_server_request(
         subscribed_connection_ids,
         conversation_id,
     );
-    let notification = match request_type {
-        ServerRequestType::CommandExecutionRequestApproval => {
-            ServerNotification::CommandExecutionApprovalResolved(
-                CommandExecutionApprovalResolvedNotification {
-                    thread_id,
-                    request_id,
-                },
-            )
-        }
-        ServerRequestType::FileChangeRequestApproval => {
-            ServerNotification::FileChangeApprovalResolved(FileChangeApprovalResolvedNotification {
+    outgoing
+        .send_server_notification(ServerNotification::ServerRequestResolved(
+            ServerRequestResolvedNotification {
                 thread_id,
                 request_id,
-            })
-        }
-        ServerRequestType::ToolRequestUserInput => {
-            ServerNotification::ToolRequestUserInputResolved(
-                ToolRequestUserInputResolvedNotification {
-                    thread_id,
-                    request_id,
-                },
-            )
-        }
-    };
-    outgoing.send_server_notification(notification).await;
+            },
+        ))
+        .await;
 }
 
 async fn load_thread_for_running_resume_response(
@@ -7890,7 +7862,7 @@ mod tests {
                 },
             ))
             .await;
-        thread_outgoing.abort_pending_client_requests().await;
+        thread_outgoing.abort_pending_server_requests().await;
 
         let request_message = outgoing_rx.recv().await.expect("request should be sent");
         let OutgoingEnvelope::ToConnection {

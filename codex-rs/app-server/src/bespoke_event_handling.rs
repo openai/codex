@@ -7,7 +7,6 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::server_request_error::is_turn_transition_server_request_error;
-use crate::thread_state::ServerRequestType;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
@@ -138,7 +137,6 @@ struct CommandExecutionCompletionItem {
 
 async fn resolve_server_request_on_thread_listener(
     thread_state: &Arc<Mutex<ThreadState>>,
-    request_type: ServerRequestType,
     request_id: RequestId,
 ) {
     let (completion_tx, completion_rx) = oneshot::channel();
@@ -153,7 +151,6 @@ async fn resolve_server_request_on_thread_listener(
 
     if listener_command_tx
         .send(ThreadListenerCommand::ResolveServerRequest {
-            request_type,
             request_id,
             completion_tx,
         })
@@ -189,13 +186,15 @@ pub(crate) async fn apply_bespoke_event_handling(
     } = event;
     match msg {
         EventMsg::TurnStarted(_) => {
-            outgoing.abort_pending_client_requests().await;
+            // While not technically necessary as it was already done on TurnComplete, be extra cautios and abort any pending server requests.
+            outgoing.abort_pending_server_requests().await;
             thread_watch_manager
                 .note_turn_started(&conversation_id.to_string())
                 .await;
         }
         EventMsg::TurnComplete(_ev) => {
-            outgoing.abort_pending_client_requests().await;
+            // All per-thread requests are bound to a turn, so abort them.
+            outgoing.abort_pending_server_requests().await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
@@ -322,8 +321,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         state
                             .turn_summary
                             .file_change_started
-                            .insert(item_id.clone(), patch_changes.clone())
-                            .is_none()
+                            .insert(item_id.clone())
                     };
                     if first_start {
                         let item = ThreadItem::FileChange {
@@ -1188,8 +1186,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 state
                     .turn_summary
                     .file_change_started
-                    .insert(item_id.clone(), changes.clone())
-                    .is_none()
+                    .insert(item_id.clone())
             };
             if first_start {
                 let item = ThreadItem::FileChange {
@@ -1275,10 +1272,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             // We already have state tracking FileChange items on item/started, so let's use that.
             let is_file_change = {
                 let state = thread_state.lock().await;
-                state
-                    .turn_summary
-                    .file_change_started
-                    .contains_key(&item_id)
+                state.turn_summary.file_change_started.contains(&item_id)
             };
             if is_file_change {
                 let notification = FileChangeOutputDeltaNotification {
@@ -1379,7 +1373,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
-            outgoing.abort_pending_client_requests().await;
+            // All per-thread requests are bound to a turn, so abort them.
+            outgoing.abort_pending_server_requests().await;
             let pending = {
                 let mut state = thread_state.lock().await;
                 std::mem::take(&mut state.pending_interrupts)
@@ -1876,12 +1871,7 @@ async fn on_request_user_input_response(
     user_input_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
-    resolve_server_request_on_thread_listener(
-        &thread_state,
-        ServerRequestType::ToolRequestUserInput,
-        pending_request_id,
-    )
-    .await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
     drop(user_input_guard);
     let value = match response {
         Ok(Ok(value)) => value,
@@ -2004,12 +1994,7 @@ async fn on_file_change_request_approval_response(
     permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
-    resolve_server_request_on_thread_listener(
-        &thread_state,
-        ServerRequestType::FileChangeRequestApproval,
-        pending_request_id,
-    )
-    .await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
     drop(permission_guard);
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
@@ -2077,12 +2062,7 @@ async fn on_command_execution_request_approval_response(
     permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
-    resolve_server_request_on_thread_listener(
-        &thread_state,
-        ServerRequestType::CommandExecutionRequestApproval,
-        pending_request_id,
-    )
-    .await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
     drop(permission_guard);
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {

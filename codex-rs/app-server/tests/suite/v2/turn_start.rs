@@ -14,11 +14,9 @@ use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
-use codex_app_server_protocol::CommandExecutionApprovalResolvedNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::FileChangeApprovalDecision;
-use codex_app_server_protocol::FileChangeApprovalResolvedNotification;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -31,6 +29,7 @@ use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::TextElement;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
@@ -1091,23 +1090,19 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
             continue;
         };
         match notification.method.as_str() {
-            "item/commandExecution/approvalResolved" => {
-                let resolved: CommandExecutionApprovalResolvedNotification =
-                    serde_json::from_value(
-                        notification
-                            .params
-                            .clone()
-                            .expect("item/commandExecution/approvalResolved params"),
-                    )?;
+            "serverRequest/resolved" => {
+                let resolved: ServerRequestResolvedNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .clone()
+                        .expect("serverRequest/resolved params"),
+                )?;
                 assert_eq!(resolved.thread_id, thread.id);
                 assert_eq!(resolved.request_id, resolved_request_id);
                 saw_resolved = true;
             }
             "turn/completed" => {
-                assert!(
-                    saw_resolved,
-                    "item/commandExecution/approvalResolved should arrive first"
-                );
+                assert!(saw_resolved, "serverRequest/resolved should arrive first");
                 break;
             }
             _ => {}
@@ -1578,22 +1573,19 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
             continue;
         };
         match notification.method.as_str() {
-            "item/fileChange/approvalResolved" => {
-                let resolved: FileChangeApprovalResolvedNotification = serde_json::from_value(
+            "serverRequest/resolved" => {
+                let resolved: ServerRequestResolvedNotification = serde_json::from_value(
                     notification
                         .params
                         .clone()
-                        .expect("item/fileChange/approvalResolved params"),
+                        .expect("serverRequest/resolved params"),
                 )?;
                 assert_eq!(resolved.thread_id, thread.id);
                 assert_eq!(resolved.request_id, resolved_request_id);
                 saw_resolved = true;
             }
             "item/fileChange/outputDelta" => {
-                assert!(
-                    saw_resolved,
-                    "item/fileChange/approvalResolved should arrive first"
-                );
+                assert!(saw_resolved, "serverRequest/resolved should arrive first");
                 let notification: FileChangeOutputDeltaNotification = serde_json::from_value(
                     notification
                         .params
@@ -1607,10 +1599,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
                     notification.params.clone().expect("item/completed params"),
                 )?;
                 if let ThreadItem::FileChange { .. } = completed.item {
-                    assert!(
-                        saw_resolved,
-                        "item/fileChange/approvalResolved should arrive first"
-                    );
+                    assert!(saw_resolved, "serverRequest/resolved should arrive first");
                     completed_file_change = Some(completed.item);
                 }
             }

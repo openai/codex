@@ -17,6 +17,7 @@ use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::error_code::INTERNAL_ERROR_CODE;
+use crate::server_request_error::TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON;
 
 #[cfg(test)]
 use codex_protocol::account::PlanType;
@@ -100,7 +101,7 @@ impl ThreadScopedOutgoingMessageSender {
             .await;
     }
 
-    pub(crate) async fn abort_pending_client_requests(&self) {
+    pub(crate) async fn abort_pending_server_requests(&self) {
         self.outgoing
             .cancel_requests_for_thread(
                 self.thread_id,
@@ -108,7 +109,7 @@ impl ThreadScopedOutgoingMessageSender {
                     code: INTERNAL_ERROR_CODE,
                     message: "client request resolved because the turn state was changed"
                         .to_string(),
-                    data: Some(serde_json::json!({ "reason": "turnTransition" })),
+                    data: Some(serde_json::json!({ "reason": TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON })),
                 }),
             )
             .await
