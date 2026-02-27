@@ -22,7 +22,6 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 use tracing::error;
@@ -224,22 +223,13 @@ async fn run_compact_task_inner(
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
-    sess.replace_history(new_history.clone(), reference_context_item.clone())
+    let compacted_item = CompactedItem {
+        message: summary_text.clone(),
+        replacement_history: Some(new_history.clone()),
+    };
+    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
     sess.recompute_token_usage(&turn_context).await;
-
-    let rollout_item = RolloutItem::Compacted(CompactedItem {
-        message: summary_text.clone(),
-        replacement_history: Some(new_history),
-    });
-    sess.persist_rollout_items(&[rollout_item]).await;
-    if let Some(turn_context_item) = reference_context_item {
-        // Mid-turn compaction re-injected initial context into the replacement history, so
-        // persist a fresh `TurnContextItem` after `Compacted` to re-establish the baseline for
-        // resume/fork replay.
-        sess.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item)])
-            .await;
-    }
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)
         .await;

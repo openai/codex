@@ -13,7 +13,6 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
-use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
@@ -159,26 +158,13 @@ async fn run_remote_compact_task_inner_impl(
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
-    sess.replace_history(new_history.clone(), reference_context_item.clone())
-        .await;
-    sess.recompute_token_usage(turn_context).await;
-
     let compacted_item = CompactedItem {
         message: String::new(),
-        replacement_history: Some(new_history),
+        replacement_history: Some(new_history.clone()),
     };
-    let rollout_items = if let Some(turn_context_item) = reference_context_item {
-        // Mid-turn compaction re-injected initial context into the replacement history, so
-        // persist a fresh `TurnContextItem` after `Compacted` to re-establish the baseline for
-        // resume/fork replay.
-        vec![
-            RolloutItem::Compacted(compacted_item),
-            RolloutItem::TurnContext(turn_context_item),
-        ]
-    } else {
-        vec![RolloutItem::Compacted(compacted_item)]
-    };
-    sess.persist_rollout_items(&rollout_items).await;
+    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
+        .await;
+    sess.recompute_token_usage(turn_context).await;
 
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
