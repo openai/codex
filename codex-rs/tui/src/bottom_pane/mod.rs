@@ -1539,7 +1539,6 @@ mod tests {
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
-                permissions: None,
                 path_to_skills_md: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),
