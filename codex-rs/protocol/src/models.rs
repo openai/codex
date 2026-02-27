@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 
 use codex_utils_image::load_and_resize_to_fit;
 use serde::Deserialize;
@@ -20,6 +19,7 @@ use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
 use codex_execpolicy::Policy;
 use codex_git::GhostCommit;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
@@ -54,8 +54,8 @@ impl SandboxPermissions {
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct FileSystemPermissions {
-    pub read: Option<Vec<PathBuf>>,
-    pub write: Option<Vec<PathBuf>>,
+    pub read: Option<Vec<AbsolutePathBuf>>,
+    pub write: Option<Vec<AbsolutePathBuf>>,
 }
 
 impl FileSystemPermissions {

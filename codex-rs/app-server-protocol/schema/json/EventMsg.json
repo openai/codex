@@ -3411,7 +3411,7 @@
       "properties": {
         "read": {
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/AbsolutePathBuf"
           },
           "type": [
             "array",
@@ -3420,7 +3420,7 @@
         },
         "write": {
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/AbsolutePathBuf"
           },
           "type": [
             "array",

@@ -614,9 +614,14 @@ mod tests {
     use codex_protocol::protocol::ExecPolicyAmendment;
     use codex_protocol::protocol::NetworkApprovalProtocol;
     use codex_protocol::protocol::NetworkPolicyAmendment;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
+    }
 
     fn render_overlay_lines(view: &ApprovalOverlay, width: u16) -> String {
         let height = view.desired_height(width);
@@ -632,6 +637,17 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn normalize_snapshot_paths(rendered: String) -> String {
+        [
+            (absolute_path("/tmp/readme.txt"), "/tmp/readme.txt"),
+            (absolute_path("/tmp/out.txt"), "/tmp/out.txt"),
+        ]
+        .into_iter()
+        .fold(rendered, |rendered, (path, normalized)| {
+            rendered.replace(&path.display().to_string(), normalized)
+        })
     }
 
     fn make_exec_request() -> ApprovalRequest {
@@ -851,8 +867,8 @@ mod tests {
     fn additional_permissions_exec_options_hide_execpolicy_amendment() {
         let additional_permissions = PermissionProfile {
             file_system: Some(FileSystemPermissions {
-                read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
-                write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+                read: Some(vec![absolute_path("/tmp/readme.txt")]),
+                write: Some(vec![absolute_path("/tmp/out.txt")]),
             }),
             ..Default::default()
         };
@@ -884,8 +900,8 @@ mod tests {
             network_approval_context: None,
             additional_permissions: Some(PermissionProfile {
                 file_system: Some(FileSystemPermissions {
-                    read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
-                    write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+                    read: Some(vec![absolute_path("/tmp/readme.txt")]),
+                    write: Some(vec![absolute_path("/tmp/out.txt")]),
                 }),
                 ..Default::default()
             }),
@@ -923,8 +939,8 @@ mod tests {
             network_approval_context: None,
             additional_permissions: Some(PermissionProfile {
                 file_system: Some(FileSystemPermissions {
-                    read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
-                    write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+                    read: Some(vec![absolute_path("/tmp/readme.txt")]),
+                    write: Some(vec![absolute_path("/tmp/out.txt")]),
                 }),
                 ..Default::default()
             }),
@@ -933,7 +949,7 @@ mod tests {
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
         assert_snapshot!(
             "approval_overlay_additional_permissions_prompt",
-            render_overlay_lines(&view, 120)
+            normalize_snapshot_paths(render_overlay_lines(&view, 120))
         );
     }
 
