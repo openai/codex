@@ -1269,6 +1269,7 @@ impl Session {
         let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
         let account_id = auth.and_then(CodexAuth::get_account_id);
         let account_email = auth.and_then(CodexAuth::get_account_email);
+        let chatgpt_user_id = auth.and_then(CodexAuth::get_chatgpt_user_id);
         let originator = crate::default_client::originator().value;
         let terminal_type = terminal::user_agent();
         let session_model = session_configuration.collaboration_mode.model().to_string();
@@ -1284,6 +1285,9 @@ impl Session {
             terminal_type.clone(),
             session_configuration.session_source.clone(),
         );
+        if let Some(chatgpt_user_id) = chatgpt_user_id.as_deref() {
+            otel_manager = otel_manager.with_chatgpt_user_id(chatgpt_user_id);
+        }
         if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
             otel_manager = otel_manager.with_metrics_service_name(service_name);
         }
