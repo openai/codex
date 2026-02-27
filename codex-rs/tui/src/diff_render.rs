@@ -202,6 +202,15 @@ fn resolve_diff_backgrounds(
     resolve_diff_backgrounds_for(theme, color_level, diff_scope_background_rgbs())
 }
 
+/// Snapshot the current terminal environment into a reusable style context.
+///
+/// Queries `diff_theme`, `diff_color_level`, and the active syntax theme's
+/// scope backgrounds once, bundling them into a [`DiffRenderStyleContext`]
+/// that callers thread through every line-rendering call in a single pass.
+///
+/// Call this at the top of each render frame — not per line — so the diff
+/// palette stays consistent within a frame even if the user swaps themes
+/// mid-render (theme picker live preview).
 pub(crate) fn current_diff_render_style_context() -> DiffRenderStyleContext {
     let theme = diff_theme();
     let color_level = diff_color_level();
@@ -767,6 +776,12 @@ pub(crate) fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
     }
 }
 
+/// Render a single plain-text (non-syntax-highlighted) diff line, wrapped to
+/// `width` columns, using a pre-computed [`DiffRenderStyleContext`].
+///
+/// This is the convenience entry point used by the theme picker preview and
+/// any caller that does not have syntax spans.  Delegates to the inner
+/// rendering core with `syntax_spans = None`.
 pub(crate) fn push_wrapped_diff_line_with_style_context(
     line_number: usize,
     kind: DiffLineType,
@@ -788,6 +803,13 @@ pub(crate) fn push_wrapped_diff_line_with_style_context(
     )
 }
 
+/// Render a syntax-highlighted diff line, wrapped to `width` columns, using
+/// a pre-computed [`DiffRenderStyleContext`].
+///
+/// Like [`push_wrapped_diff_line_with_style_context`] but overlays
+/// `syntax_spans` (from [`highlight_code_to_styled_spans`]) onto the diff
+/// coloring.  Delete lines receive a `DIM` modifier so syntax colors do not
+/// overpower the removal cue.
 pub(crate) fn push_wrapped_diff_line_with_syntax_and_style_context(
     line_number: usize,
     kind: DiffLineType,
