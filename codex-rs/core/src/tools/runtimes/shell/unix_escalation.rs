@@ -16,6 +16,8 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use codex_execpolicy::Decision;
+use codex_execpolicy::Evaluation;
+use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -493,28 +495,16 @@ impl EscalationPolicy for CoreShellActionProvider {
                 .await;
         }
 
-        let command = join_program_and_argv(program, argv);
-        let (commands, used_complex_parsing) =
-            if let Some(commands) = parse_shell_lc_plain_commands(&command) {
-                (commands, false)
-            } else if let Some(single_command) = parse_shell_lc_single_command_prefix(&command) {
-                (vec![single_command], true)
-            } else {
-                (vec![command.clone()], false)
-            };
-
-        let fallback = |cmd: &[String]| {
-            crate::exec_policy::render_decision_for_unmatched_command(
-                self.approval_policy,
-                &self.sandbox_policy,
-                cmd,
-                self.sandbox_permissions,
-                used_complex_parsing,
-            )
-        };
         let evaluation = {
             let policy = self.policy.read().await;
-            policy.check_multiple(commands.iter(), &fallback)
+            evaluate_intercepted_exec_policy(
+                &policy,
+                program,
+                argv,
+                self.approval_policy,
+                &self.sandbox_policy,
+                self.sandbox_permissions,
+            )
         };
         // When true, means the Evaluation was due to *.rules, not the
         // fallback function.
@@ -550,6 +540,56 @@ impl EscalationPolicy for CoreShellActionProvider {
         )
         .await
     }
+}
+
+fn evaluate_intercepted_exec_policy(
+    policy: &Policy,
+    program: &AbsolutePathBuf,
+    argv: &[String],
+    approval_policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+    sandbox_permissions: SandboxPermissions,
+) -> Evaluation {
+    let (commands, used_complex_parsing) = commands_for_intercepted_exec_policy(program, argv);
+
+    let fallback = |cmd: &[String]| {
+        crate::exec_policy::render_decision_for_unmatched_command(
+            approval_policy,
+            sandbox_policy,
+            cmd,
+            sandbox_permissions,
+            used_complex_parsing,
+        )
+    };
+
+    policy.check_multiple_with_options(
+        commands.iter(),
+        &fallback,
+        &MatchOptions {
+            resolve_host_executables: true,
+        },
+    )
+}
+
+fn commands_for_intercepted_exec_policy(
+    program: &AbsolutePathBuf,
+    argv: &[String],
+) -> (Vec<Vec<String>>, bool) {
+    if let [_, flag, script] = argv {
+        let shell_command = [
+            program.to_string_lossy().to_string(),
+            flag.clone(),
+            script.clone(),
+        ];
+        if let Some(commands) = parse_shell_lc_plain_commands(&shell_command) {
+            return (commands, false);
+        }
+        if let Some(single_command) = parse_shell_lc_single_command_prefix(&shell_command) {
+            return (vec![single_command], true);
+        }
+    }
+
+    (vec![join_program_and_argv(program, argv)], false)
 }
 
 struct CoreShellCommandExecutor {
