@@ -304,7 +304,7 @@ impl CloudRequirementsService {
         self.fetch_with_retries(&auth, chatgpt_user_id, account_id)
             .await
             .ok_or_else(|| {
-                let message = "Failed to load your workspace-managed config";
+                let message = "failed to load your workspace-managed config";
                 tracing::error!(
                     path = %self.cache_path.display(),
                     "{message}"
