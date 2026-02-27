@@ -6,6 +6,7 @@ use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -16,6 +17,7 @@ pub(crate) struct EnvironmentContext {
     pub cwd: Option<PathBuf>,
     pub shell: Shell,
     pub network: Option<NetworkContext>,
+    pub deny_read_paths: Vec<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -25,11 +27,17 @@ pub(crate) struct NetworkContext {
 }
 
 impl EnvironmentContext {
-    pub fn new(cwd: Option<PathBuf>, shell: Shell, network: Option<NetworkContext>) -> Self {
+    pub fn new(
+        cwd: Option<PathBuf>,
+        shell: Shell,
+        network: Option<NetworkContext>,
+        deny_read_paths: Vec<AbsolutePathBuf>,
+    ) -> Self {
         Self {
             cwd,
             shell,
             network,
+            deny_read_paths,
         }
     }
 
@@ -40,10 +48,11 @@ impl EnvironmentContext {
         let EnvironmentContext {
             cwd,
             network,
+            deny_read_paths,
             // should compare all fields except shell
             shell: _,
         } = other;
-        self.cwd == *cwd && self.network == *network
+        self.cwd == *cwd && self.network == *network && self.deny_read_paths == *deny_read_paths
     }
 
     pub fn diff_from_turn_context_item(
@@ -53,6 +62,8 @@ impl EnvironmentContext {
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
         let after_network = Self::network_from_turn_context(after);
+        let before_deny_read_paths = before.sandbox_policy.denied_read_paths();
+        let after_deny_read_paths = after.sandbox_policy.denied_read_paths();
         let cwd = if before.cwd != after.cwd {
             Some(after.cwd.clone())
         } else {
@@ -63,7 +74,12 @@ impl EnvironmentContext {
         } else {
             before_network
         };
-        EnvironmentContext::new(cwd, shell.clone(), network)
+        let deny_read_paths = if before_deny_read_paths != after_deny_read_paths {
+            after_deny_read_paths
+        } else {
+            before_deny_read_paths
+        };
+        EnvironmentContext::new(cwd, shell.clone(), network, deny_read_paths)
     }
 
     pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
@@ -71,6 +87,7 @@ impl EnvironmentContext {
             Some(turn_context.cwd.clone()),
             shell.clone(),
             Self::network_from_turn_context(turn_context),
+            turn_context.sandbox_policy.denied_read_paths(),
         )
     }
 
@@ -79,6 +96,7 @@ impl EnvironmentContext {
             Some(turn_context_item.cwd.clone()),
             shell.clone(),
             Self::network_from_turn_context_item(turn_context_item),
+            turn_context_item.sandbox_policy.denied_read_paths(),
         )
     }
 
@@ -145,6 +163,13 @@ impl EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
+        if !self.deny_read_paths.is_empty() {
+            lines.push("  <deny_read_paths>".to_string());
+            for path in &self.deny_read_paths {
+                lines.push(format!("    <path>{}</path>", path.to_string_lossy()));
+            }
+            lines.push("  </deny_read_paths>".to_string());
+        }
         lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
         lines.join("\n")
     }
@@ -169,6 +194,7 @@ mod tests {
     use crate::shell::ShellType;
 
     use super::*;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use core_test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
@@ -180,10 +206,14 @@ mod tests {
         }
     }
 
+    fn deny_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(path).expect("deny path should be absolute")
+    }
+
     #[test]
     fn serialize_workspace_write_environment_context() {
         let cwd = test_path_buf("/repo");
-        let context = EnvironmentContext::new(Some(cwd.clone()), fake_shell(), None);
+        let context = EnvironmentContext::new(Some(cwd.clone()), fake_shell(), None, Vec::new());
 
         let expected = format!(
             r#"<environment_context>
@@ -202,8 +232,12 @@ mod tests {
             allowed_domains: vec!["api.example.com".to_string(), "*.openai.com".to_string()],
             denied_domains: vec!["blocked.example.com".to_string()],
         };
-        let context =
-            EnvironmentContext::new(Some(test_path_buf("/repo")), fake_shell(), Some(network));
+        let context = EnvironmentContext::new(
+            Some(test_path_buf("/repo")),
+            fake_shell(),
+            Some(network),
+            Vec::new(),
+        );
 
         let expected = format!(
             r#"<environment_context>
@@ -223,7 +257,7 @@ mod tests {
 
     #[test]
     fn serialize_read_only_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(None, fake_shell(), None, Vec::new());
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -234,7 +268,7 @@ mod tests {
 
     #[test]
     fn serialize_external_sandbox_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(None, fake_shell(), None, Vec::new());
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -245,7 +279,7 @@ mod tests {
 
     #[test]
     fn serialize_external_sandbox_with_restricted_network_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(None, fake_shell(), None, Vec::new());
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -256,7 +290,7 @@ mod tests {
 
     #[test]
     fn serialize_full_access_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(None, fake_shell(), None, Vec::new());
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -267,23 +301,66 @@ mod tests {
 
     #[test]
     fn equals_except_shell_compares_cwd() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
+        let context1 =
+            EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, Vec::new());
+        let context2 =
+            EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, Vec::new());
         assert!(context1.equals_except_shell(&context2));
     }
 
     #[test]
-    fn equals_except_shell_ignores_sandbox_policy() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
+    fn serialize_environment_context_with_deny_read_paths() {
+        let denied = vec![deny_path("/repo/.gitconfig"), deny_path("/repo/.ssh")];
+        let context =
+            EnvironmentContext::new(Some(test_path_buf("/repo")), fake_shell(), None, denied);
 
-        assert!(context1.equals_except_shell(&context2));
+        let expected = format!(
+            r#"<environment_context>
+  <cwd>{}</cwd>
+  <shell>bash</shell>
+  <deny_read_paths>
+    <path>/repo/.gitconfig</path>
+    <path>/repo/.ssh</path>
+  </deny_read_paths>
+</environment_context>"#,
+            test_path_buf("/repo").display()
+        );
+
+        assert_eq!(context.serialize_to_xml(), expected);
     }
 
     #[test]
     fn equals_except_shell_compares_cwd_differences() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo1")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo2")), fake_shell(), None);
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo1")),
+            fake_shell(),
+            None,
+            Vec::new(),
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo2")),
+            fake_shell(),
+            None,
+            Vec::new(),
+        );
+
+        assert!(!context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn equals_except_shell_compares_deny_read_paths() {
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            vec![deny_path("/repo/.gitconfig")],
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            vec![deny_path("/repo/.ssh")],
+        );
 
         assert!(!context1.equals_except_shell(&context2));
     }
@@ -298,6 +375,7 @@ mod tests {
                 shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
             },
             None,
+            Vec::new(),
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
@@ -307,6 +385,7 @@ mod tests {
                 shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
             },
             None,
+            Vec::new(),
         );
 
         assert!(context1.equals_except_shell(&context2));
