@@ -2930,14 +2930,14 @@ impl App {
             self.pending_shutdown_exit_thread_id = None;
         }
         if let EventMsg::SessionConfigured(session) = &event.msg
-            && let Some(first_cell) = self.transcript_cells.first_mut()
-            && matches!(
-                first_cell
-                    .as_ref()
-                    .as_any()
-                    .downcast_ref::<history_cell::SessionHeaderHistoryCell>(),
-                Some(startup_header) if startup_header.is_loading_placeholder()
-            )
+            && let Some(loading_header_idx) = self.transcript_cells.iter().rposition(|cell| {
+                matches!(
+                    cell.as_ref()
+                        .as_any()
+                        .downcast_ref::<history_cell::SessionHeaderHistoryCell>(),
+                    Some(startup_header) if startup_header.is_loading_placeholder()
+                )
+            })
         {
             let cell = Arc::new(history_cell::SessionHeaderHistoryCell::new(
                 session.model.clone(),
@@ -2945,13 +2945,38 @@ impl App {
                 session.cwd.clone(),
                 CODEX_CLI_VERSION,
             )) as Arc<dyn HistoryCell>;
-            *first_cell = cell.clone();
+            self.transcript_cells[loading_header_idx] = cell.clone();
             if matches!(&self.overlay, Some(Overlay::Transcript(_))) {
                 self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
             }
-            let display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-            tui.replace_top_visible_history_lines(display)?;
+            if loading_header_idx == 0 {
+                let display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+                tui.replace_top_visible_history_lines(display)?;
+            } else {
+                self.clear_terminal_ui(tui, false)?;
+                self.deferred_history_lines.clear();
+
+                let transcript_cells = self.transcript_cells.clone();
+                for transcript_cell in transcript_cells {
+                    let mut display =
+                        transcript_cell.display_lines(tui.terminal.last_known_screen_size.width);
+                    if !display.is_empty() {
+                        if !transcript_cell.is_stream_continuation() {
+                            if self.has_emitted_history_lines {
+                                display.insert(0, Line::from(""));
+                            } else {
+                                self.has_emitted_history_lines = true;
+                            }
+                        }
+                        if self.overlay.is_some() {
+                            self.deferred_history_lines.extend(display);
+                        } else {
+                            tui.insert_history_lines(display);
+                        }
+                    }
+                }
+            }
         }
         self.handle_codex_event_now(event);
         if self.backtrack_render_pending {

@@ -3096,6 +3096,7 @@ impl ChatWidget {
         let header_model = model
             .clone()
             .unwrap_or_else(|| session_configured.model.clone());
+        let header_reasoning_effort = session_configured.reasoning_effort;
         let active_collaboration_mask =
             Self::initial_collaboration_mask(&config, models_manager.as_ref(), model_override);
         let header_model = active_collaboration_mask
@@ -3108,7 +3109,7 @@ impl ChatWidget {
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
         let fallback_default = Settings {
-            model: header_model,
+            model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
         };
@@ -3236,6 +3237,17 @@ impl ChatWidget {
                 ),
         );
         widget.update_collaboration_mode_indicator();
+
+        widget
+            .app_event_tx
+            .send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::SessionHeaderHistoryCell::new(
+                    header_model,
+                    header_reasoning_effort,
+                    widget.config.cwd.clone(),
+                    CODEX_CLI_VERSION,
+                ),
+            )));
 
         widget
     }
