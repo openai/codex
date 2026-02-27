@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::path::Path;
 
 #[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsAutomationValue;
@@ -20,7 +19,6 @@ use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 
 pub(crate) fn compile_permission_profile(
-    _skill_dir: &Path,
     permissions: Option<PermissionProfile>,
 ) -> Option<Permissions> {
     let PermissionProfile {
@@ -225,21 +223,18 @@ mod tests {
         let read_dir = skill_dir.join("data");
         fs::create_dir_all(&read_dir).expect("read dir");
 
-        let profile = compile_permission_profile(
-            &skill_dir,
-            Some(PermissionProfile {
-                network: Some(true),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![
-                        absolute_path(&skill_dir.join("data")),
-                        absolute_path(&skill_dir.join("data")),
-                        absolute_path(&skill_dir.join("scripts/../data")),
-                    ]),
-                    write: Some(vec![absolute_path(&skill_dir.join("output"))]),
-                }),
-                ..Default::default()
+        let profile = compile_permission_profile(Some(PermissionProfile {
+            network: Some(true),
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![
+                    absolute_path(&skill_dir.join("data")),
+                    absolute_path(&skill_dir.join("data")),
+                    absolute_path(&skill_dir.join("scripts/../data")),
+                ]),
+                write: Some(vec![absolute_path(&skill_dir.join("output"))]),
             }),
-        )
+            ..Default::default()
+        }))
         .expect("profile");
 
         assert_eq!(
@@ -284,7 +279,7 @@ mod tests {
         let skill_dir = tempdir.path().join("skill");
         fs::create_dir_all(&skill_dir).expect("skill dir");
 
-        let profile = compile_permission_profile(&skill_dir, None);
+        let profile = compile_permission_profile(None);
 
         assert_eq!(profile, None);
     }
@@ -295,13 +290,10 @@ mod tests {
         let skill_dir = tempdir.path().join("skill");
         fs::create_dir_all(&skill_dir).expect("skill dir");
 
-        let profile = compile_permission_profile(
-            &skill_dir,
-            Some(PermissionProfile {
-                network: Some(true),
-                ..Default::default()
-            }),
-        )
+        let profile = compile_permission_profile(Some(PermissionProfile {
+            network: Some(true),
+            ..Default::default()
+        }))
         .expect("profile");
 
         assert_eq!(
@@ -330,17 +322,14 @@ mod tests {
         let read_dir = skill_dir.join("data");
         fs::create_dir_all(&read_dir).expect("read dir");
 
-        let profile = compile_permission_profile(
-            &skill_dir,
-            Some(PermissionProfile {
-                network: Some(true),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![absolute_path(&skill_dir.join("data"))]),
-                    write: Some(Vec::new()),
-                }),
-                ..Default::default()
+        let profile = compile_permission_profile(Some(PermissionProfile {
+            network: Some(true),
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![absolute_path(&skill_dir.join("data"))]),
+                write: Some(Vec::new()),
             }),
-        )
+            ..Default::default()
+        }))
         .expect("profile");
 
         assert_eq!(
@@ -379,20 +368,17 @@ mod tests {
         let skill_dir = tempdir.path().join("skill");
         fs::create_dir_all(&skill_dir).expect("skill dir");
 
-        let profile = compile_permission_profile(
-            &skill_dir,
-            Some(PermissionProfile {
-                macos: Some(MacOsPermissions {
-                    preferences: Some(MacOsPreferencesValue::Mode("readwrite".to_string())),
-                    automations: Some(MacOsAutomationValue::BundleIds(vec![
-                        "com.apple.Notes".to_string(),
-                    ])),
-                    accessibility: Some(true),
-                    calendar: Some(true),
-                }),
-                ..Default::default()
+        let profile = compile_permission_profile(Some(PermissionProfile {
+            macos: Some(MacOsPermissions {
+                preferences: Some(MacOsPreferencesValue::Mode("readwrite".to_string())),
+                automations: Some(MacOsAutomationValue::BundleIds(vec![
+                    "com.apple.Notes".to_string(),
+                ])),
+                accessibility: Some(true),
+                calendar: Some(true),
             }),
-        )
+            ..Default::default()
+        }))
         .expect("profile");
 
         assert_eq!(
@@ -419,8 +405,8 @@ mod tests {
         let skill_dir = tempdir.path().join("skill");
         fs::create_dir_all(&skill_dir).expect("skill dir");
 
-        let profile = compile_permission_profile(&skill_dir, Some(PermissionProfile::default()))
-            .expect("profile");
+        let profile =
+            compile_permission_profile(Some(PermissionProfile::default())).expect("profile");
 
         assert_eq!(
             profile.macos_seatbelt_profile_extensions,

@@ -514,6 +514,140 @@ async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Res
     Ok(())
 }
 
+/// Empty skill permissions should behave like no skill override and inherit the
+/// turn sandbox instead of forcing an explicit read-only skill sandbox.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork empty skill permissions test")? else {
+        return Ok(());
+    };
+
+    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let outside_path = outside_dir
+        .path()
+        .join("zsh-fork-skill-empty-permissions.txt");
+    let outside_path_quoted = shlex::try_join([outside_path.to_string_lossy().as_ref()])?;
+    let script_contents = format!(
+        "#!/bin/sh\nprintf '%s' allowed > {outside_path_quoted}\ncat {outside_path_quoted}\n"
+    );
+    let outside_path_for_hook = outside_path.clone();
+    let script_contents_for_hook = script_contents.clone();
+
+    let server = start_mock_server().await;
+    let test = build_zsh_fork_test(
+        &server,
+        runtime,
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+        move |home| {
+            let _ = fs::remove_file(&outside_path_for_hook);
+            write_skill_with_shell_script_contents(
+                home,
+                "mbolin-test-skill",
+                "sandboxed.sh",
+                &script_contents_for_hook,
+            )
+            .unwrap();
+            write_skill_metadata(home, "mbolin-test-skill", "permissions: {}\n").unwrap();
+        },
+    )
+    .await?;
+
+    let (script_path_str, command) = skill_script_command(&test, "sandboxed.sh")?;
+
+    let first_call_id = "zsh-fork-skill-empty-permissions-1";
+    let first_arguments = shell_command_arguments(&command)?;
+    let first_mocks = mount_function_call_agent_response(
+        &server,
+        first_call_id,
+        &first_arguments,
+        "shell_command",
+    )
+    .await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let approval = wait_for_exec_approval_request(&test)
+        .await
+        .expect("expected exec approval request before completion");
+    assert_eq!(approval.call_id, first_call_id);
+    assert_eq!(approval.command, vec![script_path_str.clone()]);
+    assert_eq!(approval.additional_permissions, None);
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::ApprovedForSession,
+        })
+        .await?;
+
+    wait_for_turn_complete(&test).await;
+
+    let first_output = first_mocks
+        .completion
+        .single_request()
+        .function_call_output(first_call_id)["output"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        first_output.contains("allowed"),
+        "expected empty skill permissions to inherit full-access turn sandbox, got output: {first_output:?}"
+    );
+    assert_eq!(fs::read_to_string(&outside_path)?, "allowed");
+
+    let second_call_id = "zsh-fork-skill-empty-permissions-2";
+    let second_arguments = shell_command_arguments(&command)?;
+    let second_mocks = mount_function_call_agent_response(
+        &server,
+        second_call_id,
+        &second_arguments,
+        "shell_command",
+    )
+    .await;
+
+    let _ = fs::remove_file(&outside_path);
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let cached_approval = wait_for_exec_approval_request(&test).await;
+    assert!(
+        cached_approval.is_none(),
+        "expected second run to reuse the cached session approval"
+    );
+
+    let second_output = second_mocks
+        .completion
+        .single_request()
+        .function_call_output(second_call_id)["output"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        second_output.contains("allowed"),
+        "expected cached empty-permissions skill approval to inherit the turn sandbox, got output: {second_output:?}"
+    );
+    assert_eq!(fs::read_to_string(&outside_path)?, "allowed");
+
+    Ok(())
+}
+
 /// The validation to focus on is: writes to the skill-approved folder succeed,
 /// and writes to an unrelated folder fail, both before and after cached approval.
 #[cfg(unix)]

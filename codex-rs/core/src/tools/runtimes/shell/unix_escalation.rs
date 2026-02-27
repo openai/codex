@@ -9,6 +9,7 @@ use crate::features::Feature;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
+use crate::skills::permissions::compile_permission_profile;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -225,9 +226,7 @@ impl CoreShellActionProvider {
     }
 
     fn skill_escalation_execution(skill: &SkillMetadata) -> EscalationExecution {
-        skill
-            .permissions
-            .as_ref()
+        compile_permission_profile(skill.permission_profile.clone())
             .map(|permissions| {
                 EscalationExecution::Permissions(EscalationPermissions::Permissions(
                     EscalatedPermissions {
@@ -237,13 +236,6 @@ impl CoreShellActionProvider {
                             .clone(),
                     },
                 ))
-            })
-            .or_else(|| {
-                skill
-                    .permission_profile
-                    .clone()
-                    .map(EscalationPermissions::PermissionProfile)
-                    .map(EscalationExecution::Permissions)
             })
             .unwrap_or(EscalationExecution::TurnDefault)
     }
