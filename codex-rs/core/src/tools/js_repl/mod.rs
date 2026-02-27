@@ -104,6 +104,7 @@ pub struct JsReplArgs {
 #[derive(Clone, Debug)]
 pub struct JsExecResult {
     pub output: String,
+    pub content_items: Vec<FunctionCallOutputContentItem>,
 }
 
 struct KernelState {
@@ -125,6 +126,7 @@ struct ExecContext {
 #[derive(Default)]
 struct ExecToolCalls {
     in_flight: usize,
+    content_items: Vec<FunctionCallOutputContentItem>,
     notify: Arc<Notify>,
     cancel: CancellationToken,
 }
@@ -136,6 +138,7 @@ enum JsReplToolCallPayloadKind {
     FunctionText,
     FunctionContentItems,
     CustomText,
+    CustomContentItems,
     McpResult,
     McpErrorResult,
     Error,
@@ -369,6 +372,21 @@ impl JsReplManager {
         Some(state.cancel.clone())
     }
 
+    async fn record_exec_tool_call_content_items(
+        exec_tool_calls: &Arc<Mutex<HashMap<String, ExecToolCalls>>>,
+        exec_id: &str,
+        content_items: Vec<FunctionCallOutputContentItem>,
+    ) {
+        if content_items.is_empty() {
+            return;
+        }
+
+        let mut calls = exec_tool_calls.lock().await;
+        if let Some(state) = calls.get_mut(exec_id) {
+            state.content_items.extend(content_items);
+        }
+    }
+
     async fn finish_exec_tool_call(
         exec_tool_calls: &Arc<Mutex<HashMap<String, ExecToolCalls>>>,
         exec_id: &str,
@@ -592,11 +610,18 @@ impl JsReplManager {
                     output,
                 )
             }
-            ResponseInputItem::CustomToolCallOutput { output, .. } => Self::summarize_text_payload(
-                Some("custom_tool_call_output"),
-                JsReplToolCallPayloadKind::CustomText,
-                output,
-            ),
+            ResponseInputItem::CustomToolCallOutput { output, .. } => {
+                let payload_kind = if output.content_items().is_some() {
+                    JsReplToolCallPayloadKind::CustomContentItems
+                } else {
+                    JsReplToolCallPayloadKind::CustomText
+                };
+                Self::summarize_function_output_payload(
+                    "custom_tool_call_output",
+                    payload_kind,
+                    output,
+                )
+            }
             ResponseInputItem::McpToolCallOutput { result, .. } => match result {
                 Ok(result) => {
                     let output = FunctionCallOutputPayload::from(result);
@@ -769,7 +794,13 @@ impl JsReplManager {
         };
 
         match response {
-            ExecResultMessage::Ok { output } => Ok(JsExecResult { output }),
+            ExecResultMessage::Ok { content_items } => {
+                let (output, content_items) = split_exec_result_content_items(content_items);
+                Ok(JsExecResult {
+                    output,
+                    content_items,
+                })
+            }
             ExecResultMessage::Err { message } => Err(FunctionCallError::RespondToModel(message)),
         }
     }
@@ -1073,10 +1104,22 @@ impl JsReplManager {
                     error,
                 } => {
                     JsReplManager::wait_for_exec_tool_calls_map(&exec_tool_calls, &id).await;
+                    let content_items = {
+                        let calls = exec_tool_calls.lock().await;
+                        calls
+                            .get(&id)
+                            .map(|state| state.content_items.clone())
+                            .unwrap_or_default()
+                    };
                     let mut pending = pending_execs.lock().await;
                     if let Some(tx) = pending.remove(&id) {
                         let payload = if ok {
-                            ExecResultMessage::Ok { output }
+                            ExecResultMessage::Ok {
+                                content_items: build_exec_result_content_items(
+                                    output,
+                                    content_items,
+                                ),
+                            }
                         } else {
                             ExecResultMessage::Err {
                                 message: error
@@ -1133,7 +1176,11 @@ impl JsReplManager {
                                         response: None,
                                         error: Some("js_repl execution reset".to_string()),
                                     },
-                                    result = JsReplManager::run_tool_request(ctx, req) => result,
+                                    result = JsReplManager::run_tool_request(
+                                        ctx,
+                                        req,
+                                        Arc::clone(&exec_tool_calls_for_task),
+                                    ) => result,
                                 }
                             }
                             None => RunToolResult {
@@ -1227,7 +1274,11 @@ impl JsReplManager {
         }
     }
 
-    async fn run_tool_request(exec: ExecContext, req: RunToolRequest) -> RunToolResult {
+    async fn run_tool_request(
+        exec: ExecContext,
+        req: RunToolRequest,
+        exec_tool_calls: Arc<Mutex<HashMap<String, ExecToolCalls>>>,
+    ) -> RunToolResult {
         if is_js_repl_internal_tool(&req.tool_name) {
             let error = "js_repl cannot invoke itself".to_string();
             let summary = Self::summarize_tool_call_error(&error);
@@ -1300,39 +1351,13 @@ impl JsReplManager {
             .await
         {
             Ok(response) => {
-                if let ResponseInputItem::FunctionCallOutput { output, .. } = &response
-                    && let Some(items) = output.content_items()
-                {
-                    let mut has_image = false;
-                    let mut content = Vec::with_capacity(items.len());
-                    for item in items {
-                        match item {
-                            FunctionCallOutputContentItem::InputText { text } => {
-                                content.push(ContentItem::InputText { text: text.clone() });
-                            }
-                            FunctionCallOutputContentItem::InputImage { image_url } => {
-                                has_image = true;
-                                content.push(ContentItem::InputImage {
-                                    image_url: image_url.clone(),
-                                });
-                            }
-                        }
-                    }
-
-                    if has_image
-                        && session
-                            .inject_response_items(vec![ResponseInputItem::Message {
-                                role: "user".to_string(),
-                                content,
-                            }])
-                            .await
-                            .is_err()
-                    {
-                        warn!(
-                            tool_name = %tool_name,
-                            "js_repl tool call returned image content but there was no active turn to attach it to"
-                        );
-                    }
+                if let Some(items) = response_content_items(&response) {
+                    Self::record_exec_tool_call_content_items(
+                        &exec_tool_calls,
+                        &req.exec_id,
+                        items,
+                    )
+                    .await;
                 }
 
                 let summary = Self::summarize_tool_call_response(&response);
@@ -1407,6 +1432,50 @@ impl JsReplManager {
     }
 }
 
+fn response_content_items(
+    response: &ResponseInputItem,
+) -> Option<Vec<FunctionCallOutputContentItem>> {
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. }
+        | ResponseInputItem::CustomToolCallOutput { output, .. } => output
+            .content_items()
+            .map(<[FunctionCallOutputContentItem]>::to_vec),
+        ResponseInputItem::McpToolCallOutput { result, .. } => match result {
+            Ok(result) => FunctionCallOutputPayload::from(result)
+                .content_items()
+                .map(<[FunctionCallOutputContentItem]>::to_vec),
+            Err(_) => None,
+        },
+        ResponseInputItem::Message { .. } => None,
+    }
+}
+
+fn build_exec_result_content_items(
+    output: String,
+    content_items: Vec<FunctionCallOutputContentItem>,
+) -> Vec<FunctionCallOutputContentItem> {
+    let mut all_content_items = Vec::with_capacity(content_items.len() + 1);
+    all_content_items.push(FunctionCallOutputContentItem::InputText { text: output });
+    all_content_items.extend(content_items);
+    all_content_items
+}
+
+fn split_exec_result_content_items(
+    mut content_items: Vec<FunctionCallOutputContentItem>,
+) -> (String, Vec<FunctionCallOutputContentItem>) {
+    match content_items.first() {
+        Some(FunctionCallOutputContentItem::InputText { .. }) => {
+            let FunctionCallOutputContentItem::InputText { text } = content_items.remove(0) else {
+                unreachable!("first content item should be input_text");
+            };
+            (text, content_items)
+        }
+        Some(FunctionCallOutputContentItem::InputImage { .. }) | None => {
+            (String::new(), content_items)
+        }
+    }
+}
+
 fn is_freeform_tool(specs: &[ToolSpec], name: &str) -> bool {
     specs
         .iter()
@@ -1462,8 +1531,12 @@ struct RunToolResult {
 
 #[derive(Debug)]
 enum ExecResultMessage {
-    Ok { output: String },
-    Err { message: String },
+    Ok {
+        content_items: Vec<FunctionCallOutputContentItem>,
+    },
+    Err {
+        message: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1601,7 +1674,6 @@ mod tests {
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::dynamic_tools::DynamicToolSpec;
-    use codex_protocol::models::ContentItem;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::ResponseInputItem;
@@ -1839,6 +1911,35 @@ mod tests {
             JsReplToolCallResponseSummary {
                 response_type: Some("function_call_output".to_string()),
                 payload_kind: Some(JsReplToolCallPayloadKind::FunctionContentItems),
+                payload_text_preview: None,
+                payload_text_length: None,
+                payload_item_count: Some(1),
+                text_item_count: Some(0),
+                image_item_count: Some(1),
+                structured_content_present: None,
+                result_is_error: None,
+            }
+        );
+    }
+
+    #[test]
+    fn summarize_tool_call_response_for_multimodal_custom_output() {
+        let response = ResponseInputItem::CustomToolCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,abcd".to_string(),
+                },
+            ]),
+        };
+
+        let actual = JsReplManager::summarize_tool_call_response(&response);
+
+        assert_eq!(
+            actual,
+            JsReplToolCallResponseSummary {
+                response_type: Some("custom_tool_call_output".to_string()),
+                payload_kind: Some(JsReplToolCallPayloadKind::CustomContentItems),
                 payload_text_preview: None,
                 payload_text_length: None,
                 payload_item_count: Some(1),
@@ -2310,20 +2411,22 @@ console.log(out.output?.body?.text ?? "");
             )
             .await?;
         assert!(result.output.contains("function_call_output"));
-
-        let pending_input = session.get_pending_input().await;
-        let [ResponseInputItem::Message { role, content }] = pending_input.as_slice() else {
-            panic!(
-                "view_image should inject exactly one pending input message, got {pending_input:?}"
-            );
-        };
-        assert_eq!(role, "user");
-        let [ContentItem::InputImage { image_url }] = content.as_slice() else {
-            panic!(
-                "view_image should inject exactly one input_image content item, got {content:?}"
-            );
+        assert_eq!(
+            result.content_items.as_slice(),
+            [FunctionCallOutputContentItem::InputImage {
+                image_url:
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+                        .to_string(),
+            }]
+            .as_slice()
+        );
+        let [FunctionCallOutputContentItem::InputImage { image_url }] =
+            result.content_items.as_slice()
+        else {
+            panic!("view_image should return exactly one input_image content item");
         };
         assert!(image_url.starts_with("data:image/png;base64,"));
+        assert!(session.get_pending_input().await.is_empty());
 
         Ok(())
     }
@@ -2404,22 +2507,18 @@ console.log(out.type);
         response_watcher_result?;
         let result = result?;
         assert!(result.output.contains("function_call_output"));
-
-        let pending_input = session.get_pending_input().await;
         assert_eq!(
-            pending_input,
-            vec![ResponseInputItem::Message {
-                role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputText {
-                        text: "inline image note".to_string(),
-                    },
-                    ContentItem::InputImage {
-                        image_url: image_url.to_string(),
-                    },
-                ],
-            }]
+            result.content_items,
+            vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "inline image note".to_string(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: image_url.to_string(),
+                },
+            ]
         );
+        assert!(session.get_pending_input().await.is_empty());
 
         Ok(())
     }

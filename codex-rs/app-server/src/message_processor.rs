@@ -140,6 +140,7 @@ pub(crate) struct ConnectionSessionState {
     pub(crate) initialized: bool,
     pub(crate) experimental_api_enabled: bool,
     pub(crate) opted_out_notification_methods: HashSet<String>,
+    pub(crate) app_server_client_name: Option<String>,
 }
 
 pub(crate) struct MessageProcessorArgs {
@@ -329,6 +330,7 @@ impl MessageProcessor {
                     if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
                         *suffix = Some(user_agent_suffix);
                     }
+                    session.app_server_client_name = Some(name.clone());
 
                     let user_agent = get_codex_user_agent();
                     let response = InitializeResponse { user_agent };
@@ -430,7 +432,7 @@ impl MessageProcessor {
                 // inline the full `CodexMessageProcessor::process_request` future, which
                 // can otherwise push worker-thread stack usage over the edge.
                 self.codex_message_processor
-                    .process_request(connection_id, other)
+                    .process_request(connection_id, other, session.app_server_client_name.clone())
                     .boxed()
                     .await;
             }

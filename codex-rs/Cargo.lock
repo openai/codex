@@ -1900,6 +1900,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "codex-utils-absolute-path",
  "multimap",
  "pretty_assertions",
  "serde",

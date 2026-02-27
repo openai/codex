@@ -35,6 +35,10 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -342,6 +346,144 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     assert!(pos_permissions < pos_user_instructions);
     assert!(pos_user_instructions < pos_environment);
     assert!(pos_environment < pos_new_user);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
+    skip_if_no_network!();
+
+    // Early js_repl builds persisted image tool results as two separate rollout items:
+    // a string-valued custom_tool_call_output plus a standalone user input_image message.
+    // Current image tests cover today's shapes; this keeps resume compatibility for that
+    // legacy rollout representation.
+    let legacy_custom_tool_call = ResponseItem::CustomToolCall {
+        id: None,
+        status: None,
+        call_id: "legacy-js-call".to_string(),
+        name: "js_repl".to_string(),
+        input: "console.log('legacy image flow')".to_string(),
+    };
+    let legacy_image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+    let rollout = vec![
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: ThreadId::default(),
+                    timestamp: "2024-01-01T00:00:00Z".to_string(),
+                    cwd: ".".into(),
+                    originator: "test_originator".to_string(),
+                    cli_version: "test_version".to_string(),
+                    model_provider: Some("test-provider".to_string()),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            item: RolloutItem::ResponseItem(legacy_custom_tool_call),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:02.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+                call_id: "legacy-js-call".to_string(),
+                output: FunctionCallOutputPayload::from_text("legacy js_repl stdout".to_string()),
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:03.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputImage {
+                    image_url: legacy_image_url.to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            }),
+        },
+    ];
+
+    let tmpdir = TempDir::new().unwrap();
+    let session_path = tmpdir
+        .path()
+        .join("resume-legacy-js-repl-image-rollout.jsonl");
+    let mut f = std::fs::File::create(&session_path).unwrap();
+    for line in rollout {
+        writeln!(f, "{}", serde_json::to_string(&line).unwrap()).unwrap();
+    }
+
+    let server = MockServer::start().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let mut builder = test_codex().with_model("gpt-5.1");
+    let test = builder
+        .resume(&server, codex_home, session_path.clone())
+        .await
+        .expect("resume conversation");
+    test.submit_turn("after resume").await.unwrap();
+
+    let input = resp_mock.single_request().input();
+
+    let legacy_output_index = input
+        .iter()
+        .position(|item| {
+            item.get("type").and_then(|value| value.as_str()) == Some("custom_tool_call_output")
+                && item.get("call_id").and_then(|value| value.as_str()) == Some("legacy-js-call")
+        })
+        .expect("legacy custom tool output should be replayed");
+    assert_eq!(
+        input[legacy_output_index]
+            .get("output")
+            .and_then(|value| value.as_str()),
+        Some("legacy js_repl stdout")
+    );
+
+    let legacy_image_index = input
+        .iter()
+        .position(|item| {
+            item.get("type").and_then(|value| value.as_str()) == Some("message")
+                && item.get("role").and_then(|value| value.as_str()) == Some("user")
+                && item
+                    .get("content")
+                    .and_then(|value| value.as_array())
+                    .is_some_and(|content| {
+                        content.iter().any(|entry| {
+                            entry.get("type").and_then(|value| value.as_str())
+                                == Some("input_image")
+                                && entry.get("image_url").and_then(|value| value.as_str())
+                                    == Some(legacy_image_url)
+                        })
+                    })
+        })
+        .expect("legacy injected image message should be replayed");
+
+    let new_user_index = input
+        .iter()
+        .position(|item| {
+            item.get("type").and_then(|value| value.as_str()) == Some("message")
+                && item.get("role").and_then(|value| value.as_str()) == Some("user")
+                && item
+                    .get("content")
+                    .and_then(|value| value.as_array())
+                    .is_some_and(|content| {
+                        content.iter().any(|entry| {
+                            entry.get("type").and_then(|value| value.as_str()) == Some("input_text")
+                                && entry.get("text").and_then(|value| value.as_str())
+                                    == Some("after resume")
+                        })
+                    })
+        })
+        .expect("new user message should be present");
+
+    assert!(legacy_output_index < new_user_index);
+    assert!(legacy_image_index < new_user_index);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1565,7 +1707,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     });
     prompt.input.push(ResponseItem::CustomToolCallOutput {
         call_id: "custom-tool-call-id".into(),
-        output: "ok".into(),
+        output: FunctionCallOutputPayload::from_text("ok".into()),
     });
 
     let mut stream = client_session

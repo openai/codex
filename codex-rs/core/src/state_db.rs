@@ -345,6 +345,7 @@ pub async fn reconcile_rollout(
     builder: Option<&ThreadMetadataBuilder>,
     items: &[RolloutItem],
     archived_only: Option<bool>,
+    new_thread_memory_mode: Option<&str>,
 ) {
     let Some(ctx) = context else {
         return;
@@ -357,6 +358,7 @@ pub async fn reconcile_rollout(
             builder,
             items,
             "reconcile_rollout",
+            new_thread_memory_mode,
         )
         .await;
         return;
@@ -467,6 +469,7 @@ pub async fn read_repair_rollout_path(
         None,
         &[],
         archived_only,
+        None,
     )
     .await;
 }
@@ -479,6 +482,7 @@ pub async fn apply_rollout_items(
     builder: Option<&ThreadMetadataBuilder>,
     items: &[RolloutItem],
     stage: &str,
+    new_thread_memory_mode: Option<&str>,
 ) {
     let Some(ctx) = context else {
         return;
@@ -499,7 +503,10 @@ pub async fn apply_rollout_items(
     };
     builder.rollout_path = rollout_path.to_path_buf();
     builder.cwd = normalize_cwd_for_state_db(&builder.cwd);
-    if let Err(err) = ctx.apply_rollout_items(&builder, items, None).await {
+    if let Err(err) = ctx
+        .apply_rollout_items(&builder, items, None, new_thread_memory_mode)
+        .await
+    {
         warn!(
             "state db apply_rollout_items failed during {stage} for {}: {err}",
             rollout_path.display()
