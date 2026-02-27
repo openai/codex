@@ -1,5 +1,6 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
@@ -28,8 +29,16 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) config_snapshot: ThreadConfigSnapshot,
 }
 
+// ThreadListenerCommand is used to perform operations in the context of the thread listener, for serialization purposes.
 pub(crate) enum ThreadListenerCommand {
-    SendThreadResumeResponse(PendingThreadResumeRequest),
+    // SendThreadResumeResponse is used to resume an already running thread by sending the thread's history to the client and atomically subscribing for new updates.
+    SendThreadResumeResponse(Box<PendingThreadResumeRequest>),
+    // ResolveServerRequest is used to notify the client that the request has been resolved.
+    // It is executed in the thread listener's context to ensure that the resolved notification is ordered with regard to the request itself.
+    ResolveServerRequest {
+        request_id: RequestId,
+        completion_tx: oneshot::Sender<()>,
+    },
 }
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.

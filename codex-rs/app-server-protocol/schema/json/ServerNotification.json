@@ -1422,6 +1422,32 @@
       ],
       "type": "object"
     },
+    "RequestId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        }
+      ]
+    },
+    "ServerRequestResolvedNotification": {
+      "properties": {
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "SessionSource": {
       "oneOf": [
         {
@@ -3420,6 +3446,26 @@
         "params"
       ],
       "title": "Item/fileChange/outputDeltaNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "serverRequest/resolved"
+          ],
+          "title": "ServerRequest/resolvedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ServerRequestResolvedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "ServerRequest/resolvedNotification",
       "type": "object"
     },
     {
