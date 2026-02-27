@@ -26,17 +26,59 @@ enum TurnReferenceContextItem {
 }
 
 #[derive(Debug, Default)]
-struct ActiveReplaySegment {
+struct ActiveReplaySegment<'a> {
     turn_id: Option<String>,
     counts_as_user_turn: bool,
     previous_model: Option<String>,
     reference_context_item: TurnReferenceContextItem,
-    base_replacement_history: Option<Vec<ResponseItem>>,
+    base_replacement_history: Option<&'a [ResponseItem]>,
 }
 
 fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
     active_turn_id
         .is_none_or(|turn_id| item_turn_id.is_none_or(|item_turn_id| item_turn_id == turn_id))
+}
+
+fn finalize_active_segment<'a>(
+    active_segment: ActiveReplaySegment<'a>,
+    base_replacement_history: &mut Option<&'a [ResponseItem]>,
+    previous_model: &mut Option<String>,
+    reference_context_item: &mut TurnReferenceContextItem,
+    pending_rollback_turns: &mut usize,
+) {
+    // Thread rollback always targets the newest surviving user turns, so consume that
+    // skip budget before letting this segment contribute metadata or a compaction base.
+    if *pending_rollback_turns > 0 {
+        if active_segment.counts_as_user_turn {
+            *pending_rollback_turns -= 1;
+        }
+        return;
+    }
+
+    // A surviving replacement-history checkpoint is a complete history base. Once we
+    // know the newest surviving one, older rollout items do not affect rebuilt history.
+    if base_replacement_history.is_none()
+        && let Some(segment_base_replacement_history) = active_segment.base_replacement_history
+    {
+        *base_replacement_history = Some(segment_base_replacement_history);
+    }
+
+    // `previous_model` comes from the newest surviving user turn that established one.
+    if previous_model.is_none() && active_segment.counts_as_user_turn {
+        *previous_model = active_segment.previous_model;
+    }
+
+    // `reference_context_item` comes from the newest surviving user turn baseline, or
+    // from a surviving compaction that explicitly cleared that baseline.
+    if matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
+        && (active_segment.counts_as_user_turn
+            || matches!(
+                active_segment.reference_context_item,
+                TurnReferenceContextItem::Cleared
+            ))
+    {
+        *reference_context_item = active_segment.reference_context_item;
+    }
 }
 
 impl Session {
@@ -50,62 +92,20 @@ impl Session {
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
         // are both known; then replay only the buffered surviving tail forward to preserve exact
         // history semantics.
-        let mut base_replacement_history = None;
+        let mut base_replacement_history: Option<&[ResponseItem]> = None;
         let mut previous_model = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
-        // Rollout items that survive after the newest replacement-history checkpoint, stored in
-        // reverse scan order so they can later be replayed forward on top of that checkpoint.
-        let mut rollout_suffix_items_rev = Vec::new();
+        // Borrowed suffix of rollout items newer than the newest surviving replacement-history
+        // checkpoint. If no such checkpoint exists, this remains the full rollout.
+        let mut rollout_suffix = rollout_items;
         // Reverse replay accumulates rollout items into the newest in-progress turn segment until
         // we hit its matching `TurnStarted`, at which point the segment can be finalized.
-        let mut active_segment: Option<ActiveReplaySegment> = None;
+        let mut active_segment: Option<ActiveReplaySegment<'_>> = None;
 
-        let finalize_active_segment =
-            |active_segment: ActiveReplaySegment,
-             base_replacement_history: &mut Option<Vec<ResponseItem>>,
-             previous_model: &mut Option<String>,
-             reference_context_item: &mut TurnReferenceContextItem,
-             pending_rollback_turns: &mut usize| {
-                // Thread rollback always targets the newest surviving user turns, so consume that
-                // skip budget before letting this segment contribute metadata or a compaction base.
-                if *pending_rollback_turns > 0 {
-                    if active_segment.counts_as_user_turn {
-                        *pending_rollback_turns -= 1;
-                    }
-                    return;
-                }
-
-                // A surviving replacement-history checkpoint is a complete history base. Once we
-                // know the newest surviving one, older rollout items do not affect rebuilt history.
-                if base_replacement_history.is_none()
-                    && let Some(segment_base_replacement_history) =
-                        active_segment.base_replacement_history
-                {
-                    *base_replacement_history = Some(segment_base_replacement_history);
-                }
-
-                // `previous_model` comes from the newest surviving user turn that established one.
-                if previous_model.is_none() && active_segment.counts_as_user_turn {
-                    *previous_model = active_segment.previous_model;
-                }
-
-                // `reference_context_item` comes from the newest surviving user turn baseline, or
-                // from a surviving compaction that explicitly cleared that baseline.
-                if matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
-                    && (active_segment.counts_as_user_turn
-                        || matches!(
-                            active_segment.reference_context_item,
-                            TurnReferenceContextItem::Cleared
-                        ))
-                {
-                    *reference_context_item = active_segment.reference_context_item;
-                }
-            };
-
-        for item in rollout_items.iter().rev() {
+        for (index, item) in rollout_items.iter().enumerate().rev() {
             match item {
                 RolloutItem::Compacted(compacted) => {
                     let active_segment =
@@ -121,7 +121,8 @@ impl Session {
                     if active_segment.base_replacement_history.is_none()
                         && let Some(replacement_history) = &compacted.replacement_history
                     {
-                        active_segment.base_replacement_history = Some(replacement_history.clone());
+                        active_segment.base_replacement_history = Some(replacement_history);
+                        rollout_suffix = &rollout_items[index + 1..];
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -210,10 +211,6 @@ impl Session {
                 // result.
                 break;
             }
-
-            if base_replacement_history.is_none() {
-                rollout_suffix_items_rev.push(item.clone());
-            }
         }
 
         if let Some(active_segment) = active_segment.take() {
@@ -229,13 +226,13 @@ impl Session {
         let initial_context = self.build_initial_context(turn_context, None).await;
         let mut history = ContextManager::new();
         if let Some(base_replacement_history) = base_replacement_history {
-            history.replace(base_replacement_history);
+            history.replace(base_replacement_history.to_vec());
         }
-        // Temporary eager bridge: rebuild exact history semantics from the buffered surviving tail
+        // Temporary eager bridge: rebuild exact history semantics from the borrowed rollout suffix
         // discovered by reverse replay. This keeps the history result stable while the control
-        // flow moves toward the future lazy reverse loader design without depending on absolute
-        // rollout indices.
-        for item in rollout_suffix_items_rev.iter().rev() {
+        // flow moves toward the future lazy reverse loader design without cloning the full rollout
+        // in the common no-compaction case.
+        for item in rollout_suffix {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_items(
