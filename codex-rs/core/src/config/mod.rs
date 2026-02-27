@@ -2,6 +2,7 @@ use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppsConfigToml;
+use crate::config::types::CodexAppsMcpConfigToml;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -1246,6 +1247,10 @@ pub struct ConfigToml {
     /// Settings for app-specific controls.
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
+
+    /// Config overrides for the synthesized `codex_apps` MCP server.
+    #[serde(default)]
+    pub codex_apps_mcp: Option<CodexAppsMcpConfigToml>,
 
     /// OTEL configuration.
     pub otel: Option<crate::config::types::OtelConfigToml>,

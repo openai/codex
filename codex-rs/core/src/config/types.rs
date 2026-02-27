@@ -530,6 +530,19 @@ pub struct AppsConfigToml {
     pub apps: HashMap<String, AppConfig>,
 }
 
+/// Config overrides for the synthesized `codex_apps` MCP server.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct CodexAppsMcpConfigToml {
+    /// Explicit allow-list of tools exposed from the synthesized `codex_apps` server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_tools: Option<Vec<String>>,
+
+    /// Explicit deny-list of tools exposed from the synthesized `codex_apps` server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_tools: Option<Vec<String>>,
+}
+
 // ===== OTEL configuration =====
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

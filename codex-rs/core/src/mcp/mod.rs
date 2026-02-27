@@ -13,11 +13,13 @@ use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::mcp::Tool;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::config::Config;
+use crate::config::types::CodexAppsMcpConfigToml;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::features::Feature;
@@ -115,6 +117,12 @@ pub(crate) fn codex_apps_mcp_url(config: &Config) -> String {
     )
 }
 
+fn read_codex_apps_mcp_config(config: &Config) -> Option<CodexAppsMcpConfigToml> {
+    let effective_config = config.config_layer_stack.effective_config();
+    let codex_apps_mcp = effective_config.as_table()?.get("codex_apps_mcp")?.clone();
+    CodexAppsMcpConfigToml::deserialize(codex_apps_mcp).ok()
+}
+
 fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> McpServerConfig {
     let bearer_token_env_var = codex_apps_mcp_bearer_token_env_var();
     let http_headers = if bearer_token_env_var.is_some() {
@@ -124,7 +132,7 @@ fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> Mc
     };
     let url = codex_apps_mcp_url(config);
 
-    McpServerConfig {
+    let mut server = McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var,
@@ -139,7 +147,18 @@ fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> Mc
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+    };
+
+    if let Some(overrides) = read_codex_apps_mcp_config(config) {
+        if let Some(enabled_tools) = overrides.enabled_tools {
+            server.enabled_tools = Some(enabled_tools);
+        }
+        if let Some(disabled_tools) = overrides.disabled_tools {
+            server.disabled_tools = Some(disabled_tools);
+        }
     }
+
+    server
 }
 
 pub(crate) fn with_codex_apps_mcp(
@@ -366,6 +385,7 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use toml::Value as TomlValue;
 
     fn make_tool(name: &str) -> Tool {
         Tool {
@@ -540,5 +560,34 @@ mod tests {
 
         let expected_url = format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
         assert_eq!(url, &expected_url);
+    }
+
+    #[tokio::test]
+    async fn codex_apps_server_config_applies_cli_tool_filters() {
+        let mut config = crate::config::Config::load_with_cli_overrides(vec![(
+            "codex_apps_mcp.disabled_tools".to_string(),
+            TomlValue::Array(vec![TomlValue::String(
+                "github_add_comment_to_issue".to_string(),
+            )]),
+        )])
+        .await
+        .expect("load config with codex apps MCP overrides");
+        config.chatgpt_base_url = "https://chatgpt.com".to_string();
+        config.features.enable(Feature::Apps);
+
+        let servers = with_codex_apps_mcp(HashMap::new(), true, None, &config);
+        let server = servers
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .expect("codex apps should be present when apps is enabled");
+
+        assert_eq!(
+            server.disabled_tools.as_ref(),
+            Some(&vec!["github_add_comment_to_issue".to_string()])
+        );
+        let url = match &server.transport {
+            McpServerTransportConfig::StreamableHttp { url, .. } => url,
+            _ => panic!("expected streamable http transport for codex apps"),
+        };
+        assert_eq!(url, "https://chatgpt.com/backend-api/wham/apps");
     }
 }
