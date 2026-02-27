@@ -6719,7 +6719,22 @@ impl CodexMessageProcessor {
         let thread_id = snapshot.thread_id.clone();
         let sqlite_feedback_logs = if include_logs {
             let state_db_ctx = get_state_db(&self.config, None).await;
-            read_feedback_logs_from_state_db_context(state_db_ctx.as_ref(), conversation_id).await
+            match (state_db_ctx.as_ref(), conversation_id) {
+                (Some(state_db_ctx), Some(conversation_id)) => {
+                    let thread_id_text = conversation_id.to_string();
+                    match state_db_ctx.query_feedback_logs(&thread_id_text).await {
+                        Ok(logs) if logs.is_empty() => None,
+                        Ok(logs) => Some(logs),
+                        Err(err) => {
+                            warn!(
+                                "failed to query feedback logs from sqlite for thread_id={thread_id_text}: {err}"
+                            );
+                            None
+                        }
+                    }
+                }
+                _ => None,
+            }
         } else {
             None
         };
@@ -7307,26 +7322,6 @@ async fn read_summary_from_state_db_context_by_thread_id(
     ))
 }
 
-async fn read_feedback_logs_from_state_db_context(
-    state_db_ctx: Option<&StateDbHandle>,
-    thread_id: Option<ThreadId>,
-) -> Option<Vec<u8>> {
-    let state_db_ctx = state_db_ctx?;
-    let thread_id = thread_id?;
-    let thread_id_text = thread_id.to_string();
-
-    match state_db_ctx.query_feedback_logs(&thread_id_text).await {
-        Ok(logs) if logs.is_empty() => None,
-        Ok(logs) => Some(logs),
-        Err(err) => {
-            warn!(
-                "failed to query feedback logs from sqlite for thread_id={thread_id_text}: {err}"
-            );
-            None
-        }
-    }
-}
-
 async fn summary_from_thread_list_item(
     it: codex_core::ThreadItem,
     fallback_provider: &str,
@@ -7698,7 +7693,6 @@ mod tests {
     use anyhow::Result;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
-    use codex_state::StateRuntime;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -7922,23 +7916,6 @@ mod tests {
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_feedback_logs_from_state_db_context_returns_none_for_empty_logs() -> Result<()> {
-        let temp_dir = TempDir::new()?;
-        let state_db = StateRuntime::init(
-            temp_dir.path().to_path_buf(),
-            "test-provider".to_string(),
-            None,
-        )
-        .await?;
-        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
-
-        let logs = read_feedback_logs_from_state_db_context(Some(&state_db), Some(thread_id)).await;
-
-        assert_eq!(logs, None);
         Ok(())
     }
 

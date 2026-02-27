@@ -312,7 +312,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use pretty_assertions::assert_eq;
+    use tokio::time::Instant;
     use tracing_subscriber::filter::Targets;
     use tracing_subscriber::fmt::writer::MakeWriter;
     use tracing_subscriber::layer::SubscriberExt;
@@ -390,23 +390,31 @@ mod tests {
         });
         tracing::debug!("threadless-after");
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
         drop(guard);
 
-        let sqlite_logs = String::from_utf8(
-            runtime
-                .query_feedback_logs("thread-1")
-                .await
-                .expect("query feedback logs"),
-        )
-        .expect("valid utf-8");
         // TODO(ccunningham): Store enough span metadata in SQLite to reproduce span
         // prefixes like `feedback-thread{thread_id="thread-1"}:` in feedback exports.
         let feedback_logs = writer
             .snapshot()
             .replace("feedback-thread{thread_id=\"thread-1\"}: ", "");
-
-        assert_eq!(sqlite_logs, feedback_logs);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let sqlite_logs = String::from_utf8(
+                runtime
+                    .query_feedback_logs("thread-1")
+                    .await
+                    .expect("query feedback logs"),
+            )
+            .expect("valid utf-8");
+            if sqlite_logs == feedback_logs {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "sqlite feedback logs did not match feedback formatter output before timeout\nsqlite:\n{sqlite_logs}\nfeedback:\n{feedback_logs}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
