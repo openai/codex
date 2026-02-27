@@ -128,24 +128,6 @@ impl Session {
                     pending_rollback_turns = pending_rollback_turns
                         .saturating_add(usize::try_from(rollback.num_turns).unwrap_or(usize::MAX));
                 }
-                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
-                    // `TurnStarted` is the oldest boundary of the active reverse segment.
-                    if active_segment.as_ref().is_some_and(|active_segment| {
-                        turn_ids_are_compatible(
-                            active_segment.turn_id.as_deref(),
-                            Some(event.turn_id.as_str()),
-                        )
-                    }) && let Some(active_segment) = active_segment.take()
-                    {
-                        finalize_active_segment(
-                            active_segment,
-                            &mut base_replacement_history,
-                            &mut previous_model,
-                            &mut reference_context_item,
-                            &mut pending_rollback_turns,
-                        );
-                    }
-                }
                 RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
@@ -194,6 +176,24 @@ impl Session {
                             active_segment.reference_context_item =
                                 TurnReferenceContextItem::Latest(Box::new(ctx.clone()));
                         }
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+                    // `TurnStarted` is the oldest boundary of the active reverse segment.
+                    if active_segment.as_ref().is_some_and(|active_segment| {
+                        turn_ids_are_compatible(
+                            active_segment.turn_id.as_deref(),
+                            Some(event.turn_id.as_str()),
+                        )
+                    }) && let Some(active_segment) = active_segment.take()
+                    {
+                        finalize_active_segment(
+                            active_segment,
+                            &mut base_replacement_history,
+                            &mut previous_model,
+                            &mut reference_context_item,
+                            &mut pending_rollback_turns,
+                        );
                     }
                 }
                 RolloutItem::ResponseItem(_)
