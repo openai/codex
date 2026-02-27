@@ -75,6 +75,7 @@ pub struct HookPayload {
 pub struct HookEventAfterAgent {
     pub thread_id: ThreadId,
     pub turn_id: String,
+    pub subagent: bool,
     pub input_messages: Vec<String>,
     pub last_assistant_message: Option<String>,
 }
@@ -189,6 +190,7 @@ mod tests {
                 event: HookEventAfterAgent {
                     thread_id,
                     turn_id: "turn-1".to_string(),
+                    subagent: false,
                     input_messages: vec!["hello".to_string()],
                     last_assistant_message: Some("hi".to_string()),
                 },
@@ -204,6 +206,7 @@ mod tests {
                 "event_type": "after_agent",
                 "thread_id": thread_id.to_string(),
                 "turn_id": "turn-1",
+                "subagent": false,
                 "input_messages": ["hello"],
                 "last_assistant_message": "hi",
             },

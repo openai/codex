@@ -19,6 +19,7 @@ enum UserNotification {
         thread_id: String,
         turn_id: String,
         cwd: String,
+        subagent: bool,
 
         /// Messages that the user sent to the agent to initiate the turn.
         input_messages: Vec<String>,
@@ -35,6 +36,7 @@ pub fn legacy_notify_json(hook_event: &HookEvent, cwd: &Path) -> Result<String, 
                 thread_id: event.thread_id.to_string(),
                 turn_id: event.turn_id.clone(),
                 cwd: cwd.display().to_string(),
+                subagent: event.subagent,
                 input_messages: event.input_messages.clone(),
                 last_assistant_message: event.last_assistant_message.clone(),
             })
@@ -91,6 +93,7 @@ mod tests {
             "thread-id": "b5f6c1c2-1111-2222-3333-444455556666",
             "turn-id": "12345",
             "cwd": "/Users/example/project",
+            "subagent": false,
             "input-messages": ["Rename `foo` to `bar` and update the callsites."],
             "last-assistant-message": "Rename complete and verified `cargo build` succeeds.",
         })
@@ -102,6 +105,7 @@ mod tests {
             thread_id: "b5f6c1c2-1111-2222-3333-444455556666".to_string(),
             turn_id: "12345".to_string(),
             cwd: "/Users/example/project".to_string(),
+            subagent: false,
             input_messages: vec!["Rename `foo` to `bar` and update the callsites.".to_string()],
             last_assistant_message: Some(
                 "Rename complete and verified `cargo build` succeeds.".to_string(),
@@ -120,6 +124,7 @@ mod tests {
                 thread_id: ThreadId::from_string("b5f6c1c2-1111-2222-3333-444455556666")
                     .expect("valid thread id"),
                 turn_id: "12345".to_string(),
+                subagent: false,
                 input_messages: vec!["Rename `foo` to `bar` and update the callsites.".to_string()],
                 last_assistant_message: Some(
                     "Rename complete and verified `cargo build` succeeds.".to_string(),
