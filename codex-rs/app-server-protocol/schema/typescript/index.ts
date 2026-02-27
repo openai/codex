@@ -155,6 +155,7 @@ export type { RejectConfig } from "./RejectConfig";
 export type { RemoteSkillDownloadedEvent } from "./RemoteSkillDownloadedEvent";
 export type { RemoteSkillSummary } from "./RemoteSkillSummary";
 export type { RequestId } from "./RequestId";
+export type { RequestPermissionsEvent } from "./RequestPermissionsEvent";
 export type { RequestUserInputEvent } from "./RequestUserInputEvent";
 export type { RequestUserInputQuestion } from "./RequestUserInputQuestion";
 export type { RequestUserInputQuestionOption } from "./RequestUserInputQuestionOption";

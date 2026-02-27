@@ -41,6 +41,8 @@ use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
+use crate::request_permissions::RequestPermissionsEvent;
+use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -69,6 +71,7 @@ pub use crate::permissions::FileSystemSandboxKind;
 pub use crate::permissions::FileSystemSandboxPolicy;
 pub use crate::permissions::FileSystemSpecialPath;
 pub use crate::permissions::NetworkSandboxPolicy;
+pub use crate::request_permissions::RequestPermissionsArgs;
 pub use crate::request_user_input::RequestUserInputEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
@@ -354,6 +357,14 @@ pub enum Op {
         id: String,
         /// User-provided answers.
         response: RequestUserInputResponse,
+    },
+
+    /// Resolve a request_permissions tool call.
+    RequestPermissionsResponse {
+        /// Call id for the in-flight request.
+        id: String,
+        /// User-granted permissions.
+        response: RequestPermissionsResponse,
     },
 
     /// Resolve a dynamic tool call request.
@@ -1143,6 +1154,8 @@ pub enum EventMsg {
     ViewImageToolCall(ViewImageToolCallEvent),
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
+
+    RequestPermissions(RequestPermissionsEvent),
 
     RequestUserInput(RequestUserInputEvent),
 

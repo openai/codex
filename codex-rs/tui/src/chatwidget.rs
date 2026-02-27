@@ -4820,6 +4820,7 @@ impl ChatWidget {
             EventMsg::RequestUserInput(ev) => {
                 self.on_request_user_input(ev);
             }
+            EventMsg::RequestPermissions(_) => {}
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),

@@ -28,6 +28,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -40,6 +41,7 @@ use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
+use macos_permissions::intersect_macos_seatbelt_profile_extensions;
 use macos_permissions::merge_macos_seatbelt_profile_extensions;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -146,20 +148,82 @@ impl EffectiveSandboxPermissions {
 pub(crate) fn normalize_additional_permissions(
     additional_permissions: PermissionProfile,
 ) -> Result<PermissionProfile, String> {
+    let network = additional_permissions
+        .network
+        .filter(|network| !network.is_empty());
+    let file_system = additional_permissions
+        .file_system
+        .map(|file_system| {
+            let read = file_system
+                .read
+                .map(|paths| normalize_permission_paths(paths, "file_system.read"));
+            let write = file_system
+                .write
+                .map(|paths| normalize_permission_paths(paths, "file_system.write"));
+            FileSystemPermissions { read, write }
+        })
+        .filter(|file_system| !file_system.is_empty());
+    let macos = additional_permissions.macos;
+
     Ok(PermissionProfile {
-        network: additional_permissions.network,
-        file_system: additional_permissions
-            .file_system
-            .map(|file_system| FileSystemPermissions {
-                read: file_system
-                    .read
-                    .map(|paths| normalize_permission_paths(paths, "file_system.read")),
-                write: file_system
-                    .write
-                    .map(|paths| normalize_permission_paths(paths, "file_system.write")),
-            }),
-        macos: additional_permissions.macos,
+        network,
+        file_system,
+        macos,
     })
+}
+
+pub fn intersect_permission_profiles(
+    requested: PermissionProfile,
+    granted: PermissionProfile,
+) -> PermissionProfile {
+    let file_system = requested
+        .file_system
+        .map(|requested_file_system| {
+            let granted_file_system = granted.file_system.unwrap_or_default();
+            let read = requested_file_system
+                .read
+                .map(|requested_read| {
+                    let granted_read = granted_file_system.read.unwrap_or_default();
+                    requested_read
+                        .into_iter()
+                        .filter(|path| granted_read.contains(path))
+                        .collect()
+                })
+                .filter(|paths: &Vec<_>| !paths.is_empty());
+            let write = requested_file_system
+                .write
+                .map(|requested_write| {
+                    let granted_write = granted_file_system.write.unwrap_or_default();
+                    requested_write
+                        .into_iter()
+                        .filter(|path| granted_write.contains(path))
+                        .collect()
+                })
+                .filter(|paths: &Vec<_>| !paths.is_empty());
+            FileSystemPermissions { read, write }
+        })
+        .filter(|file_system| !file_system.is_empty());
+    let network = match (requested.network, granted.network) {
+        (
+            Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+            Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+        ) => Some(NetworkPermissions {
+            enabled: Some(true),
+        }),
+        _ => None,
+    };
+
+    let macos = intersect_macos_seatbelt_profile_extensions(requested.macos, granted.macos);
+
+    PermissionProfile {
+        network,
+        file_system,
+        macos,
+    }
 }
 
 fn normalize_permission_paths(
@@ -581,6 +645,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::EffectiveSandboxPermissions;
     use super::SandboxManager;
+    use super::intersect_permission_profiles;
     use super::merge_file_system_policy_with_additional_permissions;
     use super::normalize_additional_permissions;
     use super::sandbox_policy_with_additional_permissions;
@@ -788,6 +853,77 @@ mod tests {
                 read: Some(vec![path.clone()]),
                 write: Some(vec![path]),
             })
+        );
+    }
+
+    #[test]
+    fn normalize_additional_permissions_drops_empty_nested_profiles() {
+        let permissions = normalize_additional_permissions(PermissionProfile {
+            network: Some(NetworkPermissions { enabled: None }),
+            file_system: Some(FileSystemPermissions {
+                read: None,
+                write: None,
+            }),
+            macos: None,
+        })
+        .expect("permissions");
+
+        assert_eq!(permissions, PermissionProfile::default());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn normalize_additional_permissions_preserves_default_macos_preferences_permission() {
+        let permissions = normalize_additional_permissions(PermissionProfile {
+            macos: Some(MacOsSeatbeltProfileExtensions::default()),
+            ..Default::default()
+        })
+        .expect("permissions");
+
+        assert_eq!(
+            permissions,
+            PermissionProfile {
+                macos: Some(MacOsSeatbeltProfileExtensions::default()),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn intersect_permission_profiles_preserves_default_macos_grants() {
+        let requested = PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: Some(Vec::from(["/tmp/requested"
+                    .try_into()
+                    .expect("absolute path")])),
+                write: None,
+            }),
+            macos: Some(MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadWrite,
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                    "com.apple.Notes".to_string(),
+                ]),
+                macos_accessibility: true,
+                macos_calendar: true,
+            }),
+            ..Default::default()
+        };
+        let granted = PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: Some(Vec::new()),
+                write: None,
+            }),
+            macos: Some(MacOsSeatbeltProfileExtensions::default()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            intersect_permission_profiles(requested, granted),
+            PermissionProfile {
+                macos: Some(MacOsSeatbeltProfileExtensions::default()),
+                ..Default::default()
+            }
         );
     }
 

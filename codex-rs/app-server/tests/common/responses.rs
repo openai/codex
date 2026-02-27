@@ -83,3 +83,23 @@ pub fn create_request_user_input_sse_response(call_id: &str) -> anyhow::Result<S
         responses::ev_completed("resp-1"),
     ]))
 }
+
+pub fn create_request_permissions_sse_response(call_id: &str) -> anyhow::Result<String> {
+    let tool_call_arguments = serde_json::to_string(&json!({
+        "reason": "Select a workspace root",
+        "permissions": {
+            "file_system": {
+                "write": [
+                    ".",
+                    "../shared"
+                ]
+            }
+        }
+    }))?;
+
+    Ok(responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_function_call(call_id, "request_permissions", &tool_call_arguments),
+        responses::ev_completed("resp-1"),
+    ]))
+}

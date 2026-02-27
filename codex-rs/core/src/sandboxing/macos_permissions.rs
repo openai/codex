@@ -31,6 +31,28 @@ pub(crate) fn merge_macos_seatbelt_profile_extensions(
     }
 }
 
+pub(crate) fn intersect_macos_seatbelt_profile_extensions(
+    requested: Option<MacOsSeatbeltProfileExtensions>,
+    granted: Option<MacOsSeatbeltProfileExtensions>,
+) -> Option<MacOsSeatbeltProfileExtensions> {
+    match (requested, granted) {
+        (Some(requested), Some(granted)) => {
+            let macos_automation = intersect_macos_automation_permission(
+                &requested.macos_automation,
+                &granted.macos_automation,
+            );
+
+            Some(MacOsSeatbeltProfileExtensions {
+                macos_preferences: requested.macos_preferences.min(granted.macos_preferences),
+                macos_automation,
+                macos_accessibility: requested.macos_accessibility && granted.macos_accessibility,
+                macos_calendar: requested.macos_calendar && granted.macos_calendar,
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Unions two preferences permissions by keeping the more permissive one.
 ///
 /// The larger rank wins: `None < ReadOnly < ReadWrite`. When both sides have
@@ -75,8 +97,40 @@ fn union_macos_automation_permission(
     }
 }
 
+fn intersect_macos_automation_permission(
+    requested: &MacOsAutomationPermission,
+    granted: &MacOsAutomationPermission,
+) -> MacOsAutomationPermission {
+    match (requested, granted) {
+        (_, MacOsAutomationPermission::None) | (MacOsAutomationPermission::None, _) => {
+            MacOsAutomationPermission::None
+        }
+        (MacOsAutomationPermission::All, granted) => granted.clone(),
+        (MacOsAutomationPermission::BundleIds(requested), MacOsAutomationPermission::All) => {
+            MacOsAutomationPermission::BundleIds(requested.clone())
+        }
+        (
+            MacOsAutomationPermission::BundleIds(requested),
+            MacOsAutomationPermission::BundleIds(granted),
+        ) => {
+            let bundle_ids = requested
+                .iter()
+                .filter(|bundle_id| granted.contains(bundle_id))
+                .cloned()
+                .collect::<Vec<String>>();
+            if bundle_ids.is_empty() {
+                MacOsAutomationPermission::None
+            } else {
+                MacOsAutomationPermission::BundleIds(bundle_ids)
+            }
+        }
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    use super::intersect_macos_automation_permission;
+    use super::intersect_macos_seatbelt_profile_extensions;
     use super::merge_macos_seatbelt_profile_extensions;
     use super::union_macos_automation_permission;
     use super::union_macos_preferences_permission;
@@ -140,5 +194,39 @@ mod tests {
         let merged = union_macos_automation_permission(&base, &requested);
 
         assert_eq!(merged, MacOsAutomationPermission::All);
+    }
+
+    #[test]
+    fn intersect_macos_automation_permission_keeps_common_bundle_ids() {
+        let requested = MacOsAutomationPermission::BundleIds(vec![
+            "com.apple.Notes".to_string(),
+            "com.apple.Calendar".to_string(),
+        ]);
+        let granted = MacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string()]);
+
+        let intersected = intersect_macos_automation_permission(&requested, &granted);
+
+        assert_eq!(
+            intersected,
+            MacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string()])
+        );
+    }
+
+    #[test]
+    fn intersect_macos_seatbelt_profile_extensions_preserves_default_grant() {
+        let requested = MacOsSeatbeltProfileExtensions {
+            macos_preferences: MacOsPreferencesPermission::ReadWrite,
+            macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                "com.apple.Notes".to_string(),
+            ]),
+            macos_accessibility: true,
+            macos_calendar: true,
+        };
+        let granted = MacOsSeatbeltProfileExtensions::default();
+
+        let intersected =
+            intersect_macos_seatbelt_profile_extensions(Some(requested), Some(granted));
+
+        assert_eq!(intersected, Some(MacOsSeatbeltProfileExtensions::default()));
     }
 }

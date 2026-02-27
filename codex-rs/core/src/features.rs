@@ -921,6 +921,12 @@ mod tests {
     }
 
     #[test]
+    fn request_permissions_is_under_development() {
+        assert_eq!(Feature::RequestPermissions.stage(), Stage::UnderDevelopment);
+        assert_eq!(Feature::RequestPermissions.default_enabled(), false);
+    }
+
+    #[test]
     fn image_generation_is_under_development() {
         assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
         assert_eq!(Feature::ImageGeneration.default_enabled(), false);
