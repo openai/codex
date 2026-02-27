@@ -1638,6 +1638,12 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     let readme_contents = std::fs::read_to_string(expected_readme_path)?;
     assert_eq!(readme_contents, "new line\n");
 
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+
     Ok(())
 }
 
