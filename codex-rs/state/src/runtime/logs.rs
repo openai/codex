@@ -290,10 +290,12 @@ WHERE id IN (
         let max_bytes = LOG_PARTITION_SIZE_LIMIT_BYTES;
         let lines = sqlx::query_scalar::<_, String>(
             r#"
-WITH relevant_processes AS (
-    SELECT DISTINCT process_uuid
+WITH latest_process AS (
+    SELECT process_uuid
     FROM logs
     WHERE thread_id = ? AND process_uuid IS NOT NULL
+    ORDER BY ts DESC, ts_nanos DESC, id DESC
+    LIMIT 1
 ),
 feedback_logs AS (
     SELECT
@@ -315,7 +317,7 @@ feedback_logs AS (
         thread_id = ?
         OR (
             thread_id IS NULL
-            AND process_uuid IN (SELECT process_uuid FROM relevant_processes)
+            AND process_uuid IN (SELECT process_uuid FROM latest_process)
         )
     )
 )
@@ -951,6 +953,80 @@ mod tests {
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
             " INFO threadless-before\n INFO thread-scoped\n INFO threadless-after\n"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn query_feedback_logs_excludes_threadless_rows_from_prior_processes() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("old-process-threadless".to_string()),
+                    thread_id: None,
+                    process_uuid: Some("proc-old".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("old-process-thread".to_string()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-old".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 3,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("new-process-thread".to_string()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-new".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 4,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("new-process-threadless".to_string()),
+                    thread_id: None,
+                    process_uuid: Some("proc-new".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let bytes = runtime
+            .query_feedback_logs("thread-1")
+            .await
+            .expect("query feedback logs");
+
+        assert_eq!(
+            String::from_utf8(bytes).expect("valid utf-8"),
+            " INFO old-process-thread\n INFO new-process-thread\n INFO new-process-threadless\n"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
