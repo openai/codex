@@ -955,4 +955,76 @@ mod tests {
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
+
+    #[tokio::test]
+    async fn query_feedback_logs_keeps_newest_suffix_across_thread_and_threadless_logs() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+        let thread_marker = "thread-scoped-oldest";
+        let threadless_older_marker = "threadless-older";
+        let threadless_newer_marker = "threadless-newer";
+        let five_mebibytes = format!("{threadless_older_marker} {}", "a".repeat(5 * 1024 * 1024));
+        let four_and_half_mebibytes = format!(
+            "{threadless_newer_marker} {}",
+            "b".repeat((9 * 1024 * 1024) / 2)
+        );
+        let one_mebibyte = format!("{thread_marker} {}", "c".repeat(1024 * 1024));
+
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(one_mebibyte.clone()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(five_mebibytes),
+                    thread_id: None,
+                    process_uuid: Some("proc-1".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 3,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(four_and_half_mebibytes),
+                    thread_id: None,
+                    process_uuid: Some("proc-1".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let bytes = runtime
+            .query_feedback_logs("thread-1")
+            .await
+            .expect("query feedback logs");
+        let logs = String::from_utf8(bytes).expect("valid utf-8");
+
+        assert!(!logs.contains(thread_marker));
+        assert!(logs.contains(threadless_older_marker));
+        assert!(logs.contains(threadless_newer_marker));
+        assert_eq!(logs.matches('\n').count(), 2);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
 }
