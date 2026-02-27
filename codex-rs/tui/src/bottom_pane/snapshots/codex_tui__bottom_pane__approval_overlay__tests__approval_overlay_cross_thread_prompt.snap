@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/approval_overlay.rs
+expression: "render_overlay_lines(&view, 80)"
+---
+  Would you like to run the following command?
+
+  Thread: Robie [explorer]
+
+  $ echo hi
+
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel or o to open thread
