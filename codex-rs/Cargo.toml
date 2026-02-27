@@ -146,7 +146,7 @@ mcp_test_support = { path = "mcp-server/tests/common" }
 # External
 age = "0.11.1"
 allocative = "0.3.3"
-ansi-to-tui = "7.0.0"
+ansi-to-tui = "8.0.1"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
 askama = "0.15.4"
