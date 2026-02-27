@@ -296,15 +296,6 @@ impl OutgoingMessageSender {
         thread_id: ThreadId,
         error: Option<JSONRPCErrorError>,
     ) {
-        self.cancel_requests_for_thread_matching(thread_id, error)
-            .await
-    }
-
-    async fn cancel_requests_for_thread_matching(
-        &self,
-        thread_id: ThreadId,
-        error: Option<JSONRPCErrorError>,
-    ) {
         let entries = {
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
             let request_ids = request_id_to_callback
