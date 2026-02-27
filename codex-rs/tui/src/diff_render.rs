@@ -982,10 +982,11 @@ fn diff_color_level_for_terminal(
 /// Context lines intentionally leave the background unset so the terminal
 /// default shows through.
 fn style_line_bg_for(kind: DiffLineType, theme: DiffTheme, color_level: DiffColorLevel) -> Style {
-    match kind {
-        DiffLineType::Insert => Style::default().bg(add_line_bg(theme, color_level)),
-        DiffLineType::Delete => Style::default().bg(del_line_bg(theme, color_level)),
-        DiffLineType::Context => Style::default(),
+    match (kind, color_level) {
+        (_, DiffColorLevel::Ansi16) => Style::default(),
+        (DiffLineType::Insert, _) => Style::default().bg(add_line_bg(theme, color_level)),
+        (DiffLineType::Delete, _) => Style::default().bg(del_line_bg(theme, color_level)),
+        (DiffLineType::Context, _) => Style::default(),
     }
 }
 
@@ -1043,11 +1044,17 @@ fn light_del_num_bg(color_level: DiffColorLevel) -> Color {
 /// tinted background so numbers contrast against the pastel line fill.  On
 /// dark backgrounds a simple `DIM` modifier is sufficient.
 fn style_gutter_for(kind: DiffLineType, theme: DiffTheme, color_level: DiffColorLevel) -> Style {
-    match (theme, kind) {
-        (DiffTheme::Light, DiffLineType::Insert) => Style::default()
+    match (theme, kind, color_level) {
+        (DiffTheme::Light, DiffLineType::Insert, DiffColorLevel::Ansi16) => {
+            Style::default().fg(light_gutter_fg(color_level))
+        }
+        (DiffTheme::Light, DiffLineType::Delete, DiffColorLevel::Ansi16) => {
+            Style::default().fg(light_gutter_fg(color_level))
+        }
+        (DiffTheme::Light, DiffLineType::Insert, _) => Style::default()
             .fg(light_gutter_fg(color_level))
             .bg(light_add_num_bg(color_level)),
-        (DiffTheme::Light, DiffLineType::Delete) => Style::default()
+        (DiffTheme::Light, DiffLineType::Delete, _) => Style::default()
             .fg(light_gutter_fg(color_level))
             .bg(light_del_num_bg(color_level)),
         _ => style_gutter_dim(),
@@ -1075,9 +1082,7 @@ fn style_sign_del(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
 /// Content style for insert lines (plain, non-syntax-highlighted text).
 fn style_add(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
     match (theme, color_level) {
-        (DiffTheme::Dark, DiffColorLevel::Ansi16) => Style::default()
-            .fg(Color::Black)
-            .bg(add_line_bg(theme, color_level)),
+        (_, DiffColorLevel::Ansi16) => Style::default().fg(Color::Green),
         (DiffTheme::Light, _) => Style::default().bg(add_line_bg(theme, color_level)),
         (DiffTheme::Dark, _) => Style::default()
             .fg(Color::Green)
@@ -1088,9 +1093,7 @@ fn style_add(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
 /// Content style for delete lines (plain, non-syntax-highlighted text).
 fn style_del(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
     match (theme, color_level) {
-        (DiffTheme::Dark, DiffColorLevel::Ansi16) => Style::default()
-            .fg(Color::Black)
-            .bg(del_line_bg(theme, color_level)),
+        (_, DiffColorLevel::Ansi16) => Style::default().fg(Color::Red),
         (DiffTheme::Light, _) => Style::default().bg(del_line_bg(theme, color_level)),
         (DiffTheme::Dark, _) => Style::default()
             .fg(Color::Red)
@@ -1113,32 +1116,28 @@ mod tests {
     use ratatui::widgets::Paragraph;
 
     #[test]
-    fn dark_ansi16_add_style_has_contrast() {
+    fn ansi16_add_style_uses_foreground_only() {
         let style = style_add(DiffTheme::Dark, DiffColorLevel::Ansi16);
-        assert_eq!(style.fg, Some(Color::Black));
-        assert_eq!(style.bg, Some(Color::Green));
-        assert_ne!(style.fg, style.bg);
+        assert_eq!(style.fg, Some(Color::Green));
+        assert_eq!(style.bg, None);
     }
 
     #[test]
-    fn dark_ansi16_del_style_has_contrast() {
+    fn ansi16_del_style_uses_foreground_only() {
         let style = style_del(DiffTheme::Dark, DiffColorLevel::Ansi16);
-        assert_eq!(style.fg, Some(Color::Black));
-        assert_eq!(style.bg, Some(Color::Red));
-        assert_ne!(style.fg, style.bg);
+        assert_eq!(style.fg, Some(Color::Red));
+        assert_eq!(style.bg, None);
     }
 
     #[test]
-    fn dark_ansi16_sign_styles_have_contrast() {
+    fn ansi16_sign_styles_use_foreground_only() {
         let add_sign = style_sign_add(DiffTheme::Dark, DiffColorLevel::Ansi16);
-        assert_eq!(add_sign.fg, Some(Color::Black));
-        assert_eq!(add_sign.bg, Some(Color::Green));
-        assert_ne!(add_sign.fg, add_sign.bg);
+        assert_eq!(add_sign.fg, Some(Color::Green));
+        assert_eq!(add_sign.bg, None);
 
         let del_sign = style_sign_del(DiffTheme::Dark, DiffColorLevel::Ansi16);
-        assert_eq!(del_sign.fg, Some(Color::Black));
-        assert_eq!(del_sign.bg, Some(Color::Red));
-        assert_ne!(del_sign.fg, del_sign.bg);
+        assert_eq!(del_sign.fg, Some(Color::Red));
+        assert_eq!(del_sign.bg, None);
     }
     use ratatui::widgets::WidgetRef;
     use ratatui::widgets::Wrap;
@@ -1541,6 +1540,32 @@ mod tests {
     }
 
     #[test]
+    fn ui_snapshot_ansi16_insert_delete_no_background() {
+        let mut lines = push_wrapped_diff_line_inner_with_theme_and_color_level(
+            1,
+            DiffLineType::Insert,
+            "added in ansi16 mode",
+            80,
+            line_number_width(2),
+            None,
+            DiffTheme::Dark,
+            DiffColorLevel::Ansi16,
+        );
+        lines.extend(push_wrapped_diff_line_inner_with_theme_and_color_level(
+            2,
+            DiffLineType::Delete,
+            "deleted in ansi16 mode",
+            80,
+            line_number_width(2),
+            None,
+            DiffTheme::Dark,
+            DiffColorLevel::Ansi16,
+        ));
+
+        snapshot_lines("ansi16_insert_delete_no_background", lines, 40, 4);
+    }
+
+    #[test]
     fn truecolor_dark_theme_uses_configured_backgrounds() {
         assert_eq!(
             style_line_bg_for(
@@ -1606,6 +1631,42 @@ mod tests {
                 DiffColorLevel::Ansi256
             ),
             "256-color mode should keep add/delete backgrounds distinct"
+        );
+    }
+
+    #[test]
+    fn ansi16_disables_line_and_gutter_backgrounds() {
+        assert_eq!(
+            style_line_bg_for(
+                DiffLineType::Insert,
+                DiffTheme::Dark,
+                DiffColorLevel::Ansi16
+            ),
+            Style::default()
+        );
+        assert_eq!(
+            style_line_bg_for(
+                DiffLineType::Delete,
+                DiffTheme::Light,
+                DiffColorLevel::Ansi16
+            ),
+            Style::default()
+        );
+        assert_eq!(
+            style_gutter_for(
+                DiffLineType::Insert,
+                DiffTheme::Light,
+                DiffColorLevel::Ansi16
+            ),
+            Style::default().fg(Color::Black)
+        );
+        assert_eq!(
+            style_gutter_for(
+                DiffLineType::Delete,
+                DiffTheme::Light,
+                DiffColorLevel::Ansi16
+            ),
+            Style::default().fg(Color::Black)
         );
     }
 
