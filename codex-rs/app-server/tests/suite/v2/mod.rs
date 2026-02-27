@@ -19,7 +19,6 @@ mod realtime_conversation;
 mod request_user_input;
 mod review;
 mod safety_check_downgrade;
-mod skill_approval;
 mod skills_list;
 mod thread_archive;
 mod thread_fork;

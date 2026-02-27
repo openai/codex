@@ -31,6 +31,7 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailabilityNux;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
@@ -49,6 +50,7 @@ use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RejectConfig as CoreRejectConfig;
+use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
 use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
@@ -741,7 +743,8 @@ pub struct ConfigEdit {
 pub enum CommandExecutionApprovalDecision {
     /// User approved the command.
     Accept,
-    /// User approved the command and future identical commands should run without prompting.
+    /// User approved the command and future prompts in the same session-scoped
+    /// approval cache should run without prompting.
     AcceptForSession,
     /// User approved the command, and wants to apply the proposed execpolicy amendment so future
     /// matching commands can run without prompting.
@@ -756,6 +759,27 @@ pub enum CommandExecutionApprovalDecision {
     Decline,
     /// User denied the command. The turn will also be immediately interrupted.
     Cancel,
+}
+
+impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
+    fn from(value: CoreReviewDecision) -> Self {
+        match value {
+            CoreReviewDecision::Approved => Self::Accept,
+            CoreReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment,
+            } => Self::AcceptWithExecpolicyAmendment {
+                execpolicy_amendment: proposed_execpolicy_amendment.into(),
+            },
+            CoreReviewDecision::ApprovedForSession => Self::AcceptForSession,
+            CoreReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => Self::ApplyNetworkPolicyAmendment {
+                network_policy_amendment: network_policy_amendment.into(),
+            },
+            CoreReviewDecision::Abort => Self::Cancel,
+            CoreReviewDecision::Denied => Self::Decline,
+        }
+    }
 }
 
 v2_enum_from_core! {
@@ -1369,10 +1393,27 @@ pub struct ModelListParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ModelAvailabilityNux {
+    pub message: String,
+}
+
+impl From<CoreModelAvailabilityNux> for ModelAvailabilityNux {
+    fn from(value: CoreModelAvailabilityNux) -> Self {
+        Self {
+            message: value.message,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Model {
     pub id: String,
     pub model: String,
     pub upgrade: Option<String>,
+    pub upgrade_info: Option<ModelUpgradeInfo>,
+    pub availability_nux: Option<ModelAvailabilityNux>,
     pub display_name: String,
     pub description: String,
     pub hidden: bool,
@@ -1384,6 +1425,16 @@ pub struct Model {
     pub supports_personality: bool,
     // Only one model should be marked as default.
     pub is_default: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelUpgradeInfo {
+    pub model: String,
+    pub upgrade_copy: Option<String>,
+    pub model_link: Option<String>,
+    pub migration_markdown: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3029,6 +3080,18 @@ impl From<CoreUserInput> for UserInput {
     }
 }
 
+impl UserInput {
+    pub fn text_char_count(&self) -> usize {
+        match self {
+            UserInput::Text { text, .. } => text.chars().count(),
+            UserInput::Image { .. }
+            | UserInput::LocalImage { .. }
+            | UserInput::Skill { .. }
+            | UserInput::Mention { .. } => 0,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -3802,6 +3865,11 @@ pub struct CommandExecutionRequestApprovalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
+    /// Ordered list of decisions the client may present for this prompt.
+    #[experimental("item/commandExecution/requestApproval.availableDecisions")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub available_decisions: Option<Vec<CommandExecutionApprovalDecision>>,
 }
 
 impl CommandExecutionRequestApprovalParams {
@@ -3840,29 +3908,6 @@ pub struct FileChangeRequestApprovalParams {
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequestApprovalResponse {
     pub decision: FileChangeApprovalDecision,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillRequestApprovalParams {
-    pub item_id: String,
-    pub skill_name: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum SkillApprovalDecision {
-    Approve,
-    Decline,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillRequestApprovalResponse {
-    pub decision: SkillApprovalDecision,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -209,7 +209,6 @@ export type { SkillDependencies } from "./SkillDependencies";
 export type { SkillErrorInfo } from "./SkillErrorInfo";
 export type { SkillInterface } from "./SkillInterface";
 export type { SkillMetadata } from "./SkillMetadata";
-export type { SkillRequestApprovalEvent } from "./SkillRequestApprovalEvent";
 export type { SkillScope } from "./SkillScope";
 export type { SkillToolDependency } from "./SkillToolDependency";
 export type { SkillsListEntry } from "./SkillsListEntry";

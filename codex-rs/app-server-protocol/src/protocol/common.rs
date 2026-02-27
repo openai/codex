@@ -715,11 +715,6 @@ server_request_definitions! {
         response: v2::ToolRequestUserInputResponse,
     },
 
-    SkillRequestApproval => "skill/requestApproval" {
-        params: v2::SkillRequestApprovalParams,
-        response: v2::SkillRequestApprovalResponse,
-    },
-
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,
@@ -1545,6 +1540,7 @@ mod tests {
             }),
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
+            available_decisions: None,
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&params);
         assert_eq!(

@@ -1,5 +1,7 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
+use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 use crate::error_code::INTERNAL_ERROR_CODE;
+use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::FuzzyFileSearchSession;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
@@ -267,6 +269,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_utils_json_to_toml::json_to_toml;
@@ -557,7 +560,12 @@ impl CodexMessageProcessor {
         Ok((review_request, hint))
     }
 
-    pub async fn process_request(&mut self, connection_id: ConnectionId, request: ClientRequest) {
+    pub async fn process_request(
+        &mut self,
+        connection_id: ConnectionId,
+        request: ClientRequest,
+        app_server_client_name: Option<String>,
+    ) {
         let to_connection_request_id = |request_id| ConnectionRequestId {
             connection_id,
             request_id,
@@ -644,8 +652,12 @@ impl CodexMessageProcessor {
                     .await;
             }
             ClientRequest::TurnStart { request_id, params } => {
-                self.turn_start(to_connection_request_id(request_id), params)
-                    .await;
+                self.turn_start(
+                    to_connection_request_id(request_id),
+                    params,
+                    app_server_client_name.clone(),
+                )
+                .await;
             }
             ClientRequest::TurnSteer { request_id, params } => {
                 self.turn_steer(to_connection_request_id(request_id), params)
@@ -764,12 +776,20 @@ impl CodexMessageProcessor {
                     .await;
             }
             ClientRequest::SendUserMessage { request_id, params } => {
-                self.send_user_message(to_connection_request_id(request_id), params)
-                    .await;
+                self.send_user_message(
+                    to_connection_request_id(request_id),
+                    params,
+                    app_server_client_name.clone(),
+                )
+                .await;
             }
             ClientRequest::SendUserTurn { request_id, params } => {
-                self.send_user_turn(to_connection_request_id(request_id), params)
-                    .await;
+                self.send_user_turn(
+                    to_connection_request_id(request_id),
+                    params,
+                    app_server_client_name.clone(),
+                )
+                .await;
             }
             ClientRequest::InterruptConversation { request_id, params } => {
                 self.interrupt_conversation(to_connection_request_id(request_id), params)
@@ -4146,6 +4166,7 @@ impl CodexMessageProcessor {
             http_headers,
             env_http_headers,
             scopes.as_deref().unwrap_or_default(),
+            server.oauth_resource.as_deref(),
             timeout_secs,
             config.mcp_oauth_callback_port,
             config.mcp_oauth_callback_url.as_deref(),
@@ -4732,6 +4753,36 @@ impl CodexMessageProcessor {
         self.outgoing.send_error(request_id, error).await;
     }
 
+    fn input_too_large_error(actual_chars: usize) -> JSONRPCErrorError {
+        JSONRPCErrorError {
+            code: INVALID_PARAMS_ERROR_CODE,
+            message: format!(
+                "Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters."
+            ),
+            data: Some(serde_json::json!({
+                "input_error_code": INPUT_TOO_LARGE_ERROR_CODE,
+                "max_chars": MAX_USER_INPUT_TEXT_CHARS,
+                "actual_chars": actual_chars,
+            })),
+        }
+    }
+
+    fn validate_v1_input_limit(items: &[WireInputItem]) -> Result<(), JSONRPCErrorError> {
+        let actual_chars: usize = items.iter().map(WireInputItem::text_char_count).sum();
+        if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
+            return Err(Self::input_too_large_error(actual_chars));
+        }
+        Ok(())
+    }
+
+    fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
+        let actual_chars: usize = items.iter().map(V2UserInput::text_char_count).sum();
+        if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
+            return Err(Self::input_too_large_error(actual_chars));
+        }
+        Ok(())
+    }
+
     async fn send_internal_error(&self, request_id: ConnectionRequestId, message: String) {
         let error = JSONRPCErrorError {
             code: INTERNAL_ERROR_CODE,
@@ -5026,11 +5077,16 @@ impl CodexMessageProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: SendUserMessageParams,
+        app_server_client_name: Option<String>,
     ) {
         let SendUserMessageParams {
             conversation_id,
             items,
         } = params;
+        if let Err(error) = Self::validate_v1_input_limit(&items) {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
         let Ok(conversation) = self.thread_manager.get_thread(conversation_id).await else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -5040,6 +5096,12 @@ impl CodexMessageProcessor {
             self.outgoing.send_error(request_id, error).await;
             return;
         };
+        if let Err(error) =
+            Self::set_app_server_client_name(conversation.as_ref(), app_server_client_name).await
+        {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
@@ -5070,7 +5132,12 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn send_user_turn(&self, request_id: ConnectionRequestId, params: SendUserTurnParams) {
+    async fn send_user_turn(
+        &self,
+        request_id: ConnectionRequestId,
+        params: SendUserTurnParams,
+        app_server_client_name: Option<String>,
+    ) {
         let SendUserTurnParams {
             conversation_id,
             items,
@@ -5082,6 +5149,10 @@ impl CodexMessageProcessor {
             summary,
             output_schema,
         } = params;
+        if let Err(error) = Self::validate_v1_input_limit(&items) {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         let Ok(conversation) = self.thread_manager.get_thread(conversation_id).await else {
             let error = JSONRPCErrorError {
@@ -5092,6 +5163,12 @@ impl CodexMessageProcessor {
             self.outgoing.send_error(request_id, error).await;
             return;
         };
+        if let Err(error) =
+            Self::set_app_server_client_name(conversation.as_ref(), app_server_client_name).await
+        {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
@@ -5116,7 +5193,7 @@ impl CodexMessageProcessor {
                 sandbox_policy,
                 model,
                 effort,
-                summary,
+                summary: Some(summary),
                 final_output_json_schema: output_schema,
                 collaboration_mode: None,
                 personality: None,
@@ -5205,6 +5282,7 @@ impl CodexMessageProcessor {
             connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
             connectors::list_cached_all_connectors(&config)
         );
+        let cached_all_connectors = all_connectors.clone();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -5231,6 +5309,19 @@ impl CodexMessageProcessor {
         let app_list_deadline = tokio::time::Instant::now() + APP_LIST_LOAD_TIMEOUT;
         let mut accessible_loaded = false;
         let mut all_loaded = false;
+        let mut last_notified_apps = None;
+
+        if accessible_connectors.is_some() || all_connectors.is_some() {
+            let merged = connectors::with_app_enabled_state(
+                Self::merge_loaded_apps(
+                    all_connectors.as_deref(),
+                    accessible_connectors.as_deref(),
+                ),
+                &config,
+            );
+            Self::send_app_list_updated_notification(&outgoing, merged.clone()).await;
+            last_notified_apps = Some(merged);
+        }
 
         loop {
             let result = match tokio::time::timeout_at(app_list_deadline, rx.recv()).await {
@@ -5287,14 +5378,30 @@ impl CodexMessageProcessor {
                 }
             }
 
+            let showing_interim_force_refetch = force_refetch && !(accessible_loaded && all_loaded);
+            let all_connectors_for_update =
+                if showing_interim_force_refetch && cached_all_connectors.is_some() {
+                    cached_all_connectors.as_deref()
+                } else {
+                    all_connectors.as_deref()
+                };
+            let accessible_connectors_for_update =
+                if showing_interim_force_refetch && !accessible_loaded {
+                    None
+                } else {
+                    accessible_connectors.as_deref()
+                };
             let merged = connectors::with_app_enabled_state(
                 Self::merge_loaded_apps(
-                    all_connectors.as_deref(),
-                    accessible_connectors.as_deref(),
+                    all_connectors_for_update,
+                    accessible_connectors_for_update,
                 ),
                 &config,
             );
-            Self::send_app_list_updated_notification(&outgoing, merged.clone()).await;
+            if last_notified_apps.as_ref() != Some(&merged) {
+                Self::send_app_list_updated_notification(&outgoing, merged.clone()).await;
+                last_notified_apps = Some(merged.clone());
+            }
 
             if accessible_loaded && all_loaded {
                 match Self::paginate_apps(merged.as_slice(), start, limit) {
@@ -5563,7 +5670,16 @@ impl CodexMessageProcessor {
         let _ = conversation.submit(Op::Interrupt).await;
     }
 
-    async fn turn_start(&self, request_id: ConnectionRequestId, params: TurnStartParams) {
+    async fn turn_start(
+        &self,
+        request_id: ConnectionRequestId,
+        params: TurnStartParams,
+        app_server_client_name: Option<String>,
+    ) {
+        if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
             Err(error) => {
@@ -5571,6 +5687,12 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if let Err(error) =
+            Self::set_app_server_client_name(thread.as_ref(), app_server_client_name).await
+        {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         let collaboration_modes_config = CollaborationModesConfig {
             default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
@@ -5652,6 +5774,20 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn set_app_server_client_name(
+        thread: &CodexThread,
+        app_server_client_name: Option<String>,
+    ) -> Result<(), JSONRPCErrorError> {
+        thread
+            .set_app_server_client_name(app_server_client_name)
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to set app server client name: {err}"),
+                data: None,
+            })
+    }
+
     async fn turn_steer(&self, request_id: ConnectionRequestId, params: TurnSteerParams) {
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
@@ -5667,6 +5803,10 @@ impl CodexMessageProcessor {
                 "expectedTurnId must not be empty".to_string(),
             )
             .await;
+            return;
+        }
+        if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.outgoing.send_error(request_id, error).await;
             return;
         }
 
@@ -7575,7 +7715,7 @@ mod tests {
                 "role": "user",
                 "content": [{
                     "type": "input_text",
-                    "text": "<user_instructions>\n<AGENTS.md contents>\n</user_instructions>".to_string(),
+                    "text": "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\n<AGENTS.md contents>\n</INSTRUCTIONS>".to_string(),
                 }],
             }),
             json!({

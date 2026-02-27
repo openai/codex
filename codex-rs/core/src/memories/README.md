@@ -59,7 +59,14 @@ Phase 2 consolidates the latest stage-1 outputs into the filesystem memory artif
 What it does:
 
 - claims a single global phase-2 job (so only one consolidation runs at a time)
-- loads a bounded set of the most recent stage-1 outputs from the state DB (the per-rollout memories produced by Phase 1, used as the consolidation input set)
+- loads a bounded set of stage-1 outputs from the state DB using phase-2
+  selection rules:
+  - ignores memories whose `last_usage` falls outside the configured
+    `max_unused_days` window
+  - for memories with no `last_usage`, falls back to `generated_at` so fresh
+    never-used memories can still be selected
+  - ranks eligible memories by `usage_count` first, then by the most recent
+    `last_usage` / `generated_at`
 - computes a completion watermark from the claimed watermark + newest input timestamps
 - syncs local memory artifacts under the memories root:
   - `raw_memories.md` (merged raw memories, latest first)
@@ -70,10 +77,30 @@ What it does:
 If there is input, it then:
 
 - spawns an internal consolidation sub-agent
+- builds the Phase 2 prompt with a diff of the current Phase 1 input
+  selection versus the last successful Phase 2 selection (`added`,
+  `retained`, `removed`)
 - runs it with no approvals, no network, and local write access only
 - disables collab for that agent (to prevent recursive delegation)
 - watches the agent status and heartbeats the global job lease while it runs
 - marks the phase-2 job success/failure in the state DB when the agent finishes
+
+Selection diff behavior:
+
+- successful Phase 2 runs mark the exact stage-1 snapshots they consumed with
+  `selected_for_phase2 = 1` and persist the matching
+  `selected_for_phase2_source_updated_at`
+- Phase 1 upserts preserve the previous `selected_for_phase2` baseline until
+  the next successful Phase 2 run rewrites it
+- the next Phase 2 run compares the current top-N stage-1 inputs against that
+  prior snapshot selection to label inputs as `added` or `retained`; a
+  refreshed thread stays `added` until Phase 2 successfully selects its newer
+  snapshot
+- rows that were previously selected but still exist outside the current top-N
+  selection are surfaced as `removed`
+- before the agent starts, local `rollout_summaries/` and `raw_memories.md`
+  keep the union of the current selection and the previous successful
+  selection, so removed-thread evidence stays available during forgetting
 
 Watermark behavior:
 

@@ -189,6 +189,7 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
+use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::TextElement;
 use codex_utils_fuzzy_match::fuzzy_match;
 
@@ -228,6 +229,12 @@ use tokio::runtime::Handle;
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
+
+fn user_input_too_large_message(actual_chars: usize) -> String {
+    format!(
+        "Message exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters ({actual_chars} provided)."
+    )
+}
 
 /// Result returned when the user interacts with the text area.
 #[derive(Debug, PartialEq)]
@@ -388,6 +395,7 @@ pub(crate) struct ChatComposer {
     connectors_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
+    audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
@@ -493,6 +501,7 @@ impl ChatComposer {
             connectors_enabled: false,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
+            audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
@@ -570,6 +579,13 @@ impl ChatComposer {
         self.realtime_conversation_enabled = enabled;
     }
 
+    pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
+        self.audio_device_selection_enabled = enabled;
+    }
+
+    /// Compatibility shim for tests that still toggle the removed steer mode flag.
+    #[cfg(test)]
+    pub fn set_steer_enabled(&mut self, _enabled: bool) {}
     pub fn set_voice_transcription_enabled(&mut self, enabled: bool) {
         self.voice_state.transcription_enabled = enabled;
         if !enabled {
@@ -2253,6 +2269,7 @@ impl ChatComposer {
                     self.connectors_enabled,
                     self.personality_command_enabled,
                     self.realtime_conversation_enabled,
+                    self.audio_device_selection_enabled,
                     self.windows_degraded_sandbox_active,
                 )
                 .is_some();
@@ -2308,6 +2325,22 @@ impl ChatComposer {
                 text = expanded.text;
                 text_elements = expanded.text_elements;
             }
+        }
+        let actual_chars = text.chars().count();
+        if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
+            let message = user_input_too_large_message(actual_chars);
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_error_event(message),
+            )));
+            self.set_text_content_with_mention_bindings(
+                original_input.clone(),
+                original_text_elements,
+                original_local_image_paths,
+                original_mention_bindings,
+            );
+            self.pending_pastes.clone_from(&original_pending_pastes);
+            self.textarea.set_cursor(original_input.len());
+            return None;
         }
         // Custom prompt expansion can remove or rewrite image placeholders, so prune any
         // attachments that no longer have a corresponding placeholder in the expanded text.
@@ -2453,6 +2486,7 @@ impl ChatComposer {
                 self.connectors_enabled,
                 self.personality_command_enabled,
                 self.realtime_conversation_enabled,
+                self.audio_device_selection_enabled,
                 self.windows_degraded_sandbox_active,
             )
         {
@@ -2488,6 +2522,7 @@ impl ChatComposer {
             self.connectors_enabled,
             self.personality_command_enabled,
             self.realtime_conversation_enabled,
+            self.audio_device_selection_enabled,
             self.windows_degraded_sandbox_active,
         )?;
 
@@ -3307,6 +3342,7 @@ impl ChatComposer {
             self.connectors_enabled,
             self.personality_command_enabled,
             self.realtime_conversation_enabled,
+            self.audio_device_selection_enabled,
             self.windows_degraded_sandbox_active,
         )
         .is_some();
@@ -3369,6 +3405,7 @@ impl ChatComposer {
             self.connectors_enabled,
             self.personality_command_enabled,
             self.realtime_conversation_enabled,
+            self.audio_device_selection_enabled,
             self.windows_degraded_sandbox_active,
         ) {
             return true;
@@ -3423,6 +3460,7 @@ impl ChatComposer {
                     let connectors_enabled = self.connectors_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
+                    let audio_device_selection_enabled = self.audio_device_selection_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
@@ -3430,6 +3468,7 @@ impl ChatComposer {
                             connectors_enabled,
                             personality_command_enabled,
                             realtime_conversation_enabled,
+                            audio_device_selection_enabled,
                             windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         },
                     );
@@ -5919,6 +5958,118 @@ mod tests {
             _ => panic!("expected Submitted"),
         }
         assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn submit_at_character_limit_succeeds() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        let input = "x".repeat(MAX_USER_INPUT_TEXT_CHARS);
+        composer.textarea.set_text_clearing_elements(&input);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(
+            result,
+            InputResult::Submitted { text, .. } if text == input
+        ));
+    }
+
+    #[test]
+    fn oversized_submit_reports_error_and_restores_draft() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        let input = "x".repeat(MAX_USER_INPUT_TEXT_CHARS + 1);
+        composer.textarea.set_text_clearing_elements(&input);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!(composer.textarea.text(), input);
+
+        let mut found_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let message = cell
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(message.contains(&user_input_too_large_message(input.chars().count())));
+                found_error = true;
+                break;
+            }
+        }
+        assert!(found_error, "expected oversized-input error history cell");
+    }
+
+    #[test]
+    fn oversized_queued_submission_reports_error_and_restores_draft() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(false);
+        let input = "x".repeat(MAX_USER_INPUT_TEXT_CHARS + 1);
+        composer.textarea.set_text_clearing_elements(&input);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!(composer.textarea.text(), input);
+
+        let mut found_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let message = cell
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(message.contains(&user_input_too_large_message(input.chars().count())));
+                found_error = true;
+                break;
+            }
+        }
+        assert!(found_error, "expected oversized-input error history cell");
     }
 
     /// Behavior: editing that removes a paste placeholder should also clear the associated
@@ -8519,6 +8670,57 @@ mod tests {
                 .take_recent_submission_images_with_placeholders()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn prompt_expansion_over_character_limit_reports_error_and_restores_draft() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Echo: $1".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        let oversized_arg = "x".repeat(MAX_USER_INPUT_TEXT_CHARS);
+        let original_input = format!("/prompts:my-prompt {oversized_arg}");
+        composer
+            .textarea
+            .set_text_clearing_elements(&original_input);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!(composer.textarea.text(), original_input);
+
+        let actual_chars = format!("Echo: {oversized_arg}").chars().count();
+        let mut found_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let message = cell
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(message.contains(&user_input_too_large_message(actual_chars)));
+                found_error = true;
+                break;
+            }
+        }
+        assert!(found_error, "expected oversized-input error history cell");
     }
 
     #[test]
