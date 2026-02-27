@@ -6019,6 +6019,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         is_default: false,
         upgrade: None,
         show_in_picker,
+        show_nux: false,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };
@@ -6287,6 +6288,7 @@ async fn single_reasoning_option_skips_selection() {
         is_default: false,
         upgrade: None,
         show_in_picker: true,
+        show_nux: false,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };
