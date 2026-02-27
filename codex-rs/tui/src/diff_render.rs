@@ -14,6 +14,12 @@
 //! palettes for truecolor / 256-color / 16-color terminals so add/delete lines
 //! remain visually distinct even when quantizing to limited palettes.
 //!
+//! **Syntax-theme scope backgrounds:** when the active syntax theme defines
+//! background colors for `markup.inserted` / `markup.deleted` (or fallback
+//! `diff.inserted` / `diff.deleted`) scopes, those colors override the
+//! hardcoded palette for rich color levels.  ANSI-16 mode always uses
+//! foreground-only styling regardless of theme scope backgrounds.
+//!
 //! **Highlighting strategy for `Update` diffs:** the renderer highlights each
 //! hunk as a single concatenated block rather than line-by-line.  This
 //! preserves syntect's parser state across consecutive lines within a hunk
@@ -131,6 +137,17 @@ enum DiffColorLevel {
     Ansi16,
 }
 
+/// Subset of [`DiffColorLevel`] that supports tinted backgrounds.
+///
+/// ANSI-16 terminals render backgrounds with bold, saturated palette entries
+/// that overpower syntax tokens.  This type encodes the invariant "we have
+/// enough color depth for pastel tints" so that background-producing helpers
+/// (`add_line_bg`, `del_line_bg`, `light_add_num_bg`, `light_del_num_bg`)
+/// never need an unreachable ANSI-16 arm.
+///
+/// Construct via [`RichDiffColorLevel::from_diff_color_level`], which returns
+/// `None` for ANSI-16 — callers branch on the `Option` and skip backgrounds
+/// entirely when `None`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RichDiffColorLevel {
     TrueColor,
@@ -138,6 +155,7 @@ enum RichDiffColorLevel {
 }
 
 impl RichDiffColorLevel {
+    /// Extract a rich level, returning `None` for ANSI-16.
     fn from_diff_color_level(level: DiffColorLevel) -> Option<Self> {
         match level {
             DiffColorLevel::TrueColor => Some(Self::TrueColor),
@@ -147,12 +165,24 @@ impl RichDiffColorLevel {
     }
 }
 
+/// Pre-resolved background colors for insert and delete diff lines.
+///
+/// Computed once per `render_change` call from the active syntax theme's
+/// scope backgrounds (via [`resolve_diff_backgrounds`]) and then threaded
+/// through every style helper so individual lines never re-query the theme.
+///
+/// Both fields are `None` when the color level is ANSI-16 — callers fall
+/// back to foreground-only styling in that case.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct ResolvedDiffBackgrounds {
     add: Option<Color>,
     del: Option<Color>,
 }
 
+/// Resolve diff backgrounds for production rendering.
+///
+/// Queries the active syntax theme for `markup.inserted` / `markup.deleted`
+/// (and `diff.*` fallbacks), then delegates to [`resolve_diff_backgrounds_for`].
 fn resolve_diff_backgrounds(
     theme: DiffTheme,
     color_level: DiffColorLevel,
@@ -160,6 +190,12 @@ fn resolve_diff_backgrounds(
     resolve_diff_backgrounds_for(theme, color_level, diff_scope_background_rgbs())
 }
 
+/// Core background-resolution logic, kept pure for testability.
+///
+/// Starts from the hardcoded fallback palette and then overrides with theme
+/// scope backgrounds when both (a) the color level is rich enough and (b) the
+/// theme defines a matching scope.  This means the fallback palette is always
+/// the baseline and theme scopes are strictly additive.
 fn resolve_diff_backgrounds_for(
     theme: DiffTheme,
     color_level: DiffColorLevel,
@@ -179,6 +215,8 @@ fn resolve_diff_backgrounds_for(
     resolved
 }
 
+/// Hardcoded palette backgrounds, used when the syntax theme provides no
+/// diff-specific scope backgrounds.  Returns empty backgrounds for ANSI-16.
 fn fallback_diff_backgrounds(
     theme: DiffTheme,
     color_level: DiffColorLevel,
@@ -192,6 +230,8 @@ fn fallback_diff_backgrounds(
     }
 }
 
+/// Convert an RGB triple to the appropriate ratatui `Color` for the given
+/// rich color level — passthrough for truecolor, quantized for ANSI-256.
 fn color_from_rgb_for_level(rgb: (u8, u8, u8), color_level: RichDiffColorLevel) -> Color {
     match color_level {
         RichDiffColorLevel::TrueColor => rgb_color(rgb),
@@ -199,6 +239,12 @@ fn color_from_rgb_for_level(rgb: (u8, u8, u8), color_level: RichDiffColorLevel) 
     }
 }
 
+/// Find the closest ANSI-256 color (indices 16–255) to `target` using
+/// perceptual distance.
+///
+/// Skips the first 16 entries (system colors) because their actual RGB
+/// values depend on the user's terminal configuration and are unreliable
+/// for distance calculations.
 fn quantize_rgb_to_ansi256(target: (u8, u8, u8)) -> Color {
     let best_index = XTERM_COLORS
         .iter()
@@ -1191,6 +1237,16 @@ fn style_sign_del(
 }
 
 /// Content style for insert lines (plain, non-syntax-highlighted text).
+///
+/// Foreground-only on ANSI-16.  On rich levels, uses the pre-resolved
+/// background from `diff_backgrounds` — which is the theme scope color when
+/// available, or the hardcoded palette otherwise.  Dark themes add an
+/// explicit green foreground for readability over the tinted background;
+/// light themes rely on the default (dark) foreground against the pastel.
+///
+/// When no background is resolved (e.g. a theme that defines no diff
+/// scopes and the fallback palette is somehow empty), the style degrades
+/// to foreground-only so the line is still legible.
 fn style_add(
     theme: DiffTheme,
     color_level: DiffColorLevel,
@@ -1212,6 +1268,9 @@ fn style_add(
 }
 
 /// Content style for delete lines (plain, non-syntax-highlighted text).
+///
+/// Mirror of [`style_add`] with red foreground and the delete-side
+/// resolved background.
 fn style_del(
     theme: DiffTheme,
     color_level: DiffColorLevel,

@@ -243,17 +243,34 @@ pub(crate) fn current_syntax_theme() -> Theme {
     }
 }
 
+/// Raw RGB background colors extracted from syntax theme diff/markup scopes.
+///
+/// These are theme-provided colors, not yet adapted for any particular color
+/// depth.  [`diff_render`](crate::diff_render) converts them to ratatui
+/// `Color` values via `color_from_rgb_for_level` after deciding whether to
+/// emit truecolor or quantized ANSI-256.
+///
+/// Both fields are `None` when the active theme defines no relevant scope
+/// backgrounds, in which case the diff renderer falls back to its hardcoded
+/// palette.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DiffScopeBackgroundRgbs {
     pub inserted: Option<(u8, u8, u8)>,
     pub deleted: Option<(u8, u8, u8)>,
 }
 
+/// Query the active syntax theme for diff-scope background colors.
+///
+/// Prefers `markup.inserted` / `markup.deleted` (the TextMate convention used
+/// by most VS Code themes) and falls back to `diff.inserted` / `diff.deleted`
+/// (used by some older `.tmTheme` files).
 pub(crate) fn diff_scope_background_rgbs() -> DiffScopeBackgroundRgbs {
     let theme = current_syntax_theme();
     diff_scope_background_rgbs_for_theme(&theme)
 }
 
+/// Pure extraction helper, separated from the global theme singleton so tests
+/// can pass arbitrary themes.
 fn diff_scope_background_rgbs_for_theme(theme: &Theme) -> DiffScopeBackgroundRgbs {
     let highlighter = Highlighter::new(theme);
     let inserted = scope_background_rgb(&highlighter, "markup.inserted")
@@ -263,6 +280,7 @@ fn diff_scope_background_rgbs_for_theme(theme: &Theme) -> DiffScopeBackgroundRgb
     DiffScopeBackgroundRgbs { inserted, deleted }
 }
 
+/// Extract the background color for a single TextMate scope, if defined.
 fn scope_background_rgb(highlighter: &Highlighter<'_>, scope_name: &str) -> Option<(u8, u8, u8)> {
     let scope = Scope::new(scope_name).ok()?;
     let bg = highlighter.style_mod_for_stack(&[scope]).background?;
