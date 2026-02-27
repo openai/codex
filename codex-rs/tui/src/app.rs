@@ -10,6 +10,7 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
+use crate::chatwidget::DEFAULT_MODEL_DISPLAY_NAME;
 use crate::chatwidget::ExternalEditorState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
@@ -740,7 +741,7 @@ impl App {
     fn insert_startup_header(&mut self, tui: &mut tui::Tui) {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
         let header = Arc::new(history_cell::SessionHeaderHistoryCell::new_with_style(
-            "loading".to_string(),
+            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
             placeholder_style,
             None,
             self.config.cwd.clone(),

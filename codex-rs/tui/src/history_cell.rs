@@ -10,6 +10,7 @@
 //! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
 //! rendered transcript output can change.
 
+use crate::chatwidget::DEFAULT_MODEL_DISPLAY_NAME;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -1191,7 +1192,7 @@ impl SessionHeaderHistoryCell {
     }
 
     pub(crate) fn is_loading_placeholder(&self) -> bool {
-        self.model == "loading"
+        self.model == DEFAULT_MODEL_DISPLAY_NAME
     }
 }
 
