@@ -1045,70 +1045,21 @@ pub(crate) fn new_session_info(
     is_first_event: bool,
     auth_plan: Option<PlanType>,
 ) -> SessionInfoCell {
-    let SessionConfiguredEvent {
-        model,
-        reasoning_effort,
-        ..
-    } = event;
     // Header box rendered as history (so it appears at the very top)
     let header = SessionHeaderHistoryCell::new(
-        model.clone(),
-        reasoning_effort,
+        event.model.clone(),
+        event.reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
     );
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
-
-    if is_first_event {
-        // Help lines below the header (new copy and list)
-        let help_lines: Vec<Line<'static>> = vec![
-            "  To get started, describe a task or try one of these commands:"
-                .dim()
-                .into(),
-            Line::from(""),
-            Line::from(vec![
-                "  ".into(),
-                "/init".into(),
-                " - create an AGENTS.md file with instructions for Codex".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/status".into(),
-                " - show current session configuration".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/permissions".into(),
-                " - choose what Codex is allowed to do".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/model".into(),
-                " - choose what model and reasoning effort to use".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/review".into(),
-                " - review any changes and find issues".dim(),
-            ]),
-        ];
-
-        parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
-    } else {
-        if config.show_tooltips
-            && let Some(tooltips) = tooltips::get_tooltip(auth_plan).map(TooltipHistoryCell::new)
-        {
-            parts.push(Box::new(tooltips));
-        }
-        if requested_model != model {
-            let lines = vec![
-                "model changed:".magenta().bold().into(),
-                format!("requested: {requested_model}").into(),
-                format!("used: {model}").into(),
-            ];
-            parts.push(Box::new(PlainHistoryCell { lines }));
-        }
-    }
+    parts.extend(session_info_body_parts(
+        config,
+        requested_model,
+        &event,
+        is_first_event,
+        auth_plan,
+    ));
 
     SessionInfoCell(CompositeHistoryCell { parts })
 }
@@ -1131,6 +1082,22 @@ pub(crate) fn new_session_info_body(
     is_first_event: bool,
     auth_plan: Option<PlanType>,
 ) -> Option<Box<dyn HistoryCell>> {
+    let parts = session_info_body_parts(config, requested_model, event, is_first_event, auth_plan);
+
+    match parts.len() {
+        0 => None,
+        1 => parts.into_iter().next(),
+        _ => Some(Box::new(CompositeHistoryCell::new(parts))),
+    }
+}
+
+fn session_info_body_parts(
+    config: &Config,
+    requested_model: &str,
+    event: &SessionConfiguredEvent,
+    is_first_event: bool,
+    auth_plan: Option<PlanType>,
+) -> Vec<Box<dyn HistoryCell>> {
     let mut parts: Vec<Box<dyn HistoryCell>> = Vec::new();
 
     if is_first_event {
@@ -1182,11 +1149,7 @@ pub(crate) fn new_session_info_body(
         }
     }
 
-    match parts.len() {
-        0 => None,
-        1 => parts.into_iter().next(),
-        _ => Some(Box::new(CompositeHistoryCell::new(parts))),
-    }
+    parts
 }
 
 pub(crate) fn new_user_prompt(
