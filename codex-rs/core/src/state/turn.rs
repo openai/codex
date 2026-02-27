@@ -10,6 +10,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use tokio::sync::oneshot;
 
@@ -70,6 +71,7 @@ impl ActiveTurn {
 #[derive(Default)]
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_request_permissions: HashMap<String, oneshot::Sender<RequestPermissionsResponse>>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
@@ -93,9 +95,25 @@ impl TurnState {
 
     pub(crate) fn clear_pending(&mut self) {
         self.pending_approvals.clear();
+        self.pending_request_permissions.clear();
         self.pending_user_input.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
+    }
+
+    pub(crate) fn insert_pending_request_permissions(
+        &mut self,
+        key: String,
+        tx: oneshot::Sender<RequestPermissionsResponse>,
+    ) -> Option<oneshot::Sender<RequestPermissionsResponse>> {
+        self.pending_request_permissions.insert(key, tx)
+    }
+
+    pub(crate) fn remove_pending_request_permissions(
+        &mut self,
+        key: &str,
+    ) -> Option<oneshot::Sender<RequestPermissionsResponse>> {
+        self.pending_request_permissions.remove(key)
     }
 
     pub(crate) fn insert_pending_user_input(

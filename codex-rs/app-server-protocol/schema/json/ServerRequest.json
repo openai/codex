@@ -794,6 +794,35 @@
         }
       ]
     },
+    "PermissionsRequestApprovalParams": {
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "permissions": {
+          "$ref": "#/definitions/AdditionalPermissionProfile"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "permissions",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -964,6 +993,31 @@
         "params"
       ],
       "title": "Item/tool/requestUserInputRequest",
+      "type": "object"
+    },
+    {
+      "description": "Request approval for additional permissions from the user.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "item/permissions/requestApproval"
+          ],
+          "title": "Item/permissions/requestApprovalRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PermissionsRequestApprovalParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Item/permissions/requestApprovalRequest",
       "type": "object"
     },
     {

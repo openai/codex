@@ -94,6 +94,9 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::request_permissions::RequestPermissionsArgs;
+use codex_protocol::request_permissions::RequestPermissionsEvent;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -2775,6 +2778,37 @@ impl Session {
         rx_approve
     }
 
+    pub async fn request_permissions(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        args: RequestPermissionsArgs,
+    ) -> Option<RequestPermissionsResponse> {
+        let (tx_response, rx_response) = oneshot::channel();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_request_permissions(call_id.clone(), tx_response)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending request_permissions for call_id: {call_id}");
+        }
+
+        let event = EventMsg::RequestPermissions(RequestPermissionsEvent {
+            call_id,
+            turn_id: turn_context.sub_id.clone(),
+            reason: args.reason,
+            permissions: args.permissions,
+        });
+        self.send_event(turn_context, event).await;
+        rx_response.await.ok()
+    }
+
     pub async fn request_user_input(
         &self,
         turn_context: &TurnContext,
@@ -2828,6 +2862,31 @@ impl Session {
             }
             None => {
                 warn!("No pending user input found for sub_id: {sub_id}");
+            }
+        }
+    }
+
+    pub async fn notify_request_permissions_response(
+        &self,
+        call_id: &str,
+        response: RequestPermissionsResponse,
+    ) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_request_permissions(call_id)
+                }
+                None => None,
+            }
+        };
+        match entry {
+            Some(tx_response) => {
+                tx_response.send(response).ok();
+            }
+            None => {
+                warn!("No pending request_permissions found for call_id: {call_id}");
             }
         }
     }
@@ -3769,6 +3828,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::UserInputAnswer { id, response } => {
                 handlers::request_user_input_response(&sess, id, response).await;
             }
+            Op::RequestPermissionsResponse { id, response } => {
+                handlers::request_permissions_response(&sess, id, response).await;
+            }
             Op::DynamicToolResponse { id, response } => {
                 handlers::dynamic_tool_response(&sess, id, response).await;
             }
@@ -3894,6 +3956,7 @@ mod handlers {
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
+    use codex_protocol::request_permissions::RequestPermissionsResponse;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
@@ -4126,6 +4189,15 @@ mod handlers {
         response: RequestUserInputResponse,
     ) {
         sess.notify_user_input_response(&id, response).await;
+    }
+
+    pub async fn request_permissions_response(
+        sess: &Arc<Session>,
+        id: String,
+        response: RequestPermissionsResponse,
+    ) {
+        sess.notify_request_permissions_response(&id, response)
+            .await;
     }
 
     pub async fn dynamic_tool_response(
@@ -5891,6 +5963,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::ExecApprovalRequest(_)
+        | EventMsg::RequestPermissions(_)
         | EventMsg::RequestUserInput(_)
         | EventMsg::DynamicToolCallRequest(_)
         | EventMsg::DynamicToolCallResponse(_)

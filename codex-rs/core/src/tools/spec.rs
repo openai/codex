@@ -16,6 +16,7 @@ use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::multi_agents::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::config_types::WebSearchMode;
@@ -968,6 +969,37 @@ fn create_request_user_input_tool(
     })
 }
 
+fn create_request_permissions_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "reason".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional short explanation for why additional permissions are needed.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "permissions".to_string(),
+        JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(true.into()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "request_permissions".to_string(),
+        description: request_permissions_tool_description(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["permissions".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_close_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -1659,6 +1691,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::MultiAgentHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
+    use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::SearchToolBm25Handler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -1679,6 +1712,7 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
+    let request_permissions_handler = Arc::new(RequestPermissionsHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
@@ -1743,6 +1777,9 @@ pub(crate) fn build_specs(
         builder.register_handler("js_repl", js_repl_handler);
         builder.register_handler("js_repl_reset", js_repl_reset_handler);
     }
+
+    builder.push_spec(create_request_permissions_tool());
+    builder.register_handler("request_permissions", request_permissions_handler);
 
     builder.push_spec(create_request_user_input_tool(CollaborationModesConfig {
         default_mode_request_user_input: config.default_mode_request_user_input,
@@ -2406,6 +2443,7 @@ mod tests {
             "shell_command",
             &[
                 "update_plan",
+                "request_permissions",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2424,6 +2462,7 @@ mod tests {
             "shell_command",
             &[
                 "update_plan",
+                "request_permissions",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2444,6 +2483,7 @@ mod tests {
                 "exec_command",
                 "write_stdin",
                 "update_plan",
+                "request_permissions",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2464,6 +2504,7 @@ mod tests {
                 "exec_command",
                 "write_stdin",
                 "update_plan",
+                "request_permissions",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2482,6 +2523,7 @@ mod tests {
             "shell_command",
             &[
                 "update_plan",
+                "request_permissions",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2500,6 +2542,7 @@ mod tests {
             "shell_command",
             &[
                 "update_plan",
+                "request_permissions",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2518,6 +2561,7 @@ mod tests {
             "shell",
             &[
                 "update_plan",
+                "request_permissions",
                 "request_user_input",
                 "web_search",
                 "view_image",
@@ -2535,6 +2579,7 @@ mod tests {
             "shell_command",
             &[
                 "update_plan",
+                "request_permissions",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2555,6 +2600,7 @@ mod tests {
                 "exec_command",
                 "write_stdin",
                 "update_plan",
+                "request_permissions",
                 "request_user_input",
                 "apply_patch",
                 "web_search",

@@ -174,6 +174,7 @@ export type { RemoteSkillSummary } from "./RemoteSkillSummary";
 export type { RemoveConversationListenerParams } from "./RemoveConversationListenerParams";
 export type { RemoveConversationSubscriptionResponse } from "./RemoveConversationSubscriptionResponse";
 export type { RequestId } from "./RequestId";
+export type { RequestPermissionsEvent } from "./RequestPermissionsEvent";
 export type { RequestUserInputEvent } from "./RequestUserInputEvent";
 export type { RequestUserInputQuestion } from "./RequestUserInputQuestion";
 export type { RequestUserInputQuestionOption } from "./RequestUserInputQuestionOption";

@@ -122,6 +122,8 @@ export type { NetworkRequirements } from "./NetworkRequirements";
 export type { OverriddenMetadata } from "./OverriddenMetadata";
 export type { PatchApplyStatus } from "./PatchApplyStatus";
 export type { PatchChangeKind } from "./PatchChangeKind";
+export type { PermissionsRequestApprovalParams } from "./PermissionsRequestApprovalParams";
+export type { PermissionsRequestApprovalResponse } from "./PermissionsRequestApprovalResponse";
 export type { PlanDeltaNotification } from "./PlanDeltaNotification";
 export type { ProductSurface } from "./ProductSurface";
 export type { ProfileV2 } from "./ProfileV2";

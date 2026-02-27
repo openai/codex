@@ -725,6 +725,57 @@ Order of messages:
 
 UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
 
+### Permission requests
+
+The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. Today that commonly means additional filesystem access, but the payload is intentionally general so future requests can include non-filesystem permissions too.
+
+```json
+{
+  "method": "item/permissions/requestApproval",
+  "id": 61,
+  "params": {
+    "threadId": "thr_123",
+    "turnId": "turn_123",
+    "itemId": "call_123",
+    "reason": "Select a workspace root",
+    "permissions": {
+      "fileSystem": {
+        "write": [
+          "/Users/me/project",
+          "/Users/me/shared"
+        ]
+      }
+    }
+  }
+}
+```
+
+The client responds with the granted subset of that permission profile:
+
+```json
+{
+  "permissions": {
+    "fileSystem": {
+      "write": [
+        "/Users/me/project"
+      ]
+    }
+  }
+}
+```
+
+The client should respond with the subset of requested directories it allows and the subset it denies:
+
+```json
+{
+  "id": 61,
+  "result": {
+    "allowedDirectories": ["/Users/me/project"],
+    "deniedDirectories": ["/Users/me/shared"]
+  }
+}
+```
+
 ### Dynamic tool calls (experimental)
 
 `dynamicTools` on `thread/start` and the corresponding `item/tool/call` request/response flow are experimental APIs. To enable them, set `initialize.params.capabilities.experimentalApi = true`.

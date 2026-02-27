@@ -14,5 +14,6 @@ pub mod openai_models;
 pub mod parse_command;
 pub mod plan_tool;
 pub mod protocol;
+pub mod request_permissions;
 pub mod request_user_input;
 pub mod user_input;

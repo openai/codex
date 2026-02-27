@@ -1,0 +1,151 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
+    "AdditionalFileSystemPermissions": {
+      "properties": {
+        "read": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "write": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AdditionalMacOsPermissions": {
+      "properties": {
+        "accessibility": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "automations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsAutomationValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calendar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "preferences": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsPreferencesValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AdditionalPermissionProfile": {
+      "properties": {
+        "fileSystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalMacOsPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MacOsAutomationValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "MacOsPreferencesValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "itemId": {
+      "type": "string"
+    },
+    "permissions": {
+      "$ref": "#/definitions/AdditionalPermissionProfile"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "itemId",
+    "permissions",
+    "threadId",
+    "turnId"
+  ],
+  "title": "PermissionsRequestApprovalParams",
+  "type": "object"
+}

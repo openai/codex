@@ -51,6 +51,8 @@ use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContex
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
 use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAction;
 use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::PermissionsRequestApprovalParams;
+use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
@@ -91,6 +93,9 @@ use codex_core::review_prompts;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
+use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+use codex_protocol::models::MacOsPermissions as CoreMacOsPermissions;
+use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -106,6 +111,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use codex_shell_command::parse_command::shlex_join;
@@ -517,6 +523,51 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await
                 {
                     error!("failed to submit UserInputAnswer: {err}");
+                }
+            }
+        }
+        EventMsg::RequestPermissions(request) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let request_permissions_guard = thread_watch_manager
+                    .note_user_input_requested(&conversation_id.to_string())
+                    .await;
+                let requested_permissions = request.permissions.clone();
+                let params = PermissionsRequestApprovalParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: request.turn_id.clone(),
+                    item_id: request.call_id.clone(),
+                    reason: request.reason,
+                    permissions: request.permissions.into(),
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::PermissionsRequestApproval(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_request_permissions_response(
+                        request.call_id,
+                        requested_permissions,
+                        rx,
+                        conversation,
+                        request_permissions_guard,
+                    )
+                    .await;
+                });
+            } else {
+                error!(
+                    "request_permissions is only supported on api v2 (call_id: {})",
+                    request.call_id
+                );
+                let empty = CoreRequestPermissionsResponse {
+                    permissions: Default::default(),
+                };
+                if let Err(err) = conversation
+                    .submit(Op::RequestPermissionsResponse {
+                        id: request.call_id,
+                        response: empty,
+                    })
+                    .await
+                {
+                    error!("failed to submit RequestPermissionsResponse: {err}");
                 }
             }
         }
@@ -1888,6 +1939,127 @@ async fn on_request_user_input_response(
         .await
     {
         error!("failed to submit UserInputAnswer: {err}");
+    }
+}
+
+async fn on_request_permissions_response(
+    call_id: String,
+    requested_permissions: CorePermissionProfile,
+    receiver: oneshot::Receiver<ClientRequestResult>,
+    conversation: Arc<CodexThread>,
+    request_permissions_guard: ThreadWatchActiveGuard,
+) {
+    let response = receiver.await;
+    drop(request_permissions_guard);
+    let value = match response {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            let empty = CoreRequestPermissionsResponse {
+                permissions: Default::default(),
+            };
+            if let Err(err) = conversation
+                .submit(Op::RequestPermissionsResponse {
+                    id: call_id,
+                    response: empty,
+                })
+                .await
+            {
+                error!("failed to submit RequestPermissionsResponse: {err}");
+            }
+            return;
+        }
+        Err(err) => {
+            error!("request failed: {err:?}");
+            let empty = CoreRequestPermissionsResponse {
+                permissions: Default::default(),
+            };
+            if let Err(err) = conversation
+                .submit(Op::RequestPermissionsResponse {
+                    id: call_id,
+                    response: empty,
+                })
+                .await
+            {
+                error!("failed to submit RequestPermissionsResponse: {err}");
+            }
+            return;
+        }
+    };
+
+    let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(value)
+        .unwrap_or_else(|err| {
+            error!("failed to deserialize PermissionsRequestApprovalResponse: {err}");
+            PermissionsRequestApprovalResponse {
+                permissions: V2AdditionalPermissionProfile {
+                    network: None,
+                    file_system: None,
+                    macos: None,
+                },
+            }
+        });
+    let response = CoreRequestPermissionsResponse {
+        permissions: sanitize_granted_permissions(
+            requested_permissions,
+            response.permissions.into(),
+        ),
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::RequestPermissionsResponse {
+            id: call_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit RequestPermissionsResponse: {err}");
+    }
+}
+
+fn sanitize_granted_permissions(
+    requested: CorePermissionProfile,
+    granted: CorePermissionProfile,
+) -> CorePermissionProfile {
+    let file_system = requested.file_system.map(|requested_file_system| {
+        let granted_file_system = granted.file_system.unwrap_or_default();
+        let read = requested_file_system.read.map(|requested_read| {
+            let granted_read = granted_file_system.read.unwrap_or_default();
+            requested_read
+                .into_iter()
+                .filter(|path| granted_read.contains(path))
+                .collect()
+        });
+        let write = requested_file_system.write.map(|requested_write| {
+            let granted_write = granted_file_system.write.unwrap_or_default();
+            requested_write
+                .into_iter()
+                .filter(|path| granted_write.contains(path))
+                .collect()
+        });
+        CoreFileSystemPermissions { read, write }
+    });
+    let requested_macos = requested.macos;
+    let granted_macos = granted.macos;
+
+    CorePermissionProfile {
+        network: requested
+            .network
+            .filter(|requested_network| *requested_network)
+            .and(granted.network.filter(|granted_network| *granted_network)),
+        file_system,
+        macos: requested_macos.map(|requested_macos| {
+            let granted_macos = granted_macos.unwrap_or_default();
+            CoreMacOsPermissions {
+                preferences: requested_macos.preferences.and(granted_macos.preferences),
+                automations: requested_macos.automations.and(granted_macos.automations),
+                accessibility: requested_macos
+                    .accessibility
+                    .and(granted_macos.accessibility.filter(|value| *value)),
+                calendar: requested_macos
+                    .calendar
+                    .and(granted_macos.calendar.filter(|value| *value)),
+            }
+        }),
     }
 }
 

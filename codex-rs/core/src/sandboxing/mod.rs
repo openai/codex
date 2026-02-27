@@ -100,18 +100,20 @@ pub(crate) enum SandboxTransformError {
 pub(crate) fn normalize_additional_permissions(
     additional_permissions: PermissionProfile,
 ) -> Result<PermissionProfile, String> {
-    let Some(file_system) = additional_permissions.file_system else {
-        return Ok(PermissionProfile::default());
-    };
-    let read = file_system
-        .read
-        .map(|paths| normalize_permission_paths(paths, "file_system.read"));
-    let write = file_system
-        .write
-        .map(|paths| normalize_permission_paths(paths, "file_system.write"));
+    let file_system = additional_permissions.file_system.map(|file_system| {
+        let read = file_system
+            .read
+            .map(|paths| normalize_permission_paths(paths, "file_system.read"));
+        let write = file_system
+            .write
+            .map(|paths| normalize_permission_paths(paths, "file_system.write"));
+        FileSystemPermissions { read, write }
+    });
+
     Ok(PermissionProfile {
-        file_system: Some(FileSystemPermissions { read, write }),
-        ..Default::default()
+        network: additional_permissions.network,
+        file_system,
+        macos: additional_permissions.macos,
     })
 }
 

@@ -715,6 +715,12 @@ server_request_definitions! {
         response: v2::ToolRequestUserInputResponse,
     },
 
+    /// Request approval for additional permissions from the user.
+    PermissionsRequestApproval => "item/permissions/requestApproval" {
+        params: v2::PermissionsRequestApprovalParams,
+        response: v2::PermissionsRequestApprovalResponse,
+    },
+
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,

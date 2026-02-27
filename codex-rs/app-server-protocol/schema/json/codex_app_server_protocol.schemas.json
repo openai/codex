@@ -2941,6 +2941,42 @@
               "description": "Responses API call id for the associated tool call, if available.",
               "type": "string"
             },
+            "permissions": {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "default": "",
+              "description": "Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "request_permissions"
+              ],
+              "title": "RequestPermissionsEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "permissions",
+            "type"
+          ],
+          "title": "RequestPermissionsEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "description": "Responses API call id for the associated tool call, if available.",
+              "type": "string"
+            },
             "questions": {
               "items": {
                 "$ref": "#/definitions/RequestUserInputQuestion"
@@ -5391,6 +5427,50 @@
       },
       "type": "object"
     },
+    "PermissionsRequestApprovalParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "permissions": {
+          "$ref": "#/definitions/AdditionalPermissionProfile"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "permissions",
+        "threadId",
+        "turnId"
+      ],
+      "title": "PermissionsRequestApprovalParams",
+      "type": "object"
+    },
+    "PermissionsRequestApprovalResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "permissions": {
+          "$ref": "#/definitions/AdditionalPermissionProfile"
+        }
+      },
+      "required": [
+        "permissions"
+      ],
+      "title": "PermissionsRequestApprovalResponse",
+      "type": "object"
+    },
     "PlanItemArg": {
       "additionalProperties": false,
       "properties": {
@@ -6716,6 +6796,31 @@
             "params"
           ],
           "title": "Item/tool/requestUserInputRequest",
+          "type": "object"
+        },
+        {
+          "description": "Request approval for additional permissions from the user.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "item/permissions/requestApproval"
+              ],
+              "title": "Item/permissions/requestApprovalRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PermissionsRequestApprovalParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Item/permissions/requestApprovalRequest",
           "type": "object"
         },
         {
