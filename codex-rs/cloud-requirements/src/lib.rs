@@ -304,7 +304,7 @@ impl CloudRequirementsService {
         self.fetch_with_retries(&auth, chatgpt_user_id, account_id)
             .await
             .ok_or_else(|| {
-                let message = "unable to load required cloud configuration. Please check your network and try again.";
+                let message = "unable to load managed configuration. Check your network and try again. See https://developers.openai.com/codex/enterprise/managed-configuration/";
                 tracing::error!(
                     path = %self.cache_path.display(),
                     "{message}"
@@ -1242,7 +1242,7 @@ mod tests {
             .expect_err("cloud requirements retry exhaustion should fail closed");
         assert!(
             err.to_string()
-                .contains("could not load required cloud configuration")
+                .contains("unable to load required cloud configuration")
         );
         assert_eq!(
             fetcher.request_count.load(Ordering::SeqCst),
