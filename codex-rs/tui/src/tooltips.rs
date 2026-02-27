@@ -92,7 +92,7 @@ fn get_startup_tip_with_rng<R: Rng + ?Sized>(
             .get(&preset.model)
             .copied()
             .unwrap_or(0);
-        (preset.show_nux_new && display_count < 4).then(|| StartupTip::ModelNew {
+        (preset.show_nux && display_count < 4).then(|| StartupTip::ModelNew {
             model: preset.model.clone(),
             message: model_new_tooltip(preset),
         })
@@ -138,9 +138,10 @@ fn get_generic_tooltip_with_rng<R: Rng + ?Sized>(
 
     // Leave small chance for a random tooltip to be shown.
     if rng.random_ratio(8, 10)
-        && let Some(tooltip) = plan_tooltip(plan) {
-            return Some(tooltip.to_string());
-        }
+        && let Some(tooltip) = plan_tooltip(plan)
+    {
+        return Some(tooltip.to_string());
+    }
 
     pick_tooltip(rng).map(str::to_string)
 }
@@ -342,7 +343,7 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
-    fn model_preset(show_nux_new: bool, description: &str) -> ModelPreset {
+    fn model_preset(show_nux: bool, description: &str) -> ModelPreset {
         ModelPreset {
             id: "gpt-test".to_string(),
             model: "gpt-test".to_string(),
@@ -354,7 +355,7 @@ mod tests {
             is_default: false,
             upgrade: None,
             show_in_picker: true,
-            show_nux_new,
+            show_nux,
             supported_in_api: true,
             input_modalities: codex_protocol::openai_models::default_input_modalities(),
         }
