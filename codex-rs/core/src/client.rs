@@ -522,7 +522,7 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
-        let input = prompt.get_formatted_input();
+        let input = prompt.get_formatted_input()?;
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let default_reasoning_effort = model_info.default_reasoning_level;
         let reasoning = if model_info.supports_reasoning_summaries {

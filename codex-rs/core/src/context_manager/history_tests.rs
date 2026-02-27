@@ -1,12 +1,15 @@
 use super::*;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_git::GhostCommit;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
@@ -14,6 +17,9 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
+use image::ImageBuffer;
+use image::ImageFormat;
+use image::Rgba;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 
@@ -276,6 +282,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "https://example.com/result.png".to_string(),
+                    detail: None,
                 },
             ]),
         },
@@ -294,6 +301,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "https://example.com/js-repl-result.png".to_string(),
+                    detail: None,
                 },
             ]),
         },
@@ -489,6 +497,7 @@ fn replace_last_turn_images_replaces_tool_output_images() {
                 body: FunctionCallOutputBody::ContentItems(vec![
                     FunctionCallOutputContentItem::InputImage {
                         image_url: "data:image/png;base64,AAA".to_string(),
+                        detail: None,
                     },
                 ]),
                 success: Some(true),
@@ -1302,7 +1311,7 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
 
     let raw_len = serde_json::to_string(&image_item).unwrap().len() as i64;
     let estimated = estimate_response_item_model_visible_bytes(&image_item);
-    let expected = raw_len - payload.len() as i64 + IMAGE_BYTES_ESTIMATE;
+    let expected = raw_len - payload.len() as i64 + RESIZED_IMAGE_BYTES_ESTIMATE;
     let text_only_estimated = estimate_response_item_model_visible_bytes(&text_only_item);
 
     assert_eq!(estimated, expected);
@@ -1320,13 +1329,16 @@ fn image_data_url_payload_does_not_dominate_function_call_output_estimate() {
             FunctionCallOutputContentItem::InputText {
                 text: "Screenshot captured".to_string(),
             },
-            FunctionCallOutputContentItem::InputImage { image_url },
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: None,
+            },
         ]),
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
     let estimated = estimate_response_item_model_visible_bytes(&item);
-    let expected = raw_len - payload.len() as i64 + IMAGE_BYTES_ESTIMATE;
+    let expected = raw_len - payload.len() as i64 + RESIZED_IMAGE_BYTES_ESTIMATE;
 
     assert_eq!(estimated, expected);
     assert!(estimated < raw_len);
@@ -1342,13 +1354,16 @@ fn image_data_url_payload_does_not_dominate_custom_tool_call_output_estimate() {
             FunctionCallOutputContentItem::InputText {
                 text: "Screenshot captured".to_string(),
             },
-            FunctionCallOutputContentItem::InputImage { image_url },
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: None,
+            },
         ]),
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
     let estimated = estimate_response_item_model_visible_bytes(&item);
-    let expected = raw_len - payload.len() as i64 + IMAGE_BYTES_ESTIMATE;
+    let expected = raw_len - payload.len() as i64 + RESIZED_IMAGE_BYTES_ESTIMATE;
 
     assert_eq!(estimated, expected);
     assert!(estimated < raw_len);
@@ -1370,6 +1385,7 @@ fn non_base64_image_urls_are_unchanged() {
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url: "file:///tmp/foo.png".to_string(),
+                detail: None,
             },
         ]),
     };
@@ -1409,7 +1425,10 @@ fn non_image_base64_data_url_is_unchanged() {
     let item = ResponseItem::FunctionCallOutput {
         call_id: "call-octet".to_string(),
         output: FunctionCallOutputPayload::from_content_items(vec![
-            FunctionCallOutputContentItem::InputImage { image_url },
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: None,
+            },
         ]),
     };
 
@@ -1433,7 +1452,7 @@ fn mixed_case_data_url_markers_are_adjusted() {
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
     let estimated = estimate_response_item_model_visible_bytes(&item);
-    let expected = raw_len - payload.len() as i64 + IMAGE_BYTES_ESTIMATE;
+    let expected = raw_len - payload.len() as i64 + RESIZED_IMAGE_BYTES_ESTIMATE;
 
     assert_eq!(estimated, expected);
 }
@@ -1465,7 +1484,52 @@ fn multiple_inline_images_apply_multiple_fixed_costs() {
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
     let payload_sum = (payload_one.len() + payload_two.len()) as i64;
     let estimated = estimate_response_item_model_visible_bytes(&item);
-    let expected = raw_len - payload_sum + (2 * IMAGE_BYTES_ESTIMATE);
+    let expected = raw_len - payload_sum + (2 * RESIZED_IMAGE_BYTES_ESTIMATE);
+
+    assert_eq!(estimated, expected);
+}
+
+#[test]
+fn original_detail_images_scale_with_dimensions() {
+    let width = 2304;
+    let height = 864;
+    let image = ImageBuffer::from_pixel(width, height, Rgba([12u8, 34, 56, 255]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut bytes, ImageFormat::Png)
+        .expect("encode png");
+    let payload = BASE64_STANDARD.encode(bytes.get_ref());
+    let image_url = format!("data:image/png;base64,{payload}");
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call-original".to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: Some(ImageDetail::Original),
+            },
+        ]),
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let scale_to_fit = f64::min(
+        f64::from(ORIGINAL_IMAGE_MAX_DIM) / f64::from(width),
+        f64::from(ORIGINAL_IMAGE_MAX_DIM) / f64::from(height),
+    );
+    let scaled_width = (f64::from(width) * scale_to_fit).round() as u32;
+    let scaled_height = (f64::from(height) * scale_to_fit).round() as u32;
+    let scale_short_side =
+        f64::from(ORIGINAL_IMAGE_TARGET_SHORT_SIDE) / f64::from(scaled_width.min(scaled_height));
+    let tiled_width = (f64::from(scaled_width) * scale_short_side).round() as u32;
+    let tiled_height = (f64::from(scaled_height) * scale_short_side).round() as u32;
+    let tile_count = i64::from(
+        tiled_width.saturating_add(ORIGINAL_IMAGE_TILE_SIZE - 1) / ORIGINAL_IMAGE_TILE_SIZE,
+    ) * i64::from(
+        tiled_height.saturating_add(ORIGINAL_IMAGE_TILE_SIZE - 1) / ORIGINAL_IMAGE_TILE_SIZE,
+    );
+    let expected_tokens =
+        ORIGINAL_IMAGE_BASE_TOKENS + tile_count.saturating_mul(ORIGINAL_IMAGE_TILE_TOKENS);
+    let expected = raw_len - payload.len() as i64 + (expected_tokens * 4);
 
     assert_eq!(estimated, expected);
 }

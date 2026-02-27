@@ -33,24 +33,48 @@ pub struct EncodedImage {
 impl EncodedImage {
     pub fn into_data_url(self) -> String {
         let encoded = BASE64_STANDARD.encode(&self.bytes);
-        format!("data:{};base64,{}", self.mime, encoded)
+        format!("data:{};base64,{encoded}", self.mime)
     }
 }
 
-static IMAGE_CACHE: LazyLock<BlockingLruCache<[u8; 20], EncodedImage>> =
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PromptImageMode {
+    ResizeToFit,
+    Original,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ImageCacheKey {
+    digest: [u8; 20],
+    mode: PromptImageMode,
+}
+
+static IMAGE_CACHE: LazyLock<BlockingLruCache<ImageCacheKey, EncodedImage>> =
     LazyLock::new(|| BlockingLruCache::new(NonZeroUsize::new(32).unwrap_or(NonZeroUsize::MIN)));
 
 pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessingError> {
+    load_for_prompt(path, PromptImageMode::ResizeToFit)
+}
+
+pub fn load_for_prompt(
+    path: &Path,
+    mode: PromptImageMode,
+) -> Result<EncodedImage, ImageProcessingError> {
     let path_buf = path.to_path_buf();
 
     let file_bytes = read_file_bytes(path, &path_buf)?;
 
-    let key = sha1_digest(&file_bytes);
+    let key = ImageCacheKey {
+        digest: sha1_digest(&file_bytes),
+        mode,
+    };
 
     IMAGE_CACHE.get_or_try_insert_with(key, move || {
         let format = match image::guess_format(&file_bytes) {
             Ok(ImageFormat::Png) => Some(ImageFormat::Png),
             Ok(ImageFormat::Jpeg) => Some(ImageFormat::Jpeg),
+            Ok(ImageFormat::Gif) => Some(ImageFormat::Gif),
+            Ok(ImageFormat::WebP) => Some(ImageFormat::WebP),
             _ => None,
         };
 
@@ -63,8 +87,10 @@ pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessi
 
         let (width, height) = dynamic.dimensions();
 
-        let encoded = if width <= MAX_WIDTH && height <= MAX_HEIGHT {
-            if let Some(format) = format {
+        let encoded = if mode == PromptImageMode::Original
+            || (width <= MAX_WIDTH && height <= MAX_HEIGHT)
+        {
+            if let Some(format) = format.filter(|format| can_preserve_source_bytes(*format, mode)) {
                 let mime = format_to_mime(format);
                 EncodedImage {
                     bytes: file_bytes,
@@ -97,6 +123,20 @@ pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessi
 
         Ok(encoded)
     })
+}
+
+fn can_preserve_source_bytes(format: ImageFormat, mode: PromptImageMode) -> bool {
+    match mode {
+        PromptImageMode::ResizeToFit => matches!(format, ImageFormat::Png | ImageFormat::Jpeg),
+        PromptImageMode::Original => {
+            // Public API docs explicitly call out non-animated GIF support only.
+            // Preserve byte-for-byte only for formats we can safely pass through.
+            matches!(
+                format,
+                ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP
+            )
+        }
+    }
 }
 
 fn read_file_bytes(path: &Path, path_for_error: &Path) -> Result<Vec<u8>, ImageProcessingError> {
@@ -162,6 +202,8 @@ fn encode_image(
 fn format_to_mime(format: ImageFormat) -> String {
     match format {
         ImageFormat::Jpeg => "image/jpeg".to_string(),
+        ImageFormat::Gif => "image/gif".to_string(),
+        ImageFormat::WebP => "image/webp".to_string(),
         _ => "image/png".to_string(),
     }
 }
@@ -208,6 +250,24 @@ mod tests {
         let loaded =
             image::load_from_memory(&processed.bytes).expect("read resized bytes back into image");
         assert_eq!(loaded.dimensions(), (processed.width, processed.height));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn preserves_large_image_in_original_mode() {
+        let temp_file = NamedTempFile::new().expect("temp file");
+        let image = ImageBuffer::from_pixel(4096, 2048, Rgba([180u8, 30, 30, 255]));
+        image
+            .save_with_format(temp_file.path(), ImageFormat::Png)
+            .expect("write png to temp file");
+
+        let original_bytes = std::fs::read(temp_file.path()).expect("read written image");
+        let processed =
+            load_for_prompt(temp_file.path(), PromptImageMode::Original).expect("process image");
+
+        assert_eq!(processed.width, 4096);
+        assert_eq!(processed.height, 2048);
+        assert_eq!(processed.mime, "image/png");
+        assert_eq!(processed.bytes, original_bytes);
     }
 
     #[tokio::test(flavor = "multi_thread")]

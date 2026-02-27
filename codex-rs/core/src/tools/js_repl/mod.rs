@@ -1900,6 +1900,7 @@ mod tests {
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,abcd".to_string(),
+                    detail: None,
                 },
             ]),
         };
@@ -1929,6 +1930,7 @@ mod tests {
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,abcd".to_string(),
+                    detail: None,
                 },
             ]),
         };
@@ -2417,15 +2419,17 @@ console.log(out.output?.body?.text ?? "");
                 image_url:
                     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
                         .to_string(),
+                detail: None,
             }]
             .as_slice()
         );
-        let [FunctionCallOutputContentItem::InputImage { image_url }] =
+        let [FunctionCallOutputContentItem::InputImage { image_url, detail }] =
             result.content_items.as_slice()
         else {
             panic!("view_image should return exactly one input_image content item");
         };
         assert!(image_url.starts_with("data:image/png;base64,"));
+        assert_eq!(*detail, None);
         assert!(session.get_pending_input().await.is_empty());
 
         Ok(())
@@ -2515,6 +2519,7 @@ console.log(out.type);
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: image_url.to_string(),
+                    detail: None,
                 },
             ]
         );

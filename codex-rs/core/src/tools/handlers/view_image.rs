@@ -1,10 +1,15 @@
 use async_trait::async_trait;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ImageDetail;
+use codex_protocol::models::local_image_content_items_with_label_number;
 use codex_protocol::openai_models::InputModality;
+use codex_utils_image::PromptImageMode;
 use serde::Deserialize;
 use tokio::fs;
 
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
 use crate::protocol::ViewImageToolCallEvent;
@@ -14,17 +19,42 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::local_image_content_items_with_label_number;
 
 pub struct ViewImageHandler;
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";
+const MIN_ORIGINAL_RESOLUTION_MODEL_VERSION: (u32, u32) = (5, 4);
 
 #[derive(Deserialize)]
 struct ViewImageArgs {
     path: String,
+}
+
+fn supports_original_resolution_model(slug: &str) -> bool {
+    // Match `gpt-X.Y...` model slugs and enable original-resolution images for
+    // GPT models at version 5.4 or newer.
+    let Some(version_suffix) = slug.strip_prefix("gpt-") else {
+        return false;
+    };
+    let version_end = version_suffix
+        .find(|ch: char| !ch.is_ascii_digit() && ch != '.')
+        .unwrap_or(version_suffix.len());
+    let version = &version_suffix[..version_end];
+    if version.is_empty() {
+        return false;
+    }
+
+    let mut parts = version.split('.');
+    let Some(major) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
+        return false;
+    };
+    let minor = parts
+        .next()
+        .and_then(|part| part.parse::<u32>().ok())
+        .unwrap_or(0);
+
+    (major, minor) >= MIN_ORIGINAL_RESOLUTION_MODEL_VERSION
 }
 
 #[async_trait]
@@ -81,15 +111,33 @@ impl ToolHandler for ViewImageHandler {
         }
         let event_path = abs_path.clone();
 
-        let content = local_image_content_items_with_label_number(&abs_path, None);
-        let content = content
+        let use_original_resolution = turn
+            .config
+            .features
+            .enabled(Feature::ViewImageOriginalResolution)
+            && supports_original_resolution_model(&turn.model_info.slug);
+        let image_mode = if use_original_resolution {
+            PromptImageMode::Original
+        } else {
+            PromptImageMode::ResizeToFit
+        };
+        let image_detail = if use_original_resolution {
+            Some(ImageDetail::Original)
+        } else {
+            None
+        };
+
+        let content = local_image_content_items_with_label_number(&abs_path, None, image_mode)
             .into_iter()
             .map(|item| match item {
                 ContentItem::InputText { text } => {
                     FunctionCallOutputContentItem::InputText { text }
                 }
                 ContentItem::InputImage { image_url } => {
-                    FunctionCallOutputContentItem::InputImage { image_url }
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url,
+                        detail: image_detail,
+                    }
                 }
                 ContentItem::OutputText { text } => {
                     FunctionCallOutputContentItem::InputText { text }
@@ -111,5 +159,23 @@ impl ToolHandler for ViewImageHandler {
             body: FunctionCallOutputBody::ContentItems(content),
             success: Some(true),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supports_original_resolution_model;
+
+    #[test]
+    fn supports_original_resolution_model_version_gate() {
+        assert!(!supports_original_resolution_model("gpt-4.1"));
+        assert!(!supports_original_resolution_model("gpt-5"));
+        assert!(!supports_original_resolution_model("gpt-5.3"));
+        assert!(supports_original_resolution_model("gpt-5.4"));
+        assert!(supports_original_resolution_model("gpt-5.4-mini"));
+        assert!(supports_original_resolution_model("gpt-5.5"));
+        assert!(supports_original_resolution_model("gpt-5.10"));
+        assert!(supports_original_resolution_model("gpt-6"));
+        assert!(!supports_original_resolution_model("o3"));
     }
 }
