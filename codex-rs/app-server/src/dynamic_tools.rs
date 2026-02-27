@@ -8,8 +8,8 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::error;
 
-use crate::client_request_error::is_turn_transition_client_request_error;
 use crate::outgoing_message::ClientRequestResult;
+use crate::server_request_error::is_turn_transition_server_request_error;
 
 pub(crate) async fn on_call_response(
     call_id: String,
@@ -19,7 +19,7 @@ pub(crate) async fn on_call_response(
     let response = receiver.await;
     let (response, _error) = match response {
         Ok(Ok(value)) => decode_response(value),
-        Ok(Err(err)) if is_turn_transition_client_request_error(&err) => return,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
             fallback_response("dynamic tool request failed")

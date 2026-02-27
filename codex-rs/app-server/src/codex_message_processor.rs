@@ -6746,47 +6746,6 @@ impl CodexMessageProcessor {
     }
 }
 
-async fn resolve_pending_server_request(
-    conversation_id: ThreadId,
-    thread_state: &Arc<Mutex<ThreadState>>,
-    outgoing: &Arc<OutgoingMessageSender>,
-    request_type: ServerRequestType,
-    request_id: RequestId,
-) {
-    let thread_id = conversation_id.to_string();
-    let subscribed_connection_ids = thread_state.lock().await.subscribed_connection_ids();
-    let outgoing = ThreadScopedOutgoingMessageSender::new(
-        outgoing.clone(),
-        subscribed_connection_ids,
-        conversation_id,
-    );
-    let notification = match request_type {
-        ServerRequestType::CommandExecutionRequestApproval => {
-            ServerNotification::CommandExecutionApprovalResolved(
-                CommandExecutionApprovalResolvedNotification {
-                    thread_id,
-                    request_id,
-                },
-            )
-        }
-        ServerRequestType::FileChangeRequestApproval => {
-            ServerNotification::FileChangeApprovalResolved(FileChangeApprovalResolvedNotification {
-                thread_id,
-                request_id,
-            })
-        }
-        ServerRequestType::ToolRequestUserInput => {
-            ServerNotification::ToolRequestUserInputResolved(
-                ToolRequestUserInputResolvedNotification {
-                    thread_id,
-                    request_id,
-                },
-            )
-        }
-    };
-    outgoing.send_server_notification(notification).await;
-}
-
 async fn handle_thread_listener_command(
     conversation_id: ThreadId,
     codex_home: &Path,
@@ -6918,6 +6877,47 @@ async fn handle_pending_thread_resume_request(
         .await;
 
     thread_state.lock().await.add_connection(connection_id);
+}
+
+async fn resolve_pending_server_request(
+    conversation_id: ThreadId,
+    thread_state: &Arc<Mutex<ThreadState>>,
+    outgoing: &Arc<OutgoingMessageSender>,
+    request_type: ServerRequestType,
+    request_id: RequestId,
+) {
+    let thread_id = conversation_id.to_string();
+    let subscribed_connection_ids = thread_state.lock().await.subscribed_connection_ids();
+    let outgoing = ThreadScopedOutgoingMessageSender::new(
+        outgoing.clone(),
+        subscribed_connection_ids,
+        conversation_id,
+    );
+    let notification = match request_type {
+        ServerRequestType::CommandExecutionRequestApproval => {
+            ServerNotification::CommandExecutionApprovalResolved(
+                CommandExecutionApprovalResolvedNotification {
+                    thread_id,
+                    request_id,
+                },
+            )
+        }
+        ServerRequestType::FileChangeRequestApproval => {
+            ServerNotification::FileChangeApprovalResolved(FileChangeApprovalResolvedNotification {
+                thread_id,
+                request_id,
+            })
+        }
+        ServerRequestType::ToolRequestUserInput => {
+            ServerNotification::ToolRequestUserInputResolved(
+                ToolRequestUserInputResolvedNotification {
+                    thread_id,
+                    request_id,
+                },
+            )
+        }
+    };
+    outgoing.send_server_notification(notification).await;
 }
 
 async fn load_thread_for_running_resume_response(

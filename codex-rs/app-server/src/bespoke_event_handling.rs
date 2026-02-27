@@ -1,4 +1,3 @@
-use crate::client_request_error::is_turn_transition_client_request_error;
 use crate::codex_message_processor::ApiVersion;
 use crate::codex_message_processor::read_rollout_items_from_rollout;
 use crate::codex_message_processor::read_summary_from_rollout;
@@ -7,6 +6,7 @@ use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
+use crate::server_request_error::is_turn_transition_server_request_error;
 use crate::thread_state::ServerRequestType;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
@@ -136,7 +136,7 @@ struct CommandExecutionCompletionItem {
     command_actions: Vec<V2ParsedCommand>,
 }
 
-async fn queue_pending_client_request_removal(
+async fn resolve_server_request_on_thread_listener(
     thread_state: &Arc<Mutex<ThreadState>>,
     request_type: ServerRequestType,
     request_id: RequestId,
@@ -1776,7 +1776,7 @@ async fn on_patch_approval_response(
     let response = receiver.await;
     let value = match response {
         Ok(Ok(value)) => value,
-        Ok(Err(err)) if is_turn_transition_client_request_error(&err) => return,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
             if let Err(submit_err) = codex
@@ -1833,7 +1833,7 @@ async fn on_exec_approval_response(
     let response = receiver.await;
     let value = match response {
         Ok(Ok(value)) => value,
-        Ok(Err(err)) if is_turn_transition_client_request_error(&err) => return,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
             return;
@@ -1876,7 +1876,7 @@ async fn on_request_user_input_response(
     user_input_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
-    queue_pending_client_request_removal(
+    resolve_server_request_on_thread_listener(
         &thread_state,
         ServerRequestType::ToolRequestUserInput,
         pending_request_id,
@@ -1885,7 +1885,7 @@ async fn on_request_user_input_response(
     drop(user_input_guard);
     let value = match response {
         Ok(Ok(value)) => value,
-        Ok(Err(err)) if is_turn_transition_client_request_error(&err) => return,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
             let empty = CoreRequestUserInputResponse {
@@ -2004,7 +2004,7 @@ async fn on_file_change_request_approval_response(
     permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
-    queue_pending_client_request_removal(
+    resolve_server_request_on_thread_listener(
         &thread_state,
         ServerRequestType::FileChangeRequestApproval,
         pending_request_id,
@@ -2027,7 +2027,7 @@ async fn on_file_change_request_approval_response(
             // Only short-circuit on declines/cancels/failures.
             (decision, completion_status)
         }
-        Ok(Err(err)) if is_turn_transition_client_request_error(&err) => return,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
             (ReviewDecision::Denied, Some(PatchApplyStatus::Failed))
@@ -2077,7 +2077,7 @@ async fn on_command_execution_request_approval_response(
     permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
-    queue_pending_client_request_removal(
+    resolve_server_request_on_thread_listener(
         &thread_state,
         ServerRequestType::CommandExecutionRequestApproval,
         pending_request_id,
@@ -2134,7 +2134,7 @@ async fn on_command_execution_request_approval_response(
             };
             (decision, completion_status)
         }
-        Ok(Err(err)) if is_turn_transition_client_request_error(&err) => return,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
             (ReviewDecision::Denied, Some(CommandExecutionStatus::Failed))

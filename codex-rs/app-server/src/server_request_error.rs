@@ -2,7 +2,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 
 const TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON: &str = "turnTransition";
 
-pub(crate) fn is_turn_transition_client_request_error(error: &JSONRPCErrorError) -> bool {
+pub(crate) fn is_turn_transition_server_request_error(error: &JSONRPCErrorError) -> bool {
     error
         .data
         .as_ref()
@@ -13,7 +13,7 @@ pub(crate) fn is_turn_transition_client_request_error(error: &JSONRPCErrorError)
 
 #[cfg(test)]
 mod tests {
-    use super::is_turn_transition_client_request_error;
+    use super::is_turn_transition_server_request_error;
     use codex_app_server_protocol::JSONRPCErrorError;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -26,7 +26,7 @@ mod tests {
             data: Some(json!({ "reason": "turnTransition" })),
         };
 
-        assert_eq!(is_turn_transition_client_request_error(&error), true);
+        assert_eq!(is_turn_transition_server_request_error(&error), true);
     }
 
     #[test]
@@ -37,6 +37,6 @@ mod tests {
             data: Some(json!({ "reason": "other" })),
         };
 
-        assert_eq!(is_turn_transition_client_request_error(&error), false);
+        assert_eq!(is_turn_transition_server_request_error(&error), false);
     }
 }

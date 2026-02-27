@@ -53,7 +53,6 @@ use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod bespoke_event_handling;
-mod client_request_error;
 mod codex_message_processor;
 mod config_api;
 mod dynamic_tools;
@@ -64,6 +63,7 @@ mod fuzzy_file_search;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod server_request_error;
 mod thread_state;
 mod thread_status;
 mod transport;
