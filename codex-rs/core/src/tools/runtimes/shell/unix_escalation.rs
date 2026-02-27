@@ -7,8 +7,10 @@ use crate::exec::SandboxType;
 use crate::exec::is_likely_sandbox_denied;
 use crate::features::Feature;
 use crate::sandboxing::SandboxPermissions;
+use crate::sandboxing::sandbox_policy_with_additional_permissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
+use crate::skills::permissions::merge_macos_seatbelt_profile_extensions;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -224,7 +226,11 @@ impl CoreShellActionProvider {
         }
     }
 
-    fn skill_escalation_execution(skill: &SkillMetadata) -> EscalationExecution {
+    fn skill_escalation_execution(
+        skill: &SkillMetadata,
+        turn_sandbox_policy: &SandboxPolicy,
+        turn_macos_seatbelt_profile_extensions: Option<&MacOsSeatbeltProfileExtensions>,
+    ) -> EscalationExecution {
         skill
             .permissions
             .as_ref()
@@ -239,11 +245,21 @@ impl CoreShellActionProvider {
                 ))
             })
             .or_else(|| {
-                skill
-                    .permission_profile
-                    .clone()
-                    .map(EscalationPermissions::PermissionProfile)
-                    .map(EscalationExecution::Permissions)
+                skill.permission_profile.as_ref().map(|permission_profile| {
+                    EscalationExecution::Permissions(EscalationPermissions::Permissions(
+                        EscalatedPermissions {
+                            sandbox_policy: sandbox_policy_with_additional_permissions(
+                                turn_sandbox_policy,
+                                permission_profile,
+                            ),
+                            macos_seatbelt_profile_extensions:
+                                merge_macos_seatbelt_profile_extensions(
+                                    turn_macos_seatbelt_profile_extensions,
+                                    permission_profile.macos.as_ref(),
+                                ),
+                        },
+                    ))
+                })
             })
             .unwrap_or(EscalationExecution::TurnDefault)
     }
@@ -263,6 +279,13 @@ impl CoreShellActionProvider {
         let turn = self.turn.clone();
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
+        let reason = match decision_source {
+            DecisionSource::SkillScript { skill } if skill.permissions.is_some() => Some(
+                "Use the skill's declared sandbox exactly; do not merge it with the current sandbox."
+                    .to_string(),
+            ),
+            _ => None,
+        };
         Ok(stopwatch
             .pause_for(async move {
                 let available_decisions = vec![
@@ -286,7 +309,7 @@ impl CoreShellActionProvider {
                         approval_id,
                         command,
                         workdir,
-                        None,
+                        reason,
                         None,
                         None,
                         additional_permissions,
@@ -462,7 +485,17 @@ impl EscalationPolicy for CoreShellActionProvider {
             let execution = approval
                 .skill
                 .as_ref()
-                .map(Self::skill_escalation_execution)
+                .map(|skill| {
+                    Self::skill_escalation_execution(
+                        skill,
+                        &self.sandbox_policy,
+                        self.turn
+                            .config
+                            .permissions
+                            .macos_seatbelt_profile_extensions
+                            .as_ref(),
+                    )
+                })
                 .unwrap_or(EscalationExecution::TurnDefault);
 
             return Ok(EscalationDecision::escalate(execution));
@@ -487,7 +520,15 @@ impl EscalationPolicy for CoreShellActionProvider {
                     argv,
                     workdir,
                     skill.permission_profile.clone(),
-                    Self::skill_escalation_execution(&skill),
+                    Self::skill_escalation_execution(
+                        &skill,
+                        &self.sandbox_policy,
+                        self.turn
+                            .config
+                            .permissions
+                            .macos_seatbelt_profile_extensions
+                            .as_ref(),
+                    ),
                     decision_source,
                 )
                 .await;
