@@ -7097,6 +7097,7 @@ mod tests {
         assert_eq!(expected, history.raw_items());
     }
 
+    #[tokio::test]
     async fn resumed_history_injects_initial_context_on_first_context_update_only() {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
