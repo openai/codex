@@ -34,7 +34,7 @@ fn assistant_message(text: &str) -> ResponseItem {
 }
 
 #[tokio::test]
-async fn record_initial_history_resumed_hydrates_previous_model() {
+async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previous_model() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_model = "previous-rollout-model";
     let previous_context_item = TurnContextItem {
@@ -65,10 +65,8 @@ async fn record_initial_history_resumed_hydrates_previous_model() {
         }))
         .await;
 
-    assert_eq!(
-        session.previous_model().await,
-        Some(previous_model.to_string())
-    );
+    assert_eq!(session.previous_model().await, None);
+    assert!(session.reference_context_item().await.is_none());
 }
 
 #[tokio::test]
@@ -603,7 +601,7 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
 }
 
 #[tokio::test]
-async fn record_initial_history_resumed_seeds_reference_context_item_without_compaction() {
+async fn record_initial_history_resumed_bare_turn_context_does_not_seed_reference_context_item() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_context_item = turn_context.to_turn_context_item();
     let rollout_items = vec![RolloutItem::TurnContext(previous_context_item.clone())];
@@ -616,12 +614,7 @@ async fn record_initial_history_resumed_seeds_reference_context_item_without_com
         }))
         .await;
 
-    assert_eq!(
-        serde_json::to_value(session.reference_context_item().await)
-            .expect("serialize seeded reference context item"),
-        serde_json::to_value(Some(previous_context_item))
-            .expect("serialize expected reference context item")
-    );
+    assert!(session.reference_context_item().await.is_none());
 }
 
 #[tokio::test]
@@ -644,10 +637,7 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
         }))
         .await;
 
-    assert_eq!(
-        session.previous_model().await,
-        Some(turn_context.model_info.slug.clone())
-    );
+    assert_eq!(session.previous_model().await, None);
     assert!(session.reference_context_item().await.is_none());
 }
 

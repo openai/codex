@@ -179,11 +179,10 @@ impl Session {
                 RolloutItem::TurnContext(ctx) => {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
-                    // Legacy rollouts can omit lifecycle ids, so a bare `TurnContextItem` still
-                    // establishes a user-turn segment and its metadata by itself.
+                    // `TurnContextItem` can attach metadata to an existing segment, but only a
+                    // real `UserMessage` event should make the segment count as a user turn.
                     if active_segment.turn_id.is_none() {
                         active_segment.turn_id = ctx.turn_id.clone();
-                        active_segment.counts_as_user_turn = true;
                     }
                     if turn_ids_are_compatible(
                         active_segment.turn_id.as_deref(),
