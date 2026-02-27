@@ -2,6 +2,7 @@ use super::CoreShellActionProvider;
 #[cfg(target_os = "macos")]
 use super::CoreShellCommandExecutor;
 use super::ParsedShellCommand;
+use super::evaluate_intercepted_exec_policy;
 use super::extract_shell_script;
 use super::join_program_and_argv;
 use super::map_exec_result;
@@ -12,14 +13,16 @@ use crate::config::Permissions;
 #[cfg(target_os = "macos")]
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::exec::SandboxType;
-#[cfg(target_os = "macos")]
 use crate::protocol::AskForApproval;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
-#[cfg(target_os = "macos")]
 use crate::sandboxing::SandboxPermissions;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+use codex_execpolicy::Decision;
+use codex_execpolicy::Evaluation;
+use codex_execpolicy::PolicyParser;
+use codex_execpolicy::RuleMatch;
 #[cfg(target_os = "macos")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
@@ -36,7 +39,24 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "macos")]
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
+
+fn host_absolute_path(segments: &[&str]) -> String {
+    let mut path = if cfg!(windows) {
+        PathBuf::from(r"C:\")
+    } else {
+        PathBuf::from("/")
+    };
+    for segment in segments {
+        path.push(segment);
+    }
+    path.to_string_lossy().into_owned()
+}
+
+fn starlark_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
 
 #[test]
 fn extract_shell_script_preserves_login_flag() {
@@ -201,6 +221,84 @@ fn shell_request_escalation_execution_is_explicit() {
             },
         )),
     );
+}
+
+#[test]
+fn intercepted_exec_policy_uses_host_executable_mappings() {
+    let git_path = host_absolute_path(&["usr", "bin", "git"]);
+    let git_path_literal = starlark_string(&git_path);
+    let policy_src = format!(
+        r#"
+prefix_rule(pattern = ["git", "status"], decision = "prompt")
+host_executable(name = "git", paths = ["{git_path_literal}"])
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", &policy_src).unwrap();
+    let policy = parser.build();
+    let program = AbsolutePathBuf::try_from(git_path).unwrap();
+
+    let evaluation = evaluate_intercepted_exec_policy(
+        &policy,
+        &program,
+        &["git".to_string(), "status".to_string()],
+        AskForApproval::OnRequest,
+        &SandboxPolicy::new_read_only_policy(),
+        SandboxPermissions::UseDefault,
+    );
+
+    assert_eq!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec!["git".to_string(), "status".to_string()],
+                decision: Decision::Prompt,
+                resolved_program: Some(program),
+                justification: None,
+            }],
+        }
+    );
+    assert!(CoreShellActionProvider::decision_driven_by_policy(
+        &evaluation.matched_rules,
+        evaluation.decision
+    ));
+}
+
+#[test]
+fn intercepted_exec_policy_rejects_disallowed_host_executable_mapping() {
+    let allowed_git = host_absolute_path(&["usr", "bin", "git"]);
+    let other_git = host_absolute_path(&["opt", "homebrew", "bin", "git"]);
+    let allowed_git_literal = starlark_string(&allowed_git);
+    let policy_src = format!(
+        r#"
+prefix_rule(pattern = ["git", "status"], decision = "prompt")
+host_executable(name = "git", paths = ["{allowed_git_literal}"])
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", &policy_src).unwrap();
+    let policy = parser.build();
+    let program = AbsolutePathBuf::try_from(other_git.clone()).unwrap();
+
+    let evaluation = evaluate_intercepted_exec_policy(
+        &policy,
+        &program,
+        &["git".to_string(), "status".to_string()],
+        AskForApproval::OnRequest,
+        &SandboxPolicy::new_read_only_policy(),
+        SandboxPermissions::UseDefault,
+    );
+
+    assert!(matches!(
+        evaluation.matched_rules.as_slice(),
+        [RuleMatch::HeuristicsRuleMatch { command, .. }]
+            if command == &vec![other_git, "status".to_string()]
+    ));
+    assert!(!CoreShellActionProvider::decision_driven_by_policy(
+        &evaluation.matched_rules,
+        evaluation.decision
+    ));
 }
 
 #[cfg(target_os = "macos")]
