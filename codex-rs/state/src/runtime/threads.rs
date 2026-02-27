@@ -195,6 +195,15 @@ FROM threads
 
     /// Insert or replace thread metadata directly.
     pub async fn upsert_thread(&self, metadata: &crate::ThreadMetadata) -> anyhow::Result<()> {
+        self.upsert_thread_with_creation_memory_mode(metadata, None)
+            .await
+    }
+
+    async fn upsert_thread_with_creation_memory_mode(
+        &self,
+        metadata: &crate::ThreadMetadata,
+        creation_memory_mode: Option<&str>,
+    ) -> anyhow::Result<()> {
         sqlx::query(
             r#"
 INSERT INTO threads (
@@ -217,8 +226,9 @@ INSERT INTO threads (
     archived_at,
     git_sha,
     git_branch,
-    git_origin_url
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    git_origin_url,
+    memory_mode
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -261,6 +271,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(creation_memory_mode.unwrap_or("enabled"))
         .execute(self.pool.as_ref())
         .await?;
         Ok(())
@@ -316,13 +327,14 @@ ON CONFLICT(thread_id, position) DO NOTHING
         builder: &ThreadMetadataBuilder,
         items: &[RolloutItem],
         otel: Option<&OtelManager>,
+        new_thread_memory_mode: Option<&str>,
     ) -> anyhow::Result<()> {
         if items.is_empty() {
             return Ok(());
         }
-        let mut metadata = self
-            .get_thread(builder.id)
-            .await?
+        let existing_metadata = self.get_thread(builder.id).await?;
+        let mut metadata = existing_metadata
+            .clone()
             .unwrap_or_else(|| builder.build(&self.default_provider));
         metadata.rollout_path = builder.rollout_path.clone();
         for item in items {
@@ -333,7 +345,13 @@ ON CONFLICT(thread_id, position) DO NOTHING
         }
         // Keep the thread upsert before dynamic tools to satisfy the foreign key constraint:
         // thread_dynamic_tools.thread_id -> threads.id.
-        if let Err(err) = self.upsert_thread(&metadata).await {
+        let upsert_result = if existing_metadata.is_none() {
+            self.upsert_thread_with_creation_memory_mode(&metadata, new_thread_memory_mode)
+                .await
+        } else {
+            self.upsert_thread(&metadata).await
+        };
+        if let Err(err) = upsert_result {
             if let Some(otel) = otel {
                 otel.counter(DB_ERROR_METRIC, 1, &[("stage", "apply_rollout_items")]);
             }
@@ -493,4 +511,50 @@ pub(super) fn push_thread_order_and_limit(
     builder.push(" DESC, id DESC");
     builder.push(" LIMIT ");
     builder.push_bind(limit as i64);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::test_support::test_thread_metadata;
+    use crate::runtime::test_support::unique_temp_dir;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn upsert_thread_keeps_creation_memory_mode_for_existing_rows() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+
+        runtime
+            .upsert_thread_with_creation_memory_mode(&metadata, Some("disabled"))
+            .await
+            .expect("initial insert should succeed");
+
+        let memory_mode: String =
+            sqlx::query_scalar("SELECT memory_mode FROM threads WHERE id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("memory mode should be readable");
+        assert_eq!(memory_mode, "disabled");
+
+        metadata.title = "updated title".to_string();
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("upsert should succeed");
+
+        let memory_mode: String =
+            sqlx::query_scalar("SELECT memory_mode FROM threads WHERE id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("memory mode should remain readable");
+        assert_eq!(memory_mode, "disabled");
+    }
 }
