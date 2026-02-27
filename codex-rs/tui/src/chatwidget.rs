@@ -1274,15 +1274,22 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_agent_message(&mut self, message: String) {
-        // If we have a stream_controller, then the final agent message is redundant and will be a
-        // duplicate of what has already been streamed.
-        if self.stream_controller.is_none() && !message.is_empty() {
-            self.handle_streaming_delta(message);
+    fn finalize_completed_assistant_message(&mut self, message: Option<&str>) {
+        // If we have a stream_controller, the finalized message payload is redundant because the
+        // visible content has already been accumulated through deltas.
+        if self.stream_controller.is_none()
+            && let Some(message) = message
+            && !message.is_empty()
+        {
+            self.handle_streaming_delta(message.to_string());
         }
         self.flush_answer_stream_with_separator();
         self.handle_stream_finished();
         self.request_redraw();
+    }
+
+    fn on_agent_message(&mut self, message: String) {
+        self.finalize_completed_assistant_message(Some(&message));
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -2299,12 +2306,15 @@ impl ChatWidget {
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
     fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
-        if self.stream_controller.is_some() {
-            self.flush_answer_stream_with_separator();
-            self.handle_stream_finished();
-        } else if let [AgentMessageContent::Text { text }] = item.content.as_slice() {
-            self.on_agent_message(text.clone());
+        let mut message = String::new();
+        for content in &item.content {
+            match content {
+                AgentMessageContent::Text { text } => message.push_str(text),
+            }
         }
+        self.finalize_completed_assistant_message(
+            (!message.is_empty()).then_some(message.as_str()),
+        );
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
             Some(MessagePhase::FinalAnswer) | None => false,
