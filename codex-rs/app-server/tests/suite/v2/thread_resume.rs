@@ -1,11 +1,11 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
-use app_test_support::create_exec_command_sse_response;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_shell_command_sse_response;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::Utc;
@@ -656,7 +656,16 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
 async fn thread_resume_replays_pending_command_execution_request_approval() -> Result<()> {
     let responses = vec![
         create_final_assistant_message_sse_response("seeded")?,
-        create_exec_command_sse_response("call-1")?,
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            None,
+            Some(5000),
+            "call-1",
+        )?,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
