@@ -228,10 +228,9 @@ impl Session {
         if let Some(base_replacement_history) = base_replacement_history {
             history.replace(base_replacement_history.to_vec());
         }
-        // Temporary eager bridge: rebuild exact history semantics from the borrowed rollout suffix
-        // discovered by reverse replay. This keeps the history result stable while the control
-        // flow moves toward the future lazy reverse loader design without cloning the full rollout
-        // in the common no-compaction case.
+        // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
+        // design should keep this same replay shape, but drive it from a resumable reverse source
+        // instead of an eagerly loaded `&[RolloutItem]`.
         for item in rollout_suffix {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
