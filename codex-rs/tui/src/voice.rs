@@ -81,7 +81,8 @@ impl VoiceCapture {
     }
 
     pub fn start_realtime(config: &Config, tx: AppEventSender) -> Result<Self, String> {
-        let (device, default_config) = select_realtime_input_device_and_config(config)?;
+        let (device, default_config) =
+            crate::audio_device::select_configured_input_device_and_config(config)?;
         let config = preferred_pcm16_24khz_input_config(&device).unwrap_or(default_config);
 
         let sample_rate = config.sample_rate().0;
@@ -323,12 +324,6 @@ fn pcm16_24khz_input_config_rank(config_range: &SupportedStreamConfigRange) -> O
     };
 
     Some(channel_rank * 2 + exact_rate_rank)
-}
-
-fn select_realtime_input_device_and_config(
-    config: &Config,
-) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
-    crate::audio_device::select_configured_input_device_and_config(config)
 }
 
 fn build_input_stream(
@@ -871,27 +866,36 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn config_range(
-        channels: u16,
-        sample_format: cpal::SampleFormat,
-        min_sample_rate: u32,
-        max_sample_rate: u32,
-    ) -> SupportedStreamConfigRange {
-        SupportedStreamConfigRange::new(
-            channels,
-            SampleRate(min_sample_rate),
-            SampleRate(max_sample_rate),
-            cpal::SupportedBufferSize::Unknown,
-            sample_format,
-        )
-    }
-
     #[test]
     fn pcm16_24khz_input_config_rank_prefers_exact_mono_i16_24khz() {
-        let exact_mono = config_range(1, cpal::SampleFormat::I16, 24_000, 24_000);
-        let ranged_mono = config_range(1, cpal::SampleFormat::I16, 16_000, 48_000);
-        let exact_stereo = config_range(2, cpal::SampleFormat::I16, 24_000, 24_000);
-        let exact_f32 = config_range(1, cpal::SampleFormat::F32, 24_000, 24_000);
+        let exact_mono = SupportedStreamConfigRange::new(
+            1,
+            SampleRate(24_000),
+            SampleRate(24_000),
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::I16,
+        );
+        let ranged_mono = SupportedStreamConfigRange::new(
+            1,
+            SampleRate(16_000),
+            SampleRate(48_000),
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::I16,
+        );
+        let exact_stereo = SupportedStreamConfigRange::new(
+            2,
+            SampleRate(24_000),
+            SampleRate(24_000),
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::I16,
+        );
+        let exact_f32 = SupportedStreamConfigRange::new(
+            1,
+            SampleRate(24_000),
+            SampleRate(24_000),
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::F32,
+        );
 
         assert_eq!(pcm16_24khz_input_config_rank(&exact_mono), Some(0));
         assert_eq!(pcm16_24khz_input_config_rank(&ranged_mono), Some(1));
@@ -901,8 +905,20 @@ mod tests {
 
     #[test]
     fn pcm16_24khz_input_config_rank_rejects_non_24khz_ranges() {
-        let too_low = config_range(1, cpal::SampleFormat::I16, 8_000, 16_000);
-        let too_high = config_range(1, cpal::SampleFormat::I16, 32_000, 48_000);
+        let too_low = SupportedStreamConfigRange::new(
+            1,
+            SampleRate(8_000),
+            SampleRate(16_000),
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::I16,
+        );
+        let too_high = SupportedStreamConfigRange::new(
+            1,
+            SampleRate(32_000),
+            SampleRate(48_000),
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::I16,
+        );
 
         assert_eq!(pcm16_24khz_input_config_rank(&too_low), None);
         assert_eq!(pcm16_24khz_input_config_rank(&too_high), None);
