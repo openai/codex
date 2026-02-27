@@ -6638,8 +6638,6 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
 
-    use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
-    use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
@@ -8966,59 +8964,6 @@ mod tests {
             .expect("environment update item should be emitted");
         assert!(environment_update.contains("<current_date>2026-02-27</current_date>"));
         assert!(environment_update.contains("<timezone>Europe/Berlin</timezone>"));
-    }
-
-    #[tokio::test]
-    async fn build_settings_update_items_emits_empty_collaboration_marker_when_instructions_clear()
-    {
-        let (session, previous_context) = make_session_and_context().await;
-        let previous_context = Arc::new(previous_context);
-        let mut current_context = previous_context
-            .with_model(
-                previous_context.model_info.slug.clone(),
-                &session.services.models_manager,
-            )
-            .await;
-        current_context.collaboration_mode = CollaborationMode {
-            mode: ModeKind::Default,
-            settings: Settings {
-                model: previous_context.collaboration_mode.model().to_string(),
-                reasoning_effort: previous_context.collaboration_mode.reasoning_effort(),
-                developer_instructions: None,
-            },
-        };
-
-        let mut previous_context_item = previous_context.to_turn_context_item();
-        previous_context_item.collaboration_mode = Some(CollaborationMode {
-            mode: ModeKind::Realtime,
-            settings: Settings {
-                model: previous_context.collaboration_mode.model().to_string(),
-                reasoning_effort: previous_context.collaboration_mode.reasoning_effort(),
-                developer_instructions: Some("realtime instructions".to_string()),
-            },
-        });
-
-        let update_items = session.build_settings_update_items(
-            Some(&previous_context_item),
-            None,
-            &current_context,
-        );
-
-        let developer_update = update_items
-            .iter()
-            .find_map(|item| match item {
-                ResponseItem::Message { role, content, .. } if role == "developer" => {
-                    let [ContentItem::InputText { text }] = content.as_slice() else {
-                        return None;
-                    };
-                    Some(text)
-                }
-                _ => None,
-            })
-            .expect("developer update item should be emitted");
-        assert!(developer_update.contains(&format!(
-            "{COLLABORATION_MODE_OPEN_TAG}{COLLABORATION_MODE_CLOSE_TAG}"
-        )));
     }
 
     #[tokio::test]

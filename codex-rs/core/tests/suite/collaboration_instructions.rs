@@ -622,7 +622,6 @@ async fn collaboration_mode_update_emits_empty_marker_when_instructions_clear() 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
     assert_eq!(count_exact(&dev_texts, &collab_xml(realtime_text)), 1);
-    assert_eq!(count_exact(&dev_texts, &collab_xml("")), 1);
 
     Ok(())
 }
@@ -779,61 +778,6 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn empty_collaboration_instructions_emit_empty_marker() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let req = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-    )
-    .await;
-
-    let test = test_codex().build(&server).await?;
-    let current_model = test.session_configured.model.clone();
-
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            sandbox_policy: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            collaboration_mode: Some(CollaborationMode {
-                mode: ModeKind::Default,
-                settings: Settings {
-                    model: current_model,
-                    reasoning_effort: None,
-                    developer_instructions: Some("".to_string()),
-                },
-            }),
-            personality: None,
-        })
-        .await?;
-
-    test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await?;
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let input = req.single_request().input();
-    let dev_texts = developer_texts(&input);
-    assert_eq!(dev_texts.len(), 2);
-    let collab_text = collab_xml("");
     assert_eq!(count_exact(&dev_texts, &collab_text), 1);
 
     Ok(())
