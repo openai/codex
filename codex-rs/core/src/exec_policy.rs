@@ -472,17 +472,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         return Ok(policy);
     };
 
-    let mut combined_rules = policy.rules().clone();
-    for (program, rules) in requirements_policy.as_ref().rules().iter_all() {
-        for rule in rules {
-            combined_rules.insert(program.clone(), rule.clone());
-        }
-    }
-
-    let mut combined_network_rules = policy.network_rules().to_vec();
-    combined_network_rules.extend(requirements_policy.as_ref().network_rules().iter().cloned());
-
-    Ok(Policy::from_parts(combined_rules, combined_network_rules))
+    Ok(policy.merge_overlay(requirements_policy.as_ref()))
 }
 
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].
@@ -949,6 +939,7 @@ mod tests {
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             },
@@ -988,6 +979,55 @@ mod tests {
 
         assert!(allowed.is_empty());
         assert_eq!(denied, vec!["blocked.example.com".to_string()]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn preserves_host_executables_when_requirements_overlay_is_present() -> anyhow::Result<()>
+    {
+        let temp_dir = tempdir()?;
+        let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+        fs::create_dir_all(&policy_dir)?;
+        fs::write(
+            policy_dir.join("host.rules"),
+            r#"
+host_executable(name = "git", paths = ["/usr/bin/git"])
+"#,
+        )?;
+
+        let mut requirements_exec_policy = Policy::empty();
+        requirements_exec_policy.add_network_rule(
+            "blocked.example.com",
+            codex_execpolicy::NetworkRuleProtocol::Https,
+            Decision::Forbidden,
+            None,
+        )?;
+
+        let requirements = ConfigRequirements {
+            exec_policy: Some(codex_config::Sourced::new(
+                codex_config::RequirementsExecPolicy::new(requirements_exec_policy),
+                codex_config::RequirementSource::Unknown,
+            )),
+            ..ConfigRequirements::default()
+        };
+        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+        let layer = ConfigLayerEntry::new(
+            ConfigLayerSource::Project { dot_codex_folder },
+            TomlValue::Table(Default::default()),
+        );
+        let config_stack =
+            ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())?;
+
+        let policy = load_exec_policy(&config_stack).await?;
+
+        assert_eq!(
+            policy
+                .host_executables()
+                .get("git")
+                .expect("missing git host executable")
+                .as_ref(),
+            [AbsolutePathBuf::try_from("/usr/bin/git".to_string())?]
+        );
         Ok(())
     }
 
@@ -1106,6 +1146,7 @@ mod tests {
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             },
@@ -1117,6 +1158,7 @@ mod tests {
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["ls".to_string()],
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 }],
             },
@@ -1983,6 +2025,7 @@ prefix_rule(
         let matched_rules_prompt = vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: vec!["cargo".to_string()],
             decision: Decision::Prompt,
+            resolved_program: None,
             justification: None,
         }];
         assert_eq!(
@@ -1996,6 +2039,7 @@ prefix_rule(
         let matched_rules_allow = vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: vec!["cargo".to_string()],
             decision: Decision::Allow,
+            resolved_program: None,
             justification: None,
         }];
         assert_eq!(
@@ -2009,6 +2053,7 @@ prefix_rule(
         let matched_rules_forbidden = vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: vec!["cargo".to_string()],
             decision: Decision::Forbidden,
+            resolved_program: None,
             justification: None,
         }];
         assert_eq!(
