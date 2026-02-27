@@ -79,6 +79,8 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -737,8 +739,13 @@ impl App {
     }
 
     fn insert_startup_header(&mut self, tui: &mut tui::Tui) {
-        let header = Arc::new(history_cell::new_loading_session_header(
+        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+        let header = Arc::new(history_cell::SessionHeaderHistoryCell::new_with_style(
+            "loading".to_string(),
+            placeholder_style,
+            None,
             self.config.cwd.clone(),
+            CODEX_CLI_VERSION,
         )) as Arc<dyn HistoryCell>;
         self.insert_history_cell(tui, header);
         self.startup_header_pending_replacement = true;

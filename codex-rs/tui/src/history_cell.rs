@@ -1064,17 +1064,6 @@ pub(crate) fn new_session_info(
     SessionInfoCell(CompositeHistoryCell { parts })
 }
 
-pub(crate) fn new_loading_session_header(directory: PathBuf) -> SessionHeaderHistoryCell {
-    let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
-    SessionHeaderHistoryCell::new_with_style(
-        "loading".to_string(),
-        placeholder_style,
-        None,
-        directory,
-        CODEX_CLI_VERSION,
-    )
-}
-
 pub(crate) fn new_session_info_body(
     config: &Config,
     requested_model: &str,
