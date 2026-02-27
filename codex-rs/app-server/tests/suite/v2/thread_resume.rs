@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout_with_text_elements;
@@ -6,6 +7,7 @@ use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::Utc;
 use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
@@ -15,6 +17,7 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -277,7 +280,7 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/started"),
+        wait_for_thread_status_active(&mut primary, &thread.id),
     )
     .await??;
 
@@ -384,7 +387,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         to_response::<TurnStartResponse>(running_turn_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/started"),
+        wait_for_thread_status_active(&mut primary, &thread_id),
     )
     .await??;
 
@@ -500,7 +503,7 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         to_response::<TurnStartResponse>(running_turn_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/started"),
+        wait_for_thread_status_active(&mut primary, &thread_id),
     )
     .await??;
 
@@ -603,7 +606,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/started"),
+        wait_for_thread_status_active(&mut primary, &thread.id),
     )
     .await??;
 
@@ -1101,6 +1104,30 @@ required = true
 "#
         ),
     )
+}
+
+async fn wait_for_thread_status_active(
+    mcp: &mut McpProcess,
+    thread_id: &str,
+) -> Result<ThreadStatusChangedNotification> {
+    loop {
+        let status_changed_notif: JSONRPCNotification = mcp
+            .read_stream_until_notification_message("thread/status/changed")
+            .await?;
+        let status_changed_params = status_changed_notif
+            .params
+            .context("thread/status/changed params must be present")?;
+        let status_changed: ThreadStatusChangedNotification =
+            serde_json::from_value(status_changed_params)?;
+        if status_changed.thread_id == thread_id
+            && status_changed.status
+                == (ThreadStatus::Active {
+                    active_flags: Vec::new(),
+                })
+        {
+            return Ok(status_changed);
+        }
+    }
 }
 
 #[allow(dead_code)]
