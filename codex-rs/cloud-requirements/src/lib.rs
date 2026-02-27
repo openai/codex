@@ -56,12 +56,12 @@ fn refresher_task_slot() -> &'static Mutex<Option<JoinHandle<()>>> {
     REFRESHER_TASK.get_or_init(|| Mutex::new(None))
 }
 
-fn emit_cloud_requirements_failure_metric(phase: &str, reason: &str) {
+fn emit_cloud_requirements_load_failure_metric(trigger: &str, stage: &str) {
     if let Some(metrics) = codex_otel::metrics::global() {
         let _ = metrics.counter(
-            "codex.cloud_requirements.failure",
+            "codex.cloud_requirements.load_failure",
             1,
-            &[("phase", phase), ("reason", reason)],
+            &[("trigger", trigger), ("stage", stage)],
         );
     }
 }
@@ -245,7 +245,7 @@ impl CloudRequirementsService {
                     self.timeout.as_secs()
                 );
                 tracing::error!("{message}");
-                emit_cloud_requirements_failure_metric("load", "timeout");
+                emit_cloud_requirements_load_failure_metric("startup", "final");
             })
             .map_err(|_| {
                 CloudRequirementsLoadError::new(format!(
@@ -305,15 +305,15 @@ impl CloudRequirementsService {
             }
         }
 
-        self.fetch_with_retries(&auth, chatgpt_user_id, account_id)
+        self.fetch_with_retries(&auth, chatgpt_user_id, account_id, "startup")
             .await
             .ok_or_else(|| {
-                let message = "failed to fetch cloud requirements from remote after retries";
+                let message = "could not load required cloud configuration; check your network connection and try again";
                 tracing::error!(
                     path = %self.cache_path.display(),
                     "{message}"
                 );
-                emit_cloud_requirements_failure_metric("load", "remote_failed");
+                emit_cloud_requirements_load_failure_metric("startup", "final");
                 CloudRequirementsLoadError::new(message)
             })
     }
@@ -323,6 +323,7 @@ impl CloudRequirementsService {
         auth: &CodexAuth,
         chatgpt_user_id: Option<&str>,
         account_id: Option<&str>,
+        trigger: &str,
     ) -> Option<Option<ConfigRequirementsToml>> {
         for attempt in 1..=CLOUD_REQUIREMENTS_MAX_ATTEMPTS {
             let contents = match self.fetcher.fetch_requirements(auth).await {
@@ -335,6 +336,7 @@ impl CloudRequirementsService {
                             max_attempts = CLOUD_REQUIREMENTS_MAX_ATTEMPTS,
                             "Failed to fetch cloud requirements; retrying"
                         );
+                        emit_cloud_requirements_load_failure_metric(trigger, "retry");
                         sleep(backoff(attempt as u64)).await;
                     }
                     continue;
@@ -379,7 +381,7 @@ impl CloudRequirementsService {
                     tracing::error!(
                         "Timed out refreshing cloud requirements cache from remote; keeping existing cache"
                     );
-                    emit_cloud_requirements_failure_metric("refresh", "timeout");
+                    emit_cloud_requirements_load_failure_metric("refresh", "final");
                 }
             }
         }
@@ -406,7 +408,7 @@ impl CloudRequirementsService {
         let account_id = account_id.as_deref();
 
         if self
-            .fetch_with_retries(&auth, chatgpt_user_id, account_id)
+            .fetch_with_retries(&auth, chatgpt_user_id, account_id, "refresh")
             .await
             .is_none()
         {
@@ -414,7 +416,7 @@ impl CloudRequirementsService {
                 path = %self.cache_path.display(),
                 "Failed to refresh cloud requirements cache from remote"
             );
-            emit_cloud_requirements_failure_metric("refresh", "remote_failed");
+            emit_cloud_requirements_load_failure_metric("refresh", "final");
         }
         true
     }
@@ -560,8 +562,8 @@ pub fn cloud_requirements_loader(
     CloudRequirementsLoader::new(async move {
         task.await.map_err(|err| {
             tracing::error!(error = %err, "Cloud requirements task failed");
-            emit_cloud_requirements_failure_metric("load", "task_failed");
-            CloudRequirementsLoadError::new(format!("cloud requirements task failed: {err}"))
+            emit_cloud_requirements_load_failure_metric("startup", "final");
+            CloudRequirementsLoadError::new(format!("cloud requirements load failed: {err}"))
         })?
     })
 }
@@ -1243,7 +1245,7 @@ mod tests {
             .expect_err("cloud requirements retry exhaustion should fail closed");
         assert!(
             err.to_string()
-                .contains("failed to fetch cloud requirements from remote after retries")
+                .contains("could not load required cloud configuration")
         );
         assert_eq!(
             fetcher.request_count.load(Ordering::SeqCst),
