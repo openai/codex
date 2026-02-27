@@ -227,8 +227,10 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::config_loader::ConfigLayerStackOrdering;
+    use crate::skills::SkillsManager;
     use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
+    use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -468,6 +470,52 @@ writable_roots = ["./sandbox-root"]
 
         assert_eq!(config.model.as_deref(), Some("role-model"));
         assert_eq!(session_flags_layer_count(&config), before_layers + 1);
+    }
+
+    #[tokio::test]
+    async fn apply_role_skills_config_disables_skill_for_spawned_agent() {
+        let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+        let skill_dir = home.path().join("skills").join("demo");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        let skill_path = skill_dir.join("SKILL.md");
+        fs::write(
+            &skill_path,
+            "---\nname: demo-skill\ndescription: demo description\n---\n\n# Body\n",
+        )
+        .expect("write skill");
+        let role_path = write_role_config(
+            &home,
+            "skills-role.toml",
+            &format!(
+                r#"[[skills.config]]
+path = "{}"
+enabled = false
+"#,
+                skill_path.display()
+            ),
+        )
+        .await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+            },
+        );
+
+        apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect("custom role should apply");
+
+        let skills_manager = SkillsManager::new(home.path().to_path_buf());
+        let outcome = skills_manager.skills_for_config(&config);
+        let skill = outcome
+            .skills
+            .iter()
+            .find(|skill| skill.name == "demo-skill")
+            .expect("demo skill should be discovered");
+
+        assert_eq!(outcome.is_skill_enabled(skill), false);
     }
 
     #[test]
