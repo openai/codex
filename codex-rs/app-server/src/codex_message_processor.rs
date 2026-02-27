@@ -5322,8 +5322,14 @@ impl CodexMessageProcessor {
                 ),
                 &config,
             );
-            Self::send_app_list_updated_notification(&outgoing, merged.clone()).await;
-            last_notified_apps = Some(merged);
+            if Self::should_send_app_list_updated_notification(
+                merged.as_slice(),
+                accessible_loaded,
+                all_loaded,
+            ) {
+                Self::send_app_list_updated_notification(&outgoing, merged.clone()).await;
+                last_notified_apps = Some(merged);
+            }
         }
 
         loop {
@@ -5401,7 +5407,12 @@ impl CodexMessageProcessor {
                 ),
                 &config,
             );
-            if last_notified_apps.as_ref() != Some(&merged) {
+            if Self::should_send_app_list_updated_notification(
+                merged.as_slice(),
+                accessible_loaded,
+                all_loaded,
+            ) && last_notified_apps.as_ref() != Some(&merged)
+            {
                 Self::send_app_list_updated_notification(&outgoing, merged.clone()).await;
                 last_notified_apps = Some(merged.clone());
             }
@@ -5429,6 +5440,15 @@ impl CodexMessageProcessor {
         let all = all_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
         let accessible = accessible_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
         connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded)
+    }
+
+    fn should_send_app_list_updated_notification(
+        connectors: &[AppInfo],
+        accessible_loaded: bool,
+        all_loaded: bool,
+    ) -> bool {
+        connectors.iter().any(|connector| connector.is_accessible)
+            || (accessible_loaded && all_loaded)
     }
 
     fn paginate_apps(
