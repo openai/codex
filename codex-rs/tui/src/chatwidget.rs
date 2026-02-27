@@ -3373,7 +3373,7 @@ impl ChatWidget {
                         && user_message.text.strip_prefix('!').is_none()
                         && (!has_images || self.current_model_supports_images());
                     if should_preview_as_pending_nudge {
-                        self.submit_user_message_without_local_history(user_message);
+                        self.submit_user_message_internal(user_message, false);
                     } else if self.is_session_configured() {
                         // Submitted is only emitted when steer is enabled.
                         // Reset any reasoning header only when we are actually submitting a turn.
@@ -3992,10 +3992,6 @@ impl ChatWidget {
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
         self.submit_user_message_internal(user_message, true);
-    }
-
-    fn submit_user_message_without_local_history(&mut self, user_message: UserMessage) {
-        self.submit_user_message_internal(user_message, false);
     }
 
     fn submit_user_message_internal(&mut self, user_message: UserMessage, render_in_history: bool) {
