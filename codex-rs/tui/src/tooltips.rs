@@ -5,7 +5,6 @@ use codex_protocol::openai_models::ModelPreset;
 use lazy_static::lazy_static;
 use rand::Rng;
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
@@ -53,20 +52,20 @@ fn experimental_tooltips() -> Vec<&'static str> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StartupTip {
     Generic(String),
-    AvailabilityNux { message: String },
+    AvailabilityNux { model: String, message: String },
 }
 
 impl StartupTip {
     pub(crate) fn message(&self) -> String {
         match self {
-            Self::Generic(message) | Self::AvailabilityNux { message } => message.clone(),
+            Self::Generic(message) | Self::AvailabilityNux { message, .. } => message.clone(),
         }
     }
 
-    pub(crate) fn availability_nux_message(&self) -> Option<&str> {
+    pub(crate) fn availability_nux_model(&self) -> Option<&str> {
         match self {
             Self::Generic(_) => None,
-            Self::AvailabilityNux { message } => Some(message.as_str()),
+            Self::AvailabilityNux { model, .. } => Some(model.as_str()),
         }
     }
 }
@@ -188,25 +187,31 @@ fn availability_nux_tips(
     models: &[ModelPreset],
     availability_nux_display_counts: &BTreeMap<String, u32>,
 ) -> Vec<StartupTip> {
-    let mut seen_messages = HashSet::new();
-
     models
         .iter()
-        .filter_map(|preset| preset.availability_nux.as_ref())
-        .filter(|availability_nux| {
+        .filter_map(|preset| {
+            preset
+                .availability_nux
+                .as_ref()
+                .map(|availability_nux| (preset.model.as_str(), availability_nux))
+        })
+        .filter(|(model, _)| {
             availability_nux_display_counts
-                .get(&availability_nux.message)
+                .get(*model)
                 .copied()
                 .unwrap_or(0)
                 < 4
         })
-        .filter(|availability_nux| seen_messages.insert(availability_nux.message.clone()))
-        .map(startup_tip_from_availability_nux)
+        .map(|(model, availability_nux)| startup_tip_from_availability_nux(model, availability_nux))
         .collect()
 }
 
-fn startup_tip_from_availability_nux(availability_nux: &ModelAvailabilityNux) -> StartupTip {
+fn startup_tip_from_availability_nux(
+    model: &str,
+    availability_nux: &ModelAvailabilityNux,
+) -> StartupTip {
     StartupTip::AvailabilityNux {
+        model: model.to_string(),
         message: availability_nux.message.clone(),
     }
 }
@@ -372,11 +377,16 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
-    fn model_preset(availability_nux: Option<&str>, description: &str) -> ModelPreset {
+    fn model_preset(
+        model: &str,
+        display_name: &str,
+        availability_nux: Option<&str>,
+        description: &str,
+    ) -> ModelPreset {
         ModelPreset {
-            id: "gpt-test".to_string(),
-            model: "gpt-test".to_string(),
-            display_name: "GPT Test".to_string(),
+            id: model.to_string(),
+            model: model.to_string(),
+            display_name: display_name.to_string(),
             description: description.to_string(),
             default_reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![],
@@ -512,6 +522,8 @@ content = "This is a test announcement"
     #[test]
     fn first_session_eligible_model_returns_all_availability_nux_tips() {
         let preset = model_preset(
+            "gpt-test",
+            "GPT Test",
             Some("*New* Spark is now available to you."),
             "Fast, high-reliability coding model.",
         );
@@ -529,6 +541,7 @@ content = "This is a test announcement"
         assert_eq!(
             StartupTips {
                 first_session_tips: vec![StartupTip::AvailabilityNux {
+                    model: "gpt-test".to_string(),
                     message: "*New* Spark is now available to you.".to_string(),
                 }],
                 selected_tip: None,
@@ -539,7 +552,7 @@ content = "This is a test announcement"
 
     #[test]
     fn first_session_ineligible_model_skips_tip() {
-        let preset = model_preset(None, "");
+        let preset = model_preset("gpt-test", "GPT Test", None, "");
         let mut rng = StdRng::seed_from_u64(1);
 
         let tips = get_startup_tips_with_rng(
@@ -555,18 +568,21 @@ content = "This is a test announcement"
     }
 
     #[test]
-    fn first_session_dedupes_multiple_availability_nuxes_by_message() {
+    fn first_session_returns_multiple_availability_nuxes() {
         let mut rng = StdRng::seed_from_u64(1);
         let models = vec![
-            model_preset(Some("*New* Spark is now available to you."), ""),
-            model_preset(Some("*New* Spark is now available to you."), ""),
-            ModelPreset {
-                model: "gpt-other".to_string(),
-                availability_nux: Some(ModelAvailabilityNux {
-                    message: "*New* Canvas is now available to you.".to_string(),
-                }),
-                ..model_preset(None, "")
-            },
+            model_preset(
+                "spark",
+                "Spark",
+                Some("*New* Spark is now available to you."),
+                "",
+            ),
+            model_preset(
+                "canvas",
+                "Canvas",
+                Some("*New* Canvas is now available to you."),
+                "",
+            ),
         ];
 
         let tips = get_startup_tips_with_rng(
@@ -582,9 +598,11 @@ content = "This is a test announcement"
             StartupTips {
                 first_session_tips: vec![
                     StartupTip::AvailabilityNux {
+                        model: "spark".to_string(),
                         message: "*New* Spark is now available to you.".to_string(),
                     },
                     StartupTip::AvailabilityNux {
+                        model: "canvas".to_string(),
                         message: "*New* Canvas is now available to you.".to_string(),
                     },
                 ],
@@ -596,7 +614,12 @@ content = "This is a test announcement"
 
     #[test]
     fn later_session_can_select_availability_nux_from_weighted_pool() {
-        let preset = model_preset(Some("*New* Spark is now available to you."), "");
+        let preset = model_preset(
+            "gpt-test",
+            "GPT Test",
+            Some("*New* Spark is now available to you."),
+            "",
+        );
         let mut rng = StdRng::seed_from_u64(5);
 
         let tips = get_startup_tips_with_rng(
@@ -612,6 +635,7 @@ content = "This is a test announcement"
             StartupTips {
                 first_session_tips: Vec::new(),
                 selected_tip: Some(StartupTip::AvailabilityNux {
+                    model: "gpt-test".to_string(),
                     message: "*New* Spark is now available to you.".to_string(),
                 }),
             },
@@ -621,8 +645,13 @@ content = "This is a test announcement"
 
     #[test]
     fn later_session_count_limit_disables_availability_nux() {
-        let preset = model_preset(Some("*New* Spark is now available to you."), "");
-        let counts = BTreeMap::from([("*New* Spark is now available to you.".to_string(), 4)]);
+        let preset = model_preset(
+            "gpt-test",
+            "GPT Test",
+            Some("*New* Spark is now available to you."),
+            "",
+        );
+        let counts = BTreeMap::from([("gpt-test".to_string(), 4)]);
         let mut rng = StdRng::seed_from_u64(5);
 
         let tips = get_startup_tips_with_rng(
@@ -645,7 +674,12 @@ content = "This is a test announcement"
 
     #[test]
     fn later_session_eligible_model_includes_announcement_and_generic_candidates() {
-        let preset = model_preset(Some("*New* Spark is now available to you."), "");
+        let preset = model_preset(
+            "gpt-test",
+            "GPT Test",
+            Some("*New* Spark is now available to you."),
+            "",
+        );
         let mut saw_announcement = false;
         let mut saw_plan_tip = false;
         let mut saw_random_tip = false;

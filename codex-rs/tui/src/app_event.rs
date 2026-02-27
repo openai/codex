@@ -337,7 +337,7 @@ pub(crate) enum AppEvent {
 
     /// Persist that an availability NUX was displayed.
     PersistAvailabilityNuxDisplayed {
-        message: String,
+        model: String,
     },
 
     /// Skip the next world-writable scan (one-shot) after a user-confirmed continue.

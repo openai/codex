@@ -1892,9 +1892,7 @@ async fn session_configured_first_session_shows_model_nux_and_increments_display
         chat.config
             .notices
             .availability_nux_display_counts
-            .get(
-                "*New* You're using **GPT Test**. Fast, high-reliability coding model. Use /model to compare or switch anytime.",
-            )
+            .get("gpt-5.1")
     );
 }
 
@@ -1938,7 +1936,7 @@ async fn session_configured_ineligible_model_does_not_increment_display_count() 
         chat.config
             .notices
             .availability_nux_display_counts
-            .get("*New* Spark is now available to you.")
+            .get("gpt-5.1")
     );
 }
 
