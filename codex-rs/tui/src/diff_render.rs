@@ -127,6 +127,22 @@ enum DiffColorLevel {
     Ansi16,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RichDiffColorLevel {
+    TrueColor,
+    Ansi256,
+}
+
+impl RichDiffColorLevel {
+    fn from_diff_color_level(level: DiffColorLevel) -> Option<Self> {
+        match level {
+            DiffColorLevel::TrueColor => Some(Self::TrueColor),
+            DiffColorLevel::Ansi256 => Some(Self::Ansi256),
+            DiffColorLevel::Ansi16 => None,
+        }
+    }
+}
+
 pub struct DiffSummary {
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
@@ -982,10 +998,10 @@ fn diff_color_level_for_terminal(
 /// Context lines intentionally leave the background unset so the terminal
 /// default shows through.
 fn style_line_bg_for(kind: DiffLineType, theme: DiffTheme, color_level: DiffColorLevel) -> Style {
-    match (kind, color_level) {
-        (_, DiffColorLevel::Ansi16) => Style::default(),
-        (DiffLineType::Insert, _) => Style::default().bg(add_line_bg(theme, color_level)),
-        (DiffLineType::Delete, _) => Style::default().bg(del_line_bg(theme, color_level)),
+    match (kind, RichDiffColorLevel::from_diff_color_level(color_level)) {
+        (_, None) => Style::default(),
+        (DiffLineType::Insert, Some(level)) => Style::default().bg(add_line_bg(theme, level)),
+        (DiffLineType::Delete, Some(level)) => Style::default().bg(del_line_bg(theme, level)),
         (DiffLineType::Context, _) => Style::default(),
     }
 }
@@ -994,25 +1010,21 @@ fn style_context() -> Style {
     Style::default()
 }
 
-fn add_line_bg(theme: DiffTheme, color_level: DiffColorLevel) -> Color {
+fn add_line_bg(theme: DiffTheme, color_level: RichDiffColorLevel) -> Color {
     match (theme, color_level) {
-        (DiffTheme::Dark, DiffColorLevel::TrueColor) => rgb_color(DARK_TC_ADD_LINE_BG_RGB),
-        (DiffTheme::Dark, DiffColorLevel::Ansi256) => indexed_color(DARK_256_ADD_LINE_BG_IDX),
-        (DiffTheme::Dark, DiffColorLevel::Ansi16) => Color::Green,
-        (DiffTheme::Light, DiffColorLevel::TrueColor) => rgb_color(LIGHT_TC_ADD_LINE_BG_RGB),
-        (DiffTheme::Light, DiffColorLevel::Ansi256) => indexed_color(LIGHT_256_ADD_LINE_BG_IDX),
-        (DiffTheme::Light, DiffColorLevel::Ansi16) => Color::LightGreen,
+        (DiffTheme::Dark, RichDiffColorLevel::TrueColor) => rgb_color(DARK_TC_ADD_LINE_BG_RGB),
+        (DiffTheme::Dark, RichDiffColorLevel::Ansi256) => indexed_color(DARK_256_ADD_LINE_BG_IDX),
+        (DiffTheme::Light, RichDiffColorLevel::TrueColor) => rgb_color(LIGHT_TC_ADD_LINE_BG_RGB),
+        (DiffTheme::Light, RichDiffColorLevel::Ansi256) => indexed_color(LIGHT_256_ADD_LINE_BG_IDX),
     }
 }
 
-fn del_line_bg(theme: DiffTheme, color_level: DiffColorLevel) -> Color {
+fn del_line_bg(theme: DiffTheme, color_level: RichDiffColorLevel) -> Color {
     match (theme, color_level) {
-        (DiffTheme::Dark, DiffColorLevel::TrueColor) => rgb_color(DARK_TC_DEL_LINE_BG_RGB),
-        (DiffTheme::Dark, DiffColorLevel::Ansi256) => indexed_color(DARK_256_DEL_LINE_BG_IDX),
-        (DiffTheme::Dark, DiffColorLevel::Ansi16) => Color::Red,
-        (DiffTheme::Light, DiffColorLevel::TrueColor) => rgb_color(LIGHT_TC_DEL_LINE_BG_RGB),
-        (DiffTheme::Light, DiffColorLevel::Ansi256) => indexed_color(LIGHT_256_DEL_LINE_BG_IDX),
-        (DiffTheme::Light, DiffColorLevel::Ansi16) => Color::LightRed,
+        (DiffTheme::Dark, RichDiffColorLevel::TrueColor) => rgb_color(DARK_TC_DEL_LINE_BG_RGB),
+        (DiffTheme::Dark, RichDiffColorLevel::Ansi256) => indexed_color(DARK_256_DEL_LINE_BG_IDX),
+        (DiffTheme::Light, RichDiffColorLevel::TrueColor) => rgb_color(LIGHT_TC_DEL_LINE_BG_RGB),
+        (DiffTheme::Light, RichDiffColorLevel::Ansi256) => indexed_color(LIGHT_256_DEL_LINE_BG_IDX),
     }
 }
 
@@ -1024,19 +1036,17 @@ fn light_gutter_fg(color_level: DiffColorLevel) -> Color {
     }
 }
 
-fn light_add_num_bg(color_level: DiffColorLevel) -> Color {
+fn light_add_num_bg(color_level: RichDiffColorLevel) -> Color {
     match color_level {
-        DiffColorLevel::TrueColor => rgb_color(LIGHT_TC_ADD_NUM_BG_RGB),
-        DiffColorLevel::Ansi256 => indexed_color(LIGHT_256_ADD_NUM_BG_IDX),
-        DiffColorLevel::Ansi16 => Color::Green,
+        RichDiffColorLevel::TrueColor => rgb_color(LIGHT_TC_ADD_NUM_BG_RGB),
+        RichDiffColorLevel::Ansi256 => indexed_color(LIGHT_256_ADD_NUM_BG_IDX),
     }
 }
 
-fn light_del_num_bg(color_level: DiffColorLevel) -> Color {
+fn light_del_num_bg(color_level: RichDiffColorLevel) -> Color {
     match color_level {
-        DiffColorLevel::TrueColor => rgb_color(LIGHT_TC_DEL_NUM_BG_RGB),
-        DiffColorLevel::Ansi256 => indexed_color(LIGHT_256_DEL_NUM_BG_IDX),
-        DiffColorLevel::Ansi16 => Color::Red,
+        RichDiffColorLevel::TrueColor => rgb_color(LIGHT_TC_DEL_NUM_BG_RGB),
+        RichDiffColorLevel::Ansi256 => indexed_color(LIGHT_256_DEL_NUM_BG_IDX),
     }
 }
 
@@ -1044,19 +1054,23 @@ fn light_del_num_bg(color_level: DiffColorLevel) -> Color {
 /// tinted background so numbers contrast against the pastel line fill.  On
 /// dark backgrounds a simple `DIM` modifier is sufficient.
 fn style_gutter_for(kind: DiffLineType, theme: DiffTheme, color_level: DiffColorLevel) -> Style {
-    match (theme, kind, color_level) {
-        (DiffTheme::Light, DiffLineType::Insert, DiffColorLevel::Ansi16) => {
+    match (
+        theme,
+        kind,
+        RichDiffColorLevel::from_diff_color_level(color_level),
+    ) {
+        (DiffTheme::Light, DiffLineType::Insert, None) => {
             Style::default().fg(light_gutter_fg(color_level))
         }
-        (DiffTheme::Light, DiffLineType::Delete, DiffColorLevel::Ansi16) => {
+        (DiffTheme::Light, DiffLineType::Delete, None) => {
             Style::default().fg(light_gutter_fg(color_level))
         }
-        (DiffTheme::Light, DiffLineType::Insert, _) => Style::default()
+        (DiffTheme::Light, DiffLineType::Insert, Some(level)) => Style::default()
             .fg(light_gutter_fg(color_level))
-            .bg(light_add_num_bg(color_level)),
-        (DiffTheme::Light, DiffLineType::Delete, _) => Style::default()
+            .bg(light_add_num_bg(level)),
+        (DiffTheme::Light, DiffLineType::Delete, Some(level)) => Style::default()
             .fg(light_gutter_fg(color_level))
-            .bg(light_del_num_bg(color_level)),
+            .bg(light_del_num_bg(level)),
         _ => style_gutter_dim(),
     }
 }
@@ -1083,10 +1097,18 @@ fn style_sign_del(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
 fn style_add(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
     match (theme, color_level) {
         (_, DiffColorLevel::Ansi16) => Style::default().fg(Color::Green),
-        (DiffTheme::Light, _) => Style::default().bg(add_line_bg(theme, color_level)),
-        (DiffTheme::Dark, _) => Style::default()
+        (DiffTheme::Light, DiffColorLevel::TrueColor) => {
+            Style::default().bg(add_line_bg(theme, RichDiffColorLevel::TrueColor))
+        }
+        (DiffTheme::Light, DiffColorLevel::Ansi256) => {
+            Style::default().bg(add_line_bg(theme, RichDiffColorLevel::Ansi256))
+        }
+        (DiffTheme::Dark, DiffColorLevel::TrueColor) => Style::default()
             .fg(Color::Green)
-            .bg(add_line_bg(theme, color_level)),
+            .bg(add_line_bg(theme, RichDiffColorLevel::TrueColor)),
+        (DiffTheme::Dark, DiffColorLevel::Ansi256) => Style::default()
+            .fg(Color::Green)
+            .bg(add_line_bg(theme, RichDiffColorLevel::Ansi256)),
     }
 }
 
@@ -1094,10 +1116,18 @@ fn style_add(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
 fn style_del(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
     match (theme, color_level) {
         (_, DiffColorLevel::Ansi16) => Style::default().fg(Color::Red),
-        (DiffTheme::Light, _) => Style::default().bg(del_line_bg(theme, color_level)),
-        (DiffTheme::Dark, _) => Style::default()
+        (DiffTheme::Light, DiffColorLevel::TrueColor) => {
+            Style::default().bg(del_line_bg(theme, RichDiffColorLevel::TrueColor))
+        }
+        (DiffTheme::Light, DiffColorLevel::Ansi256) => {
+            Style::default().bg(del_line_bg(theme, RichDiffColorLevel::Ansi256))
+        }
+        (DiffTheme::Dark, DiffColorLevel::TrueColor) => Style::default()
             .fg(Color::Red)
-            .bg(del_line_bg(theme, color_level)),
+            .bg(del_line_bg(theme, RichDiffColorLevel::TrueColor)),
+        (DiffTheme::Dark, DiffColorLevel::Ansi256) => Style::default()
+            .fg(Color::Red)
+            .bg(del_line_bg(theme, RichDiffColorLevel::Ansi256)),
     }
 }
 
