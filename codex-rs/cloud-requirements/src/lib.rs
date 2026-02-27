@@ -55,16 +55,6 @@ fn refresher_task_slot() -> &'static Mutex<Option<JoinHandle<()>>> {
     REFRESHER_TASK.get_or_init(|| Mutex::new(None))
 }
 
-pub fn stop_cloud_requirements_refresher() {
-    let mut refresher_guard = refresher_task_slot().lock().unwrap_or_else(|err| {
-        tracing::warn!("cloud requirements refresher task slot was poisoned");
-        err.into_inner()
-    });
-    if let Some(existing_task) = refresher_guard.take() {
-        existing_task.abort();
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FetchCloudRequirementsStatus {
     BackendClientInit,
@@ -348,19 +338,21 @@ impl CloudRequirementsService {
     async fn refresh_cache_in_background(&self) {
         loop {
             sleep(CLOUD_REQUIREMENTS_CACHE_REFRESH_INTERVAL).await;
-            let _ = timeout(self.timeout, self.refresh_cache())
-                .await
-                .inspect_err(|_| {
+            match timeout(self.timeout, self.refresh_cache()).await {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(_) => {
                     tracing::warn!(
                         "Timed out refreshing cloud requirements cache from remote; keeping existing cache"
                     );
-                });
+                }
+            }
         }
     }
 
-    async fn refresh_cache(&self) {
+    async fn refresh_cache(&self) -> bool {
         let Some(auth) = self.auth_manager.auth().await else {
-            return;
+            return false;
         };
         if !auth.is_chatgpt_auth()
             || !matches!(
@@ -368,7 +360,7 @@ impl CloudRequirementsService {
                 Some(PlanType::Business | PlanType::Enterprise)
             )
         {
-            return;
+            return false;
         }
 
         let token_data = auth.get_token_data().ok();
@@ -388,6 +380,7 @@ impl CloudRequirementsService {
                 "Failed to refresh cloud requirements cache from remote"
             );
         }
+        true
     }
 
     async fn load_cache(

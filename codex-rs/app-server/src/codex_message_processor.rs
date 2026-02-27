@@ -186,7 +186,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
-use codex_cloud_requirements::stop_cloud_requirements_refresher;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
@@ -1452,7 +1451,6 @@ impl CodexMessageProcessor {
                 data: None,
             });
         }
-        stop_cloud_requirements_refresher();
 
         // Reflect the current auth method after logout (likely None).
         Ok(self
