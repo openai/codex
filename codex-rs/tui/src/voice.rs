@@ -10,6 +10,8 @@ use codex_login::CodexAuth;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
+use cpal::SampleRate;
+use cpal::SupportedStreamConfigRange;
 use cpal::traits::DeviceTrait;
 use cpal::traits::HostTrait;
 use cpal::traits::StreamTrait;
@@ -26,6 +28,9 @@ use std::sync::atomic::Ordering;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
+
+const OPENAI_TRANSCRIPTION_MODEL: &str = "gpt-4o-mini-transcribe";
+const TRANSCRIPTION_TARGET_SAMPLE_RATE: u32 = 24_000;
 
 struct TranscriptionAuthContext {
     mode: AuthMode,
@@ -51,7 +56,8 @@ pub struct VoiceCapture {
 
 impl VoiceCapture {
     pub fn start() -> Result<Self, String> {
-        let (device, config) = select_default_input_device_and_config()?;
+        let (device, default_config) = select_default_input_device_and_config()?;
+        let config = preferred_transcription_config(&device).unwrap_or(default_config);
 
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
@@ -221,8 +227,8 @@ pub fn transcribe_async(
             return;
         }
 
-        // Encode entire clip as normalized WAV.
-        let wav_bytes = match encode_wav_normalized(&audio) {
+        // Encode the captured PCM16 clip into WAV without rewriting sample values.
+        let wav_bytes = match encode_wav_pcm16(&audio) {
             Ok(b) => b,
             Err(e) => {
                 error!("failed to encode wav: {e}");
@@ -272,6 +278,48 @@ fn select_default_input_device_and_config()
         .default_input_config()
         .map_err(|e| format!("failed to get default input config: {e}"))?;
     Ok((device, config))
+}
+
+fn preferred_transcription_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfig> {
+    let configs = device.supported_input_configs().ok()?;
+    let mut best_config = None;
+    let mut best_rank = None;
+
+    for config_range in configs {
+        let Some(rank) = transcription_config_rank(&config_range) else {
+            continue;
+        };
+        if best_rank.is_none_or(|best| rank < best) {
+            best_rank = Some(rank);
+            best_config =
+                Some(config_range.with_sample_rate(SampleRate(TRANSCRIPTION_TARGET_SAMPLE_RATE)));
+        }
+    }
+
+    best_config
+}
+
+fn transcription_config_rank(config_range: &SupportedStreamConfigRange) -> Option<u8> {
+    if config_range.sample_format() != cpal::SampleFormat::I16 {
+        return None;
+    }
+
+    let min_sample_rate = config_range.min_sample_rate().0;
+    let max_sample_rate = config_range.max_sample_rate().0;
+    if !(min_sample_rate..=max_sample_rate).contains(&TRANSCRIPTION_TARGET_SAMPLE_RATE) {
+        return None;
+    }
+
+    let channel_rank = if config_range.channels() == 1 { 0 } else { 1 };
+    let exact_rate_rank = if min_sample_rate == TRANSCRIPTION_TARGET_SAMPLE_RATE
+        && max_sample_rate == TRANSCRIPTION_TARGET_SAMPLE_RATE
+    {
+        0
+    } else {
+        1
+    };
+
+    Some(channel_rank * 2 + exact_rate_rank)
 }
 
 fn select_realtime_input_device_and_config(
@@ -671,7 +719,7 @@ fn clip_duration_seconds(audio: &RecordedAudio) -> f32 {
     }
 }
 
-fn encode_wav_normalized(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
+fn encode_wav_pcm16(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
     let mut wav_bytes: Vec<u8> = Vec::new();
     let spec = WavSpec {
         channels: audio.channels,
@@ -683,29 +731,9 @@ fn encode_wav_normalized(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
     let mut writer =
         WavWriter::new(&mut cursor, spec).map_err(|_| "failed to create wav writer".to_string())?;
 
-    // Simple peak normalization with headroom to improve audibility on quiet inputs.
-    let segment = &audio.data[..];
-    let mut peak: i16 = 0;
-    for &s in segment {
-        let a = s.unsigned_abs();
-        if a > peak.unsigned_abs() {
-            peak = s;
-        }
-    }
-    let peak_abs = (peak as i32).unsigned_abs() as i32;
-    let target = (i16::MAX as f32) * 0.9; // leave some headroom
-    let gain: f32 = if peak_abs > 0 {
-        target / (peak_abs as f32)
-    } else {
-        1.0
-    };
-
-    for &s in segment {
-        let v = ((s as f32) * gain)
-            .round()
-            .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+    for &sample in &audio.data {
         writer
-            .write_sample(v)
+            .write_sample(sample)
             .map_err(|_| "failed writing wav sample".to_string())?;
     }
     writer
@@ -782,7 +810,7 @@ async fn transcribe_bytes(
                 .mime_str("audio/wav")
                 .map_err(|e| format!("failed to set mime: {e}"))?;
             let mut form = reqwest::multipart::Form::new()
-                .text("model", "gpt-4o-transcribe")
+                .text("model", OPENAI_TRANSCRIPTION_MODEL)
                 .part("file", part);
             if let Some(context) = context {
                 form = form.text("prompt", context);
@@ -832,5 +860,77 @@ async fn transcribe_bytes(
         Err("empty transcription result".to_string())
     } else {
         Ok(text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn config_range(
+        channels: u16,
+        sample_format: cpal::SampleFormat,
+        min_sample_rate: u32,
+        max_sample_rate: u32,
+    ) -> SupportedStreamConfigRange {
+        SupportedStreamConfigRange::new(
+            channels,
+            SampleRate(min_sample_rate),
+            SampleRate(max_sample_rate),
+            cpal::SupportedBufferSize::Unknown,
+            sample_format,
+        )
+    }
+
+    #[test]
+    fn transcription_config_rank_prefers_exact_mono_i16_24khz() {
+        let exact_mono = config_range(1, cpal::SampleFormat::I16, 24_000, 24_000);
+        let ranged_mono = config_range(1, cpal::SampleFormat::I16, 16_000, 48_000);
+        let exact_stereo = config_range(2, cpal::SampleFormat::I16, 24_000, 24_000);
+        let exact_f32 = config_range(1, cpal::SampleFormat::F32, 24_000, 24_000);
+
+        assert_eq!(transcription_config_rank(&exact_mono), Some(0));
+        assert_eq!(transcription_config_rank(&ranged_mono), Some(1));
+        assert_eq!(transcription_config_rank(&exact_stereo), Some(2));
+        assert_eq!(transcription_config_rank(&exact_f32), None);
+    }
+
+    #[test]
+    fn transcription_config_rank_rejects_non_24khz_ranges() {
+        let too_low = config_range(1, cpal::SampleFormat::I16, 8_000, 16_000);
+        let too_high = config_range(1, cpal::SampleFormat::I16, 32_000, 48_000);
+
+        assert_eq!(transcription_config_rank(&too_low), None);
+        assert_eq!(transcription_config_rank(&too_high), None);
+    }
+
+    #[test]
+    fn encode_wav_pcm16_preserves_input_samples() {
+        let audio = RecordedAudio {
+            data: vec![-30_000, 0, 12_345, 30_000],
+            sample_rate: 24_000,
+            channels: 1,
+        };
+
+        let wav = encode_wav_pcm16(&audio).expect("wav encoding should succeed");
+        let mut reader =
+            hound::WavReader::new(Cursor::new(wav)).expect("wav reader should open encoded bytes");
+        let spec = reader.spec();
+        let samples = reader
+            .samples::<i16>()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("samples should decode");
+
+        assert_eq!(spec.sample_rate, 24_000);
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.bits_per_sample, 16);
+        assert_eq!(spec.sample_format, SampleFormat::Int);
+        assert_eq!(samples, audio.data);
+    }
+
+    #[test]
+    fn openai_transcription_model_constant_matches_expected_model() {
+        assert_eq!(OPENAI_TRANSCRIPTION_MODEL, "gpt-4o-mini-transcribe");
     }
 }
