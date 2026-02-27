@@ -561,7 +561,7 @@ async fn collaboration_mode_update_emits_empty_marker_when_instructions_clear() 
     .await;
 
     let test = test_codex().build(&server).await?;
-    let realtime_text = "realtime mode instructions";
+    let plan_text = "plan mode instructions";
 
     test.codex
         .submit(Op::OverrideTurnContext {
@@ -573,8 +573,8 @@ async fn collaboration_mode_update_emits_empty_marker_when_instructions_clear() 
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
-                ModeKind::Realtime,
-                Some(realtime_text),
+                ModeKind::Plan,
+                Some(plan_text),
             )),
             personality: None,
         })
@@ -621,7 +621,7 @@ async fn collaboration_mode_update_emits_empty_marker_when_instructions_clear() 
 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
-    assert_eq!(count_exact(&dev_texts, &collab_xml(realtime_text)), 1);
+    assert_eq!(count_exact(&dev_texts, &collab_xml(plan_text)), 1);
 
     Ok(())
 }

@@ -3817,7 +3817,6 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "realtime",
         "default"
       ],
       "type": "string"

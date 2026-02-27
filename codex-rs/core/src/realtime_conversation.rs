@@ -186,6 +186,9 @@ pub(crate) async fn handle_start(
         .session_id
         .or_else(|| Some(sess.conversation_id.to_string()));
     info!("starting realtime conversation");
+    if sess.realtime_instructions_active().await {
+        sess.emit_realtime_end_instructions().await;
+    }
     let events_rx = match sess
         .conversation
         .start(api_provider, None, prompt, requested_session_id.clone())
@@ -198,11 +201,7 @@ pub(crate) async fn handle_start(
             return Ok(());
         }
     };
-    if let Err(err) = sess.enter_realtime_collaboration_mode().await {
-        let _ = sess.conversation.shutdown().await;
-        send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
-        return Ok(());
-    }
+    sess.emit_realtime_start_instructions().await;
 
     info!("realtime conversation started");
 
@@ -243,7 +242,7 @@ pub(crate) async fn handle_start(
         }
         if let Some(()) = sess_clone.conversation.running_state().await {
             info!("realtime conversation transport closed");
-            close_realtime_and_reset_mode(
+            close_realtime_and_emit_end_instruction(
                 &sess_clone,
                 ev,
                 "transport_closed",
@@ -304,7 +303,7 @@ pub(crate) async fn handle_text(
 
 pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
     let error_sub_id = sub_id.clone();
-    close_realtime_and_reset_mode(
+    close_realtime_and_emit_end_instruction(
         sess,
         |msg| Event {
             id: sub_id.clone(),
@@ -316,7 +315,7 @@ pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
     .await;
 }
 
-async fn close_realtime_and_reset_mode<F>(
+async fn close_realtime_and_emit_end_instruction<F>(
     sess: &Arc<Session>,
     event_builder: F,
     reason: &str,
@@ -333,14 +332,7 @@ async fn close_realtime_and_reset_mode<F>(
         return;
     }
 
-    if let Err(err) = sess.reset_to_default_collaboration_mode().await {
-        if let Some(sub_id) = error_sub_id {
-            send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
-        } else {
-            warn!("failed to reset collaboration mode after realtime close: {err}");
-        }
-        return;
-    }
+    sess.emit_realtime_end_instructions().await;
 
     sess.send_event_raw(event_builder(EventMsg::RealtimeConversationClosed(
         RealtimeConversationClosedEvent {

@@ -162,6 +162,10 @@ pub enum SteerInputError {
     ExpectedTurnMismatch { expected: String, actual: String },
     EmptyInput,
 }
+
+const REALTIME_START_DEVELOPER_INSTRUCTIONS: &str = "Realtime conversation handling is now active. Keep responses concise, low-latency, interruption-safe, and operationally safe for live interaction. This instruction applies only while realtime is active.";
+const REALTIME_END_DEVELOPER_INSTRUCTIONS: &str = "Realtime conversation handling has ended. The realtime-specific developer instruction no longer applies.";
+
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
@@ -3035,45 +3039,69 @@ impl Session {
         state.session_configuration.collaboration_mode.clone()
     }
 
-    pub(crate) async fn enter_realtime_collaboration_mode(&self) -> ConstraintResult<()> {
-        let current = self.collaboration_mode().await;
-        let collaboration_mode = self
-            .services
-            .models_manager
-            .list_collaboration_modes()
-            .into_iter()
-            .find(|mask| mask.mode == Some(ModeKind::Realtime))
-            .map(|mask| current.apply_mask(&mask))
-            .unwrap_or_else(|| CollaborationMode {
-                mode: ModeKind::Realtime,
-                settings: Settings {
-                    model: current.model().to_string(),
-                    reasoning_effort: current.reasoning_effort(),
-                    developer_instructions: None,
-                },
-            });
-
-        self.update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(collaboration_mode),
-            ..Default::default()
-        })
-        .await
+    pub(crate) async fn realtime_instructions_active(&self) -> bool {
+        let state = self.state.lock().await;
+        state.realtime_instructions_active()
     }
 
-    pub(crate) async fn reset_to_default_collaboration_mode(&self) -> ConstraintResult<()> {
-        let current = self.collaboration_mode().await;
-        self.update_settings(SessionSettingsUpdate {
-            collaboration_mode: Some(CollaborationMode {
-                mode: ModeKind::Default,
-                settings: Settings {
-                    model: current.model().to_string(),
-                    reasoning_effort: current.reasoning_effort(),
-                    developer_instructions: None,
-                },
-            }),
-            ..Default::default()
-        })
-        .await
+    pub(crate) async fn emit_realtime_start_instructions(&self) {
+        if self.realtime_instructions_active().await {
+            return;
+        }
+        self.record_session_developer_message(REALTIME_START_DEVELOPER_INSTRUCTIONS)
+            .await;
+        let mut state = self.state.lock().await;
+        state.set_realtime_instructions_active(true);
+    }
+
+    pub(crate) async fn emit_realtime_end_instructions(&self) {
+        if !self.realtime_instructions_active().await {
+            return;
+        }
+        self.record_session_developer_message(REALTIME_END_DEVELOPER_INSTRUCTIONS)
+            .await;
+        let mut state = self.state.lock().await;
+        state.set_realtime_instructions_active(false);
+    }
+
+    async fn record_session_developer_message(&self, text: &str) {
+        let message: ResponseItem = DeveloperInstructions::new(text.to_string()).into();
+
+        let active_turn_context = {
+            let active = self.active_turn.lock().await;
+            active
+                .as_ref()
+                .and_then(|active_turn| active_turn.tasks.first())
+                .map(|(_, task)| Arc::clone(&task.turn_context))
+        };
+        if let Some(turn_context) = active_turn_context {
+            self.record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&message))
+                .await;
+            return;
+        }
+
+        let session_configuration = {
+            let state = self.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        let model_info = self
+            .services
+            .models_manager
+            .get_model_info(
+                session_configuration.collaboration_mode.model(),
+                &per_turn_config,
+            )
+            .await;
+        {
+            let mut state = self.state.lock().await;
+            state.record_items(
+                std::slice::from_ref(&message).iter(),
+                model_info.truncation_policy.into(),
+            );
+        }
+        self.persist_rollout_response_items(std::slice::from_ref(&message))
+            .await;
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
@@ -4592,9 +4620,7 @@ mod handlers {
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
         let _ = sess.conversation.shutdown().await;
-        if let Err(err) = sess.reset_to_default_collaboration_mode().await {
-            warn!("failed to reset collaboration mode during shutdown: {err}");
-        }
+        sess.emit_realtime_end_instructions().await;
         sess.services
             .unified_exec_manager
             .terminate_all_processes()
@@ -8967,16 +8993,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shutdown_resets_realtime_collaboration_mode_to_default() {
+    async fn shutdown_emits_realtime_end_instructions() {
         let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-        session
-            .enter_realtime_collaboration_mode()
-            .await
-            .expect("enter realtime collaboration mode");
-        assert_eq!(session.collaboration_mode().await.mode, ModeKind::Realtime);
+        session.emit_realtime_start_instructions().await;
+        assert!(session.realtime_instructions_active().await);
 
         assert!(handlers::shutdown(&session, "shutdown-test".to_string()).await);
-        assert_eq!(session.collaboration_mode().await.mode, ModeKind::Default);
+        assert!(!session.realtime_instructions_active().await);
+
+        let developer_texts = session
+            .clone_history()
+            .await
+            .raw_items()
+            .iter()
+            .filter_map(|item| match item {
+                ResponseItem::Message { role, content, .. } if role == "developer" => {
+                    content.iter().find_map(|content| match content {
+                        ContentItem::InputText { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            developer_texts,
+            vec![
+                REALTIME_START_DEVELOPER_INSTRUCTIONS.to_string(),
+                REALTIME_END_DEVELOPER_INSTRUCTIONS.to_string(),
+            ]
+        );
     }
 
     #[tokio::test]

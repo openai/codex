@@ -25,6 +25,25 @@ use serde_json::json;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
+fn developer_texts(input: &[Value]) -> Vec<String> {
+    input
+        .iter()
+        .filter_map(|item| {
+            let role = item.get("role")?.as_str()?;
+            if role != "developer" {
+                return None;
+            }
+            let text = item
+                .get("content")?
+                .as_array()?
+                .first()?
+                .get("text")?
+                .as_str()?;
+            Some(text.to_string())
+        })
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -161,6 +180,61 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_persists_realtime_start_instruction_into_next_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &api_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp_1"),
+            responses::ev_completed("resp_1"),
+        ]),
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.created",
+        "session": { "id": "sess_1" }
+    })]]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let _session_created = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionCreated { session_id },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+
+    test.submit_turn("hello").await?;
+
+    let dev_texts = developer_texts(&response_mock.single_request().input());
+    assert!(dev_texts.iter().any(|text| {
+        text.contains("Realtime conversation handling is now active.")
+            && text.contains("This instruction applies only while realtime is active.")
+    }));
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_transport_close_emits_closed_event() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -205,6 +279,68 @@ async fn conversation_transport_close_emits_closed_event() -> Result<()> {
     .await;
     assert_eq!(closed.reason.as_deref(), Some("transport_closed"));
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_close_persists_realtime_end_instruction_into_next_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &api_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp_1"),
+            responses::ev_completed("resp_1"),
+        ]),
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.created",
+        "session": { "id": "sess_1" }
+    })]]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let _session_created = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionCreated { session_id },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    let _closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+
+    test.submit_turn("hello").await?;
+
+    let dev_texts = developer_texts(&response_mock.single_request().input());
+    assert!(dev_texts.iter().any(|text| {
+        text.contains("Realtime conversation handling has ended.")
+            && text.contains("realtime-specific developer instruction no longer applies")
+    }));
+
+    realtime_server.shutdown().await;
     Ok(())
 }
 
@@ -711,7 +847,6 @@ async fn inbound_realtime_text_ignores_user_role_and_still_forwards_audio() -> R
 async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_audio() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
-    let start = std::time::Instant::now();
 
     let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
     let first_chunks = vec![
@@ -803,22 +938,9 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
         _ => None,
     })
     .await;
-    eprintln!(
-        "[realtime test +{}ms] saw trigger text={:?}",
-        start.elapsed().as_millis(),
-        "delegate now"
-    );
 
     let mirrored_request = realtime_server.wait_for_request(0, 1).await;
     let mirrored_request_body = mirrored_request.body_json();
-    eprintln!(
-        "[realtime test +{}ms] saw mirrored request type={:?} role={:?} text={:?} data={:?}",
-        start.elapsed().as_millis(),
-        mirrored_request_body["type"].as_str(),
-        mirrored_request_body["item"]["role"].as_str(),
-        mirrored_request_body["item"]["content"][0]["text"].as_str(),
-        mirrored_request_body["item"]["content"][0]["data"].as_str(),
-    );
     assert_eq!(
         mirrored_request_body["type"].as_str(),
         Some("conversation.item.create")
@@ -835,13 +957,6 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
         _ => None,
     })
     .await;
-    eprintln!(
-        "[realtime test +{}ms] saw audio out data={} sample_rate={} num_channels={}",
-        start.elapsed().as_millis(),
-        audio_out.data,
-        audio_out.sample_rate,
-        audio_out.num_channels
-    );
     assert_eq!(audio_out.data, "AQID");
 
     let completion = completions
@@ -852,10 +967,6 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
     completion
         .await
         .expect("delegated turn request did not complete");
-    eprintln!(
-        "[realtime test +{}ms] delegated completion resolved",
-        start.elapsed().as_millis()
-    );
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })

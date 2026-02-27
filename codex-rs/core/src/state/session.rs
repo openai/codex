@@ -19,6 +19,7 @@ use codex_protocol::protocol::TurnContextItem;
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
+    pub(crate) realtime_instructions_active: bool,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
@@ -40,6 +41,7 @@ impl SessionState {
         Self {
             session_configuration,
             history,
+            realtime_instructions_active: false,
             latest_rate_limits: None,
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
@@ -69,6 +71,14 @@ impl SessionState {
 
     pub(crate) fn clone_history(&self) -> ContextManager {
         self.history.clone()
+    }
+
+    pub(crate) fn realtime_instructions_active(&self) -> bool {
+        self.realtime_instructions_active
+    }
+
+    pub(crate) fn set_realtime_instructions_active(&mut self, active: bool) {
+        self.realtime_instructions_active = active;
     }
 
     pub(crate) fn replace_history(
