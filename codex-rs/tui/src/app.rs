@@ -103,6 +103,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 
 mod pending_interactive_replay;
@@ -616,6 +617,7 @@ pub(crate) struct App {
     windows_sandbox: WindowsSandboxState,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
+    thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_picker_threads: HashMap<ThreadId, AgentPickerThreadEntry>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
@@ -794,6 +796,23 @@ impl App {
             self.suppress_shutdown_complete = true;
             self.chat_widget.submit_op(Op::Shutdown);
             self.server.remove_thread(&thread_id).await;
+            self.abort_thread_event_listener(thread_id);
+        }
+    }
+
+    fn abort_thread_event_listener(&mut self, thread_id: ThreadId) {
+        if let Some(handle) = self.thread_event_listener_tasks.remove(&thread_id) {
+            handle.abort();
+        }
+    }
+
+    fn abort_all_thread_event_listeners(&mut self) {
+        for handle in self
+            .thread_event_listener_tasks
+            .drain()
+            .map(|(_, handle)| handle)
+        {
+            handle.abort();
         }
     }
 
@@ -1264,6 +1283,7 @@ impl App {
     }
 
     fn reset_thread_event_state(&mut self) {
+        self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
         self.agent_picker_threads.clear();
         self.active_thread_id = None;
@@ -1619,6 +1639,7 @@ impl App {
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
+            thread_event_listener_tasks: HashMap::new(),
             agent_picker_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
@@ -3156,7 +3177,7 @@ impl App {
             ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
         let app_event_tx = self.app_event_tx.clone();
         self.thread_event_channels.insert(thread_id, channel);
-        tokio::spawn(async move {
+        let listener_handle = tokio::spawn(async move {
             loop {
                 let event = match thread.next_event().await {
                     Ok(event) => event,
@@ -3168,6 +3189,8 @@ impl App {
                 app_event_tx.send(AppEvent::ThreadEvent { thread_id, event });
             }
         });
+        self.thread_event_listener_tasks
+            .insert(thread_id, listener_handle);
         Ok(())
     }
 
@@ -3662,6 +3685,41 @@ mod tests {
         assert_eq!(app.active_thread_id, None);
         assert_eq!(app.primary_thread_id, None);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn reset_thread_event_state_aborts_listener_tasks() {
+        struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+
+        impl Drop for NotifyOnDrop {
+            fn drop(&mut self) {
+                if let Some(tx) = self.0.take() {
+                    let _ = tx.send(());
+                }
+            }
+        }
+
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let _notify_on_drop = NotifyOnDrop(Some(dropped_tx));
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        app.thread_event_listener_tasks.insert(thread_id, handle);
+        started_rx
+            .await
+            .expect("listener task should report it started");
+
+        app.reset_thread_event_state();
+
+        assert_eq!(app.thread_event_listener_tasks.is_empty(), true);
+        time::timeout(Duration::from_millis(50), dropped_rx)
+            .await
+            .expect("timed out waiting for listener task abort")
+            .expect("listener task drop notification should succeed");
     }
 
     #[tokio::test]
@@ -4171,6 +4229,7 @@ mod tests {
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
+            thread_event_listener_tasks: HashMap::new(),
             agent_picker_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
@@ -4230,6 +4289,7 @@ mod tests {
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),
+                thread_event_listener_tasks: HashMap::new(),
                 agent_picker_threads: HashMap::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
