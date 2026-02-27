@@ -352,6 +352,10 @@ pub struct Config {
 
     /// User-defined role declarations keyed by role name.
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
+    /// How user-provided `agent_nicknames` are merged with built-in names.
+    pub agent_nickname_mode: AgentNicknameMode,
+    /// User-provided agent nicknames from `[agents].nicknames`.
+    pub agent_nicknames: Vec<String>,
 
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
@@ -1337,6 +1341,14 @@ pub struct ToolsToml {
     pub view_image: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentNicknameMode {
+    #[default]
+    Append,
+    Replace,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AgentsToml {
@@ -1351,6 +1363,12 @@ pub struct AgentsToml {
     /// Default maximum runtime in seconds for agent job workers.
     #[schemars(range(min = 1))]
     pub job_max_runtime_seconds: Option<u64>,
+    /// How `nicknames` should apply to the built-in nickname list.
+    pub nickname_mode: Option<AgentNicknameMode>,
+    /// Comma-separated custom nicknames for spawned sub-agents.
+    ///
+    /// Example: `nicknames = "Atlas, Nova, Vega"`
+    pub nicknames: Option<String>,
 
     /// User-defined role declarations keyed by role name.
     ///
@@ -1866,6 +1884,29 @@ impl Config {
             })
             .transpose()?
             .unwrap_or_default();
+        let agent_nickname_mode = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.nickname_mode)
+            .unwrap_or_default();
+        let agent_nicknames = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.nicknames.as_deref())
+            .map(|nicknames| {
+                let mut parsed = Vec::new();
+                for name in nicknames
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                {
+                    if !parsed.iter().any(|existing| existing == name) {
+                        parsed.push(name.to_string());
+                    }
+                }
+                parsed
+            })
+            .unwrap_or_default();
         let agent_job_max_runtime_seconds = cfg
             .agents
             .as_ref()
@@ -2130,6 +2171,8 @@ impl Config {
             agent_max_threads,
             agent_max_depth,
             agent_roles,
+            agent_nickname_mode,
+            agent_nicknames,
             memories: cfg.memories.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
             codex_home,
@@ -4561,6 +4604,8 @@ model = "gpt-5.1-codex"
                 max_threads: None,
                 max_depth: None,
                 job_max_runtime_seconds: None,
+                nickname_mode: None,
+                nicknames: None,
                 roles: BTreeMap::from([(
                     "researcher".to_string(),
                     AgentRoleToml {
@@ -4617,6 +4662,35 @@ config_file = "./agents/researcher.toml"
                 .get("researcher")
                 .and_then(|role| role.config_file.as_ref()),
             Some(&role_config_path)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn load_config_parses_agents_nickname_csv_and_mode() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            agents: Some(AgentsToml {
+                max_threads: None,
+                max_depth: None,
+                job_max_runtime_seconds: None,
+                nickname_mode: Some(AgentNicknameMode::Replace),
+                nicknames: Some(" Atlas, Nova , ,Atlas, Vega ".to_string()),
+                roles: BTreeMap::new(),
+            }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        assert_eq!(config.agent_nickname_mode, AgentNicknameMode::Replace);
+        assert_eq!(
+            config.agent_nicknames,
+            vec!["Atlas".to_string(), "Nova".to_string(), "Vega".to_string()]
         );
 
         Ok(())
@@ -4833,6 +4907,8 @@ model_verbosity = "high"
                 agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
                 agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
                 agent_roles: BTreeMap::new(),
+                agent_nickname_mode: AgentNicknameMode::Append,
+                agent_nicknames: Vec::new(),
                 memories: MemoriesConfig::default(),
                 agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
                 codex_home: fixture.codex_home(),
@@ -4960,6 +5036,8 @@ model_verbosity = "high"
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
+            agent_nickname_mode: AgentNicknameMode::Append,
+            agent_nicknames: Vec::new(),
             memories: MemoriesConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
@@ -5085,6 +5163,8 @@ model_verbosity = "high"
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
+            agent_nickname_mode: AgentNicknameMode::Append,
+            agent_nicknames: Vec::new(),
             memories: MemoriesConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
@@ -5196,6 +5276,8 @@ model_verbosity = "high"
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
+            agent_nickname_mode: AgentNicknameMode::Append,
+            agent_nicknames: Vec::new(),
             memories: MemoriesConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),

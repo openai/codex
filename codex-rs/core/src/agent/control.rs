@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::agent::guards::Guards;
 use crate::agent::status::is_final;
+use crate::config::AgentNicknameMode;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
@@ -31,12 +32,25 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
 }
 
-fn agent_nickname_list() -> Vec<&'static str> {
-    AGENT_NAMES
+fn agent_nickname_list(config: &crate::config::Config) -> Vec<String> {
+    let mut built_in_names: Vec<String> = AGENT_NAMES
         .lines()
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .collect()
+        .map(str::to_string)
+        .collect();
+
+    if config.agent_nicknames.is_empty() {
+        return built_in_names;
+    }
+
+    match config.agent_nickname_mode {
+        AgentNicknameMode::Replace => config.agent_nicknames.clone(),
+        AgentNicknameMode::Append => {
+            built_in_names.extend(config.agent_nicknames.iter().cloned());
+            built_in_names
+        }
+    }
 }
 
 /// Control-plane handle for multi-agent operations.
@@ -83,6 +97,9 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let agent_nickname_list = agent_nickname_list(&config);
+        let agent_nickname_refs: Vec<&str> =
+            agent_nickname_list.iter().map(String::as_str).collect();
         let session_source = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -90,7 +107,7 @@ impl AgentControl {
                 agent_role,
                 ..
             })) => {
-                let agent_nickname = reservation.reserve_agent_nickname(&agent_nickname_list())?;
+                let agent_nickname = reservation.reserve_agent_nickname(&agent_nickname_refs)?;
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id,
                     depth,
@@ -199,6 +216,9 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let agent_nickname_list = agent_nickname_list(&config);
+        let agent_nickname_refs: Vec<&str> =
+            agent_nickname_list.iter().map(String::as_str).collect();
         let session_source = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -220,7 +240,7 @@ impl AgentControl {
                     .as_deref()
                     .map(|agent_nickname| {
                         reservation.reserve_agent_nickname_with_preference(
-                            &agent_nickname_list(),
+                            &agent_nickname_refs,
                             Some(agent_nickname),
                         )
                     })
@@ -439,6 +459,7 @@ mod tests {
     use crate::CodexThread;
     use crate::ThreadManager;
     use crate::agent::agent_status_from_event;
+    use crate::config::CONFIG_TOML_FILE;
     use crate::config::Config;
     use crate::config::ConfigBuilder;
     use crate::config_loader::LoaderOverrides;
@@ -491,6 +512,42 @@ mod tests {
             text: text.to_string(),
             text_elements: Vec::new(),
         }]
+    }
+
+    #[tokio::test]
+    async fn agent_nickname_list_appends_custom_names() {
+        let (_home, config) = test_config_with_cli_overrides(vec![
+            (
+                "agents.nicknames".to_string(),
+                TomlValue::String("Atlas,Nova".to_string()),
+            ),
+            (
+                "agents.nickname_mode".to_string(),
+                TomlValue::String("append".to_string()),
+            ),
+        ])
+        .await;
+        let nickname_list = agent_nickname_list(&config);
+        assert!(nickname_list.iter().any(|name| name == "Euclid"));
+        assert!(nickname_list.iter().any(|name| name == "Atlas"));
+        assert!(nickname_list.iter().any(|name| name == "Nova"));
+    }
+
+    #[tokio::test]
+    async fn agent_nickname_list_replaces_builtin_names() {
+        let (_home, config) = test_config_with_cli_overrides(vec![
+            (
+                "agents.nicknames".to_string(),
+                TomlValue::String("Atlas,Nova".to_string()),
+            ),
+            (
+                "agents.nickname_mode".to_string(),
+                TomlValue::String("replace".to_string()),
+            ),
+        ])
+        .await;
+        let nickname_list = agent_nickname_list(&config);
+        assert_eq!(nickname_list, vec!["Atlas".to_string(), "Nova".to_string()]);
     }
 
     struct AgentControlHarness {
@@ -1440,5 +1497,69 @@ mod tests {
             .shutdown_agent(resumed_thread_id)
             .await
             .expect("resumed child shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn spawn_thread_subagent_uses_replaced_custom_nickname_pool() {
+        let home = TempDir::new().expect("create temp dir");
+        tokio::fs::write(
+            home.path().join(CONFIG_TOML_FILE),
+            r#"
+[agents]
+nickname_mode = "replace"
+nicknames = "Atlas, Nova"
+"#,
+        )
+        .await
+        .expect("write config");
+
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .build()
+            .await
+            .expect("load config");
+
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        );
+        let control = manager.agent_control();
+        let harness = AgentControlHarness {
+            _home: home,
+            config,
+            manager,
+            control,
+        };
+        let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+
+        let child_thread_id = harness
+            .control
+            .spawn_agent(
+                harness.config.clone(),
+                text_input("hello child"),
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth: 1,
+                    agent_nickname: None,
+                    agent_role: Some("explorer".to_string()),
+                })),
+            )
+            .await
+            .expect("child spawn should succeed");
+
+        let child_thread = harness
+            .manager
+            .get_thread(child_thread_id)
+            .await
+            .expect("child thread should be registered");
+        let nickname = child_thread
+            .config_snapshot()
+            .await
+            .session_source
+            .get_nickname()
+            .expect("nickname should be assigned");
+        assert!(nickname == "Atlas" || nickname == "Nova");
     }
 }

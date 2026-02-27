@@ -6,6 +6,13 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AgentNicknameMode": {
+      "enum": [
+        "append",
+        "replace"
+      ],
+      "type": "string"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -46,6 +53,18 @@
           "format": "uint",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "nickname_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentNicknameMode"
+            }
+          ],
+          "description": "How `nicknames` should apply to the built-in nickname list."
+        },
+        "nicknames": {
+          "description": "Comma-separated custom nicknames for spawned sub-agents.\n\nExample: `nicknames = \"Atlas, Nova, Vega\"`",
+          "type": "string"
         }
       },
       "type": "object"
