@@ -44,6 +44,20 @@ pub(super) struct PendingInteractiveReplayState {
 }
 
 impl PendingInteractiveReplayState {
+    pub(super) fn event_can_change_pending_thread_approvals(event: &Event) -> bool {
+        matches!(
+            &event.msg,
+            EventMsg::ExecApprovalRequest(_)
+                | EventMsg::ApplyPatchApprovalRequest(_)
+                | EventMsg::ElicitationRequest(_)
+                | EventMsg::ExecCommandBegin(_)
+                | EventMsg::PatchApplyBegin(_)
+                | EventMsg::TurnComplete(_)
+                | EventMsg::TurnAborted(_)
+                | EventMsg::ShutdownComplete
+        )
+    }
+
     pub(super) fn op_can_change_state(op: &Op) -> bool {
         matches!(
             op,
@@ -111,11 +125,12 @@ impl PendingInteractiveReplayState {
     pub(super) fn note_event(&mut self, event: &Event) {
         match &event.msg {
             EventMsg::ExecApprovalRequest(ev) => {
-                self.exec_approval_call_ids.insert(ev.call_id.clone());
+                let approval_id = ev.effective_approval_id();
+                self.exec_approval_call_ids.insert(approval_id.clone());
                 self.exec_approval_call_ids_by_turn_id
                     .entry(ev.turn_id.clone())
                     .or_default()
-                    .push(ev.call_id.clone());
+                    .push(approval_id);
             }
             EventMsg::ExecCommandBegin(ev) => {
                 self.exec_approval_call_ids.remove(&ev.call_id);
@@ -173,11 +188,12 @@ impl PendingInteractiveReplayState {
     pub(super) fn note_evicted_event(&mut self, event: &Event) {
         match &event.msg {
             EventMsg::ExecApprovalRequest(ev) => {
-                self.exec_approval_call_ids.remove(&ev.call_id);
+                let approval_id = ev.effective_approval_id();
+                self.exec_approval_call_ids.remove(&approval_id);
                 Self::remove_call_id_from_turn_map_entry(
                     &mut self.exec_approval_call_ids_by_turn_id,
                     &ev.turn_id,
-                    &ev.call_id,
+                    &approval_id,
                 );
             }
             EventMsg::ApplyPatchApprovalRequest(ev) => {
@@ -218,7 +234,9 @@ impl PendingInteractiveReplayState {
 
     pub(super) fn should_replay_snapshot_event(&self, event: &Event) -> bool {
         match &event.msg {
-            EventMsg::ExecApprovalRequest(ev) => self.exec_approval_call_ids.contains(&ev.call_id),
+            EventMsg::ExecApprovalRequest(ev) => self
+                .exec_approval_call_ids
+                .contains(&ev.effective_approval_id()),
             EventMsg::ApplyPatchApprovalRequest(ev) => {
                 self.patch_approval_call_ids.contains(&ev.call_id)
             }
@@ -234,6 +252,12 @@ impl PendingInteractiveReplayState {
             }
             _ => true,
         }
+    }
+
+    pub(super) fn has_pending_thread_approvals(&self) -> bool {
+        !self.exec_approval_call_ids.is_empty()
+            || !self.patch_approval_call_ids.is_empty()
+            || !self.elicitation_requests.is_empty()
     }
 
     fn clear_request_user_input_turn(&mut self, turn_id: &str) {
@@ -362,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_event_snapshot_drops_resolved_exec_approval_after_outbound_approval_call_id() {
+    fn thread_event_snapshot_drops_resolved_exec_approval_after_outbound_approval_id() {
         let mut store = ThreadEventStore::new(8);
         store.push_event(Event {
             id: "ev-1".to_string(),
@@ -378,13 +402,14 @@ mod tests {
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
                     additional_permissions: None,
+                    available_decisions: None,
                     parsed_cmd: Vec::new(),
                 },
             ),
         });
 
         store.note_outbound_op(&Op::ExecApproval {
-            id: "call-1".to_string(),
+            id: "approval-1".to_string(),
             turn_id: Some("turn-1".to_string()),
             decision: codex_protocol::protocol::ReviewDecision::Approved,
         });
@@ -520,6 +545,7 @@ mod tests {
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
                     additional_permissions: None,
+                    available_decisions: None,
                     parsed_cmd: Vec::new(),
                 },
             ),
@@ -577,5 +603,58 @@ mod tests {
             snapshot.events.is_empty(),
             "resolved elicitation prompt should not replay on thread switch"
         );
+    }
+
+    #[test]
+    fn thread_event_store_reports_pending_thread_approvals() {
+        let mut store = ThreadEventStore::new(8);
+        assert_eq!(store.has_pending_thread_approvals(), false);
+
+        store.push_event(Event {
+            id: "ev-1".to_string(),
+            msg: EventMsg::ExecApprovalRequest(
+                codex_protocol::protocol::ExecApprovalRequestEvent {
+                    call_id: "call-1".to_string(),
+                    approval_id: None,
+                    turn_id: "turn-1".to_string(),
+                    command: vec!["echo".to_string(), "hi".to_string()],
+                    cwd: PathBuf::from("/tmp"),
+                    reason: None,
+                    network_approval_context: None,
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
+                    additional_permissions: None,
+                    available_decisions: None,
+                    parsed_cmd: Vec::new(),
+                },
+            ),
+        });
+
+        assert_eq!(store.has_pending_thread_approvals(), true);
+
+        store.note_outbound_op(&Op::ExecApproval {
+            id: "call-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            decision: codex_protocol::protocol::ReviewDecision::Approved,
+        });
+
+        assert_eq!(store.has_pending_thread_approvals(), false);
+    }
+
+    #[test]
+    fn request_user_input_does_not_count_as_pending_thread_approval() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(Event {
+            id: "ev-1".to_string(),
+            msg: EventMsg::RequestUserInput(
+                codex_protocol::request_user_input::RequestUserInputEvent {
+                    call_id: "call-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    questions: Vec::new(),
+                },
+            ),
+        });
+
+        assert_eq!(store.has_pending_thread_approvals(), false);
     }
 }

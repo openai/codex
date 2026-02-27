@@ -32,7 +32,7 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
-use codex_protocol::models::AdditionalPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -47,7 +47,7 @@ pub struct UnifiedExecRequest {
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<AdditionalPermissions>,
+    pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
@@ -58,7 +58,7 @@ pub struct UnifiedExecApprovalKey {
     pub cwd: PathBuf,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<AdditionalPermissions>,
+    pub additional_permissions: Option<PermissionProfile>,
 }
 
 pub struct UnifiedExecRuntime<'a> {
@@ -111,6 +111,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .or_else(|| req.justification.clone());
         Box::pin(async move {
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
+                let available_decisions = None;
                 session
                     .request_command_approval(
                         turn,
@@ -124,6 +125,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                             .proposed_execpolicy_amendment()
                             .cloned(),
                         req.additional_permissions.clone(),
+                        available_decisions,
                     )
                     .await
             })

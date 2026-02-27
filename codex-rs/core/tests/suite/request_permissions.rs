@@ -4,8 +4,8 @@ use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::features::Feature;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::models::AdditionalPermissions;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -13,6 +13,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -31,6 +32,11 @@ use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
+use std::path::Path;
+
+fn absolute_path(path: &Path) -> AbsolutePathBuf {
+    AbsolutePathBuf::try_from(path).expect("absolute path")
+}
 
 struct CommandResult {
     exit_code: Option<i64>,
@@ -79,10 +85,28 @@ fn parse_result(item: &Value) -> CommandResult {
 fn shell_event_with_request_permissions(
     call_id: &str,
     command: &str,
-    additional_permissions: &AdditionalPermissions,
+    additional_permissions: &PermissionProfile,
 ) -> Result<Value> {
     let args = json!({
         "command": command,
+        "timeout_ms": 1_000_u64,
+        "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
+        "additional_permissions": additional_permissions,
+    });
+    let args_str = serde_json::to_string(&args)?;
+    Ok(ev_function_call(call_id, "shell_command", &args_str))
+}
+
+#[cfg(target_os = "macos")]
+fn shell_event_with_raw_request_permissions(
+    call_id: &str,
+    command: &str,
+    workdir: Option<&str>,
+    additional_permissions: Value,
+) -> Result<Value> {
+    let args = json!({
+        "command": command,
+        "workdir": workdir,
         "timeout_ms": 1_000_u64,
         "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
         "additional_permissions": additional_permissions,
@@ -110,7 +134,7 @@ async fn submit_turn(
             sandbox_policy,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -184,9 +208,12 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
     let _ = fs::remove_file(&requested_write);
     let call_id = "request_permissions_skip_approval";
     let command = "touch requested-but-unused.txt";
-    let requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![requested_write.clone()],
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![absolute_path(&requested_write)]),
+        }),
+        ..Default::default()
     };
     let event = shell_event_with_request_permissions(call_id, command, &requested_permissions)?;
 
@@ -240,6 +267,98 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(target_os = "macos")]
+async fn relative_additional_permissions_resolve_against_tool_workdir() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config.features.enable(Feature::RequestPermissions);
+    });
+    let test = builder.build(&server).await?;
+
+    let nested_dir = test.workspace_path("nested");
+    fs::create_dir_all(&nested_dir)?;
+    let requested_write = nested_dir.join("relative-write.txt");
+    let _ = fs::remove_file(&requested_write);
+
+    let call_id = "request_permissions_relative_workdir";
+    let command = "touch relative-write.txt";
+    let expected_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: None,
+            write: Some(vec![absolute_path(&requested_write)]),
+        }),
+        ..Default::default()
+    };
+    let event = shell_event_with_raw_request_permissions(
+        call_id,
+        command,
+        Some("nested"),
+        json!({
+            "file_system": {
+                "write": ["./relative-write.txt"],
+            },
+        }),
+    )?;
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-relative-1"),
+            event,
+            ev_completed("resp-relative-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-relative-1", "done"),
+            ev_completed("resp-relative-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, call_id, approval_policy, sandbox_policy.clone()).await?;
+
+    let approval = expect_exec_approval(&test, command).await;
+    assert_eq!(
+        approval.additional_permissions,
+        Some(expected_permissions.clone())
+    );
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let result = parse_result(&results.single_request().function_call_output(call_id));
+    assert!(
+        result.exit_code.is_none() || result.exit_code == Some(0),
+        "unexpected exit code/output: {:?} {}",
+        result.exit_code,
+        result.stdout
+    );
+    assert!(
+        requested_write.exists(),
+        "touch command should create requested path"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(target_os = "macos")]
 async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -266,9 +385,12 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write()
         "printf {:?} > {:?} && cat {:?}",
         "cwd-widened", unrequested_write, unrequested_write
     );
-    let requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![requested_write.clone()],
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![absolute_path(&requested_write)]),
+        }),
+        ..Default::default()
     };
     let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
@@ -354,9 +476,12 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write()
         "printf {:?} > {:?} && cat {:?}",
         "tmp-widened", tmp_write, tmp_write
     );
-    let requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![requested_write.clone()],
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![absolute_path(&requested_write)]),
+        }),
+        ..Default::default()
     };
     let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
@@ -442,13 +567,21 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
         "printf {:?} > {:?} && cat {:?}",
         "outside-cwd-ok", outside_write, outside_write
     );
-    let requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![outside_dir.path().to_path_buf()],
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![absolute_path(outside_dir.path())]),
+        }),
+        ..Default::default()
     };
-    let normalized_requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![outside_dir.path().canonicalize()?],
+    let normalized_requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![AbsolutePathBuf::try_from(
+                outside_dir.path().canonicalize()?,
+            )?]),
+        }),
+        ..Default::default()
     };
     let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
@@ -530,13 +663,21 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
         "printf {:?} > {:?} && cat {:?}",
         "should-not-write", outside_write, outside_write
     );
-    let requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![outside_dir.path().to_path_buf()],
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![absolute_path(outside_dir.path())]),
+        }),
+        ..Default::default()
     };
-    let normalized_requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![outside_dir.path().canonicalize()?],
+    let normalized_requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![AbsolutePathBuf::try_from(
+                outside_dir.path().canonicalize()?,
+            )?]),
+        }),
+        ..Default::default()
     };
     let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 

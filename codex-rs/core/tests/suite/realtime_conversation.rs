@@ -715,6 +715,7 @@ async fn inbound_realtime_text_ignores_user_role_and_still_forwards_audio() -> R
 async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_audio() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
+    let start = std::time::Instant::now();
 
     let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
     let first_chunks = vec![
@@ -806,18 +807,45 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
         _ => None,
     })
     .await;
+    eprintln!(
+        "[realtime test +{}ms] saw trigger text={:?}",
+        start.elapsed().as_millis(),
+        "delegate now"
+    );
 
-    let audio_out = tokio::time::timeout(
-        Duration::from_millis(500),
-        wait_for_event_match(&test.codex, |msg| match msg {
-            EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-                payload: RealtimeEvent::AudioOut(frame),
-            }) => Some(frame.clone()),
-            _ => None,
-        }),
-    )
-    .await
-    .expect("timed out waiting for realtime audio after echoed user-role message");
+    let mirrored_request = realtime_server.wait_for_request(0, 1).await;
+    let mirrored_request_body = mirrored_request.body_json();
+    eprintln!(
+        "[realtime test +{}ms] saw mirrored request type={:?} role={:?} text={:?} data={:?}",
+        start.elapsed().as_millis(),
+        mirrored_request_body["type"].as_str(),
+        mirrored_request_body["item"]["role"].as_str(),
+        mirrored_request_body["item"]["content"][0]["text"].as_str(),
+        mirrored_request_body["item"]["content"][0]["data"].as_str(),
+    );
+    assert_eq!(
+        mirrored_request_body["type"].as_str(),
+        Some("conversation.item.create")
+    );
+    assert_eq!(
+        mirrored_request_body["item"]["content"][0]["text"].as_str(),
+        Some("assistant says hi")
+    );
+
+    let audio_out = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::AudioOut(frame),
+        }) => Some(frame.clone()),
+        _ => None,
+    })
+    .await;
+    eprintln!(
+        "[realtime test +{}ms] saw audio out data={} sample_rate={} num_channels={}",
+        start.elapsed().as_millis(),
+        audio_out.data,
+        audio_out.sample_rate,
+        audio_out.num_channels
+    );
     assert_eq!(audio_out.data, "AQID");
 
     let completion = completions
@@ -828,6 +856,10 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
     completion
         .await
         .expect("delegated turn request did not complete");
+    eprintln!(
+        "[realtime test +{}ms] delegated completion resolved",
+        start.elapsed().as_millis()
+    );
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })

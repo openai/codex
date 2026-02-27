@@ -3,8 +3,8 @@
 
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
-use std::path::PathBuf;
 
+use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_utils_cli::CliConfigOverrides;
 
@@ -49,7 +49,7 @@ const CHANNEL_CAPACITY: usize = 128;
 type IncomingMessage = JsonRpcMessage<ClientRequest, Value, ClientNotification>;
 
 pub async fn run_main(
-    codex_linux_sandbox_exe: Option<PathBuf>,
+    arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
 ) -> IoResult<()> {
     // Install a simple subscriber so `tracing` output is visible.  Users can
@@ -105,7 +105,7 @@ pub async fn run_main(
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
         let mut processor = MessageProcessor::new(
             outgoing_message_sender,
-            codex_linux_sandbox_exe,
+            arg0_paths,
             std::sync::Arc::new(config),
         );
         async move {

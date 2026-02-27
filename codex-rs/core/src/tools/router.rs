@@ -175,7 +175,6 @@ impl ToolRouter {
             call_id,
             tool_name,
             payload,
-            source,
         };
 
         match self.registry.dispatch(invocation).await {
@@ -198,7 +197,10 @@ impl ToolRouter {
         if payload_outputs_custom {
             ResponseInputItem::CustomToolCallOutput {
                 call_id,
-                output: message,
+                output: codex_protocol::models::FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::Text(message),
+                    success: Some(false),
+                },
             }
         } else {
             ResponseInputItem::FunctionCallOutput {

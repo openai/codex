@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use codex_core::config::ProjectConfig;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -65,7 +64,7 @@ async fn submit_skill_turn(test: &TestCodex, skill_path: PathBuf, prompt: &str) 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

@@ -1,6 +1,5 @@
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -161,7 +160,7 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

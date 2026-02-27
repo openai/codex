@@ -1,6 +1,7 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -48,6 +49,7 @@ use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -349,6 +351,15 @@ impl ThreadEventStore {
 
     fn op_can_change_pending_replay_state(op: &Op) -> bool {
         PendingInteractiveReplayState::op_can_change_state(op)
+    }
+
+    fn event_can_change_pending_thread_approvals(event: &Event) -> bool {
+        PendingInteractiveReplayState::event_can_change_pending_thread_approvals(event)
+    }
+
+    fn has_pending_thread_approvals(&self) -> bool {
+        self.pending_interactive_replay
+            .has_pending_thread_approvals()
     }
 }
 
@@ -850,6 +861,7 @@ impl App {
         };
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = receiver;
+        self.refresh_pending_thread_approvals().await;
     }
 
     async fn store_active_thread_receiver(&mut self) {
@@ -883,6 +895,7 @@ impl App {
             self.set_thread_active(active_id, false).await;
         }
         self.active_thread_rx = None;
+        self.refresh_pending_thread_approvals().await;
     }
 
     async fn note_active_thread_outbound_op(&mut self, op: &Op) {
@@ -899,7 +912,63 @@ impl App {
         store.note_outbound_op(op);
     }
 
+    async fn refresh_pending_thread_approvals(&mut self) {
+        let channels: Vec<(ThreadId, Arc<Mutex<ThreadEventStore>>)> = self
+            .thread_event_channels
+            .iter()
+            .map(|(thread_id, channel)| (*thread_id, Arc::clone(&channel.store)))
+            .collect();
+
+        let mut pending_thread_ids = Vec::new();
+        for (thread_id, store) in channels {
+            if Some(thread_id) == self.active_thread_id {
+                continue;
+            }
+
+            let store = store.lock().await;
+            if store.has_pending_thread_approvals() {
+                pending_thread_ids.push(thread_id);
+            }
+        }
+
+        pending_thread_ids.sort_by_key(ThreadId::to_string);
+
+        let threads = pending_thread_ids
+            .into_iter()
+            .map(|thread_id| {
+                let is_primary = self.primary_thread_id == Some(thread_id);
+                let fallback_label = if is_primary {
+                    "Main [default]".to_string()
+                } else {
+                    let thread_id = thread_id.to_string();
+                    let short_id: String = thread_id.chars().take(8).collect();
+                    format!("Agent ({short_id})")
+                };
+                if let Some(entry) = self.agent_picker_threads.get(&thread_id) {
+                    let label = format_agent_picker_item_name(
+                        entry.agent_nickname.as_deref(),
+                        entry.agent_role.as_deref(),
+                        is_primary,
+                    );
+                    if label == "Agent" {
+                        let thread_id = thread_id.to_string();
+                        let short_id: String = thread_id.chars().take(8).collect();
+                        format!("{label} ({short_id})")
+                    } else {
+                        label
+                    }
+                } else {
+                    fallback_label
+                }
+            })
+            .collect();
+
+        self.chat_widget.set_pending_thread_approvals(threads);
+    }
+
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
+        let refresh_pending_thread_approvals =
+            ThreadEventStore::event_can_change_pending_thread_approvals(&event);
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
             (channel.sender.clone(), Arc::clone(&channel.store))
@@ -928,6 +997,9 @@ impl App {
                     tracing::warn!("thread {thread_id} event channel closed");
                 }
             }
+        }
+        if refresh_pending_thread_approvals {
+            self.refresh_pending_thread_approvals().await;
         }
         Ok(())
     }
@@ -1107,6 +1179,7 @@ impl App {
             );
         }
         self.drain_active_thread_events(tui).await?;
+        self.refresh_pending_thread_approvals().await;
 
         Ok(())
     }
@@ -1130,6 +1203,7 @@ impl App {
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.pending_primary_events.clear();
+        self.chat_widget.set_pending_thread_approvals(Vec::new());
     }
 
     async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
@@ -1287,6 +1361,11 @@ impl App {
             auth_manager.clone(),
             SessionSource::Cli,
             config.model_catalog.clone(),
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+            },
         ));
         let mut model = thread_manager
             .get_models_manager()
@@ -1376,12 +1455,16 @@ impl App {
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
-            SessionSelection::Resume(path) => {
+            SessionSelection::Resume(target_session) => {
                 let resumed = thread_manager
-                    .resume_thread_from_rollout(config.clone(), path.clone(), auth_manager.clone())
+                    .resume_thread_from_rollout(
+                        config.clone(),
+                        target_session.path.clone(),
+                        auth_manager.clone(),
+                    )
                     .await
                     .wrap_err_with(|| {
-                        let path_display = path.display();
+                        let path_display = target_session.path.display();
                         format!("Failed to resume session from {path_display}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -1406,13 +1489,18 @@ impl App {
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
-            SessionSelection::Fork(path) => {
+            SessionSelection::Fork(target_session) => {
                 otel_manager.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
                 let forked = thread_manager
-                    .fork_thread(usize::MAX, config.clone(), path.clone(), false)
+                    .fork_thread(
+                        usize::MAX,
+                        config.clone(),
+                        target_session.path.clone(),
+                        false,
+                    )
                     .await
                     .wrap_err_with(|| {
-                        let path_display = path.display();
+                        let path_display = target_session.path.display();
                         format!("Failed to fork session from {path_display}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -1680,12 +1768,14 @@ impl App {
             }
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
-                    SessionSelection::Resume(path) => {
+                    SessionSelection::Resume(target_session) => {
                         let current_cwd = self.config.cwd.clone();
                         let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
                             tui,
+                            &self.config,
                             &current_cwd,
-                            &path,
+                            target_session.thread_id,
+                            &target_session.path,
                             CwdPromptAction::Resume,
                             true,
                         )
@@ -1721,7 +1811,7 @@ impl App {
                             .server
                             .resume_thread_from_rollout(
                                 resume_config.clone(),
-                                path.clone(),
+                                target_session.path.clone(),
                                 self.auth_manager.clone(),
                             )
                             .await
@@ -1755,7 +1845,7 @@ impl App {
                                 }
                             }
                             Err(err) => {
-                                let path_display = path.display();
+                                let path_display = target_session.path.display();
                                 self.chat_widget.add_error_message(format!(
                                     "Failed to resume session from {path_display}: {err}"
                                 ));
@@ -1870,19 +1960,9 @@ impl App {
             AppEvent::CodexEvent(event) => {
                 self.enqueue_primary_event(event).await?;
             }
-            AppEvent::Exit(mode) => match mode {
-                ExitMode::ShutdownFirst => {
-                    // Mark the thread we are explicitly shutting down for exit so
-                    // its shutdown completion does not trigger agent failover.
-                    self.pending_shutdown_exit_thread_id =
-                        self.active_thread_id.or(self.chat_widget.thread_id());
-                    self.chat_widget.submit_op(Op::Shutdown);
-                }
-                ExitMode::Immediate => {
-                    self.pending_shutdown_exit_thread_id = None;
-                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
-                }
-            },
+            AppEvent::Exit(mode) => {
+                return Ok(self.handle_exit_mode(mode));
+            }
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
@@ -1892,6 +1972,7 @@ impl App {
                 let submitted = self.chat_widget.submit_op(op);
                 if submitted && let Some(op) = replay_state_op.as_ref() {
                     self.note_active_thread_outbound_op(op).await;
+                    self.refresh_pending_thread_approvals().await;
                 }
             }
             AppEvent::DiffResult(text) => {
@@ -1962,6 +2043,9 @@ impl App {
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
+            }
+            AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
+                self.chat_widget.open_realtime_audio_device_selection(kind);
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -2388,6 +2472,56 @@ impl App {
                     }
                 }
             }
+            AppEvent::PersistRealtimeAudioDeviceSelection { kind, name } => {
+                let builder = match kind {
+                    RealtimeAudioDeviceKind::Microphone => {
+                        ConfigEditsBuilder::new(&self.config.codex_home)
+                            .set_realtime_microphone(name.as_deref())
+                    }
+                    RealtimeAudioDeviceKind::Speaker => {
+                        ConfigEditsBuilder::new(&self.config.codex_home)
+                            .set_realtime_speaker(name.as_deref())
+                    }
+                };
+
+                match builder.apply().await {
+                    Ok(()) => {
+                        match kind {
+                            RealtimeAudioDeviceKind::Microphone => {
+                                self.config.realtime_audio.microphone = name.clone();
+                            }
+                            RealtimeAudioDeviceKind::Speaker => {
+                                self.config.realtime_audio.speaker = name.clone();
+                            }
+                        }
+                        self.chat_widget
+                            .set_realtime_audio_device(kind, name.clone());
+
+                        if self.chat_widget.realtime_conversation_is_live() {
+                            self.chat_widget.open_realtime_audio_restart_prompt(kind);
+                        } else {
+                            let selection = name.unwrap_or_else(|| "System default".to_string());
+                            self.chat_widget.add_info_message(
+                                format!("Realtime {} set to {selection}", kind.noun()),
+                                None,
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist realtime audio selection"
+                        );
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save realtime {}: {err}",
+                            kind.noun()
+                        ));
+                    }
+                }
+            }
+            AppEvent::RestartRealtimeAudioDevice { kind } => {
+                self.chat_widget.restart_realtime_audio_device(kind);
+            }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.runtime_approval_policy_override = Some(policy);
                 if let Err(err) = self.config.permissions.approval_policy.set(policy) {
@@ -2638,6 +2772,9 @@ impl App {
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker().await;
             }
+            AppEvent::RefreshPendingThreadApprovals => {
+                self.refresh_pending_thread_approvals().await;
+            }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, thread_id).await?;
             }
@@ -2855,6 +2992,27 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
+    fn handle_exit_mode(&mut self, mode: ExitMode) -> AppRunControl {
+        match mode {
+            ExitMode::ShutdownFirst => {
+                // Mark the thread we are explicitly shutting down for exit so
+                // its shutdown completion does not trigger agent failover.
+                self.pending_shutdown_exit_thread_id =
+                    self.active_thread_id.or(self.chat_widget.thread_id());
+                if self.chat_widget.submit_op(Op::Shutdown) {
+                    AppRunControl::Continue
+                } else {
+                    self.pending_shutdown_exit_thread_id = None;
+                    AppRunControl::Exit(ExitReason::UserRequested)
+                }
+            }
+            ExitMode::Immediate => {
+                self.pending_shutdown_exit_thread_id = None;
+                AppRunControl::Exit(ExitReason::UserRequested)
+            }
+        }
+    }
+
     fn handle_codex_event_now(&mut self, event: Event) {
         let needs_refresh = matches!(
             event.msg,
@@ -3026,6 +3184,7 @@ impl App {
             ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
         let sender = channel.sender.clone();
         let store = Arc::clone(&channel.store);
+        let app_event_tx = self.app_event_tx.clone();
         self.thread_event_channels.insert(thread_id, channel);
         tokio::spawn(async move {
             loop {
@@ -3036,11 +3195,16 @@ impl App {
                         break;
                     }
                 };
+                let refresh_pending_thread_approvals =
+                    ThreadEventStore::event_can_change_pending_thread_approvals(&event);
                 let should_send = {
                     let mut guard = store.lock().await;
                     guard.push_event(event.clone());
                     guard.active
                 };
+                if refresh_pending_thread_approvals {
+                    app_event_tx.send(AppEvent::RefreshPendingThreadApprovals);
+                }
                 if should_send && let Err(err) = sender.send(event).await {
                     tracing::debug!("external thread {thread_id} channel closed: {err}");
                     break;
@@ -3373,15 +3537,21 @@ mod tests {
             true
         );
         assert_eq!(
-            App::should_wait_for_initial_session(&SessionSelection::Resume(PathBuf::from(
-                "/tmp/restore"
-            ))),
+            App::should_wait_for_initial_session(&SessionSelection::Resume(
+                crate::resume_picker::SessionTarget {
+                    path: PathBuf::from("/tmp/restore"),
+                    thread_id: ThreadId::new(),
+                }
+            )),
             false
         );
         assert_eq!(
-            App::should_wait_for_initial_session(&SessionSelection::Fork(PathBuf::from(
-                "/tmp/fork"
-            ))),
+            App::should_wait_for_initial_session(&SessionSelection::Fork(
+                crate::resume_picker::SessionTarget {
+                    path: PathBuf::from("/tmp/fork"),
+                    thread_id: ThreadId::new(),
+                }
+            )),
             false
         );
     }
@@ -3417,14 +3587,20 @@ mod tests {
     #[test]
     fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
         let wait_for_resume = App::should_wait_for_initial_session(&SessionSelection::Resume(
-            PathBuf::from("/tmp/restore"),
+            crate::resume_picker::SessionTarget {
+                path: PathBuf::from("/tmp/restore"),
+                thread_id: ThreadId::new(),
+            },
         ));
         assert_eq!(
             App::should_handle_active_thread_events(wait_for_resume, true),
             true
         );
         let wait_for_fork = App::should_wait_for_initial_session(&SessionSelection::Fork(
-            PathBuf::from("/tmp/fork"),
+            crate::resume_picker::SessionTarget {
+                path: PathBuf::from("/tmp/fork"),
+                thread_id: ThreadId::new(),
+            },
         ));
         assert_eq!(
             App::should_handle_active_thread_events(wait_for_fork, true),
@@ -3521,6 +3697,64 @@ mod tests {
             })
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_pending_thread_approvals_only_lists_inactive_threads() {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread");
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels
+            .insert(main_thread_id, ThreadEventChannel::new(1));
+
+        let agent_channel = ThreadEventChannel::new(1);
+        {
+            let mut store = agent_channel.store.lock().await;
+            store.push_event(Event {
+                id: "ev-1".to_string(),
+                msg: EventMsg::ExecApprovalRequest(
+                    codex_protocol::protocol::ExecApprovalRequestEvent {
+                        call_id: "call-1".to_string(),
+                        approval_id: None,
+                        turn_id: "turn-1".to_string(),
+                        command: vec!["echo".to_string(), "hi".to_string()],
+                        cwd: PathBuf::from("/tmp"),
+                        reason: None,
+                        network_approval_context: None,
+                        proposed_execpolicy_amendment: None,
+                        proposed_network_policy_amendments: None,
+                        additional_permissions: None,
+                        available_decisions: None,
+                        parsed_cmd: Vec::new(),
+                    },
+                ),
+            });
+        }
+        app.thread_event_channels
+            .insert(agent_thread_id, agent_channel);
+        app.agent_picker_threads.insert(
+            agent_thread_id,
+            AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                is_closed: false,
+            },
+        );
+
+        app.refresh_pending_thread_approvals().await;
+        assert_eq!(
+            app.chat_widget.pending_thread_approvals(),
+            &["Robie [explorer]".to_string()]
+        );
+
+        app.active_thread_id = Some(agent_thread_id);
+        app.refresh_pending_thread_approvals().await;
+        assert!(app.chat_widget.pending_thread_approvals().is_empty());
     }
 
     #[test]
@@ -4625,6 +4859,34 @@ mod tests {
             Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
             Err(_) => panic!("expected shutdown op to be sent"),
         }
+    }
+
+    #[tokio::test]
+    async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+
+        let control = app.handle_exit_mode(ExitMode::ShutdownFirst);
+
+        assert_eq!(app.pending_shutdown_exit_thread_id, None);
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+    }
+
+    #[tokio::test]
+    async fn shutdown_first_exit_waits_for_shutdown_when_submit_succeeds() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+
+        let control = app.handle_exit_mode(ExitMode::ShutdownFirst);
+
+        assert_eq!(app.pending_shutdown_exit_thread_id, Some(thread_id));
+        assert!(matches!(control, AppRunControl::Continue));
+        assert_eq!(op_rx.try_recv(), Ok(Op::Shutdown));
     }
 
     #[tokio::test]

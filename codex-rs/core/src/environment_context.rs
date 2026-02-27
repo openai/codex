@@ -1,9 +1,7 @@
 use crate::codex::TurnContext;
+use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::shell::Shell;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use serde::Deserialize;
@@ -15,7 +13,10 @@ use std::path::PathBuf;
 pub(crate) struct EnvironmentContext {
     pub cwd: Option<PathBuf>,
     pub shell: Shell,
+    pub current_date: Option<String>,
+    pub timezone: Option<String>,
     pub network: Option<NetworkContext>,
+    pub subagents: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -25,11 +26,21 @@ pub(crate) struct NetworkContext {
 }
 
 impl EnvironmentContext {
-    pub fn new(cwd: Option<PathBuf>, shell: Shell, network: Option<NetworkContext>) -> Self {
+    pub fn new(
+        cwd: Option<PathBuf>,
+        shell: Shell,
+        current_date: Option<String>,
+        timezone: Option<String>,
+        network: Option<NetworkContext>,
+        subagents: Option<String>,
+    ) -> Self {
         Self {
             cwd,
             shell,
+            current_date,
+            timezone,
             network,
+            subagents,
         }
     }
 
@@ -39,11 +50,17 @@ impl EnvironmentContext {
     pub fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
         let EnvironmentContext {
             cwd,
+            current_date,
+            timezone,
             network,
-            // should compare all fields except shell
+            subagents,
             shell: _,
         } = other;
-        self.cwd == *cwd && self.network == *network
+        self.cwd == *cwd
+            && self.current_date == *current_date
+            && self.timezone == *timezone
+            && self.network == *network
+            && self.subagents == *subagents
     }
 
     pub fn diff_from_turn_context_item(
@@ -58,19 +75,24 @@ impl EnvironmentContext {
         } else {
             None
         };
+        let current_date = after.current_date.clone();
+        let timezone = after.timezone.clone();
         let network = if before_network != after_network {
             after_network
         } else {
             before_network
         };
-        EnvironmentContext::new(cwd, shell.clone(), network)
+        EnvironmentContext::new(cwd, shell.clone(), current_date, timezone, network, None)
     }
 
     pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
             Some(turn_context.cwd.clone()),
             shell.clone(),
+            turn_context.current_date.clone(),
+            turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
+            None,
         )
     }
 
@@ -78,8 +100,18 @@ impl EnvironmentContext {
         Self::new(
             Some(turn_context_item.cwd.clone()),
             shell.clone(),
+            turn_context_item.current_date.clone(),
+            turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
+            None,
         )
+    }
+
+    pub fn with_subagents(mut self, subagents: String) -> Self {
+        if !subagents.is_empty() {
+            self.subagents = Some(subagents);
+        }
+        self
     }
 
     fn network_from_turn_context(turn_context: &TurnContext) -> Option<NetworkContext> {
@@ -122,13 +154,19 @@ impl EnvironmentContext {
     /// </environment_context>
     /// ```
     pub fn serialize_to_xml(self) -> String {
-        let mut lines = vec![ENVIRONMENT_CONTEXT_OPEN_TAG.to_string()];
+        let mut lines = Vec::new();
         if let Some(cwd) = self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
         }
 
         let shell_name = self.shell.name();
         lines.push(format!("  <shell>{shell_name}</shell>"));
+        if let Some(current_date) = self.current_date {
+            lines.push(format!("  <current_date>{current_date}</current_date>"));
+        }
+        if let Some(timezone) = self.timezone {
+            lines.push(format!("  <timezone>{timezone}</timezone>"));
+        }
         match self.network {
             Some(ref network) => {
                 lines.push("  <network enabled=\"true\">".to_string());
@@ -145,22 +183,18 @@ impl EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
-        lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
-        lines.join("\n")
+        if let Some(subagents) = self.subagents {
+            lines.push("  <subagents>".to_string());
+            lines.extend(subagents.lines().map(|line| format!("    {line}")));
+            lines.push("  </subagents>".to_string());
+        }
+        ENVIRONMENT_CONTEXT_FRAGMENT.wrap(lines.join("\n"))
     }
 }
 
 impl From<EnvironmentContext> for ResponseItem {
     fn from(ec: EnvironmentContext) -> Self {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: ec.serialize_to_xml(),
-            }],
-            end_turn: None,
-            phase: None,
-        }
+        ENVIRONMENT_CONTEXT_FRAGMENT.into_message(ec.serialize_to_xml())
     }
 }
 
@@ -183,12 +217,21 @@ mod tests {
     #[test]
     fn serialize_workspace_write_environment_context() {
         let cwd = test_path_buf("/repo");
-        let context = EnvironmentContext::new(Some(cwd.clone()), fake_shell(), None);
+        let context = EnvironmentContext::new(
+            Some(cwd.clone()),
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+            None,
+        );
 
         let expected = format!(
             r#"<environment_context>
   <cwd>{cwd}</cwd>
   <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
 </environment_context>"#,
             cwd = cwd.display(),
         );
@@ -202,13 +245,21 @@ mod tests {
             allowed_domains: vec!["api.example.com".to_string(), "*.openai.com".to_string()],
             denied_domains: vec!["blocked.example.com".to_string()],
         };
-        let context =
-            EnvironmentContext::new(Some(test_path_buf("/repo")), fake_shell(), Some(network));
+        let context = EnvironmentContext::new(
+            Some(test_path_buf("/repo")),
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            Some(network),
+            None,
+        );
 
         let expected = format!(
             r#"<environment_context>
   <cwd>{}</cwd>
   <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
   <network enabled="true">
     <allowed>api.example.com</allowed>
     <allowed>*.openai.com</allowed>
@@ -223,10 +274,19 @@ mod tests {
 
     #[test]
     fn serialize_read_only_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(
+            None,
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+            None,
+        );
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
         assert_eq!(context.serialize_to_xml(), expected);
@@ -234,10 +294,19 @@ mod tests {
 
     #[test]
     fn serialize_external_sandbox_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(
+            None,
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+            None,
+        );
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
         assert_eq!(context.serialize_to_xml(), expected);
@@ -245,10 +314,19 @@ mod tests {
 
     #[test]
     fn serialize_external_sandbox_with_restricted_network_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(
+            None,
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+            None,
+        );
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
         assert_eq!(context.serialize_to_xml(), expected);
@@ -256,10 +334,19 @@ mod tests {
 
     #[test]
     fn serialize_full_access_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(
+            None,
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+            None,
+        );
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
         assert_eq!(context.serialize_to_xml(), expected);
@@ -267,23 +354,65 @@ mod tests {
 
     #[test]
     fn equals_except_shell_compares_cwd() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            None,
+            None,
+            None,
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(context1.equals_except_shell(&context2));
     }
 
     #[test]
     fn equals_except_shell_ignores_sandbox_policy() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            None,
+            None,
+            None,
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            None,
+            None,
+            None,
+        );
 
         assert!(context1.equals_except_shell(&context2));
     }
 
     #[test]
     fn equals_except_shell_compares_cwd_differences() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo1")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo2")), fake_shell(), None);
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo1")),
+            fake_shell(),
+            None,
+            None,
+            None,
+            None,
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo2")),
+            fake_shell(),
+            None,
+            None,
+            None,
+            None,
+        );
 
         assert!(!context1.equals_except_shell(&context2));
     }
@@ -298,6 +427,9 @@ mod tests {
                 shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
             },
             None,
+            None,
+            None,
+            None,
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
@@ -307,8 +439,39 @@ mod tests {
                 shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
             },
             None,
+            None,
+            None,
+            None,
         );
 
         assert!(context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn serialize_environment_context_with_subagents() {
+        let context = EnvironmentContext::new(
+            Some(test_path_buf("/repo")),
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+            Some("- agent-1: atlas\n- agent-2".to_string()),
+        );
+
+        let expected = format!(
+            r#"<environment_context>
+  <cwd>{}</cwd>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+  <subagents>
+    - agent-1: atlas
+    - agent-2
+  </subagents>
+</environment_context>"#,
+            test_path_buf("/repo").display()
+        );
+
+        assert_eq!(context.serialize_to_xml(), expected);
     }
 }

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 
 use codex_utils_image::load_and_resize_to_fit;
 use serde::Deserialize;
@@ -20,6 +19,7 @@ use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
 use codex_execpolicy::Policy;
 use codex_git::GhostCommit;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
@@ -53,16 +53,94 @@ impl SandboxPermissions {
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
-pub struct AdditionalPermissions {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fs_read: Vec<PathBuf>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fs_write: Vec<PathBuf>,
+pub struct FileSystemPermissions {
+    pub read: Option<Vec<AbsolutePathBuf>>,
+    pub write: Option<Vec<AbsolutePathBuf>>,
 }
 
-impl AdditionalPermissions {
+impl FileSystemPermissions {
     pub fn is_empty(&self) -> bool {
-        self.fs_read.is_empty() && self.fs_write.is_empty()
+        self.read.is_none() && self.write.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct MacOsPermissions {
+    pub preferences: Option<MacOsPreferencesValue>,
+    pub automations: Option<MacOsAutomationValue>,
+    pub accessibility: Option<bool>,
+    pub calendar: Option<bool>,
+}
+
+impl MacOsPermissions {
+    pub fn is_empty(&self) -> bool {
+        self.preferences.is_none()
+            && self.automations.is_none()
+            && self.accessibility.is_none()
+            && self.calendar.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum MacOsPreferencesValue {
+    Bool(bool),
+    Mode(String),
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum MacOsAutomationValue {
+    Bool(bool),
+    BundleIds(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum MacOsPreferencesPermission {
+    // IMPORTANT: ReadOnly needs to be the default because it's the
+    // security-sensitive default and keeps cf prefs working.
+    #[default]
+    ReadOnly,
+    ReadWrite,
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum MacOsAutomationPermission {
+    #[default]
+    None,
+    All,
+    BundleIds(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MacOsSeatbeltProfileExtensions {
+    pub macos_preferences: MacOsPreferencesPermission,
+    pub macos_automation: MacOsAutomationPermission,
+    pub macos_accessibility: bool,
+    pub macos_calendar: bool,
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct PermissionProfile {
+    pub network: Option<bool>,
+    pub file_system: Option<FileSystemPermissions>,
+    pub macos: Option<MacOsPermissions>,
+}
+
+impl PermissionProfile {
+    pub fn is_empty(&self) -> bool {
+        self.network.is_none()
+            && self
+                .file_system
+                .as_ref()
+                .map(FileSystemPermissions::is_empty)
+                .unwrap_or(true)
+            && self
+                .macos
+                .as_ref()
+                .map(MacOsPermissions::is_empty)
+                .unwrap_or(true)
     }
 }
 
@@ -83,7 +161,7 @@ pub enum ResponseInputItem {
     },
     CustomToolCallOutput {
         call_id: String,
-        output: String,
+        output: FunctionCallOutputPayload,
     },
 }
 
@@ -183,9 +261,12 @@ pub enum ResponseItem {
         name: String,
         input: String,
     },
+    // `custom_tool_call_output.output` uses the same wire encoding as
+    // `function_call_output.output` so freeform tools can return either plain
+    // text or structured content items.
     CustomToolCallOutput {
         call_id: String,
-        output: String,
+        output: FunctionCallOutputPayload,
     },
     // Emitted by the Responses API when the agent triggers a web search.
     // Example payload (from SSE `response.output_item.done`):
@@ -800,7 +881,7 @@ pub struct ShellToolCallParams {
     pub prefix_rule: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub additional_permissions: Option<AdditionalPermissions>,
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -826,7 +907,7 @@ pub struct ShellCommandToolCallParams {
     pub prefix_rule: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub additional_permissions: Option<AdditionalPermissions>,
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -1449,6 +1530,26 @@ mod tests {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
             output: payload,
+        };
+
+        let json = serde_json::to_string(&item)?;
+        let v: serde_json::Value = serde_json::from_str(&json)?;
+
+        let output = v.get("output").expect("output field");
+        assert!(output.is_array(), "expected array output");
+
+        Ok(())
+    }
+
+    #[test]
+    fn serializes_custom_tool_image_outputs_as_array() -> Result<()> {
+        let item = ResponseInputItem::CustomToolCallOutput {
+            call_id: "call1".into(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,BASE64".into(),
+                },
+            ]),
         };
 
         let json = serde_json::to_string(&item)?;

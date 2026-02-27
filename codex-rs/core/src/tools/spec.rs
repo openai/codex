@@ -6,6 +6,7 @@ use crate::config::AgentRoleConfig;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
+use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
@@ -54,7 +55,7 @@ pub(crate) struct ToolsConfig {
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
-    pub collaboration_modes_tools: bool,
+    pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
@@ -80,7 +81,8 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
-        let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
+        let include_default_mode_request_user_input =
+            features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
         let include_agent_jobs = include_collab_tools && features.enabled(Feature::Sqlite);
         let request_permission_enabled = features.enabled(Feature::RequestPermissions);
@@ -137,7 +139,7 @@ impl ToolsConfig {
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
-            collaboration_modes_tools: include_collaboration_modes_tools,
+            default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
@@ -256,29 +258,36 @@ fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<Stri
         properties.insert(
             "additional_permissions".to_string(),
             JsonSchema::Object {
-                properties: BTreeMap::from([
-                    (
-                        "fs_read".to_string(),
-                        JsonSchema::Array {
-                            items: Box::new(JsonSchema::String { description: None }),
-                            description: Some(
-                                "Additional filesystem paths to grant read access for this command."
-                                    .to_string(),
+                properties: BTreeMap::from([(
+                    "file_system".to_string(),
+                    JsonSchema::Object {
+                        properties: BTreeMap::from([
+                            (
+                                "read".to_string(),
+                                JsonSchema::Array {
+                                    items: Box::new(JsonSchema::String { description: None }),
+                                    description: Some(
+                                        "Additional filesystem paths to grant read access for this command."
+                                            .to_string(),
+                                    ),
+                                },
                             ),
-                        },
-                    ),
-                    (
-                        "fs_write".to_string(),
-                        JsonSchema::Array {
-                            items: Box::new(JsonSchema::String { description: None }),
-                            description: Some(
-                                "Additional filesystem paths to grant write access for this command."
-                                    .to_string(),
+                            (
+                                "write".to_string(),
+                                JsonSchema::Array {
+                                    items: Box::new(JsonSchema::String { description: None }),
+                                    description: Some(
+                                        "Additional filesystem paths to grant write access for this command."
+                                            .to_string(),
+                                    ),
+                                },
                             ),
-                        },
-                    ),
-                ]),
-                required: None,
+                        ]),
+                        required: None,
+                        additional_properties: Some(false.into()),
+                    },
+                )]),
+                required: Some(vec!["file_system".to_string()]),
                 additional_properties: Some(false.into()),
             },
         );
@@ -624,6 +633,15 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
                 )),
             },
         ),
+        (
+            "fork_context".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you."
+                        .to_string(),
+                ),
+            },
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
@@ -865,7 +883,9 @@ fn create_wait_tool() -> ToolSpec {
     })
 }
 
-fn create_request_user_input_tool() -> ToolSpec {
+fn create_request_user_input_tool(
+    collaboration_modes_config: CollaborationModesConfig,
+) -> ToolSpec {
     let mut option_props = BTreeMap::new();
     option_props.insert(
         "label".to_string(),
@@ -936,7 +956,9 @@ fn create_request_user_input_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "request_user_input".to_string(),
-        description: request_user_input_tool_description(),
+        description: request_user_input_tool_description(
+            collaboration_modes_config.default_mode_request_user_input,
+        ),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1657,7 +1679,9 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
-    let request_user_input_handler = Arc::new(RequestUserInputHandler);
+    let request_user_input_handler = Arc::new(RequestUserInputHandler {
+        default_mode_request_user_input: config.default_mode_request_user_input,
+    });
     let search_tool_handler = Arc::new(SearchToolBm25Handler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
@@ -1720,10 +1744,10 @@ pub(crate) fn build_specs(
         builder.register_handler("js_repl_reset", js_repl_reset_handler);
     }
 
-    if config.collaboration_modes_tools {
-        builder.push_spec(create_request_user_input_tool());
-        builder.register_handler("request_user_input", request_user_input_handler);
-    }
+    builder.push_spec(create_request_user_input_tool(CollaborationModesConfig {
+        default_mode_request_user_input: config.default_mode_request_user_input,
+    }));
+    builder.register_handler("request_user_input", request_user_input_handler);
 
     if config.search_tool
         && let Some(app_tools) = app_tools
@@ -2017,7 +2041,6 @@ mod tests {
         let model_info = model_info_from_models_json("gpt-5-codex");
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
-        features.enable(Feature::CollaborationModes);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2048,7 +2071,7 @@ mod tests {
             create_exec_command_tool(true, false),
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
-            create_request_user_input_tool(),
+            create_request_user_input_tool(CollaborationModesConfig::default()),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
@@ -2080,8 +2103,6 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Collab);
-        features.enable(Feature::CollaborationModes);
-        features.enable(Feature::Sqlite);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2108,7 +2129,6 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Collab);
-        features.enable(Feature::CollaborationModes);
         features.enable(Feature::Sqlite);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -2134,12 +2154,11 @@ mod tests {
     }
 
     #[test]
-    fn request_user_input_requires_collaboration_modes_feature() {
+    fn request_user_input_description_reflects_default_mode_feature_flag() {
         let config = test_config();
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
-        features.disable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2147,12 +2166,13 @@ mod tests {
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-        assert!(
-            !tools.iter().any(|t| t.spec.name() == "request_user_input"),
-            "request_user_input should be disabled when collaboration_modes feature is off"
+        let request_user_input_tool = find_tool(&tools, "request_user_input");
+        assert_eq!(
+            request_user_input_tool.spec,
+            create_request_user_input_tool(CollaborationModesConfig::default())
         );
 
-        features.enable(Feature::CollaborationModes);
+        features.enable(Feature::DefaultModeRequestUserInput);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2160,7 +2180,13 @@ mod tests {
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-        assert_contains_tool_names(&tools, &["request_user_input"]);
+        let request_user_input_tool = find_tool(&tools, "request_user_input");
+        assert_eq!(
+            request_user_input_tool.spec,
+            create_request_user_input_tool(CollaborationModesConfig {
+                default_mode_request_user_input: true,
+            })
+        );
     }
 
     #[test]
@@ -2328,8 +2354,7 @@ mod tests {
         let config = test_config();
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.enable(Feature::CollaborationModes);
+        let features = Features::with_defaults();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2352,8 +2377,7 @@ mod tests {
         let config = test_config();
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.enable(Feature::CollaborationModes);
+        let features = Features::with_defaults();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2374,8 +2398,7 @@ mod tests {
 
     #[test]
     fn test_build_specs_gpt5_codex_default() {
-        let mut features = Features::with_defaults();
-        features.enable(Feature::CollaborationModes);
+        let features = Features::with_defaults();
         assert_default_model_tools(
             "gpt-5-codex",
             &features,
@@ -2393,8 +2416,7 @@ mod tests {
 
     #[test]
     fn test_build_specs_gpt51_codex_default() {
-        let mut features = Features::with_defaults();
-        features.enable(Feature::CollaborationModes);
+        let features = Features::with_defaults();
         assert_default_model_tools(
             "gpt-5.1-codex",
             &features,
@@ -2414,7 +2436,6 @@ mod tests {
     fn test_build_specs_gpt5_codex_unified_exec_web_search() {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
-        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5-codex",
             &features,
@@ -2435,7 +2456,6 @@ mod tests {
     fn test_build_specs_gpt51_codex_unified_exec_web_search() {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
-        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5.1-codex",
             &features,
@@ -2454,8 +2474,7 @@ mod tests {
 
     #[test]
     fn test_gpt_5_1_codex_max_defaults() {
-        let mut features = Features::with_defaults();
-        features.enable(Feature::CollaborationModes);
+        let features = Features::with_defaults();
         assert_default_model_tools(
             "gpt-5.1-codex-max",
             &features,
@@ -2473,8 +2492,7 @@ mod tests {
 
     #[test]
     fn test_codex_5_1_mini_defaults() {
-        let mut features = Features::with_defaults();
-        features.enable(Feature::CollaborationModes);
+        let features = Features::with_defaults();
         assert_default_model_tools(
             "gpt-5.1-codex-mini",
             &features,
@@ -2492,8 +2510,7 @@ mod tests {
 
     #[test]
     fn test_gpt_5_defaults() {
-        let mut features = Features::with_defaults();
-        features.enable(Feature::CollaborationModes);
+        let features = Features::with_defaults();
         assert_default_model_tools(
             "gpt-5",
             &features,
@@ -2510,8 +2527,7 @@ mod tests {
 
     #[test]
     fn test_gpt_5_1_defaults() {
-        let mut features = Features::with_defaults();
-        features.enable(Feature::CollaborationModes);
+        let features = Features::with_defaults();
         assert_default_model_tools(
             "gpt-5.1",
             &features,
@@ -2531,7 +2547,6 @@ mod tests {
     fn test_gpt_5_1_codex_max_unified_exec_web_search() {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
-        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5.1-codex-max",
             &features,

@@ -1,19 +1,93 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "AdditionalPermissions": {
+    "AdditionalFileSystemPermissions": {
       "properties": {
-        "fs_read": {
+        "read": {
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/AbsolutePathBuf"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
-        "fs_write": {
+        "write": {
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/AbsolutePathBuf"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AdditionalMacOsPermissions": {
+      "properties": {
+        "accessibility": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "automations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsAutomationValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calendar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "preferences": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsPreferencesValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AdditionalPermissionProfile": {
+      "properties": {
+        "fileSystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalMacOsPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -399,6 +473,30 @@
             "params"
           ],
           "title": "Thread/archiveRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/unsubscribe"
+              ],
+              "title": "Thread/unsubscribeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadUnsubscribeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/unsubscribeRequest",
           "type": "object"
         },
         {
@@ -1102,6 +1200,54 @@
             },
             "method": {
               "enum": [
+                "externalAgentConfig/detect"
+              ],
+              "title": "ExternalAgentConfig/detectRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigDetectParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ExternalAgentConfig/detectRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "externalAgentConfig/import"
+              ],
+              "title": "ExternalAgentConfig/importRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ExternalAgentConfig/importRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "config/value/write"
               ],
               "title": "Config/value/writeRequestMethod",
@@ -1296,7 +1442,7 @@
           "type": "string"
         },
         {
-          "description": "User approved the command and future identical commands should run without prompting.",
+          "description": "User approved the command and future prompts in the same session-scoped approval cache should run without prompting.",
           "enum": [
             "acceptForSession"
           ],
@@ -1325,6 +1471,28 @@
             "acceptWithExecpolicyAmendment"
           ],
           "title": "AcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "User chose a persistent network policy rule (allow/deny) for this host.",
+          "properties": {
+            "applyNetworkPolicyAmendment": {
+              "properties": {
+                "network_policy_amendment": {
+                  "$ref": "#/definitions/NetworkPolicyAmendment"
+                }
+              },
+              "required": [
+                "network_policy_amendment"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "applyNetworkPolicyAmendment"
+          ],
+          "title": "ApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision",
           "type": "object"
         },
         {
@@ -1389,12 +1557,22 @@
               "type": "null"
             }
           ],
-          "description": "Optional context for managed-network approval prompts."
+          "description": "Optional context for a managed-network approval prompt."
         },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
           "items": {
             "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "proposedNetworkPolicyAmendments": {
+          "description": "Optional proposed network policy amendments (allow/deny host) for future requests.",
+          "items": {
+            "$ref": "#/definitions/NetworkPolicyAmendment"
           },
           "type": [
             "array",
@@ -1486,50 +1664,6 @@
       ],
       "type": "object"
     },
-    "DynamicToolCallOutputContentItem": {
-      "oneOf": [
-        {
-          "properties": {
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "inputText"
-              ],
-              "title": "InputTextDynamicToolCallOutputContentItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "text",
-            "type"
-          ],
-          "title": "InputTextDynamicToolCallOutputContentItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "imageUrl": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "inputImage"
-              ],
-              "title": "InputImageDynamicToolCallOutputContentItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "imageUrl",
-            "type"
-          ],
-          "title": "InputImageDynamicToolCallOutputContentItem",
-          "type": "object"
-        }
-      ]
-    },
     "DynamicToolCallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -1562,7 +1696,7 @@
       "properties": {
         "contentItems": {
           "items": {
-            "$ref": "#/definitions/DynamicToolCallOutputContentItem"
+            "$ref": "#/definitions/v2/DynamicToolCallOutputContentItem"
           },
           "type": "array"
         },
@@ -2694,7 +2828,7 @@
             "additional_permissions": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/AdditionalPermissions"
+                  "$ref": "#/definitions/PermissionProfile"
                 },
                 {
                   "type": "null"
@@ -2706,6 +2840,16 @@
               "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
               "type": [
                 "string",
+                "null"
+              ]
+            },
+            "available_decisions": {
+              "description": "Ordered list of decisions the client may present for this prompt.\n\nWhen absent, clients should derive the legacy default set from the other fields on this request.",
+              "items": {
+                "$ref": "#/definitions/ReviewDecision"
+              },
+              "type": [
+                "array",
                 "null"
               ]
             },
@@ -2856,26 +3000,66 @@
         },
         {
           "properties": {
-            "item_id": {
+            "arguments": {
+              "description": "Dynamic tool call arguments."
+            },
+            "call_id": {
+              "description": "Identifier for the corresponding DynamicToolCallRequest.",
               "type": "string"
             },
-            "skill_name": {
+            "content_items": {
+              "description": "Dynamic tool response content items.",
+              "items": {
+                "$ref": "#/definitions/v2/DynamicToolCallOutputContentItem"
+              },
+              "type": "array"
+            },
+            "duration": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Duration"
+                }
+              ],
+              "description": "The duration of the dynamic tool call."
+            },
+            "error": {
+              "description": "Optional error text when the tool call failed before producing a response.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "success": {
+              "description": "Whether the tool call succeeded.",
+              "type": "boolean"
+            },
+            "tool": {
+              "description": "Dynamic tool name.",
+              "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this dynamic tool call belongs to.",
               "type": "string"
             },
             "type": {
               "enum": [
-                "skill_request_approval"
+                "dynamic_tool_call_response"
               ],
-              "title": "SkillRequestApprovalEventMsgType",
+              "title": "DynamicToolCallResponseEventMsgType",
               "type": "string"
             }
           },
           "required": [
-            "item_id",
-            "skill_name",
+            "arguments",
+            "call_id",
+            "content_items",
+            "duration",
+            "success",
+            "tool",
+            "turn_id",
             "type"
           ],
-          "title": "SkillRequestApprovalEventMsg",
+          "title": "DynamicToolCallResponseEventMsg",
           "type": "object"
         },
         {
@@ -4534,6 +4718,29 @@
       "title": "FileChangeRequestApprovalResponse",
       "type": "object"
     },
+    "FileSystemPermissions": {
+      "properties": {
+        "read": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "write": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "FuzzyFileSearchParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -4834,6 +5041,66 @@
       "title": "JSONRPCResponse",
       "type": "object"
     },
+    "MacOsAutomationValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "MacOsPermissions": {
+      "properties": {
+        "accessibility": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "automations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsAutomationValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calendar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "preferences": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsPreferencesValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MacOsPreferencesValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
     "McpInvocation": {
       "properties": {
         "arguments": {
@@ -5092,6 +5359,37 @@
           "type": "object"
         }
       ]
+    },
+    "PermissionProfile": {
+      "properties": {
+        "file_system": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "PlanItemArg": {
       "additionalProperties": false,
@@ -5388,7 +5686,7 @@
           "type": "object"
         },
         {
-          "description": "User has approved this command and wants to automatically approve any future identical instances (`command` and `cwd` match exactly) for the remainder of the session.",
+          "description": "User has approved this request and wants future prompts in the same session-scoped approval cache to be automatically approved for the remainder of the session.",
           "enum": [
             "approved_for_session"
           ],
@@ -5613,6 +5911,26 @@
             "params"
           ],
           "title": "Thread/unarchivedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/closed"
+              ],
+              "title": "Thread/closedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadClosedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/closedNotification",
           "type": "object"
         },
         {
@@ -6158,6 +6476,106 @@
           "type": "object"
         },
         {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/realtime/started"
+              ],
+              "title": "Thread/realtime/startedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeStartedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/startedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/realtime/itemAdded"
+              ],
+              "title": "Thread/realtime/itemAddedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeItemAddedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/itemAddedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/realtime/outputAudio/delta"
+              ],
+              "title": "Thread/realtime/outputAudio/deltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeOutputAudioDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/outputAudio/deltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/realtime/error"
+              ],
+              "title": "Thread/realtime/errorNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeErrorNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/errorNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/realtime/closed"
+              ],
+              "title": "Thread/realtime/closedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeClosedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/closedNotification",
+          "type": "object"
+        },
+        {
           "description": "Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.",
           "properties": {
             "method": {
@@ -6301,30 +6719,6 @@
           "type": "object"
         },
         {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "skill/requestApproval"
-              ],
-              "title": "Skill/requestApprovalRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/SkillRequestApprovalParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Skill/requestApprovalRequest",
-          "type": "object"
-        },
-        {
           "description": "Execute a dynamic tool call on the client.",
           "properties": {
             "id": {
@@ -6443,43 +6837,6 @@
         "http_addr",
         "socks_addr"
       ],
-      "type": "object"
-    },
-    "SkillApprovalDecision": {
-      "enum": [
-        "approve",
-        "decline"
-      ],
-      "type": "string"
-    },
-    "SkillRequestApprovalParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "itemId": {
-          "type": "string"
-        },
-        "skillName": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "itemId",
-        "skillName"
-      ],
-      "title": "SkillRequestApprovalParams",
-      "type": "object"
-    },
-    "SkillRequestApprovalResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "decision": {
-          "$ref": "#/definitions/SkillApprovalDecision"
-        }
-      },
-      "required": [
-        "decision"
-      ],
-      "title": "SkillRequestApprovalResponse",
       "type": "object"
     },
     "StepStatus": {
@@ -7718,14 +8075,8 @@
         "type": "object"
       },
       "CollaborationModeMask": {
-        "description": "A mask for collaboration mode settings, allowing partial updates. All fields except `name` are optional, enabling selective updates.",
+        "description": "EXPERIMENTAL - collaboration mode preset metadata for clients.",
         "properties": {
-          "developer_instructions": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "mode": {
             "anyOf": [
               {
@@ -8726,6 +9077,58 @@
         "title": "DeprecationNoticeNotification",
         "type": "object"
       },
+      "DynamicToolCallOutputContentItem": {
+        "oneOf": [
+          {
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "inputText"
+                ],
+                "title": "InputTextDynamicToolCallOutputContentItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "type"
+            ],
+            "title": "InputTextDynamicToolCallOutputContentItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "imageUrl": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "inputImage"
+                ],
+                "title": "InputImageDynamicToolCallOutputContentItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "imageUrl",
+              "type"
+            ],
+            "title": "InputImageDynamicToolCallOutputContentItem",
+            "type": "object"
+          }
+        ]
+      },
+      "DynamicToolCallStatus": {
+        "enum": [
+          "inProgress",
+          "completed",
+          "failed"
+        ],
+        "type": "string"
+      },
       "DynamicToolSpec": {
         "properties": {
           "description": {
@@ -8904,6 +9307,95 @@
             "type": "string"
           }
         ]
+      },
+      "ExternalAgentConfigDetectParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cwds": {
+            "description": "Zero or more working directories to include for repo-scoped detection.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "includeHome": {
+            "description": "If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
+            "type": "boolean"
+          }
+        },
+        "title": "ExternalAgentConfigDetectParams",
+        "type": "object"
+      },
+      "ExternalAgentConfigDetectResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ExternalAgentConfigDetectResponse",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "migrationItems": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "migrationItems"
+        ],
+        "title": "ExternalAgentConfigImportParams",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ExternalAgentConfigImportResponse",
+        "type": "object"
+      },
+      "ExternalAgentConfigMigrationItem": {
+        "properties": {
+          "cwd": {
+            "description": "Null or empty means home-scoped migration; non-empty means repo-scoped migration.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "itemType": {
+            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
+          }
+        },
+        "required": [
+          "description",
+          "itemType"
+        ],
+        "type": "object"
+      },
+      "ExternalAgentConfigMigrationItemType": {
+        "enum": [
+          "AGENTS_MD",
+          "CONFIG",
+          "SKILLS",
+          "MCP_SERVER_CONFIG"
+        ],
+        "type": "string"
       },
       "FeedbackUploadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -9733,6 +10225,16 @@
       },
       "Model": {
         "properties": {
+          "availabilityNux": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelAvailabilityNux"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "defaultReasoningEffort": {
             "$ref": "#/definitions/v2/ReasoningEffort"
           },
@@ -9779,6 +10281,16 @@
               "string",
               "null"
             ]
+          },
+          "upgradeInfo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelUpgradeInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -9790,6 +10302,17 @@
           "isDefault",
           "model",
           "supportedReasoningEfforts"
+        ],
+        "type": "object"
+      },
+      "ModelAvailabilityNux": {
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
         ],
         "type": "object"
       },
@@ -9879,6 +10402,35 @@
           "turnId"
         ],
         "title": "ModelReroutedNotification",
+        "type": "object"
+      },
+      "ModelUpgradeInfo": {
+        "properties": {
+          "migrationMarkdown": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "modelLink": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upgradeCopy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "model"
+        ],
         "type": "object"
       },
       "NetworkAccess": {
@@ -10890,7 +11442,7 @@
                 "type": "string"
               },
               "output": {
-                "type": "string"
+                "$ref": "#/definitions/v2/FunctionCallOutputPayload"
               },
               "type": {
                 "enum": [
@@ -12014,6 +12566,19 @@
         "title": "ThreadArchivedNotification",
         "type": "object"
       },
+      "ThreadClosedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadClosedNotification",
+        "type": "object"
+      },
       "ThreadCompactStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12440,6 +13005,59 @@
           },
           {
             "properties": {
+              "arguments": true,
+              "contentItems": {
+                "items": {
+                  "$ref": "#/definitions/v2/DynamicToolCallOutputContentItem"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "durationMs": {
+                "description": "The duration of the dynamic tool call in milliseconds.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/definitions/v2/DynamicToolCallStatus"
+              },
+              "success": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "tool": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "dynamicToolCall"
+                ],
+                "title": "DynamicToolCallThreadItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "arguments",
+              "id",
+              "status",
+              "tool",
+              "type"
+            ],
+            "title": "DynamicToolCallThreadItem",
+            "type": "object"
+          },
+          {
+            "properties": {
               "agentsStates": {
                 "additionalProperties": {
                   "$ref": "#/definitions/v2/CollabAgentState"
@@ -12676,6 +13294,13 @@
               "null"
             ]
           },
+          "searchTerm": {
+            "description": "Optional substring filter for the extracted thread title.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "sortKey": {
             "anyOf": [
               {
@@ -12819,6 +13444,130 @@
           "thread"
         ],
         "title": "ThreadReadResponse",
+        "type": "object"
+      },
+      "ThreadRealtimeAudioChunk": {
+        "description": "EXPERIMENTAL - thread realtime audio chunk.",
+        "properties": {
+          "data": {
+            "type": "string"
+          },
+          "numChannels": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "sampleRate": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "samplesPerChannel": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "numChannels",
+          "sampleRate"
+        ],
+        "type": "object"
+      },
+      "ThreadRealtimeClosedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - emitted when thread realtime transport closes.",
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadRealtimeClosedNotification",
+        "type": "object"
+      },
+      "ThreadRealtimeErrorNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - emitted when thread realtime encounters an error.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "threadId"
+        ],
+        "title": "ThreadRealtimeErrorNotification",
+        "type": "object"
+      },
+      "ThreadRealtimeItemAddedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.",
+        "properties": {
+          "item": true,
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "threadId"
+        ],
+        "title": "ThreadRealtimeItemAddedNotification",
+        "type": "object"
+      },
+      "ThreadRealtimeOutputAudioDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - streamed output audio emitted by thread realtime.",
+        "properties": {
+          "audio": {
+            "$ref": "#/definitions/v2/ThreadRealtimeAudioChunk"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "audio",
+          "threadId"
+        ],
+        "title": "ThreadRealtimeOutputAudioDeltaNotification",
+        "type": "object"
+      },
+      "ThreadRealtimeStartedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
+        "properties": {
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadRealtimeStartedNotification",
         "type": "object"
       },
       "ThreadResumeParams": {
@@ -13103,6 +13852,12 @@
                 "type": "null"
               }
             ]
+          },
+          "serviceName": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "title": "ThreadStartParams",
@@ -13337,6 +14092,40 @@
         ],
         "title": "ThreadUnarchivedNotification",
         "type": "object"
+      },
+      "ThreadUnsubscribeParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadUnsubscribeParams",
+        "type": "object"
+      },
+      "ThreadUnsubscribeResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/ThreadUnsubscribeStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ThreadUnsubscribeResponse",
+        "type": "object"
+      },
+      "ThreadUnsubscribeStatus": {
+        "enum": [
+          "notLoaded",
+          "notSubscribed",
+          "unsubscribed"
+        ],
+        "type": "string"
       },
       "TokenUsageBreakdown": {
         "properties": {

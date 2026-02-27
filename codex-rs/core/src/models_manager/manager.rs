@@ -8,6 +8,7 @@ use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
 use codex_api::ModelsClient;
@@ -41,11 +42,21 @@ pub enum RefreshStrategy {
     OnlineIfUncached,
 }
 
+/// How the manager's base catalog is sourced for the lifetime of the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogMode {
+    /// Start from bundled `models.json` and allow cache/network refresh updates.
+    Default,
+    /// Use a caller-provided catalog as authoritative and do not mutate it via refresh.
+    Custom,
+}
+
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
     remote_models: RwLock<Vec<ModelInfo>>,
-    has_custom_model_catalog: bool,
+    catalog_mode: CatalogMode,
+    collaboration_modes_config: CollaborationModesConfig,
     auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
@@ -62,10 +73,15 @@ impl ModelsManager {
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         model_catalog: Option<ModelsResponse>,
+        collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
-        let has_custom_model_catalog = model_catalog.is_some();
+        let catalog_mode = if model_catalog.is_some() {
+            CatalogMode::Custom
+        } else {
+            CatalogMode::Default
+        };
         let remote_models = model_catalog
             .map(|catalog| catalog.models)
             .unwrap_or_else(|| {
@@ -74,7 +90,8 @@ impl ModelsManager {
             });
         Self {
             remote_models: RwLock::new(remote_models),
-            has_custom_model_catalog,
+            catalog_mode,
+            collaboration_modes_config,
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
@@ -97,7 +114,14 @@ impl ModelsManager {
     ///
     /// Returns a static set of presets seeded with the configured model.
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        builtin_collaboration_mode_presets()
+        self.list_collaboration_modes_for_config(self.collaboration_modes_config)
+    }
+
+    pub fn list_collaboration_modes_for_config(
+        &self,
+        collaboration_modes_config: CollaborationModesConfig,
+    ) -> Vec<CollaborationModeMask> {
+        builtin_collaboration_mode_presets(collaboration_modes_config)
     }
 
     /// Attempt to list models without blocking, using the current cached state.
@@ -217,7 +241,7 @@ impl ModelsManager {
     /// Refresh available models according to the specified strategy.
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
         // don't override the custom model catalog if one was provided by the user
-        if self.has_custom_model_catalog {
+        if matches!(self.catalog_mode, CatalogMode::Custom) {
             return Ok(());
         }
 
@@ -364,7 +388,8 @@ impl ModelsManager {
                 Self::load_remote_models_from_file()
                     .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}")),
             ),
-            has_custom_model_catalog: false,
+            catalog_mode: CatalogMode::Default,
+            collaboration_modes_config: CollaborationModesConfig::default(),
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
@@ -491,7 +516,12 @@ mod tests {
             .expect("load default test config");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None);
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            None,
+            CollaborationModesConfig::default(),
+        );
         let known_slug = manager
             .get_remote_models()
             .await
@@ -528,6 +558,7 @@ mod tests {
             Some(ModelsResponse {
                 models: vec![remote_model("gpt-overlay", "Overlay", 0)],
             }),
+            CollaborationModesConfig::default(),
         );
 
         let model_info = manager
@@ -551,7 +582,12 @@ mod tests {
             .expect("load default test config");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None);
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            None,
+            CollaborationModesConfig::default(),
+        );
         let known_slug = manager
             .get_remote_models()
             .await
@@ -577,7 +613,12 @@ mod tests {
             .expect("load default test config");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None);
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            None,
+            CollaborationModesConfig::default(),
+        );
         let known_slug = manager
             .get_remote_models()
             .await
