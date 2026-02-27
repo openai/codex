@@ -101,7 +101,6 @@ pub struct ModelUpgrade {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
 pub struct ModelAvailabilityNux {
-    pub id: String,
     pub message: String,
 }
 
@@ -720,7 +719,6 @@ mod tests {
     fn model_preset_preserves_availability_nux() {
         let preset = ModelPreset::from(ModelInfo {
             availability_nux: Some(ModelAvailabilityNux {
-                id: "try_spark".to_string(),
                 message: "Try Spark.".to_string(),
             }),
             ..test_model(None)
@@ -729,7 +727,6 @@ mod tests {
         assert_eq!(
             preset.availability_nux,
             Some(ModelAvailabilityNux {
-                id: "try_spark".to_string(),
                 message: "Try Spark.".to_string(),
             })
         );
