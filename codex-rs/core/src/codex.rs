@@ -3010,22 +3010,13 @@ impl Session {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
         }
-        if should_inject_full_context
-            || previous_user_turn_model.is_none()
-            || !context_items.is_empty()
-        {
-            // Keep rollout TurnContext entries for any turn that establishes or changes the
-            // persisted model-visible baseline:
-            // - the first real user turn (to recover `previous_model` on resume)
-            // - full-context reinjection after the baseline was cleared
-            // - steady-state turns that emitted explicit context diffs
-            self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
-                .await;
-        }
+        // Persist one `TurnContextItem` per real user turn so resume/lazy replay can recover the
+        // latest durable baseline even when this turn emitted no model-visible context diffs.
+        self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
+            .await;
 
         // Advance the in-memory diff baseline even when this turn emitted no model-visible
-        // context items. This keeps later runtime diffing aligned with the current turn state
-        // without forcing rollout `TurnContextItem` churn after compaction/no-op turns.
+        // context items. This keeps later runtime diffing aligned with the current turn state.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
     }
@@ -8563,7 +8554,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_context_updates_and_set_reference_context_item_updates_baseline_without_emitting_diffs()
+    async fn record_context_updates_and_set_reference_context_item_persists_baseline_without_emitting_diffs()
      {
         let (session, previous_context) = make_session_and_context().await;
         let next_model = if previous_context.model_info.slug == "gpt-5.1" {
@@ -8578,6 +8569,27 @@ mod tests {
         {
             let mut state = session.state.lock().await;
             state.set_reference_context_item(Some(previous_context_item.clone()));
+        }
+        let config = session.get_config().await;
+        let recorder = RolloutRecorder::new(
+            config.as_ref(),
+            RolloutRecorderParams::new(
+                ThreadId::default(),
+                None,
+                SessionSource::Exec,
+                BaseInstructions::default(),
+                Vec::new(),
+                EventPersistenceMode::Limited,
+            ),
+            None,
+            None,
+        )
+        .await
+        .expect("create rollout recorder");
+        let rollout_path = recorder.rollout_path().to_path_buf();
+        {
+            let mut rollout = session.services.rollout.lock().await;
+            *rollout = Some(recorder);
         }
 
         let update_items =
@@ -8597,6 +8609,25 @@ mod tests {
                 .expect("serialize current context item"),
             serde_json::to_value(Some(turn_context.to_turn_context_item()))
                 .expect("serialize expected context item")
+        );
+        session.ensure_rollout_materialized().await;
+        session.flush_rollout().await;
+
+        let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .expect("read rollout history")
+        else {
+            panic!("expected resumed rollout history");
+        };
+        let persisted_turn_context = resumed.history.iter().find_map(|item| match item {
+            RolloutItem::TurnContext(ctx) => Some(ctx.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            serde_json::to_value(persisted_turn_context)
+                .expect("serialize persisted turn context item"),
+            serde_json::to_value(Some(turn_context.to_turn_context_item()))
+                .expect("serialize expected turn context item")
         );
     }
 
