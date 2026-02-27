@@ -394,8 +394,8 @@ async fn summarize_context_three_requests_and_instructions() {
     }
 
     assert_eq!(
-        regular_turn_context_count, 1,
-        "manual compact should not emit its own TurnContext entry"
+        regular_turn_context_count, 2,
+        "rollout should contain one TurnContext entry per real user turn"
     );
     assert!(
         saw_compacted_summary,
@@ -2081,8 +2081,8 @@ async fn auto_compact_persists_rollout_entries() {
     }
 
     assert_eq!(
-        turn_context_count, 1,
-        "pre-sampling compaction should not emit its own TurnContext entry"
+        turn_context_count, 3,
+        "rollout should contain one TurnContext entry per real user turn"
     );
 }
 
