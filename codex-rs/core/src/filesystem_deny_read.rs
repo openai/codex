@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_config::FilesystemDenyReadPattern;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::function_tool::FunctionCallError;
@@ -33,6 +34,20 @@ pub(crate) fn ensure_search_root_does_not_overlap_deny_read(
         )));
     }
     Ok(())
+}
+
+pub(crate) fn expand_deny_read_patterns(
+    patterns: &[FilesystemDenyReadPattern],
+) -> Vec<AbsolutePathBuf> {
+    let mut expanded = Vec::new();
+    for pattern in patterns {
+        if pattern.contains_glob() {
+            expand_glob_pattern(pattern, &mut expanded);
+        } else if let Ok(path) = AbsolutePathBuf::try_from(pattern.as_str()) {
+            push_unique_absolute(&mut expanded, path);
+        }
+    }
+    expanded
 }
 
 pub(crate) fn is_read_denied(path: &Path, sandbox_policy: &SandboxPolicy) -> bool {
@@ -93,12 +108,165 @@ fn push_unique(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
 }
 
+fn push_unique_absolute(candidates: &mut Vec<AbsolutePathBuf>, candidate: AbsolutePathBuf) {
+    if !candidates
+        .iter()
+        .any(|existing| existing.as_path() == candidate.as_path())
+    {
+        candidates.push(candidate);
+    }
+}
+
+fn expand_glob_pattern(pattern: &FilesystemDenyReadPattern, expanded: &mut Vec<AbsolutePathBuf>) {
+    let (root, components) = split_glob_pattern(pattern.as_str());
+    let Ok(root) = AbsolutePathBuf::try_from(root) else {
+        return;
+    };
+    expand_glob_components(root.as_path(), &components, expanded);
+}
+
+fn split_glob_pattern(pattern: &str) -> (&str, Vec<&str>) {
+    let Some(first_glob) = pattern.find('*') else {
+        return (pattern, Vec::new());
+    };
+    let separator_index = pattern[..first_glob]
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| is_path_separator(*ch))
+        .map(|(index, _)| index);
+    let (root, suffix) = match separator_index {
+        Some(0) => ("/", &pattern[1..]),
+        Some(index)
+            if cfg!(windows)
+                && index == 2
+                && pattern.as_bytes().get(1) == Some(&b':')
+                && pattern.as_bytes().get(2).is_some() =>
+        {
+            (&pattern[..=index], &pattern[index + 1..])
+        }
+        Some(index) => (&pattern[..index], &pattern[index + 1..]),
+        None => ("", pattern),
+    };
+    let components = suffix
+        .split(is_path_separator)
+        .filter(|component| !component.is_empty())
+        .collect();
+    (root, components)
+}
+
+fn expand_glob_components(current: &Path, remaining: &[&str], expanded: &mut Vec<AbsolutePathBuf>) {
+    if remaining.is_empty() {
+        if let Ok(path) = AbsolutePathBuf::try_from(current) {
+            push_unique_absolute(expanded, path);
+        }
+        return;
+    }
+
+    let component = remaining[0];
+    let rest = &remaining[1..];
+
+    if component == "**" {
+        expand_glob_components(current, rest, expanded);
+
+        let Ok(entries) = std::fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if rest.is_empty()
+                && let Ok(path) = AbsolutePathBuf::try_from(path.as_path())
+            {
+                push_unique_absolute(expanded, path);
+            }
+            if path.is_dir() {
+                expand_glob_components(&path, remaining, expanded);
+            }
+        }
+        return;
+    }
+
+    let Ok(entries) = std::fs::read_dir(current) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !segment_matches(component, name) {
+            continue;
+        }
+        if rest.is_empty() {
+            if let Ok(path) = AbsolutePathBuf::try_from(path.as_path()) {
+                push_unique_absolute(expanded, path);
+            }
+        } else if path.is_dir() {
+            expand_glob_components(&path, rest, expanded);
+        }
+    }
+}
+
+fn segment_matches(pattern: &str, candidate: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern == candidate;
+    }
+
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+    let candidate_chars: Vec<char> = candidate.chars().collect();
+    let mut pattern_index = 0;
+    let mut candidate_index = 0;
+    let mut star_index = None;
+    let mut star_candidate_index = 0;
+
+    while candidate_index < candidate_chars.len() {
+        if pattern_index < pattern_chars.len()
+            && pattern_chars[pattern_index] == candidate_chars[candidate_index]
+        {
+            pattern_index += 1;
+            candidate_index += 1;
+            continue;
+        }
+
+        if pattern_index < pattern_chars.len() && pattern_chars[pattern_index] == '*' {
+            star_index = Some(pattern_index);
+            pattern_index += 1;
+            star_candidate_index = candidate_index;
+            continue;
+        }
+
+        if let Some(star_index) = star_index {
+            pattern_index = star_index + 1;
+            star_candidate_index += 1;
+            candidate_index = star_candidate_index;
+            continue;
+        }
+
+        return false;
+    }
+
+    while pattern_index < pattern_chars.len() && pattern_chars[pattern_index] == '*' {
+        pattern_index += 1;
+    }
+
+    pattern_index == pattern_chars.len()
+}
+
+fn is_path_separator(ch: char) -> bool {
+    if cfg!(windows) {
+        ch == '/' || ch == '\\'
+    } else {
+        ch == '/'
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::expand_deny_read_patterns;
     use super::is_read_denied;
     use super::overlaps_deny_read;
     use crate::protocol::ReadOnlyAccess;
     use crate::protocol::SandboxPolicy;
+    use codex_config::FilesystemDenyReadPattern;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
@@ -160,6 +328,41 @@ mod tests {
         assert_eq!(
             overlaps_deny_read(&temp.path().join("public"), &policy),
             false
+        );
+    }
+
+    #[test]
+    fn expand_deny_read_patterns_supports_star_and_globstar() {
+        let temp = tempdir().expect("temp dir");
+        let secrets = temp.path().join("secrets");
+        let nested = secrets.join("nested");
+        std::fs::create_dir_all(&nested).expect("create nested");
+        let top = secrets.join("top.txt");
+        let deep = nested.join("deep.txt");
+        let ignored = secrets.join("top.log");
+        std::fs::write(&top, "top").expect("write top");
+        std::fs::write(&deep, "deep").expect("write deep");
+        std::fs::write(&ignored, "ignored").expect("write ignored");
+
+        let top_pattern = FilesystemDenyReadPattern::from_input(&format!(
+            "{}/secrets/*.txt",
+            temp.path().display()
+        ))
+        .expect("normalize pattern");
+        let deep_pattern = FilesystemDenyReadPattern::from_input(&format!(
+            "{}/secrets/**/*.txt",
+            temp.path().display()
+        ))
+        .expect("normalize pattern");
+
+        let expanded = expand_deny_read_patterns(&[top_pattern, deep_pattern]);
+
+        assert_eq!(
+            expanded,
+            vec![
+                AbsolutePathBuf::try_from(top).expect("absolute path"),
+                AbsolutePathBuf::try_from(deep).expect("absolute path"),
+            ]
         );
     }
 }

@@ -12,6 +12,7 @@ use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::ConfigRequirementsWithSources;
+use crate::config_loader::FilesystemDenyReadPattern;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::load_requirements_toml;
 use crate::config_loader::version_for_toml;
@@ -688,8 +689,62 @@ deny_read = ["./sensitive", "../shared/secret.txt"]
     assert_eq!(
         deny_read,
         vec![
-            AbsolutePathBuf::try_from(requirements_dir.join("sensitive"))?,
-            AbsolutePathBuf::try_from(tmp.path().join("shared").join("secret.txt"))?,
+            FilesystemDenyReadPattern::from(AbsolutePathBuf::try_from(
+                requirements_dir.join("sensitive")
+            )?,),
+            FilesystemDenyReadPattern::from(AbsolutePathBuf::try_from(
+                tmp.path().join("shared").join("secret.txt"),
+            )?),
+        ]
+    );
+    assert_eq!(
+        permissions.source,
+        RequirementSource::SystemRequirementsToml {
+            file: AbsolutePathBuf::try_from(requirements_file)?,
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn load_requirements_toml_resolves_filesystem_deny_read_glob_against_requirements_parent()
+-> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_dir = tmp.path().join("managed");
+    tokio::fs::create_dir_all(&requirements_dir).await?;
+    let requirements_file = requirements_dir.join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+[permissions.filesystem]
+deny_read = ["./sensitive/**/*.txt"]
+"#,
+    )
+    .await?;
+
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+
+    let permissions = config_requirements_toml
+        .permissions
+        .expect("permissions requirements should load");
+    let filesystem = permissions
+        .value
+        .filesystem
+        .expect("filesystem requirements should load");
+    let deny_read = filesystem
+        .deny_read
+        .expect("deny_read patterns should load");
+
+    assert_eq!(
+        deny_read,
+        vec![
+            FilesystemDenyReadPattern::from_input(&format!(
+                "{}/sensitive/**/*.txt",
+                requirements_dir.display()
+            ))
+            .expect("normalize glob pattern")
         ]
     );
     assert_eq!(

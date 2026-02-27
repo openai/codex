@@ -37,6 +37,7 @@ use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
+use crate::filesystem_deny_read::expand_deny_read_patterns;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -1908,7 +1909,7 @@ impl Config {
         }) = filesystem_requirements
             && !filesystem_requirements.deny_read.is_empty()
         {
-            let deny_read_paths = filesystem_requirements.deny_read;
+            let deny_read_paths = expand_deny_read_patterns(&filesystem_requirements.deny_read);
             constrained_sandbox_policy
                 .value
                 .add_normalizer(move |mut policy| {
@@ -5622,6 +5623,49 @@ mcp_oauth_callback_url = "https://example.com/callback"
         assert_eq!(
             config.permissions.sandbox_policy.get().denied_read_paths(),
             vec![denied_path]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn requirements_filesystem_deny_read_glob_expands_to_matching_paths()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let sensitive_dir = codex_home.path().join("sensitive");
+        let nested_dir = sensitive_dir.join("nested");
+        std::fs::create_dir_all(&nested_dir)?;
+        let top_match = sensitive_dir.join("top.txt");
+        let nested_match = nested_dir.join("deep.txt");
+        let ignored = sensitive_dir.join("top.log");
+        std::fs::write(&top_match, "top")?;
+        std::fs::write(&nested_match, "deep")?;
+        std::fs::write(&ignored, "ignored")?;
+
+        let glob_pattern = format!("{}/sensitive/**/*.txt", codex_home.path().display());
+        let top_match = AbsolutePathBuf::try_from(top_match).expect("absolute path");
+        let nested_match = AbsolutePathBuf::try_from(nested_match).expect("absolute path");
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async move {
+                Some(
+                    toml::from_str::<crate::config_loader::ConfigRequirementsToml>(&format!(
+                        r#"
+                                [permissions.filesystem]
+                                deny_read = [{glob_pattern:?}]
+                            "#
+                    ))
+                    .expect("parse requirements toml"),
+                )
+            }))
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.permissions.sandbox_policy.get().denied_read_paths(),
+            vec![top_match, nested_match]
         );
 
         Ok(())

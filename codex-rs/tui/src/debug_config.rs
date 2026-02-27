@@ -170,7 +170,7 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
                 .value
                 .deny_read
                 .iter()
-                .map(|path| path.as_path().display().to_string())
+                .map(|pattern| pattern.as_str().to_string())
                 .collect::<Vec<_>>(),
         );
         requirement_lines.push(requirement_line(
@@ -544,7 +544,7 @@ mod tests {
             )),
             filesystem: Some(Sourced::new(
                 FilesystemConstraints {
-                    deny_read: vec![denied_path.clone()],
+                    deny_read: vec![denied_path.clone().into()],
                 },
                 RequirementSource::SystemRequirementsToml {
                     file: requirements_file.clone(),
