@@ -1058,6 +1058,19 @@ impl App {
         Ok(())
     }
 
+    async fn handle_routed_thread_event(
+        &mut self,
+        thread_id: ThreadId,
+        event: Event,
+    ) -> Result<()> {
+        if !self.thread_event_channels.contains_key(&thread_id) {
+            tracing::debug!("dropping stale event for untracked thread {thread_id}");
+            return Ok(());
+        }
+
+        self.enqueue_thread_event(thread_id, event).await
+    }
+
     async fn enqueue_primary_event(&mut self, event: Event) -> Result<()> {
         if let Some(thread_id) = self.primary_thread_id {
             return self.enqueue_thread_event(thread_id, event).await;
@@ -2019,7 +2032,7 @@ impl App {
                 self.enqueue_primary_event(event).await?;
             }
             AppEvent::ThreadEvent { thread_id, event } => {
-                self.enqueue_thread_event(thread_id, event).await?;
+                self.handle_routed_thread_event(thread_id, event).await?;
             }
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(mode));
@@ -3621,6 +3634,34 @@ mod tests {
         }
 
         panic!("expected approval action to submit a thread-scoped op");
+    }
+
+    #[tokio::test]
+    async fn routed_thread_event_does_not_recreate_channel_after_reset() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.thread_event_channels.insert(
+            thread_id,
+            ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY),
+        );
+
+        app.reset_thread_event_state();
+        app.handle_routed_thread_event(
+            thread_id,
+            Event {
+                id: "stale-event".to_string(),
+                msg: EventMsg::ShutdownComplete,
+            },
+        )
+        .await?;
+
+        assert!(
+            !app.thread_event_channels.contains_key(&thread_id),
+            "stale routed events should not recreate cleared thread channels"
+        );
+        assert_eq!(app.active_thread_id, None);
+        assert_eq!(app.primary_thread_id, None);
+        Ok(())
     }
 
     #[tokio::test]
