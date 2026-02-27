@@ -14,14 +14,17 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 ### Installing and running Codex CLI
 
-Install the latest Codex release directly on macOS or Linux:
+Install the latest Codex release directly:
 
 ```shell
-# Install on macOS or Linux
+# Install on macOS, Linux, or WSL
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
-Windows direct installer support is coming soon. Until then, run Codex on Windows 11 via WSL2.
+```powershell
+# Install on Windows
+powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"
+```
 
 You can also install with your preferred package manager:
 

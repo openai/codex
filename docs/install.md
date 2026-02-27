@@ -4,21 +4,26 @@
 
 | Requirement                 | Details                                                         |
 | --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
+| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 (64-bit, PowerShell) |
 | Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
 | RAM                         | 4-GB minimum (8-GB recommended)                                 |
 
-### Install the latest release on macOS or Linux
+### Install the latest release
 
 ```bash
-# macOS or Linux
+# macOS, Linux, or WSL
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
-Windows direct installer support is coming soon. Until then, run Codex on Windows 11 via WSL2.
+```powershell
+# Windows
+powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"
+```
 
-The direct installer downloads the latest matching GitHub Release package for macOS or Linux and
-places both `codex` and `rg` in a user-local directory.
+The direct installer downloads the latest matching GitHub Release package for your platform and
+places the CLI binaries in a user-local directory.
+
+To update a native install, rerun the same installer command.
 
 ### DotSlash
 
