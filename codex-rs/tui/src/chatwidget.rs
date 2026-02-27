@@ -61,6 +61,7 @@ use codex_core::git_info::current_branch_name;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
+use codex_core::parse_turn_item;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
@@ -80,6 +81,7 @@ use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
@@ -605,16 +607,11 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
-    // Nudges deferred while a turn is in progress.
+    // Nudges already submitted to core but not yet committed into history.
     //
-    // Once the current streamed assistant message is done rendering, we
-    // interrupt the running turn (if needed) and then submit the pending
-    // nudges as fresh follow-up input. `on_task_complete` still drains this
-    // queue when the turn finishes naturally before an interrupt is needed.
-    pending_nudges: VecDeque<UserMessage>,
-    // True after we have requested an automatic interrupt so a pending nudge
-    // can be submitted as a fresh turn.
-    pending_nudge_interrupt_requested: bool,
+    // The bottom pane shows these above queued drafts until core records the
+    // corresponding user message and emits the matching raw response item.
+    pending_nudges: VecDeque<RenderedUserMessageEvent>,
     // Number of legacy `EventMsg::AgentMessage` events to ignore because the
     // corresponding `item.completed` already finalized the streamed message.
     pending_suppressed_legacy_agent_messages: usize,
@@ -1476,12 +1473,8 @@ impl ChatWidget {
         self.unified_exec_wait_streak = None;
         self.request_redraw();
 
-        if !from_replay {
-            self.pending_nudge_interrupt_requested = false;
-            let drained_pending_nudges = self.maybe_send_pending_nudges();
-            if !drained_pending_nudges && self.queued_user_messages.is_empty() {
-                self.maybe_prompt_plan_implementation();
-            }
+        if !from_replay && self.queued_user_messages.is_empty() {
+            self.maybe_prompt_plan_implementation();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
         // still show the prompt once after thread switch replay.
@@ -1733,8 +1726,6 @@ impl ChatWidget {
 
         self.add_to_history(history_cell::new_warning_event(message));
         self.request_redraw();
-        self.pending_nudge_interrupt_requested = false;
-        self.maybe_send_pending_nudges();
         self.maybe_send_next_queued_input();
     }
 
@@ -1743,8 +1734,6 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
 
-        self.pending_nudge_interrupt_requested = false;
-        self.maybe_send_pending_nudges();
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
     }
@@ -1826,27 +1815,19 @@ impl ChatWidget {
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto‑submitting the next one.
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
-        let interrupted_for_pending_nudge =
-            std::mem::take(&mut self.pending_nudge_interrupt_requested);
-        let had_pending_nudges = !self.pending_nudges.is_empty();
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
         if reason == TurnAbortReason::Interrupted {
             self.clear_unified_exec_processes();
         }
 
-        if !interrupted_for_pending_nudge && reason != TurnAbortReason::ReviewEnded {
+        if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
                 "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
             ));
         }
 
-        if had_pending_nudges {
-            self.maybe_send_pending_nudges();
-        }
-        if !interrupted_for_pending_nudge
-            && let Some(combined) = self.drain_queued_messages_for_restore()
-        {
+        if let Some(combined) = self.drain_queued_messages_for_restore() {
             self.restore_user_message_to_composer(combined);
             self.refresh_pending_input_preview();
         }
@@ -2412,9 +2393,6 @@ impl ChatWidget {
         }
         // A completed stream indicates non-exec content was just inserted.
         self.flush_interrupt_queue();
-        if self.agent_turn_running {
-            self.maybe_send_pending_nudges();
-        }
     }
 
     #[inline]
@@ -2885,7 +2863,6 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_nudges: VecDeque::new(),
-            pending_nudge_interrupt_requested: false,
             pending_suppressed_legacy_agent_messages: 0,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
@@ -3066,7 +3043,6 @@ impl ChatWidget {
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
             pending_nudges: VecDeque::new(),
-            pending_nudge_interrupt_requested: false,
             pending_suppressed_legacy_agent_messages: 0,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
@@ -3228,7 +3204,6 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_nudges: VecDeque::new(),
-            pending_nudge_interrupt_requested: false,
             pending_suppressed_legacy_agent_messages: 0,
             queued_message_edit_binding,
             show_welcome_banner: false,
@@ -3395,11 +3370,30 @@ impl ChatWidget {
                     else {
                         return;
                     };
-                    let should_defer_as_pending_nudge = self.is_session_configured()
-                        && (self.is_plan_streaming_in_tui() || self.stream_controller.is_some());
-                    if should_defer_as_pending_nudge {
-                        self.pending_nudges.push_back(user_message);
+                    let should_preview_as_pending_nudge = self.is_session_configured()
+                        && (self.is_plan_streaming_in_tui() || self.stream_controller.is_some())
+                        && (!user_message.text.is_empty()
+                            || !user_message.local_images.is_empty()
+                            || !user_message.remote_image_urls.is_empty())
+                        && user_message.text.strip_prefix('!').is_none()
+                        && ((user_message.local_images.is_empty()
+                            && user_message.remote_image_urls.is_empty())
+                            || self.current_model_supports_images());
+                    if should_preview_as_pending_nudge {
+                        self.pending_nudges.push_back(
+                            Self::rendered_user_message_event_from_parts(
+                                user_message.text.clone(),
+                                user_message.text_elements.clone(),
+                                user_message
+                                    .local_images
+                                    .iter()
+                                    .map(|image| image.path.clone())
+                                    .collect(),
+                                user_message.remote_image_urls.clone(),
+                            ),
+                        );
                         self.refresh_pending_input_preview();
+                        self.submit_user_message_without_local_history(user_message);
                     } else if self.is_session_configured() {
                         // Submitted is only emitted when steer is enabled.
                         // Reset any reasoning header only when we are actually submitting a turn.
@@ -4017,6 +4011,14 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_internal(user_message, true);
+    }
+
+    fn submit_user_message_without_local_history(&mut self, user_message: UserMessage) {
+        self.submit_user_message_internal(user_message, false);
+    }
+
+    fn submit_user_message_internal(&mut self, user_message: UserMessage, render_in_history: bool) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -4215,7 +4217,7 @@ impl ChatWidget {
         }
 
         // Show replayable user content in conversation history.
-        if !text.is_empty() {
+        if render_in_history && !text.is_empty() {
             let local_image_paths = local_images
                 .into_iter()
                 .map(|img| img.path)
@@ -4233,7 +4235,7 @@ impl ChatWidget {
                 local_image_paths,
                 remote_image_urls,
             ));
-        } else if !remote_image_urls.is_empty() {
+        } else if render_in_history && !remote_image_urls.is_empty() {
             self.last_rendered_user_message_event =
                 Some(Self::rendered_user_message_event_from_parts(
                     String::new(),
@@ -4467,6 +4469,23 @@ impl ChatWidget {
                     self.on_user_message_event(ev);
                 }
             }
+            EventMsg::RawResponseItem(event) => {
+                if !from_replay
+                    && let Some(TurnItem::UserMessage(item)) = parse_turn_item(&event.item)
+                    && let EventMsg::UserMessage(user_message) = item.as_legacy_event()
+                {
+                    let rendered = Self::rendered_user_message_event_from_event(&user_message);
+                    if let Some(index) = self
+                        .pending_nudges
+                        .iter()
+                        .position(|pending| pending == &rendered)
+                    {
+                        self.pending_nudges.remove(index);
+                        self.refresh_pending_input_preview();
+                        self.on_user_message_event(user_message);
+                    }
+                }
+            }
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request, from_replay)
             }
@@ -4497,8 +4516,7 @@ impl ChatWidget {
                     });
                 }
             }
-            EventMsg::RawResponseItem(_)
-            | EventMsg::ItemStarted(_)
+            EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
@@ -4523,9 +4541,6 @@ impl ChatWidget {
                 let item = event.item;
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
                     self.on_plan_item_completed(plan_item.text.clone());
-                    if !from_replay {
-                        self.maybe_send_pending_nudges();
-                    }
                 }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
                     self.on_agent_message_item_completed(item);
@@ -4677,28 +4692,6 @@ impl ChatWidget {
         self.refresh_pending_input_preview();
     }
 
-    fn maybe_send_pending_nudges(&mut self) -> bool {
-        if self.stream_controller.is_some() || self.is_plan_streaming_in_tui() {
-            return false;
-        }
-        if self.pending_nudges.is_empty() {
-            return false;
-        }
-        if self.agent_turn_running {
-            if !self.pending_nudge_interrupt_requested {
-                self.pending_nudge_interrupt_requested = true;
-                self.submit_op(Op::Interrupt);
-            }
-            return true;
-        }
-        self.pending_nudge_interrupt_requested = false;
-        while let Some(pending_nudge) = self.pending_nudges.pop_front() {
-            self.submit_user_message(pending_nudge);
-        }
-        self.refresh_pending_input_preview();
-        true
-    }
-
     /// Rebuild and update the bottom-pane pending-input preview.
     fn refresh_pending_input_preview(&mut self) {
         let messages: Vec<String> = self
@@ -4709,7 +4702,7 @@ impl ChatWidget {
         let pending_nudges: Vec<String> = self
             .pending_nudges
             .iter()
-            .map(|nudge| nudge.text.clone())
+            .map(|nudge| nudge.message().to_string())
             .collect();
         self.bottom_pane
             .set_pending_input_preview(messages, pending_nudges);

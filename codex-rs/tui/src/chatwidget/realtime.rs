@@ -51,6 +51,12 @@ pub(super) struct RenderedUserMessageEvent {
     text_elements: Vec<TextElement>,
 }
 
+impl RenderedUserMessageEvent {
+    pub(super) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
 impl ChatWidget {
     pub(super) fn rendered_user_message_event_from_parts(
         message: String,

@@ -76,6 +76,7 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionSource;
@@ -1704,7 +1705,6 @@ async fn make_chatwidget_manual(
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         pending_nudges: VecDeque::new(),
-        pending_nudge_interrupt_requested: false,
         pending_suppressed_legacy_agent_messages: 0,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
@@ -1751,16 +1751,6 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
             Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
         }
     }
-}
-
-fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
-    while let Ok(op) = op_rx.try_recv() {
-        if op == Op::Interrupt {
-            return;
-        }
-    }
-
-    panic!("expected an interrupt op but queue was empty");
 }
 
 fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
@@ -1835,6 +1825,21 @@ fn drain_insert_history(
         }
     }
     out
+}
+
+fn raw_user_message_event(text: &str) -> Event {
+    let response_item: codex_protocol::models::ResponseItem =
+        codex_protocol::models::ResponseInputItem::from(vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }])
+        .into();
+    Event {
+        id: format!("raw-user-{text}"),
+        msg: EventMsg::RawResponseItem(RawResponseItemEvent {
+            item: response_item,
+        }),
+    }
 }
 
 fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
@@ -3452,7 +3457,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
 
 #[tokio::test]
 async fn steer_enter_uses_pending_nudges_while_plan_stream_is_active() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
@@ -3461,6 +3466,7 @@ async fn steer_enter_uses_pending_nudges_while_plan_stream_is_active() {
     chat.set_collaboration_mask(plan_mask);
     chat.on_task_started();
     chat.on_plan_delta("- Step 1".to_string());
+    let _ = drain_insert_history(&mut rx);
 
     chat.bottom_pane
         .set_composer_text("queued submission".to_string(), Vec::new(), Vec::new());
@@ -3470,28 +3476,9 @@ async fn steer_enter_uses_pending_nudges_while_plan_stream_is_active() {
     assert!(chat.queued_user_messages.is_empty());
     assert_eq!(chat.pending_nudges.len(), 1);
     assert_eq!(
-        chat.pending_nudges.front().unwrap().text,
+        chat.pending_nudges.front().unwrap().message(),
         "queued submission"
     );
-    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-
-    chat.handle_codex_event(Event {
-        id: "item-plan".into(),
-        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
-            thread_id: ThreadId::new(),
-            turn_id: "turn-1".to_string(),
-            item: TurnItem::Plan(PlanItem {
-                id: "plan-1".to_string(),
-                text: "- Step 1".to_string(),
-            }),
-        }),
-    });
-
-    next_interrupt_op(&mut op_rx);
-
-    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
-
-    assert!(chat.pending_nudges.is_empty());
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
@@ -3500,13 +3487,21 @@ async fn steer_enter_uses_pending_nudges_while_plan_stream_is_active() {
                 text_elements: Vec::new(),
             }]
         ),
-        other => panic!("expected Op::UserTurn after plan stream completion, got {other:?}"),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
     }
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_codex_event(raw_user_message_event("queued submission"));
+
+    assert!(chat.pending_nudges.is_empty());
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("queued submission"));
 }
 
 #[tokio::test]
 async fn steer_enter_uses_pending_nudges_while_final_answer_stream_is_active() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     // Keep the assistant stream open (no commit tick/finalize) to model the repro window:
@@ -3523,32 +3518,26 @@ async fn steer_enter_uses_pending_nudges_while_final_answer_stream_is_active() {
     assert!(chat.queued_user_messages.is_empty());
     assert_eq!(chat.pending_nudges.len(), 1);
     assert_eq!(
-        chat.pending_nudges.front().unwrap().text,
+        chat.pending_nudges.front().unwrap().message(),
         "queued while streaming"
     );
-    assert_no_submit_op(&mut op_rx);
-
-    complete_assistant_message(
-        &mut chat,
-        "msg-commentary",
-        "Final answer line\n",
-        Some(MessagePhase::Commentary),
-    );
-
-    next_interrupt_op(&mut op_rx);
-
-    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
-
-    assert!(chat.pending_nudges.is_empty());
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { .. } => {}
-        other => panic!("expected Op::UserTurn after message completion, got {other:?}"),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
     }
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_codex_event(raw_user_message_event("queued while streaming"));
+
+    assert!(chat.pending_nudges.is_empty());
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("queued while streaming"));
 }
 
 #[tokio::test]
 async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     // Simulate "dead mode" repro timing by keeping a final-answer stream active while the
@@ -3564,20 +3553,14 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
 
     assert!(chat.queued_user_messages.is_empty());
     assert_eq!(chat.pending_nudges.len(), 2);
-    assert_eq!(chat.pending_nudges.front().unwrap().text, "first follow-up");
-    assert_eq!(chat.pending_nudges.back().unwrap().text, "second follow-up");
-    assert_no_submit_op(&mut op_rx);
-
-    complete_assistant_message(
-        &mut chat,
-        "msg-commentary",
-        "Final answer line\n",
-        Some(MessagePhase::Commentary),
+    assert_eq!(
+        chat.pending_nudges.front().unwrap().message(),
+        "first follow-up"
     );
-
-    next_interrupt_op(&mut op_rx);
-
-    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+    assert_eq!(
+        chat.pending_nudges.back().unwrap().message(),
+        "second follow-up"
+    );
 
     let first_items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,
@@ -3590,8 +3573,6 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
             text_elements: Vec::new(),
         }]
     );
-    assert!(chat.pending_nudges.is_empty());
-
     let second_items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,
         other => panic!("expected Op::UserTurn, got {other:?}"),
@@ -3603,12 +3584,30 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
             text_elements: Vec::new(),
         }]
     );
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_codex_event(raw_user_message_event("first follow-up"));
+
+    assert_eq!(chat.pending_nudges.len(), 1);
+    assert_eq!(
+        chat.pending_nudges.front().unwrap().message(),
+        "second follow-up"
+    );
+    let first_insert = drain_insert_history(&mut rx);
+    assert_eq!(first_insert.len(), 1);
+    assert!(lines_to_single_string(&first_insert[0]).contains("first follow-up"));
+
+    chat.handle_codex_event(raw_user_message_event("second follow-up"));
+
     assert!(chat.pending_nudges.is_empty());
+    let second_insert = drain_insert_history(&mut rx);
+    assert_eq!(second_insert.len(), 1);
+    assert!(lines_to_single_string(&second_insert[0]).contains("second follow-up"));
 }
 
 #[tokio::test]
-async fn manual_interrupt_flushes_pending_nudges() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+async fn manual_interrupt_keeps_pending_nudges_pending_until_core_commits_them() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     chat.on_agent_message_delta("Final answer line\n".to_string());
@@ -3621,11 +3620,6 @@ async fn manual_interrupt_flushes_pending_nudges() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_eq!(chat.pending_nudges.len(), 1);
-    assert_no_submit_op(&mut op_rx);
-
-    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
-
-    assert!(chat.pending_nudges.is_empty());
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
@@ -3634,8 +3628,25 @@ async fn manual_interrupt_flushes_pending_nudges() {
                 text_elements: Vec::new(),
             }]
         ),
-        other => panic!("expected Op::UserTurn after manual interrupt, got {other:?}"),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
     }
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    assert_eq!(chat.pending_nudges.len(), 1);
+    assert_eq!(
+        chat.pending_nudges.front().unwrap().message(),
+        "queued while streaming"
+    );
+    assert_no_submit_op(&mut op_rx);
+
+    chat.handle_codex_event(raw_user_message_event("queued while streaming"));
+
+    assert!(chat.pending_nudges.is_empty());
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 2);
+    assert!(lines_to_single_string(&inserted[1]).contains("queued while streaming"));
 }
 
 #[tokio::test]
