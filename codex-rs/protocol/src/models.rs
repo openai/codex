@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use codex_utils_image::load_and_resize_to_fit;
+use codex_utils_image::PromptImageMode;
+use codex_utils_image::load_for_prompt;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -173,6 +174,15 @@ pub enum ContentItem {
     InputText { text: String },
     InputImage { image_url: String },
     OutputText { text: String },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageDetail {
+    Auto,
+    Low,
+    High,
+    Original,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
@@ -710,8 +720,9 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
 pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
     label_number: Option<usize>,
+    mode: PromptImageMode,
 ) -> Vec<ContentItem> {
-    match load_and_resize_to_fit(path) {
+    match load_for_prompt(path, mode) {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
             if let Some(label_number) = label_number {
@@ -872,7 +883,11 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     }
                     UserInput::LocalImage { path } => {
                         image_index += 1;
-                        local_image_content_items_with_label_number(&path, Some(image_index))
+                        local_image_content_items_with_label_number(
+                            &path,
+                            Some(image_index),
+                            PromptImageMode::ResizeToFit,
+                        )
                     }
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
@@ -937,9 +952,16 @@ pub struct ShellCommandToolCallParams {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FunctionCallOutputContentItem {
     // Do not rename, these are serialized and used directly in the responses API.
-    InputText { text: String },
+    InputText {
+        text: String,
+    },
     // Do not rename, these are serialized and used directly in the responses API.
-    InputImage { image_url: String },
+    InputImage {
+        image_url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        detail: Option<ImageDetail>,
+    },
 }
 
 /// Converts structured function-call output content into plain text for
@@ -983,7 +1005,10 @@ impl From<crate::dynamic_tools::DynamicToolCallOutputContentItem>
                 Self::InputText { text }
             }
             crate::dynamic_tools::DynamicToolCallOutputContentItem::InputImage { image_url } => {
-                Self::InputImage { image_url }
+                Self::InputImage {
+                    image_url,
+                    detail: None,
+                }
             }
         }
     }
@@ -1185,7 +1210,10 @@ fn convert_mcp_content_to_items(
                     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".into());
                     format!("data:{mime_type};base64,{data}")
                 };
-                FunctionCallOutputContentItem::InputImage { image_url }
+                FunctionCallOutputContentItem::InputImage {
+                    image_url,
+                    detail: None,
+                }
             }
             Ok(McpContent::Unknown) | Err(_) => FunctionCallOutputContentItem::InputText {
                 text: serde_json::to_string(content).unwrap_or_else(|_| "<content>".to_string()),
@@ -1239,6 +1267,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,Zm9v".to_string(),
+                detail: None,
             }]
         );
     }
@@ -1256,6 +1285,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,Zm9v".to_string(),
+                detail: None,
             }]
         );
     }
@@ -1278,6 +1308,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
+                detail: None,
             },
             FunctionCallOutputContentItem::InputText {
                 text: "line 2".to_string(),
@@ -1296,6 +1327,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
+                detail: None,
             },
         ];
 
@@ -1318,6 +1350,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
+                detail: None,
             },
         ]);
 
@@ -1542,6 +1575,7 @@ mod tests {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,BASE64".into(),
+                    detail: None,
                 },
             ]
         );
@@ -1567,6 +1601,7 @@ mod tests {
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,BASE64".into(),
+                    detail: None,
                 },
             ]),
         };
@@ -1602,6 +1637,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,BASE64".into(),
+                detail: None,
             }]
         );
 
@@ -1624,6 +1660,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,XYZ".into(),
+                detail: None,
             },
         ];
         assert_eq!(

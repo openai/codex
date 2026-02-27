@@ -222,6 +222,7 @@ mod tests {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,AAA".to_string(),
+                    detail: None,
                 },
                 FunctionCallOutputContentItem::InputText {
                     text: "line 2".to_string(),
@@ -239,6 +240,7 @@ mod tests {
                     },
                     FunctionCallOutputContentItem::InputImage {
                         image_url: "data:image/png;base64,AAA".to_string(),
+                        detail: None,
                     },
                     FunctionCallOutputContentItem::InputText {
                         text: "line 2".to_string(),
