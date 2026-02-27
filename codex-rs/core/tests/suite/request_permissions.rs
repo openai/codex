@@ -13,6 +13,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -31,6 +32,11 @@ use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
+use std::path::Path;
+
+fn absolute_path(path: &Path) -> AbsolutePathBuf {
+    AbsolutePathBuf::try_from(path).expect("absolute path")
+}
 
 struct CommandResult {
     exit_code: Option<i64>,
@@ -187,7 +193,7 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
     let requested_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
-            write: Some(vec![requested_write.clone()]),
+            write: Some(vec![absolute_path(&requested_write)]),
         }),
         ..Default::default()
     };
@@ -272,7 +278,7 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write()
     let requested_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
-            write: Some(vec![requested_write.clone()]),
+            write: Some(vec![absolute_path(&requested_write)]),
         }),
         ..Default::default()
     };
@@ -363,7 +369,7 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write()
     let requested_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
-            write: Some(vec![requested_write.clone()]),
+            write: Some(vec![absolute_path(&requested_write)]),
         }),
         ..Default::default()
     };
@@ -454,14 +460,16 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
     let requested_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
-            write: Some(vec![outside_dir.path().to_path_buf()]),
+            write: Some(vec![absolute_path(outside_dir.path())]),
         }),
         ..Default::default()
     };
     let normalized_requested_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
-            write: Some(vec![outside_dir.path().canonicalize()?]),
+            write: Some(vec![AbsolutePathBuf::try_from(
+                outside_dir.path().canonicalize()?,
+            )?]),
         }),
         ..Default::default()
     };
@@ -548,14 +556,16 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
     let requested_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
-            write: Some(vec![outside_dir.path().to_path_buf()]),
+            write: Some(vec![absolute_path(outside_dir.path())]),
         }),
         ..Default::default()
     };
     let normalized_requested_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
-            write: Some(vec![outside_dir.path().canonicalize()?]),
+            write: Some(vec![AbsolutePathBuf::try_from(
+                outside_dir.path().canonicalize()?,
+            )?]),
         }),
         ..Default::default()
     };
