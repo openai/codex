@@ -17,6 +17,7 @@ use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SkillScope;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
 use dunce::canonicalize as canonicalize_path;
 use serde::Deserialize;
@@ -573,15 +574,18 @@ fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
         }
     };
 
-    let parsed: SkillMetadataFile = match serde_yaml::from_str(&contents) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            tracing::warn!(
-                "ignoring {path}: invalid {label}: {error}",
-                path = metadata_path.display(),
-                label = SKILLS_METADATA_FILENAME
-            );
-            return LoadedSkillMetadata::default();
+    let parsed: SkillMetadataFile = {
+        let _guard = AbsolutePathBufGuard::new(skill_dir);
+        match serde_yaml::from_str(&contents) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                tracing::warn!(
+                    "ignoring {path}: invalid {label}: {error}",
+                    path = metadata_path.display(),
+                    label = SKILLS_METADATA_FILENAME
+                );
+                return LoadedSkillMetadata::default();
+            }
         }
     };
 
@@ -1376,8 +1380,14 @@ permissions:
             Some(PermissionProfile {
                 network: Some(true),
                 file_system: Some(FileSystemPermissions {
-                    read: Some(vec![PathBuf::from("./data")]),
-                    write: Some(vec![PathBuf::from("./output")]),
+                    read: Some(vec![
+                        AbsolutePathBuf::try_from(normalized(skill_dir.join("data").as_path()))
+                            .expect("absolute data path"),
+                    ]),
+                    write: Some(vec![
+                        AbsolutePathBuf::try_from(normalized(skill_dir.join("output").as_path()))
+                            .expect("absolute output path"),
+                    ]),
                 }),
                 macos: None,
             })

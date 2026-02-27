@@ -36,7 +36,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "macos")]
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
 #[test]
@@ -152,7 +151,9 @@ fn shell_request_escalation_execution_is_explicit() {
     let requested_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: None,
-            write: Some(vec![PathBuf::from("./output")]),
+            write: Some(vec![
+                AbsolutePathBuf::from_absolute_path("/tmp/output").unwrap(),
+            ]),
         }),
         ..Default::default()
     };
