@@ -20,6 +20,7 @@ use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
 use crate::custom_prompts::CustomPrompt;
+use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
@@ -57,6 +58,8 @@ pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
 pub use crate::approvals::NetworkApprovalContext;
 pub use crate::approvals::NetworkApprovalProtocol;
+pub use crate::approvals::NetworkPolicyAmendment;
+pub use crate::approvals::NetworkPolicyRuleAction;
 pub use crate::request_user_input::RequestUserInputEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
@@ -182,7 +185,11 @@ pub enum Op {
         effort: Option<ReasoningEffortConfig>,
 
         /// Will only be honored if the model is configured to use reasoning.
-        summary: ReasoningSummaryConfig,
+        ///
+        /// When omitted, the session keeps the current setting (which allows core to
+        /// fall back to the selected model's default on new sessions).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<ReasoningSummaryConfig>,
         // The JSON schema to use for the final assistant message
         final_output_json_schema: Option<Value>,
 
@@ -1041,6 +1048,8 @@ pub enum EventMsg {
 
     DynamicToolCallRequest(DynamicToolCallRequest),
 
+    DynamicToolCallResponse(DynamicToolCallResponseEvent),
+
     ElicitationRequest(ElicitationRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
@@ -1767,6 +1776,27 @@ pub struct McpToolCallEndEvent {
     pub result: Result<CallToolResult, String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
+pub struct DynamicToolCallResponseEvent {
+    /// Identifier for the corresponding DynamicToolCallRequest.
+    pub call_id: String,
+    /// Turn ID that this dynamic tool call belongs to.
+    pub turn_id: String,
+    /// Dynamic tool name.
+    pub tool: String,
+    /// Dynamic tool call arguments.
+    pub arguments: serde_json::Value,
+    /// Dynamic tool response content items.
+    pub content_items: Vec<DynamicToolCallOutputContentItem>,
+    /// Whether the tool call succeeded.
+    pub success: bool,
+    /// Optional error text when the tool call failed before producing a response.
+    pub error: Option<String>,
+    /// The duration of the dynamic tool call.
+    #[ts(type = "string")]
+    pub duration: Duration,
+}
+
 impl McpToolCallEndEvent {
     pub fn is_success(&self) -> bool {
         match &self.result {
@@ -1962,7 +1992,7 @@ impl SessionSource {
                 agent_nickname.clone()
             }
             SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-                Some("morpheus".to_string())
+                Some("Morpheus".to_string())
             }
             _ => None,
         }
@@ -2094,15 +2124,19 @@ pub struct TurnContextNetworkItem {
     pub denied_domains: Vec<String>,
 }
 
-/// Persist only when the same turn also persists the corresponding
-/// model-visible context updates (diffs or full reinjection), so
-/// resume/fork does not use a `reference_context_item` whose context
-/// was never actually visible to the model.
+/// Persist once per real user turn after computing that turn's model-visible
+/// context updates, and again after mid-turn compaction when replacement
+/// history re-establishes full context, so resume/fork replay can recover the
+/// latest durable baseline.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
     pub cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2751,10 +2785,16 @@ pub enum ReviewDecision {
         proposed_execpolicy_amendment: ExecPolicyAmendment,
     },
 
-    /// User has approved this command and wants to automatically approve any
-    /// future identical instances (`command` and `cwd` match exactly) for the
+    /// User has approved this request and wants future prompts in the same
+    /// session-scoped approval cache to be automatically approved for the
     /// remainder of the session.
     ApprovedForSession,
+
+    /// User chose to persist a network policy rule (allow/deny) for future
+    /// requests to the same host.
+    NetworkPolicyAmendment {
+        network_policy_amendment: NetworkPolicyAmendment,
+    },
 
     /// User has denied this command and the agent should not execute it, but
     /// it should continue the session and try something else.
@@ -2774,6 +2814,12 @@ impl ReviewDecision {
             ReviewDecision::Approved => "approved",
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => "approved_with_amendment",
             ReviewDecision::ApprovedForSession => "approved_for_session",
+            ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => match network_policy_amendment.action {
+                NetworkPolicyRuleAction::Allow => "approved_with_network_policy_allow",
+                NetworkPolicyRuleAction::Deny => "denied_with_network_policy_deny",
+            },
             ReviewDecision::Denied => "denied",
             ReviewDecision::Abort => "abort",
         }
@@ -3319,6 +3365,8 @@ mod tests {
         let item = TurnContextItem {
             turn_id: None,
             cwd: PathBuf::from("/tmp"),
+            current_date: None,
+            timezone: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             network: Some(TurnContextNetworkItem {

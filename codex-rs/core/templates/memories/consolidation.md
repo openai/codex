@@ -99,12 +99,14 @@ Phase 2 has two operating styles:
 Primary inputs (always read these, if exists):
 Under `{{ memory_root }}/`:
 - `raw_memories.md`
-  - mechanical merge of `raw_memories` from Phase 1;
-  - ordered latest-first; use this recency ordering as a major heuristic when choosing
-    what to promote, expand, or deprecate;
+  - mechanical merge of `raw_memories` from Phase 1; ordered latest-first.
+  - Use this recency ordering as a major heuristic when choosing what to promote, expand, or deprecate.
+  - Default scan order: top-to-bottom. In INCREMENTAL UPDATE mode, bias attention toward the newest
+    portion first, then expand to older entries with enough coverage to avoid missing important older
+    context.
   - source of rollout-level metadata needed for MEMORY.md `### rollout_summary_files`
     annotations;
-    you should be able to find `cwd` and `updated_at` there.
+    you should be able to find `cwd`, `rollout_path`, and `updated_at` there.
 - `MEMORY.md`
   - merged memories; produce a lightly clustered version if applicable
 - `rollout_summaries/*.md`
@@ -118,6 +120,27 @@ Mode selection:
   and `skills/`).
 - INCREMENTAL UPDATE: existing artifacts already exist and `raw_memories.md`
   mostly contains new additions.
+
+Incremental thread diff snapshot (computed before the current artifact sync rewrites local files):
+
+**Diff since last consolidation:**
+{{ phase2_input_selection }}
+
+Incremental update and forgetting mechanism:
+- Use the diff provided
+- Do not open raw sessions / original rollout transcripts.
+- For each added thread id, search it in `raw_memories.md`, read that raw-memory section, and
+  read the corresponding `rollout_summaries/*.md` file only when needed for stronger evidence,
+  task placement, or conflict resolution.
+- For each removed thread id, search it in `MEMORY.md` and delete only the memory supported by
+  that thread. Use `thread_id=<thread_id>` in `### rollout_summary_files` when available; if not,
+  fall back to rollout summary filenames plus the corresponding `rollout_summaries/*.md` files.
+- If a `MEMORY.md` block contains both removed and undeleted threads, do not delete the whole
+  block. Remove only the removed thread's references and thread-local learnings, preserve shared
+  or still-supported content, and split or rewrite the block only if needed to keep the undeleted
+  threads intact.
+- After `MEMORY.md` cleanup is done, revisit `memory_summary.md` and remove or rewrite stale
+  summary/index content that was only supported by removed thread ids.
 
 Outputs:
 Under `{{ memory_root }}/`:
@@ -133,6 +156,8 @@ Rules:
   signal determine the granularity and depth.
 - Quality objective: for high-signal task families, `MEMORY.md` should be materially more
   useful than `raw_memories.md` while remaining easy to navigate.
+- Ordering objective: surface the most useful and most recently-updated validated memories
+  near the top of `MEMORY.md` and `memory_summary.md`.
 
 ============================================================
 1) `MEMORY.md` FORMAT (STRICT)
@@ -166,15 +191,12 @@ Required task-oriented body shape (strict):
 
 ## Task 1: <task description, outcome>
 
-task: <specific, searchable task signature; avoid fluff>
-
 ### rollout_summary_files
-
-- <rollout_summaries/file1.md> (cwd=<path>, updated_at=<timestamp>, <optional status/usefulness note>)
+- <rollout_summaries/file1.md> (cwd=<path>, rollout_path=<path>, updated_at=<timestamp>, thread_id=<thread_id>, <optional status/usefulness note>)
 
 ### keywords
 
-- <task-local retrieval handles: tool names, error strings, repo concepts, APIs/contracts>
+- <keyword1>, <keyword2>, <keyword3>, ... (single comma-separated line; task-local retrieval handles like tool names, error strings, repo concepts, APIs/contracts)
 
 ### learnings
 
@@ -186,8 +208,6 @@ task: <specific, searchable task signature; avoid fluff>
 - <uncertainty explicitly preserved if unresolved>
 
 ## Task 2: <task description, outcome>
-
-task: <specific, searchable task signature; avoid fluff>
 
 ### rollout_summary_files
 
@@ -215,7 +235,7 @@ Schema rules (strict):
     `## General Tips`.
   - Keep all tasks and tips inside the task family implied by the block header.
   - Keep entries retrieval-friendly, but not shallow.
-  - Do not emit placeholder values (`task: task`, `# Task Group: misc`, `scope: general`, etc.).
+  - Do not emit placeholder values (`# Task Group: misc`, `scope: general`, `## Task 1: task`, etc.).
 - B) Task boundaries and clustering
   - Primary organization unit is the task (`## Task <n>`), not the rollout file.
   - Default mapping: one coherent rollout summary -> one MEMORY block -> one `## Task 1`.
@@ -226,18 +246,23 @@ Schema rules (strict):
     task group and the task intent, technical context, and outcome pattern align.
   - A single `## Task <n>` section may cite multiple rollout summaries when they are
     iterative attempts or follow-up runs for the same task.
+  - A rollout summary file may appear in multiple `## Task <n>` sections (including across
+    different `# Task Group` blocks) when the same rollout contains reusable evidence for
+    distinct task angles; this is allowed.
+  - If a rollout summary is reused across tasks/blocks, each placement should add distinct
+    task-local learnings or routing value (not copy-pasted repetition).
   - Do not cluster on keyword overlap alone.
   - When in doubt, preserve boundaries (separate tasks/blocks) rather than over-cluster.
 - C) Provenance and metadata
   - Every `## Task <n>` section must include `### rollout_summary_files`, `### keywords`,
     and `### learnings`.
   - `### rollout_summary_files` must be task-local (not a block-wide catch-all list).
-  - Each rollout annotation must include `cwd=<path>` and `updated_at=<timestamp>`.
+  - Each rollout annotation must include `cwd=<path>`, `rollout_path=<path>`, and
+    `updated_at=<timestamp>`.
     If missing from a rollout summary, recover them from `raw_memories.md`.
   - Major learnings should be traceable to rollout summaries listed in the same task section.
   - Order rollout references by freshness and practical usefulness.
 - D) Retrieval and references
-  - `task:` lines must be specific and searchable.
   - `### keywords` should be discriminative and task-local (tool names, error strings,
     repo concepts, APIs/contracts).
   - Put task-specific detail in `## Task <n>` and only deduplicated cross-task guidance in
@@ -246,8 +271,15 @@ Schema rules (strict):
     `- Related skill: skills/<skill-name>/SKILL.md`).
   - Use lowercase, hyphenated skill folder names.
 - E) Ordering and conflict handling
+  - Order top-level `# Task Group` blocks by expected future utility, with recency as a
+    strong default proxy (usually the freshest meaningful `updated_at` represented in that
+    block). The top of `MEMORY.md` should contain the highest-utility / freshest task families.
   - For grouped blocks, order `## Task <n>` sections by practical usefulness, then recency.
   - Treat `updated_at` as a first-class signal: fresher validated evidence usually wins.
+  - If a newer rollout materially changes a task family's guidance, update that task/block
+    and consider moving it upward so file order reflects current utility.
+  - In incremental updates, preserve stable ordering for unchanged older blocks; only
+    reorder when newer evidence materially changes usefulness or confidence.
   - If evidence conflicts and validation is unclear, preserve the uncertainty explicitly.
   - In `## General Tips`, cite task references (`[Task 1]`, `[Task 2]`, etc.) when
     merging, deduplicating, or resolving evidence.
@@ -261,7 +293,11 @@ What to write:
   `memory_summary.md`.
 - `MEMORY.md` should support related-but-not-identical tasks: slightly more general than a
   rollout summary, but still operational and concrete.
-- Use `raw_memories.md` as the routing layer; deep-dive into `rollout_summaries/*.md` when:
+- Use `raw_memories.md` as the routing layer and task inventory.
+- Before writing `MEMORY.md`, build a scratch mapping of `rollout_summary_file -> target
+  task group/task` from the full raw inventory so you can have a better overview. 
+  Note that each rollout summary file can belong to multiple tasks.
+- Then deep-dive into `rollout_summaries/*.md` when:
   - the task is high-value and needs richer detail,
   - multiple rollouts overlap and need conflict/staleness resolution,
   - raw memory wording is too terse/ambiguous to consolidate confidently,
@@ -319,12 +355,63 @@ For example, include (when known):
 ## What's in Memory
 This is a compact index to help future agents quickly find details in `MEMORY.md`,
 `skills/`, and `rollout_summaries/`.
-Organize by topic. Each bullet must include: topic, keywords, and a clear description.
-Ordered by utility - which is the most likely to be useful for a future agent.
-Do not target a fixed topic count. Cover the real high-signal areas and omit low-signal noise.
-Prefer grouping by task family / workflow intent, not by incidental tools alone.
+Treat it as a routing/index layer, not a mini-handbook:
+- tell future agents what to search first,
+- preserve enough specificity to route into the right `MEMORY.md` block quickly.
 
-Recommended format:
+Topic selection and quality rules:
+- Organize by topic and split the index into a recent high-utility window and older topics.
+- Do not target a fixed topic count. Include informative topics and omit low-signal noise.
+- Prefer grouping by task family / workflow intent, not by incidental tool overlap alone.
+- Order topics by utility, using `updated_at` recency as a strong default proxy unless there is
+  strong contrary evidence.
+- Each topic bullet must include: topic, keywords, and a clear description.
+- Keywords must be representative and directly searchable in `MEMORY.md`.
+  Prefer exact strings that a future agent can grep for (repo/project names, user query phrases,
+  tool names, error strings, commands, file paths, APIs/contracts). Avoid vague synonyms.
+
+Required subsection structure (in this order):
+
+### <most recent memory day: YYYY-MM-DD>
+
+Recent Active Memory Window behavior (day-ordered):
+- Define a "memory day" as a calendar date (derived from `updated_at`) that has at least one
+  represented memory/rollout in the current memory set.
+- Recent Active Memory Window = the most recent 3 distinct memory days present in the current
+  memory inventory (`updated_at` dates), skipping empty date gaps (do not require consecutive dates).
+- If fewer than 3 memory days exist, include all available memory days.
+- For each recent-day subsection, prioritize informative, likely-to-recur topics and make
+  those entries richer (better keywords, clearer descriptions, and useful recent learnings);
+  do not spend much space on trivial tasks touched that day.
+- Preserve routing coverage for `MEMORY.md` in the overall index. If a recent day includes
+  less useful topics, include shorter/compact entries for routing rather than dropping them.
+- If a topic spans multiple recent days, list it under the most recent day it appears; do not
+  duplicate it under multiple day sections.
+- Recent-day entries should be richer than older-topic entries: stronger keywords, clearer
+  descriptions, and concise recent learnings/change notes.
+- Group similar tasks/topics together when it improves routing clarity.
+- Do not over cluster topics together, especially when they contain distinct task intents.
+
+Recent-topic format:
+- <topic>: <keyword1>, <keyword2>, <keyword3>, ...
+  - desc: <clear and specific description of what tasks are inside this topic; what future task/user goal this helps with; what kinds of outcomes/artifacts/procedures are covered; and when to search this topic first>
+  - learnings: <some concise, topic-local recent takeaways / decision triggers / updates worth checking first; include useful specifics, but avoid overlap with `## General Tips` (cross-topic, broadly reusable guidance belongs there)>
+
+
+### <2nd most recent memory day: YYYY-MM-DD>
+
+Use the same format and keep it informative.
+
+### <3rd most recent memory day: YYYY-MM-DD>
+
+Use the same format and keep it informative.
+
+### Older Memory Topics
+
+All remaining high-signal topics not placed in the recent day subsections.
+Avoid duplicating recent topics. Keep these compact and retrieval-oriented.
+
+Older-topic format (compact):
 - <topic>: <keyword1>, <keyword2>, <keyword3>, ...
   - desc: <clear and specific description of what is inside this topic and when to use it>
 
@@ -332,10 +419,16 @@ Notes:
 - Do not include large snippets; push details into MEMORY.md and rollout summaries.
 - Prefer topics/keywords that help a future agent search MEMORY.md efficiently.
 - Prefer clear topic taxonomy over verbose drill-down pointers.
-- Keep descriptions explicit enough that a future model can decide which keyword cluster
-  to search first for a new user query.
-- Topic descriptions should mention what is inside, when to use it, and what kind of
-  outcome/procedure depth is available (for example: runbook, diagnostics, reporting, recovery).
+- This section is primarily an index to `MEMORY.md`; mention `skills/` / `rollout_summaries/`
+  only when they materially improve routing.
+- Separation rule: recent-topic `learnings` should emphasize topic-local recent deltas,
+  caveats, and decision triggers; move cross-topic, stable, broadly reusable guidance to
+  `## General Tips`.
+- Coverage guardrail: ensure every top-level `# Task Group` in `MEMORY.md` is represented by
+  at least one topic bullet in this index (either directly or via a clearly subsuming topic).
+- Keep descriptions explicit: what is inside, when to use it, and what kind of
+  outcome/procedure depth is available (for example: runbook, diagnostics, reporting, recovery),
+  so a future agent can quickly choose which topic/keyword cluster to search first.
 
 ============================================================
 3) `skills/` FORMAT (optional)
@@ -413,6 +506,10 @@ WORKFLOW
 
 2) INIT phase behavior:
    - Read `raw_memories.md` first, then rollout summaries carefully.
+   - In INIT mode, do a chunked coverage pass over `raw_memories.md` (top-to-bottom; do not stop
+     after only the first chunk).
+   - Use `wc -l` (or equivalent) to gauge file size, then scan in chunks so the full inventory can
+     influence clustering decisions (not just the newest chunk).
    - Build Phase 2 artifacts from scratch:
      - produce/refresh `MEMORY.md`
      - create initial `skills/*` (optional but highly recommended)
@@ -422,22 +519,55 @@ WORKFLOW
      conflicting task families until MEMORY blocks are richer and more useful than raw memories
 
 3) INCREMENTAL UPDATE behavior:
-   - Treat `raw_memories.md` as the primary source of NEW signal.
-   - Read existing memory files first for continuity.
+   - Read existing `MEMORY.md` and `memory_summary.md` first for continuity and to locate
+     existing references that may need surgical cleanup.
+   - Use the injected thread-diff snapshot as the first routing pass:
+     - added thread ids = ingestion queue
+     - removed thread ids = forgetting / stale-cleanup queue
+   - Build an index of rollout references already present in existing `MEMORY.md` before
+     scanning raw memories so you can route net-new evidence into the right blocks.
+   - Work in this order:
+     1. For newly added thread ids, search them in `raw_memories.md`, read those sections, and
+        open the corresponding `rollout_summaries/*.md` files when necessary.
+     2. Route the new signal into existing `MEMORY.md` blocks or create new ones when needed.
+     3. For removed thread ids, search `MEMORY.md` and surgically delete or rewrite only the
+        unsupported thread-local memory.
+     4. If a block mixes removed and undeleted threads, preserve the undeleted-thread content;
+        split or rewrite the block if that is the cleanest way to delete only the removed part.
+     5. After `MEMORY.md` is correct, revisit `memory_summary.md` and remove or rewrite stale
+        summary/index content that no longer has undeleted support.
    - Integrate new signal into existing artifacts by:
-     - scanning new raw memories in recency order and identifying which existing blocks they should update
+     - scanning the newly added raw-memory entries in recency order and identifying which existing blocks they should update
      - updating existing knowledge with better/newer evidence
      - updating stale or contradicting guidance
+     - pruning or downgrading memory whose only provenance comes from removed thread ids
      - expanding terse old blocks when new summaries/raw memories make the task family clearer
      - doing light clustering and merging if needed
+     - refreshing `MEMORY.md` top-of-file ordering so recent high-utility task families stay easy to find
+     - rebuilding the `memory_summary.md` recent active window (last 3 memory days) from current `updated_at` coverage
      - updating existing skills or adding new skills only when there is clear new reusable procedure
-     - update `memory_summary.md` last to reflect the final state of the memory folder
+     - updating `memory_summary.md` last to reflect the final state of the memory folder
+   - Minimize churn in incremental mode: if an existing `MEMORY.md` block or `## What's in Memory`
+     topic still reflects the current evidence and points to the same task family / retrieval
+     target, keep its wording, label, and relative order mostly stable. Rewrite/reorder/rename/
+     split/merge only when fixing a real problem (staleness, ambiguity, schema drift, wrong
+     boundaries) or when meaningful new evidence materially improves retrieval clarity/searchability.
+   - Spend most of your deep-dive budget on newly added thread ids and on mixed blocks touched by
+     removed thread ids. Do not re-read unchanged older threads unless you need them for
+     conflict resolution, clustering, or provenance repair.
 
 4) Evidence deep-dive rule (both modes):
    - `raw_memories.md` is the routing layer, not always the final authority for detail.
+   - Start by inventorying the real files on disk (`rg --files rollout_summaries` or
+     equivalent) and only open/cite rollout summaries from that set.
+   - If raw memory mentions a rollout summary file that is missing on disk, do not invent or
+     guess the file path in `MEMORY.md`; treat it as missing evidence and low confidence.
    - When a task family is important, ambiguous, or duplicated across multiple rollouts,
      open the relevant `rollout_summaries/*.md` files and extract richer procedural detail,
      validation signals, and user feedback before finalizing `MEMORY.md`.
+   - When deleting stale memory from a mixed block, use the relevant rollout summaries to decide
+     which details are uniquely supported by removed threads versus still supported by undeleted
+     threads.
    - Use `updated_at` and validation strength together to resolve stale/conflicting notes.
 
 5) For both modes, update `MEMORY.md` after skill updates:
@@ -449,25 +579,25 @@ WORKFLOW
    - if multiple summaries overlap for the same thread, keep the best one
 
 7) Final pass:
-   - remove duplication in memory_summary, skills/, and MEMORY.md
-   - ensure any referenced skills/summaries actually exist
-   - ensure MEMORY blocks and "What's in Memory" use a consistent task-oriented taxonomy
-   - ensure recent important task families are easy to find (description + keywords + topic wording)
-   - if there is no net-new or higher-quality signal to add, keep changes minimal (no
+  - remove duplication in memory_summary, skills/, and MEMORY.md
+  - remove stale or low-signal blocks that are less likely to be useful in the future
+  - remove or rewrite blocks/task sections whose supporting rollout references point only to
+    removed thread ids or missing rollout summary files
+  - run a global rollout-reference audit on final `MEMORY.md` and fix accidental duplicate
+    entries / redundant repetition, while preserving intentional multi-task or multi-block
+    reuse when it adds distinct task-local value
+  - ensure any referenced skills/summaries actually exist
+  - ensure MEMORY blocks and "What's in Memory" use a consistent task-oriented taxonomy
+  - ensure recent important task families are easy to find (description + keywords + topic wording)
+  - verify `MEMORY.md` block order and `What's in Memory` section order reflect current
+     utility/recency priorities (especially the recent active memory window)
+  - verify `## What's in Memory` quality checks:
+    - recent-day headings are correctly day-ordered
+    - no accidental duplicate topic bullets across recent-day sections and `### Older Memory Topics`
+    - topic coverage still represents all top-level `# Task Group` blocks in `MEMORY.md`
+    - topic keywords are grep-friendly and likely searchable in `MEMORY.md`
+  - if there is no net-new or higher-quality signal to add, keep changes minimal (no
      churn for its own sake).
 
 You should dive deep and make sure you didn't miss any important information that might
 be useful for future agents; do not be superficial.
-
-============================================================
-SEARCH / REVIEW COMMANDS (RG-FIRST)
-============================================================
-
-Use `rg` for fast retrieval while consolidating:
-
-- Search durable notes:
-  `rg -n -i "<pattern>" "{{ memory_root }}/MEMORY.md"`
-- Search across memory tree:
-  `rg -n -i "<pattern>" "{{ memory_root }}" | head -n 100`
-- Locate rollout summary files:
-  `rg --files "{{ memory_root }}/rollout_summaries" | head -n 400`

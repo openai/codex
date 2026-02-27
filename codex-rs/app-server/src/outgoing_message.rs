@@ -9,6 +9,7 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_protocol::ThreadId;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -16,6 +17,7 @@ use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::error_code::INTERNAL_ERROR_CODE;
+use crate::server_request_error::TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON;
 
 #[cfg(test)]
 use codex_protocol::account::PlanType;
@@ -48,36 +50,45 @@ pub(crate) enum OutgoingEnvelope {
 pub(crate) struct OutgoingMessageSender {
     next_server_request_id: AtomicI64,
     sender: mpsc::Sender<OutgoingEnvelope>,
-    request_id_to_callback: Mutex<HashMap<RequestId, oneshot::Sender<ClientRequestResult>>>,
+    request_id_to_callback: Mutex<HashMap<RequestId, PendingCallbackEntry>>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ThreadScopedOutgoingMessageSender {
     outgoing: Arc<OutgoingMessageSender>,
     connection_ids: Arc<Vec<ConnectionId>>,
+    thread_id: ThreadId,
+}
+
+struct PendingCallbackEntry {
+    callback: oneshot::Sender<ClientRequestResult>,
+    thread_id: Option<ThreadId>,
+    request: ServerRequest,
 }
 
 impl ThreadScopedOutgoingMessageSender {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
         connection_ids: Vec<ConnectionId>,
+        thread_id: ThreadId,
     ) -> Self {
         Self {
             outgoing,
             connection_ids: Arc::new(connection_ids),
+            thread_id,
         }
     }
 
     pub(crate) async fn send_request(
         &self,
         payload: ServerRequestPayload,
-    ) -> oneshot::Receiver<ClientRequestResult> {
-        if self.connection_ids.is_empty() {
-            let (_tx, rx) = oneshot::channel();
-            return rx;
-        }
+    ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
         self.outgoing
-            .send_request_to_connections(self.connection_ids.as_slice(), payload)
+            .send_request_to_connections(
+                Some(self.connection_ids.as_slice()),
+                payload,
+                Some(self.thread_id),
+            )
             .await
     }
 
@@ -88,6 +99,20 @@ impl ThreadScopedOutgoingMessageSender {
         self.outgoing
             .send_server_notification_to_connections(self.connection_ids.as_slice(), notification)
             .await;
+    }
+
+    pub(crate) async fn abort_pending_server_requests(&self) {
+        self.outgoing
+            .cancel_requests_for_thread(
+                self.thread_id,
+                Some(JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: "client request resolved because the turn state was changed"
+                        .to_string(),
+                    data: Some(serde_json::json!({ "reason": TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON })),
+                }),
+            )
+            .await
     }
 
     pub(crate) async fn send_response<T: Serialize>(
@@ -116,63 +141,68 @@ impl OutgoingMessageSender {
         }
     }
 
-    pub(crate) async fn send_request_to_connections(
-        &self,
-        connection_ids: &[ConnectionId],
-        request: ServerRequestPayload,
-    ) -> oneshot::Receiver<ClientRequestResult> {
-        let (_id, rx) = self
-            .send_request_with_id_to_connections(connection_ids, request)
-            .await;
-        rx
-    }
-
-    pub(crate) async fn send_request_with_id(
+    pub(crate) async fn send_request(
         &self,
         request: ServerRequestPayload,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
-        self.send_request_with_id_to_connections(&[], request).await
+        self.send_request_to_connections(None, request, None).await
     }
 
-    async fn send_request_with_id_to_connections(
+    fn next_request_id(&self) -> RequestId {
+        RequestId::Integer(self.next_server_request_id.fetch_add(1, Ordering::Relaxed))
+    }
+
+    async fn send_request_to_connections(
         &self,
-        connection_ids: &[ConnectionId],
+        connection_ids: Option<&[ConnectionId]>,
         request: ServerRequestPayload,
+        thread_id: Option<ThreadId>,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
-        let id = RequestId::Integer(self.next_server_request_id.fetch_add(1, Ordering::Relaxed));
+        let id = self.next_request_id();
         let outgoing_message_id = id.clone();
+        let request = request.request_with_id(outgoing_message_id.clone());
+
         let (tx_approve, rx_approve) = oneshot::channel();
         {
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
-            request_id_to_callback.insert(id, tx_approve);
+            request_id_to_callback.insert(
+                id,
+                PendingCallbackEntry {
+                    callback: tx_approve,
+                    thread_id,
+                    request: request.clone(),
+                },
+            );
         }
 
-        let outgoing_message =
-            OutgoingMessage::Request(request.request_with_id(outgoing_message_id.clone()));
-        let send_result = if connection_ids.is_empty() {
-            self.sender
-                .send(OutgoingEnvelope::Broadcast {
-                    message: outgoing_message,
-                })
-                .await
-        } else {
-            let mut send_error = None;
-            for connection_id in connection_ids {
-                if let Err(err) = self
-                    .sender
-                    .send(OutgoingEnvelope::ToConnection {
-                        connection_id: *connection_id,
-                        message: outgoing_message.clone(),
+        let outgoing_message = OutgoingMessage::Request(request);
+        let send_result = match connection_ids {
+            None => {
+                self.sender
+                    .send(OutgoingEnvelope::Broadcast {
+                        message: outgoing_message,
                     })
                     .await
-                {
-                    send_error = Some(err);
-                    break;
-                }
             }
-            match send_error {
-                Some(err) => Err(err),
-                None => Ok(()),
+            Some(connection_ids) => {
+                let mut send_error = None;
+                for connection_id in connection_ids {
+                    if let Err(err) = self
+                        .sender
+                        .send(OutgoingEnvelope::ToConnection {
+                            connection_id: *connection_id,
+                            message: outgoing_message.clone(),
+                        })
+                        .await
+                    {
+                        send_error = Some(err);
+                        break;
+                    }
+                }
+                match send_error {
+                    Some(err) => Err(err),
+                    None => Ok(()),
+                }
             }
         };
 
@@ -184,15 +214,32 @@ impl OutgoingMessageSender {
         (outgoing_message_id, rx_approve)
     }
 
+    pub(crate) async fn replay_requests_to_connection_for_thread(
+        &self,
+        connection_id: ConnectionId,
+        thread_id: ThreadId,
+    ) {
+        let requests = self.pending_requests_for_thread(thread_id).await;
+        for request in requests {
+            if let Err(err) = self
+                .sender
+                .send(OutgoingEnvelope::ToConnection {
+                    connection_id,
+                    message: OutgoingMessage::Request(request),
+                })
+                .await
+            {
+                warn!("failed to resend request to client: {err:?}");
+            }
+        }
+    }
+
     pub(crate) async fn notify_client_response(&self, id: RequestId, result: Result) {
-        let entry = {
-            let mut request_id_to_callback = self.request_id_to_callback.lock().await;
-            request_id_to_callback.remove_entry(&id)
-        };
+        let entry = self.take_request_callback(&id).await;
 
         match entry {
-            Some((id, sender)) => {
-                if let Err(err) = sender.send(Ok(result)) {
+            Some((id, entry)) => {
+                if let Err(err) = entry.callback.send(Ok(result)) {
                     warn!("could not notify callback for {id:?} due to: {err:?}");
                 }
             }
@@ -203,15 +250,12 @@ impl OutgoingMessageSender {
     }
 
     pub(crate) async fn notify_client_error(&self, id: RequestId, error: JSONRPCErrorError) {
-        let entry = {
-            let mut request_id_to_callback = self.request_id_to_callback.lock().await;
-            request_id_to_callback.remove_entry(&id)
-        };
+        let entry = self.take_request_callback(&id).await;
 
         match entry {
-            Some((id, sender)) => {
+            Some((id, entry)) => {
                 warn!("client responded with error for {id:?}: {error:?}");
-                if let Err(err) = sender.send(Err(error)) {
+                if let Err(err) = entry.callback.send(Err(error)) {
                     warn!("could not notify callback for {id:?} due to: {err:?}");
                 }
             }
@@ -222,11 +266,63 @@ impl OutgoingMessageSender {
     }
 
     pub(crate) async fn cancel_request(&self, id: &RequestId) -> bool {
-        let entry = {
+        self.take_request_callback(id).await.is_some()
+    }
+
+    async fn take_request_callback(
+        &self,
+        id: &RequestId,
+    ) -> Option<(RequestId, PendingCallbackEntry)> {
+        let mut request_id_to_callback = self.request_id_to_callback.lock().await;
+        request_id_to_callback.remove_entry(id)
+    }
+
+    pub(crate) async fn pending_requests_for_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> Vec<ServerRequest> {
+        let request_id_to_callback = self.request_id_to_callback.lock().await;
+        let mut requests = request_id_to_callback
+            .iter()
+            .filter_map(|(_, entry)| {
+                (entry.thread_id == Some(thread_id)).then_some(entry.request.clone())
+            })
+            .collect::<Vec<_>>();
+        requests.sort_by(|left, right| left.id().cmp(right.id()));
+        requests
+    }
+
+    pub(crate) async fn cancel_requests_for_thread(
+        &self,
+        thread_id: ThreadId,
+        error: Option<JSONRPCErrorError>,
+    ) {
+        let entries = {
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
-            request_id_to_callback.remove_entry(id)
+            let request_ids = request_id_to_callback
+                .iter()
+                .filter_map(|(request_id, entry)| {
+                    (entry.thread_id == Some(thread_id)).then_some(request_id.clone())
+                })
+                .collect::<Vec<_>>();
+
+            let mut entries = Vec::with_capacity(request_ids.len());
+            for request_id in request_ids {
+                if let Some(entry) = request_id_to_callback.remove(&request_id) {
+                    entries.push(entry);
+                }
+            }
+            entries
         };
-        entry.is_some()
+
+        if let Some(error) = error {
+            for entry in entries {
+                if let Err(err) = entry.callback.send(Err(error.clone())) {
+                    let request_id = entry.request.id();
+                    warn!("could not notify callback for {request_id:?} due to: {err:?}",);
+                }
+            }
+        }
     }
 
     pub(crate) async fn send_response<T: Serialize>(
@@ -275,6 +371,10 @@ impl OutgoingMessageSender {
         connection_ids: &[ConnectionId],
         notification: ServerNotification,
     ) {
+        tracing::trace!(
+            targeted_connections = connection_ids.len(),
+            "app-server event: {notification}"
+        );
         let outgoing_message = OutgoingMessage::AppServerNotification(notification);
         if connection_ids.is_empty() {
             if let Err(err) = self
@@ -398,14 +498,18 @@ mod tests {
     use codex_app_server_protocol::ApplyPatchApprovalParams;
     use codex_app_server_protocol::AuthMode;
     use codex_app_server_protocol::ConfigWarningNotification;
+    use codex_app_server_protocol::DynamicToolCallParams;
+    use codex_app_server_protocol::FileChangeRequestApprovalParams;
     use codex_app_server_protocol::LoginChatGptCompleteNotification;
     use codex_app_server_protocol::ModelRerouteReason;
     use codex_app_server_protocol::ModelReroutedNotification;
     use codex_app_server_protocol::RateLimitSnapshot;
     use codex_app_server_protocol::RateLimitWindow;
+    use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::sync::Arc;
     use tokio::time::timeout;
     use uuid::Uuid;
 
@@ -653,7 +757,7 @@ mod tests {
         let outgoing = OutgoingMessageSender::new(tx);
 
         let (request_id, wait_for_result) = outgoing
-            .send_request_with_id(ServerRequestPayload::ApplyPatchApproval(
+            .send_request(ServerRequestPayload::ApplyPatchApproval(
                 ApplyPatchApprovalParams {
                     conversation_id: ThreadId::new(),
                     call_id: "call-id".to_string(),
@@ -679,5 +783,122 @@ mod tests {
             .expect("wait should not time out")
             .expect("waiter should receive a callback");
         assert_eq!(result, Err(error));
+    }
+
+    #[tokio::test]
+    async fn pending_requests_for_thread_returns_thread_requests_in_request_id_order() {
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let thread_id = ThreadId::new();
+        let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing.clone(),
+            vec![ConnectionId(1)],
+            thread_id,
+        );
+
+        let (dynamic_tool_request_id, _dynamic_tool_waiter) = thread_outgoing
+            .send_request(ServerRequestPayload::DynamicToolCall(
+                DynamicToolCallParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    call_id: "call-0".to_string(),
+                    tool: "tool".to_string(),
+                    arguments: json!({}),
+                },
+            ))
+            .await;
+        let (first_request_id, _first_waiter) = thread_outgoing
+            .send_request(ServerRequestPayload::ToolRequestUserInput(
+                ToolRequestUserInputParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "call-1".to_string(),
+                    questions: vec![],
+                },
+            ))
+            .await;
+        let (second_request_id, _second_waiter) = thread_outgoing
+            .send_request(ServerRequestPayload::FileChangeRequestApproval(
+                FileChangeRequestApprovalParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "call-2".to_string(),
+                    reason: None,
+                    grant_root: None,
+                },
+            ))
+            .await;
+        let pending_requests = outgoing.pending_requests_for_thread(thread_id).await;
+        assert_eq!(
+            pending_requests
+                .iter()
+                .map(ServerRequest::id)
+                .collect::<Vec<_>>(),
+            vec![
+                &dynamic_tool_request_id,
+                &first_request_id,
+                &second_request_id
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_requests_for_thread_cancels_all_thread_requests() {
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let thread_id = ThreadId::new();
+        let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing.clone(),
+            vec![ConnectionId(1)],
+            thread_id,
+        );
+
+        let (_dynamic_tool_request_id, dynamic_tool_waiter) = thread_outgoing
+            .send_request(ServerRequestPayload::DynamicToolCall(
+                DynamicToolCallParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    call_id: "call-0".to_string(),
+                    tool: "tool".to_string(),
+                    arguments: json!({}),
+                },
+            ))
+            .await;
+        let (_request_id, user_input_waiter) = thread_outgoing
+            .send_request(ServerRequestPayload::ToolRequestUserInput(
+                ToolRequestUserInputParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "call-1".to_string(),
+                    questions: vec![],
+                },
+            ))
+            .await;
+        let error = JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: "tracked request cancelled".to_string(),
+            data: None,
+        };
+
+        outgoing
+            .cancel_requests_for_thread(thread_id, Some(error.clone()))
+            .await;
+
+        let dynamic_tool_result = timeout(Duration::from_secs(1), dynamic_tool_waiter)
+            .await
+            .expect("dynamic tool waiter should resolve")
+            .expect("dynamic tool waiter should receive a callback");
+        let user_input_result = timeout(Duration::from_secs(1), user_input_waiter)
+            .await
+            .expect("user input waiter should resolve")
+            .expect("user input waiter should receive a callback");
+        assert_eq!(dynamic_tool_result, Err(error.clone()));
+        assert_eq!(user_input_result, Err(error));
+        assert!(
+            outgoing
+                .pending_requests_for_thread(thread_id)
+                .await
+                .is_empty()
+        );
     }
 }

@@ -206,6 +206,7 @@ pub async fn process_exec_tool_call(
         env,
         expiration,
         sandbox_permissions,
+        additional_permissions: None,
         justification,
     };
 
@@ -218,6 +219,8 @@ pub async fn process_exec_tool_call(
             enforce_managed_network,
             network: network.as_ref(),
             sandbox_policy_cwd: sandbox_cwd,
+            #[cfg(target_os = "macos")]
+            macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
             use_linux_sandbox_bwrap,
             windows_sandbox_level,
@@ -225,7 +228,7 @@ pub async fn process_exec_tool_call(
         .map_err(CodexErr::from)?;
 
     // Route through the sandboxing module for a single, unified execution path.
-    crate::sandboxing::execute_env(exec_req, sandbox_policy, stdout_stream).await
+    crate::sandboxing::execute_env(exec_req, stdout_stream).await
 }
 
 pub(crate) async fn execute_exec_env(
@@ -242,6 +245,7 @@ pub(crate) async fn execute_exec_env(
         sandbox,
         windows_sandbox_level,
         sandbox_permissions,
+        sandbox_policy: _sandbox_policy_from_env,
         justification,
         arg0,
     } = env;

@@ -23,7 +23,6 @@ members = [
     "hooks",
     "secrets",
     "exec",
-    "exec-server",
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
@@ -59,10 +58,12 @@ members = [
     "utils/approval-presets",
     "utils/oss",
     "utils/fuzzy-match",
+    "utils/stream-parser",
     "codex-client",
     "codex-api",
     "state",
     "codex-experimental-api-macros",
+    "test-macros",
 ]
 resolver = "2"
 
@@ -118,6 +119,7 @@ codex-shell-escalation = { path = "shell-escalation" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
+codex-test-macros = { path = "test-macros" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
@@ -135,10 +137,10 @@ codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
+codex-utils-stream-parser = { path = "utils/stream-parser" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
-exec_server_test_support = { path = "exec-server/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
 # External
@@ -147,6 +149,7 @@ allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
+askama = "0.15.4"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -163,6 +166,7 @@ clap_complete = "4"
 color-eyre = "0.6.3"
 crossbeam-channel = "0.5.15"
 crossterm = "0.28.1"
+csv = "1.3.1"
 ctor = "0.6.3"
 derive_more = "2"
 diffy = "0.4.2"
@@ -174,6 +178,7 @@ env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
+gethostname = "1.1.0"
 globset = "0.4"
 http = "1.3.1"
 icu_decimal = "2.1"
@@ -181,9 +186,9 @@ icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
+iana-time-zone = "0.1.64"
 include_dir = "0.7.4"
 indexmap = "2.12.0"
-indoc = "2.0"
 insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
@@ -254,6 +259,7 @@ starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
 supports-color = "3.0.2"
+syntect = "5"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
 test-log = "0.2.19"
@@ -278,7 +284,6 @@ tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
 tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
-syntect = "5"
 ts-rs = "11"
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uds_windows = "1.1.0"
@@ -348,6 +353,7 @@ ignored = [
 
 [profile.release]
 lto = "fat"
+split-debuginfo = "off"
 # Because we bundle some of these executables with the TypeScript CLI, we
 # remove everything to make the binary as small as possible.
 strip = "symbols"

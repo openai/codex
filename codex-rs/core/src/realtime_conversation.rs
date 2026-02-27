@@ -29,7 +29,9 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tracing::debug;
 use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
@@ -183,6 +185,7 @@ pub(crate) async fn handle_start(
     let requested_session_id = params
         .session_id
         .or_else(|| Some(sess.conversation_id.to_string()));
+    info!("starting realtime conversation");
     let events_rx = match sess
         .conversation
         .start(api_provider, None, prompt, requested_session_id.clone())
@@ -190,10 +193,13 @@ pub(crate) async fn handle_start(
     {
         Ok(events_rx) => events_rx,
         Err(err) => {
+            error!("failed to start realtime conversation: {err}");
             send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
             return Ok(());
         }
     };
+
+    info!("realtime conversation started");
 
     sess.send_event_raw(Event {
         id: sub_id.clone(),
@@ -210,6 +216,7 @@ pub(crate) async fn handle_start(
             msg,
         };
         while let Ok(event) = events_rx.recv().await {
+            debug!(conversation_id = %sess_clone.conversation_id, "received realtime conversation event");
             let maybe_routed_text = match &event {
                 RealtimeEvent::ConversationItemAdded(item) => {
                     realtime_text_from_conversation_item(item)
@@ -217,6 +224,7 @@ pub(crate) async fn handle_start(
                 _ => None,
             };
             if let Some(text) = maybe_routed_text {
+                debug!(text = %text, "[realtime-text] realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
                 sess_for_routed_text.route_realtime_text_input(text).await;
             }
@@ -229,6 +237,7 @@ pub(crate) async fn handle_start(
                 .await;
         }
         if let Some(()) = sess_clone.conversation.running_state().await {
+            info!("realtime conversation transport closed");
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationClosed(
                     RealtimeConversationClosedEvent {
@@ -248,6 +257,7 @@ pub(crate) async fn handle_audio(
     params: ConversationAudioParams,
 ) {
     if let Err(err) = sess.conversation.audio_in(params.frame).await {
+        error!("failed to append realtime audio: {err}");
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
     }
 }
@@ -279,7 +289,10 @@ pub(crate) async fn handle_text(
     sub_id: String,
     params: ConversationTextParams,
 ) {
+    debug!(text = %params.text, "[realtime-text] appending realtime conversation text input");
+
     if let Err(err) = sess.conversation.text_in(params.text).await {
+        error!("failed to append realtime text: {err}");
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
     }
 }

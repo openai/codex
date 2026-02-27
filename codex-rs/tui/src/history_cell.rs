@@ -785,6 +785,7 @@ pub fn new_approval_decision_cell(
     command: Vec<String>,
     decision: codex_protocol::protocol::ReviewDecision,
 ) -> Box<dyn HistoryCell> {
+    use codex_protocol::protocol::NetworkPolicyRuleAction;
     use codex_protocol::protocol::ReviewDecision::*;
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
@@ -828,6 +829,29 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        NetworkPolicyAmendment {
+            network_policy_amendment,
+        } => match network_policy_amendment.action {
+            NetworkPolicyRuleAction::Allow => (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "persisted".bold(),
+                    " Codex network access to ".into(),
+                    Span::from(network_policy_amendment.host).dim(),
+                ],
+            ),
+            NetworkPolicyRuleAction::Deny => (
+                "✗ ".red(),
+                vec![
+                    "You ".into(),
+                    "denied".bold(),
+                    " codex network access to ".into(),
+                    Span::from(network_policy_amendment.host).dim(),
+                    " and saved that rule".into(),
+                ],
+            ),
+        },
         Denied => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (
@@ -2578,6 +2602,16 @@ mod tests {
         insta::assert_snapshot!(rendered);
     }
 
+    #[test]
+    fn error_event_oversized_input_snapshot() {
+        let cell = new_error_event(
+            "Message exceeds the maximum length of 1048576 characters (1048577 provided)."
+                .to_string(),
+        );
+        let rendered = render_lines(&cell.display_lines(120)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
     #[tokio::test]
     async fn mcp_tools_output_masks_sensitive_values() {
         let mut config = test_config().await;
@@ -2599,6 +2633,7 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
         };
         let mut servers = config.mcp_servers.get().clone();
         servers.insert("docs".to_string(), stdio_config);
@@ -2622,6 +2657,7 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
         };
         servers.insert("http".to_string(), http_config);
         config

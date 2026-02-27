@@ -17,15 +17,22 @@ use crate::protocol::SandboxPolicy;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 #[cfg(target_os = "macos")]
-use crate::seatbelt::create_seatbelt_command_args;
+use crate::seatbelt::create_seatbelt_command_args_with_extensions;
 #[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::FileSystemPermissions;
+#[cfg(target_os = "macos")]
+use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
+use codex_protocol::protocol::ReadOnlyAccess;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -37,6 +44,7 @@ pub struct CommandSpec {
     pub env: HashMap<String, String>,
     pub expiration: ExecExpiration,
     pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
 }
 
@@ -50,6 +58,7 @@ pub struct ExecRequest {
     pub sandbox: SandboxType,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub sandbox_permissions: SandboxPermissions,
+    pub sandbox_policy: SandboxPolicy,
     pub justification: Option<String>,
     pub arg0: Option<String>,
 }
@@ -66,6 +75,8 @@ pub(crate) struct SandboxTransformRequest<'a> {
     // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
     pub sandbox_policy_cwd: &'a Path,
+    #[cfg(target_os = "macos")]
+    pub macos_seatbelt_profile_extensions: Option<&'a MacOsSeatbeltProfileExtensions>,
     pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
     pub use_linux_sandbox_bwrap: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -84,6 +95,158 @@ pub(crate) enum SandboxTransformError {
     #[cfg(not(target_os = "macos"))]
     #[error("seatbelt sandbox is only available on macOS")]
     SeatbeltUnavailable,
+}
+
+pub(crate) fn normalize_additional_permissions(
+    additional_permissions: PermissionProfile,
+) -> Result<PermissionProfile, String> {
+    let Some(file_system) = additional_permissions.file_system else {
+        return Ok(PermissionProfile::default());
+    };
+    let read = file_system
+        .read
+        .map(|paths| normalize_permission_paths(paths, "file_system.read"));
+    let write = file_system
+        .write
+        .map(|paths| normalize_permission_paths(paths, "file_system.write"));
+    Ok(PermissionProfile {
+        file_system: Some(FileSystemPermissions { read, write }),
+        ..Default::default()
+    })
+}
+
+fn normalize_permission_paths(
+    paths: Vec<AbsolutePathBuf>,
+    _permission_kind: &str,
+) -> Vec<AbsolutePathBuf> {
+    let mut out = Vec::with_capacity(paths.len());
+    let mut seen = HashSet::new();
+
+    for path in paths {
+        let canonicalized = path
+            .as_path()
+            .canonicalize()
+            .ok()
+            .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+            .unwrap_or(path);
+        if seen.insert(canonicalized.clone()) {
+            out.push(canonicalized);
+        }
+    }
+
+    out
+}
+
+fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
+    let mut out = Vec::with_capacity(paths.len());
+    let mut seen = HashSet::new();
+    for path in paths {
+        if seen.insert(path.to_path_buf()) {
+            out.push(path);
+        }
+    }
+    out
+}
+
+fn additional_permission_roots(
+    additional_permissions: &PermissionProfile,
+) -> (Vec<AbsolutePathBuf>, Vec<AbsolutePathBuf>) {
+    (
+        dedup_absolute_paths(
+            additional_permissions
+                .file_system
+                .as_ref()
+                .and_then(|file_system| file_system.read.clone())
+                .unwrap_or_default(),
+        ),
+        dedup_absolute_paths(
+            additional_permissions
+                .file_system
+                .as_ref()
+                .and_then(|file_system| file_system.write.clone())
+                .unwrap_or_default(),
+        ),
+    )
+}
+
+fn merge_read_only_access_with_additional_reads(
+    read_only_access: &ReadOnlyAccess,
+    extra_reads: Vec<AbsolutePathBuf>,
+) -> ReadOnlyAccess {
+    match read_only_access {
+        ReadOnlyAccess::FullAccess => ReadOnlyAccess::FullAccess,
+        ReadOnlyAccess::Restricted {
+            include_platform_defaults,
+            readable_roots,
+        } => {
+            let mut merged = readable_roots.clone();
+            merged.extend(extra_reads);
+            ReadOnlyAccess::Restricted {
+                include_platform_defaults: *include_platform_defaults,
+                readable_roots: dedup_absolute_paths(merged),
+            }
+        }
+    }
+}
+
+fn sandbox_policy_with_additional_permissions(
+    sandbox_policy: &SandboxPolicy,
+    additional_permissions: &PermissionProfile,
+) -> Result<SandboxPolicy, SandboxTransformError> {
+    if additional_permissions.is_empty() {
+        return Ok(sandbox_policy.clone());
+    }
+
+    let (extra_reads, extra_writes) = additional_permission_roots(additional_permissions);
+
+    let policy = match sandbox_policy {
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+            sandbox_policy.clone()
+        }
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            read_only_access,
+            network_access,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+        } => {
+            let mut merged_writes = writable_roots.clone();
+            merged_writes.extend(extra_writes);
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: dedup_absolute_paths(merged_writes),
+                read_only_access: merge_read_only_access_with_additional_reads(
+                    read_only_access,
+                    extra_reads,
+                ),
+                network_access: *network_access,
+                exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                exclude_slash_tmp: *exclude_slash_tmp,
+            }
+        }
+        SandboxPolicy::ReadOnly { access } => {
+            if extra_writes.is_empty() {
+                SandboxPolicy::ReadOnly {
+                    access: merge_read_only_access_with_additional_reads(access, extra_reads),
+                }
+            } else {
+                // todo(dylan) - for now, this grants more access than the request. We should restrict this,
+                // but we should add a new SandboxPolicy variant to handle this. While the feature is still
+                // UnderDevelopment, it's a useful approximation of the desired behavior.
+                SandboxPolicy::WorkspaceWrite {
+                    writable_roots: dedup_absolute_paths(extra_writes),
+                    read_only_access: merge_read_only_access_with_additional_reads(
+                        access,
+                        extra_reads,
+                    ),
+                    network_access: false,
+                    exclude_tmpdir_env_var: false,
+                    exclude_slash_tmp: false,
+                }
+            }
+        }
+    };
+
+    Ok(policy)
 }
 
 #[derive(Default)]
@@ -141,12 +304,20 @@ impl SandboxManager {
             enforce_managed_network,
             network,
             sandbox_policy_cwd,
+            #[cfg(target_os = "macos")]
+            macos_seatbelt_profile_extensions,
             codex_linux_sandbox_exe,
             use_linux_sandbox_bwrap,
             windows_sandbox_level,
         } = request;
+        let effective_policy =
+            if let Some(additional_permissions) = spec.additional_permissions.take() {
+                sandbox_policy_with_additional_permissions(policy, &additional_permissions)?
+            } else {
+                policy.clone()
+            };
         let mut env = spec.env;
-        if !policy.has_full_network_access() {
+        if !effective_policy.has_full_network_access() {
             env.insert(
                 CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
                 "1".to_string(),
@@ -163,19 +334,13 @@ impl SandboxManager {
             SandboxType::MacosSeatbelt => {
                 let mut seatbelt_env = HashMap::new();
                 seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
-                let zsh_exec_bridge_wrapper_socket = env
-                    .get(crate::zsh_exec_bridge::ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR)
-                    .map(PathBuf::from);
-                let zsh_exec_bridge_allowed_unix_sockets = zsh_exec_bridge_wrapper_socket
-                    .as_ref()
-                    .map_or_else(Vec::new, |path| vec![path.clone()]);
-                let mut args = create_seatbelt_command_args(
+                let mut args = create_seatbelt_command_args_with_extensions(
                     command.clone(),
-                    policy,
+                    &effective_policy,
                     sandbox_policy_cwd,
                     enforce_managed_network,
                     network,
-                    &zsh_exec_bridge_allowed_unix_sockets,
+                    macos_seatbelt_profile_extensions,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
@@ -190,7 +355,7 @@ impl SandboxManager {
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
                 let mut args = create_linux_sandbox_command_args(
                     command.clone(),
-                    policy,
+                    &effective_policy,
                     sandbox_policy_cwd,
                     use_linux_sandbox_bwrap,
                     allow_proxy_network,
@@ -225,6 +390,7 @@ impl SandboxManager {
             sandbox,
             windows_sandbox_level,
             sandbox_permissions: spec.sandbox_permissions,
+            sandbox_policy: effective_policy,
             justification: spec.justification,
             arg0: arg0_override,
         })
@@ -237,10 +403,10 @@ impl SandboxManager {
 
 pub async fn execute_env(
     env: ExecRequest,
-    policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
-    execute_exec_env(env, policy, stdout_stream).await
+    let effective_policy = env.sandbox_policy.clone();
+    execute_exec_env(env, &effective_policy, stdout_stream).await
 }
 
 #[cfg(test)]

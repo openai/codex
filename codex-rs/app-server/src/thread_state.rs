@@ -1,5 +1,6 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
@@ -28,8 +29,16 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) config_snapshot: ThreadConfigSnapshot,
 }
 
+// ThreadListenerCommand is used to perform operations in the context of the thread listener, for serialization purposes.
 pub(crate) enum ThreadListenerCommand {
-    SendThreadResumeResponse(PendingThreadResumeRequest),
+    // SendThreadResumeResponse is used to resume an already running thread by sending the thread's history to the client and atomically subscribing for new updates.
+    SendThreadResumeResponse(Box<PendingThreadResumeRequest>),
+    // ResolveServerRequest is used to notify the client that the request has been resolved.
+    // It is executed in the thread listener's context to ensure that the resolved notification is ordered with regard to the request itself.
+    ResolveServerRequest {
+        request_id: RequestId,
+        completion_tx: oneshot::Sender<()>,
+    },
 }
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
@@ -205,6 +214,50 @@ impl ThreadStateManager {
             thread_ids.remove(&thread_id);
             !thread_ids.is_empty()
         });
+    }
+
+    pub(crate) async fn unsubscribe_connection_from_thread(
+        &mut self,
+        thread_id: ThreadId,
+        connection_id: ConnectionId,
+    ) -> bool {
+        let Some(thread_state) = self.thread_states.get(&thread_id) else {
+            return false;
+        };
+
+        if !self
+            .thread_ids_by_connection
+            .get(&connection_id)
+            .is_some_and(|thread_ids| thread_ids.contains(&thread_id))
+        {
+            return false;
+        }
+
+        if let Some(thread_ids) = self.thread_ids_by_connection.get_mut(&connection_id) {
+            thread_ids.remove(&thread_id);
+            if thread_ids.is_empty() {
+                self.thread_ids_by_connection.remove(&connection_id);
+            }
+        }
+
+        self.subscription_state_by_id.retain(|_, state| {
+            !(state.thread_id == thread_id && state.connection_id == connection_id)
+        });
+
+        let mut thread_state = thread_state.lock().await;
+        thread_state.remove_connection(connection_id);
+        true
+    }
+
+    pub(crate) async fn has_subscribers(&self, thread_id: ThreadId) -> bool {
+        let Some(thread_state) = self.thread_states.get(&thread_id) else {
+            return false;
+        };
+        !thread_state
+            .lock()
+            .await
+            .subscribed_connection_ids()
+            .is_empty()
     }
 
     pub(crate) async fn set_listener(

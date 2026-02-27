@@ -6,6 +6,7 @@ use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkDecision;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraints;
 use codex_network_proxy::NetworkProxyHandle;
@@ -106,13 +107,9 @@ impl NetworkProxySpec {
         policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
         blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
         enable_network_approval_flow: bool,
+        audit_metadata: NetworkProxyAuditMetadata,
     ) -> std::io::Result<StartedNetworkProxy> {
-        let state =
-            build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
-                std::io::Error::other(format!("failed to build network proxy state: {err}"))
-            })?;
-        let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
-        let state = NetworkProxyState::with_reloader(state, reloader);
+        let state = self.build_state_with_audit_metadata(audit_metadata)?;
         let mut builder = NetworkProxy::builder().state(Arc::new(state));
         if enable_network_approval_flow
             && matches!(
@@ -140,6 +137,22 @@ impl NetworkProxySpec {
             .await
             .map_err(|err| std::io::Error::other(format!("failed to run network proxy: {err}")))?;
         Ok(StartedNetworkProxy::new(proxy, handle))
+    }
+
+    fn build_state_with_audit_metadata(
+        &self,
+        audit_metadata: NetworkProxyAuditMetadata,
+    ) -> std::io::Result<NetworkProxyState> {
+        let state =
+            build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
+                std::io::Error::other(format!("failed to build network proxy state: {err}"))
+            })?;
+        let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
+        Ok(NetworkProxyState::with_reloader_and_audit_metadata(
+            state,
+            reloader,
+            audit_metadata,
+        ))
     }
 
     fn apply_requirements(
@@ -203,5 +216,30 @@ impl NetworkProxySpec {
         }
 
         (config, constraints)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn build_state_with_audit_metadata_threads_metadata_to_state() {
+        let spec = NetworkProxySpec {
+            config: NetworkProxyConfig::default(),
+            constraints: NetworkProxyConstraints::default(),
+        };
+        let metadata = NetworkProxyAuditMetadata {
+            conversation_id: Some("conversation-1".to_string()),
+            app_version: Some("1.2.3".to_string()),
+            user_account_id: Some("acct-1".to_string()),
+            ..NetworkProxyAuditMetadata::default()
+        };
+
+        let state = spec
+            .build_state_with_audit_metadata(metadata.clone())
+            .expect("state should build");
+        assert_eq!(state.audit_metadata(), &metadata);
     }
 }

@@ -28,7 +28,10 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
         ));
         entries.push((
             "reasoning summaries",
-            config.model_reasoning_summary.to_string(),
+            config
+                .model_reasoning_summary
+                .map(|summary| summary.to_string())
+                .unwrap_or_else(|| "none".to_string()),
         ));
     }
 

@@ -590,6 +590,7 @@ impl UnifiedExecProcessManager {
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
+            additional_permissions: request.additional_permissions.clone(),
             justification: request.justification.clone(),
             exec_approval_requirement,
         };

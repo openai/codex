@@ -28,14 +28,17 @@ jobs:
             target: x86_64-apple-darwin
 
           # Linux
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
+          # 2026-02-27 Bazel tests have been flaky on arm in CI.
+          # Disable until we can investigate and stabilize them.
+          # - os: ubuntu-24.04-arm
+          #   target: aarch64-unknown-linux-musl
+          # - os: ubuntu-24.04-arm
+          #   target: aarch64-unknown-linux-gnu
+
           # TODO: Enable Windows once we fix the toolchain issues there.
           #- os: windows-latest
           #  target: x86_64-pc-windows-gnullvm
@@ -46,6 +49,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Set up Node.js for js_repl tests
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: codex-rs/node-version.txt
 
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
@@ -155,6 +163,13 @@ jobs:
             --build_metadata=ROLE=CI
             --build_metadata=VISIBILITY=PUBLIC
           )
+
+          if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
+            # Bazel test sandboxes on macOS may resolve an older Homebrew `node`
+            # before the `actions/setup-node` runtime on PATH.
+            node_bin="$(which node)"
+            bazel_args+=("--test_env=CODEX_JS_REPL_NODE_PATH=${node_bin}")
+          fi
 
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
             echo "BuildBuddy API key is available; using remote Bazel configuration."

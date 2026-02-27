@@ -24,9 +24,17 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 - https://developers.openai.com/codex/config-reference
 
+When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
+
+## SQLite State DB
+
+Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the
+`CODEX_SQLITE_HOME` environment variable. When unset, WorkspaceWrite sandbox
+sessions default to a temp directory; other modes default to `CODEX_HOME`.
 
 ## Notices
 

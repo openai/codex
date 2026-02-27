@@ -1,3 +1,4 @@
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
@@ -5,11 +6,15 @@ use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
+use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::parse_arguments_with_base_path;
+use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
@@ -19,6 +24,7 @@ use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::PermissionProfile;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,6 +48,8 @@ pub(crate) struct ExecCommandArgs {
     max_output_tokens: Option<usize>,
     #[serde(default)]
     sandbox_permissions: SandboxPermissions,
+    #[serde(default)]
+    additional_permissions: Option<PermissionProfile>,
     #[serde(default)]
     justification: Option<String>,
     #[serde(default)]
@@ -130,7 +138,16 @@ impl ToolHandler for UnifiedExecHandler {
 
         let response = match tool_name.as_str() {
             "exec_command" => {
-                let args: ExecCommandArgs = parse_arguments(&arguments)?;
+                let cwd = resolve_workdir_base_path(&arguments, context.turn.cwd.as_path())?;
+                let args: ExecCommandArgs =
+                    parse_arguments_with_base_path(&arguments, cwd.as_path())?;
+                maybe_emit_implicit_skill_invocation(
+                    session.as_ref(),
+                    turn.as_ref(),
+                    &args.cmd,
+                    args.workdir.as_deref(),
+                )
+                .await;
                 let process_id = manager.allocate_process_id().await;
                 let command = get_command(
                     &args,
@@ -145,12 +162,16 @@ impl ToolHandler for UnifiedExecHandler {
                     yield_time_ms,
                     max_output_tokens,
                     sandbox_permissions,
+                    additional_permissions,
                     justification,
                     prefix_rule,
                     ..
                 } = args;
 
-                if sandbox_permissions.requires_escalated_permissions()
+                let request_permission_enabled =
+                    session.features().enabled(Feature::RequestPermissions);
+
+                if sandbox_permissions.requires_additional_permissions()
                     && !matches!(
                         context.turn.approval_policy.value(),
                         codex_protocol::protocol::AskForApproval::OnRequest
@@ -166,7 +187,21 @@ impl ToolHandler for UnifiedExecHandler {
                 let workdir = workdir.filter(|value| !value.is_empty());
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
-                let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
+                let cwd = workdir.clone().unwrap_or(cwd);
+                let normalized_additional_permissions =
+                    match normalize_and_validate_additional_permissions(
+                        request_permission_enabled,
+                        context.turn.approval_policy.value(),
+                        sandbox_permissions,
+                        additional_permissions,
+                        &cwd,
+                    ) {
+                        Ok(normalized) => normalized,
+                        Err(err) => {
+                            manager.release_process_id(&process_id).await;
+                            return Err(FunctionCallError::RespondToModel(err));
+                        }
+                    };
 
                 if let Some(output) = intercept_apply_patch(
                     &command,
@@ -195,6 +230,7 @@ impl ToolHandler for UnifiedExecHandler {
                             network: context.turn.network.clone(),
                             tty,
                             sandbox_permissions,
+                            additional_permissions: normalized_additional_permissions,
                             justification,
                             prefix_rule,
                         },
@@ -304,8 +340,15 @@ fn format_response(response: &UnifiedExecResponse) -> String {
 mod tests {
     use super::*;
     use crate::shell::default_user_shell;
+    use crate::tools::handlers::parse_arguments_with_base_path;
+    use crate::tools::handlers::resolve_workdir_base_path;
+    use codex_protocol::models::FileSystemPermissions;
+    use codex_protocol::models::PermissionProfile;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::fs;
     use std::sync::Arc;
+    use tempfile::tempdir;
 
     #[test]
     fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
@@ -385,6 +428,39 @@ mod tests {
         assert!(
             err.contains("login shell is disabled by config"),
             "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exec_command_args_resolve_relative_additional_permissions_against_workdir()
+    -> anyhow::Result<()> {
+        let cwd = tempdir()?;
+        let workdir = cwd.path().join("nested");
+        fs::create_dir_all(&workdir)?;
+        let expected_write = workdir.join("relative-write.txt");
+        let json = r#"{
+            "cmd": "echo hello",
+            "workdir": "nested",
+            "additional_permissions": {
+                "file_system": {
+                    "write": ["./relative-write.txt"]
+                }
+            }
+        }"#;
+
+        let base_path = resolve_workdir_base_path(json, cwd.path())?;
+        let args: ExecCommandArgs = parse_arguments_with_base_path(json, base_path.as_path())?;
+
+        assert_eq!(
+            args.additional_permissions,
+            Some(PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: None,
+                    write: Some(vec![AbsolutePathBuf::try_from(expected_write)?]),
+                }),
+                ..Default::default()
+            })
         );
         Ok(())
     }

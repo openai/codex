@@ -13,10 +13,12 @@ use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
 use codex_execpolicy::Evaluation;
+use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
+use codex_execpolicy::blocking_append_network_rule;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -293,6 +295,43 @@ impl ExecPolicyManager {
         self.policy.store(Arc::new(updated_policy));
         Ok(())
     }
+
+    pub(crate) async fn append_network_rule_and_update(
+        &self,
+        codex_home: &Path,
+        host: &str,
+        protocol: NetworkRuleProtocol,
+        decision: Decision,
+        justification: Option<String>,
+    ) -> Result<(), ExecPolicyUpdateError> {
+        let policy_path = default_policy_path(codex_home);
+        let host = host.to_string();
+        spawn_blocking({
+            let policy_path = policy_path.clone();
+            let host = host.clone();
+            let justification = justification.clone();
+            move || {
+                blocking_append_network_rule(
+                    &policy_path,
+                    &host,
+                    protocol,
+                    decision,
+                    justification.as_deref(),
+                )
+            }
+        })
+        .await
+        .map_err(|source| ExecPolicyUpdateError::JoinBlockingTask { source })?
+        .map_err(|source| ExecPolicyUpdateError::AppendRule {
+            path: policy_path,
+            source,
+        })?;
+
+        let mut updated_policy = self.current().as_ref().clone();
+        updated_policy.add_network_rule(&host, protocol, decision, justification)?;
+        self.policy.store(Arc::new(updated_policy));
+        Ok(())
+    }
 }
 
 impl Default for ExecPolicyManager {
@@ -433,14 +472,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         return Ok(policy);
     };
 
-    let mut combined_rules = policy.rules().clone();
-    for (program, rules) in requirements_policy.as_ref().rules().iter_all() {
-        for rule in rules {
-            combined_rules.insert(program.clone(), rule.clone());
-        }
-    }
-
-    Ok(Policy::new(combined_rules))
+    Ok(policy.merge_overlay(requirements_policy.as_ref()))
 }
 
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].
@@ -497,7 +529,7 @@ pub fn render_decision_for_unmatched_command(
                     // In restricted sandboxes (ReadOnly/WorkspaceWrite), do not prompt for
                     // non‑escalated, non‑dangerous commands — let the sandbox enforce
                     // restrictions (e.g., block network/write) without a user prompt.
-                    if sandbox_permissions.requires_escalated_permissions() {
+                    if sandbox_permissions.requires_additional_permissions() {
                         Decision::Prompt
                     } else {
                         Decision::Allow
@@ -512,7 +544,7 @@ pub fn render_decision_for_unmatched_command(
                 Decision::Allow
             }
             SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => {
-                if sandbox_permissions.requires_escalated_permissions() {
+                if sandbox_permissions.requires_additional_permissions() {
                     Decision::Prompt
                 } else {
                     Decision::Allow
@@ -785,6 +817,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::tempdir;
     use toml::Value as TomlValue;
@@ -802,6 +835,22 @@ mod tests {
             ConfigRequirementsToml::default(),
         )
         .expect("ConfigLayerStack")
+    }
+
+    fn host_absolute_path(segments: &[&str]) -> String {
+        let mut path = if cfg!(windows) {
+            PathBuf::from(r"C:\")
+        } else {
+            PathBuf::from("/")
+        };
+        for segment in segments {
+            path.push(segment);
+        }
+        path.to_string_lossy().into_owned()
+    }
+
+    fn starlark_string(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
     }
 
     #[tokio::test]
@@ -907,11 +956,100 @@ mod tests {
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             },
             policy.check_multiple(command.iter(), &|_| Decision::Allow)
         );
+    }
+
+    #[tokio::test]
+    async fn merges_requirements_exec_policy_network_rules() -> anyhow::Result<()> {
+        let temp_dir = tempdir()?;
+
+        let mut requirements_exec_policy = Policy::empty();
+        requirements_exec_policy.add_network_rule(
+            "blocked.example.com",
+            codex_execpolicy::NetworkRuleProtocol::Https,
+            Decision::Forbidden,
+            None,
+        )?;
+
+        let requirements = ConfigRequirements {
+            exec_policy: Some(codex_config::Sourced::new(
+                codex_config::RequirementsExecPolicy::new(requirements_exec_policy),
+                codex_config::RequirementSource::Unknown,
+            )),
+            ..ConfigRequirements::default()
+        };
+        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+        let layer = ConfigLayerEntry::new(
+            ConfigLayerSource::Project { dot_codex_folder },
+            TomlValue::Table(Default::default()),
+        );
+        let config_stack =
+            ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())?;
+
+        let policy = load_exec_policy(&config_stack).await?;
+        let (allowed, denied) = policy.compiled_network_domains();
+
+        assert!(allowed.is_empty());
+        assert_eq!(denied, vec!["blocked.example.com".to_string()]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn preserves_host_executables_when_requirements_overlay_is_present() -> anyhow::Result<()>
+    {
+        let temp_dir = tempdir()?;
+        let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+        fs::create_dir_all(&policy_dir)?;
+        let git_path = host_absolute_path(&["usr", "bin", "git"]);
+        let git_path_literal = starlark_string(&git_path);
+        fs::write(
+            policy_dir.join("host.rules"),
+            format!(
+                r#"
+host_executable(name = "git", paths = ["{git_path_literal}"])
+"#
+            ),
+        )?;
+
+        let mut requirements_exec_policy = Policy::empty();
+        requirements_exec_policy.add_network_rule(
+            "blocked.example.com",
+            codex_execpolicy::NetworkRuleProtocol::Https,
+            Decision::Forbidden,
+            None,
+        )?;
+
+        let requirements = ConfigRequirements {
+            exec_policy: Some(codex_config::Sourced::new(
+                codex_config::RequirementsExecPolicy::new(requirements_exec_policy),
+                codex_config::RequirementSource::Unknown,
+            )),
+            ..ConfigRequirements::default()
+        };
+        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+        let layer = ConfigLayerEntry::new(
+            ConfigLayerSource::Project { dot_codex_folder },
+            TomlValue::Table(Default::default()),
+        );
+        let config_stack =
+            ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())?;
+
+        let policy = load_exec_policy(&config_stack).await?;
+
+        assert_eq!(
+            policy
+                .host_executables()
+                .get("git")
+                .expect("missing git host executable")
+                .as_ref(),
+            [AbsolutePathBuf::try_from(git_path)?]
+        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -1029,6 +1167,7 @@ mod tests {
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             },
@@ -1040,6 +1179,7 @@ mod tests {
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["ls".to_string()],
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 }],
             },
@@ -1906,6 +2046,7 @@ prefix_rule(
         let matched_rules_prompt = vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: vec!["cargo".to_string()],
             decision: Decision::Prompt,
+            resolved_program: None,
             justification: None,
         }];
         assert_eq!(
@@ -1919,6 +2060,7 @@ prefix_rule(
         let matched_rules_allow = vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: vec!["cargo".to_string()],
             decision: Decision::Allow,
+            resolved_program: None,
             justification: None,
         }];
         assert_eq!(
@@ -1932,6 +2074,7 @@ prefix_rule(
         let matched_rules_forbidden = vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: vec!["cargo".to_string()],
             decision: Decision::Forbidden,
+            resolved_program: None,
             justification: None,
         }];
         assert_eq!(

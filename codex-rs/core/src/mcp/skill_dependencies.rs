@@ -241,6 +241,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             oauth_config.http_headers,
             oauth_config.env_http_headers,
             &[],
+            server_config.oauth_resource.as_deref(),
             config.mcp_oauth_callback_port,
             config.mcp_oauth_callback_url.as_deref(),
         )
@@ -387,6 +388,7 @@ fn mcp_dependency_to_server_config(
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
         });
     }
 
@@ -411,6 +413,7 @@ fn mcp_dependency_to_server_config(
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
         });
     }
 
@@ -433,8 +436,9 @@ mod tests {
             interface: None,
             dependencies: Some(SkillDependencies { tools }),
             policy: None,
+            permission_profile: None,
             permissions: None,
-            path: PathBuf::from("skill"),
+            path_to_skills_md: PathBuf::from("skill"),
             scope: SkillScope::User,
         }
     }
@@ -467,6 +471,7 @@ mod tests {
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -515,6 +520,7 @@ mod tests {
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 

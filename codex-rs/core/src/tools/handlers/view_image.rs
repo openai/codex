@@ -81,7 +81,8 @@ impl ToolHandler for ViewImageHandler {
         }
         let event_path = abs_path.clone();
 
-        let content = local_image_content_items_with_label_number(&abs_path, None)
+        let content = local_image_content_items_with_label_number(&abs_path, None);
+        let content = content
             .into_iter()
             .map(|item| match item {
                 ContentItem::InputText { text } => {

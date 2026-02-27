@@ -1,6 +1,5 @@
 #![cfg(not(target_os = "windows"))]
 
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -84,7 +83,7 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

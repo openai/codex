@@ -1,6 +1,5 @@
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
@@ -52,10 +51,16 @@ async fn wait_for_snapshot(codex_home: &Path) -> Result<PathBuf> {
     let snapshot_dir = codex_home.join("shell_snapshots");
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await
-            && let Some(entry) = entries.next_entry().await?
-        {
-            return Ok(entry.path());
+        if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await {
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+                    continue;
+                };
+                if extension == "sh" || extension == "ps1" {
+                    return Ok(path);
+                }
+            }
         }
 
         if Instant::now() >= deadline {
@@ -156,7 +161,7 @@ async fn run_snapshot_command_with_options(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -242,7 +247,7 @@ async fn run_shell_command_snapshot_with_options(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -311,7 +316,7 @@ async fn run_tool_turn_on_harness(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -529,7 +534,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

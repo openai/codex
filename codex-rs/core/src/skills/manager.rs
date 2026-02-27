@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_protocol::protocol::SkillScope;
@@ -16,6 +17,7 @@ use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
 use crate::skills::SkillLoadOutcome;
+use crate::skills::build_implicit_skill_path_indexes;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use crate::skills::loader::skill_roots_from_layer_stack_with_agents;
@@ -50,6 +52,10 @@ impl SkillsManager {
             skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd);
         let mut outcome = load_skills_from_roots(roots);
         outcome.disabled_paths = disabled_paths_from_stack(&config.config_layer_stack);
+        let (by_scripts_dir, by_doc_path) =
+            build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
+        outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
+        outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -124,7 +130,17 @@ impl SkillsManager {
                 }),
         );
         let mut outcome = load_skills_from_roots(roots);
+        if !extra_user_roots.is_empty() {
+            // When extra user roots are provided, skip system skills before caching the result.
+            outcome
+                .skills
+                .retain(|skill| skill.scope != SkillScope::System);
+        }
         outcome.disabled_paths = disabled_paths_from_stack(&config_layer_stack);
+        let (by_scripts_dir, by_doc_path) =
+            build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
+        outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
+        outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),

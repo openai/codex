@@ -37,7 +37,7 @@ pub(crate) async fn init_if_enabled(
         return None;
     }
     let runtime = match codex_state::StateRuntime::init(
-        config.codex_home.clone(),
+        config.sqlite_home.clone(),
         config.model_provider_id.clone(),
         otel.cloned(),
     )
@@ -47,7 +47,7 @@ pub(crate) async fn init_if_enabled(
         Err(err) => {
             warn!(
                 "failed to initialize state runtime at {}: {err}",
-                config.codex_home.display()
+                config.sqlite_home.display()
             );
             if let Some(otel) = otel {
                 otel.counter("codex.db.init", 1, &[("status", "init_error")]);
@@ -79,20 +79,20 @@ pub(crate) async fn init_if_enabled(
 
 /// Get the DB if the feature is enabled and the DB exists.
 pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
-    let state_path = codex_state::state_db_path(config.codex_home.as_path());
+    let state_path = codex_state::state_db_path(config.sqlite_home.as_path());
     if !config.features.enabled(Feature::Sqlite)
         || !tokio::fs::try_exists(&state_path).await.unwrap_or(false)
     {
         return None;
     }
     let runtime = codex_state::StateRuntime::init(
-        config.codex_home.clone(),
+        config.sqlite_home.clone(),
         config.model_provider_id.clone(),
         otel.cloned(),
     )
     .await
     .ok()?;
-    require_backfill_complete(runtime, config.codex_home.as_path()).await
+    require_backfill_complete(runtime, config.sqlite_home.as_path()).await
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.
@@ -226,6 +226,7 @@ pub async fn list_threads_db(
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
     archived: bool,
+    search_term: Option<&str>,
 ) -> Option<codex_state::ThreadsPage> {
     let ctx = context?;
     if ctx.codex_home() != codex_home {
@@ -257,6 +258,7 @@ pub async fn list_threads_db(
             allowed_sources.as_slice(),
             model_providers.as_deref(),
             archived,
+            search_term,
         )
         .await
     {
@@ -343,6 +345,7 @@ pub async fn reconcile_rollout(
     builder: Option<&ThreadMetadataBuilder>,
     items: &[RolloutItem],
     archived_only: Option<bool>,
+    new_thread_memory_mode: Option<&str>,
 ) {
     let Some(ctx) = context else {
         return;
@@ -355,6 +358,7 @@ pub async fn reconcile_rollout(
             builder,
             items,
             "reconcile_rollout",
+            new_thread_memory_mode,
         )
         .await;
         return;
@@ -465,6 +469,7 @@ pub async fn read_repair_rollout_path(
         None,
         &[],
         archived_only,
+        None,
     )
     .await;
 }
@@ -477,6 +482,7 @@ pub async fn apply_rollout_items(
     builder: Option<&ThreadMetadataBuilder>,
     items: &[RolloutItem],
     stage: &str,
+    new_thread_memory_mode: Option<&str>,
 ) {
     let Some(ctx) = context else {
         return;
@@ -497,7 +503,10 @@ pub async fn apply_rollout_items(
     };
     builder.rollout_path = rollout_path.to_path_buf();
     builder.cwd = normalize_cwd_for_state_db(&builder.cwd);
-    if let Err(err) = ctx.apply_rollout_items(&builder, items, None).await {
+    if let Err(err) = ctx
+        .apply_rollout_items(&builder, items, None, new_thread_memory_mode)
+        .await
+    {
         warn!(
             "state db apply_rollout_items failed during {stage} for {}: {err}",
             rollout_path.display()

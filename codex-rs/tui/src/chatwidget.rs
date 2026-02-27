@@ -37,6 +37,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::app_event::RealtimeAudioDeviceKind;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::status::RateLimitWindowDisplay;
@@ -218,6 +221,7 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
+use crate::clipboard_text;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -259,6 +263,9 @@ mod skills;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
+mod realtime;
+use self::realtime::RealtimeConversationUiState;
+use self::realtime::RenderedUserMessageEvent;
 use crate::mention_codec::LinkedMention;
 use crate::mention_codec::encode_history_mentions;
 use crate::streaming::chunking::AdaptiveChunkingPolicy;
@@ -553,6 +560,8 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
+    // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
+    last_copyable_output: Option<String>,
     running_commands: HashMap<String, RunningCommand>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
@@ -665,6 +674,8 @@ pub(crate) struct ChatWidget {
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
+    realtime_conversation: RealtimeConversationUiState,
+    last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -842,6 +853,15 @@ enum ReplayKind {
 }
 
 impl ChatWidget {
+    fn realtime_conversation_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::RealtimeConversation)
+            && cfg!(not(target_os = "linux"))
+    }
+
+    fn realtime_audio_device_selection_enabled(&self) -> bool {
+        self.realtime_conversation_enabled() && cfg!(feature = "voice-input")
+    }
+
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
@@ -1113,6 +1133,7 @@ impl ChatWidget {
                 Constrained::allow_only(event.sandbox_policy.clone());
         }
         let initial_messages = event.initial_messages.clone();
+        self.last_copyable_output = None;
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -1301,6 +1322,9 @@ impl ChatWidget {
         } else {
             text
         };
+        if !plan_text.trim().is_empty() {
+            self.last_copyable_output = Some(plan_text.clone());
+        }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
         let should_restore_after_stream = self.plan_stream_controller.is_some();
@@ -1394,6 +1418,11 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+        if let Some(message) = last_agent_message.as_ref()
+            && !message.trim().is_empty()
+        {
+            self.last_copyable_output = Some(message.clone());
+        }
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -2546,12 +2575,14 @@ impl ChatWidget {
             .unwrap_or_else(|_| ev.command.join(" "));
         self.notify(Notification::ExecApprovalRequested { command });
 
+        let available_decisions = ev.effective_available_decisions();
         let request = ApprovalRequest::Exec {
-            id: ev.call_id,
+            id: ev.effective_approval_id(),
             command: ev.command,
             reason: ev.reason,
+            available_decisions,
             network_approval_context: ev.network_approval_context,
-            proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
+            additional_permissions: ev.additional_permissions,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -2796,6 +2827,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
+            last_copyable_output: None,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -2846,15 +2878,20 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            realtime_conversation: RealtimeConversationUiState::default(),
+            last_rendered_user_message_event: None,
         };
 
         widget.prefetch_rate_limits();
-        widget
-            .bottom_pane
-            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
+        widget
+            .bottom_pane
+            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
+        widget
+            .bottom_pane
+            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -2967,6 +3004,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
+            last_copyable_output: None,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -3017,15 +3055,20 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            realtime_conversation: RealtimeConversationUiState::default(),
+            last_rendered_user_message_event: None,
         };
 
         widget.prefetch_rate_limits();
-        widget
-            .bottom_pane
-            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
+        widget
+            .bottom_pane
+            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
+        widget
+            .bottom_pane
+            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3127,6 +3170,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
+            last_copyable_output: None,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -3177,15 +3221,20 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            realtime_conversation: RealtimeConversationUiState::default(),
+            last_rendered_user_message_event: None,
         };
 
         widget.prefetch_rate_limits();
-        widget
-            .bottom_pane
-            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
+        widget
+            .bottom_pane
+            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
+        widget
+            .bottom_pane
+            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3307,7 +3356,12 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
                     };
-                    // Steer submissions during active final-answer streaming can race with turn
+                    let Some(user_message) =
+                        self.maybe_defer_user_message_for_realtime(user_message)
+                    else {
+                        return;
+                    };
+                    // Submissions during active final-answer streaming can race with turn
                     // completion and strand the UI in a running state. Queue those inputs instead
                     // of injecting immediately; `on_task_complete()` drains this FIFO via
                     // `maybe_send_next_queued_input()`, so no typed prompt is dropped.
@@ -3315,7 +3369,7 @@ impl ChatWidget {
                         && !self.is_plan_streaming_in_tui()
                         && self.stream_controller.is_none();
                     if should_submit_now {
-                        // Submitted is only emitted when steer is enabled.
+                        // Submitted is emitted when user submits.
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
@@ -3341,6 +3395,11 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
+                    };
+                    let Some(user_message) =
+                        self.maybe_defer_user_message_for_realtime(user_message)
+                    else {
+                        return;
                     };
                     self.queue_user_message(user_message);
                 }
@@ -3400,6 +3459,19 @@ impl ChatWidget {
 
     pub(crate) fn can_launch_external_editor(&self) -> bool {
         self.bottom_pane.can_launch_external_editor()
+    }
+
+    pub(crate) fn can_run_ctrl_l_clear_now(&mut self) -> bool {
+        // Ctrl+L is not a slash command, but it follows /clear's current rule:
+        // block while a task is running.
+        if !self.bottom_pane.is_task_running() {
+            return true;
+        }
+
+        let message = "Ctrl+L is disabled while a task is in progress.".to_string();
+        self.add_to_history(history_cell::new_error_event(message));
+        self.request_redraw();
+        false
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -3464,6 +3536,22 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::Realtime => {
+                if !self.realtime_conversation_enabled() {
+                    return;
+                }
+                if self.realtime_conversation.is_live() {
+                    self.request_realtime_conversation_close(None);
+                } else {
+                    self.start_realtime_conversation();
+                }
+            }
+            SlashCommand::Settings => {
+                if !self.realtime_audio_device_selection_enabled() {
+                    return;
+                }
+                self.open_realtime_audio_popup();
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
@@ -3590,6 +3678,34 @@ impl ChatWidget {
                     };
                     tx.send(AppEvent::DiffResult(text));
                 });
+            }
+            SlashCommand::Copy => {
+                let Some(text) = self.last_copyable_output.as_deref() else {
+                    self.add_info_message(
+                        "`/copy` is unavailable before the first Codex output or right after a rollback."
+                            .to_string(),
+                        None,
+                    );
+                    return;
+                };
+
+                let copy_result = clipboard_text::copy_text_to_clipboard(text);
+
+                match copy_result {
+                    Ok(()) => {
+                        let hint = self.agent_turn_running.then_some(
+                            "Current turn is still running; copied the latest completed output (not the in-progress response)."
+                                .to_string(),
+                        );
+                        self.add_info_message(
+                            "Copied latest Codex output to clipboard.".to_string(),
+                            hint,
+                        );
+                    }
+                    Err(err) => {
+                        self.add_error_message(format!("Failed to copy to clipboard: {err}"))
+                    }
+                }
             }
             SlashCommand::Mention => {
                 self.insert_str("@");
@@ -3964,12 +4080,14 @@ impl ChatWidget {
                     .strip_prefix("skill://")
                     .unwrap_or(binding.path.as_str());
                 let path = Path::new(path);
-                if let Some(skill) = skills.iter().find(|skill| skill.path.as_path() == path)
-                    && selected_skill_paths.insert(skill.path.clone())
+                if let Some(skill) = skills
+                    .iter()
+                    .find(|skill| skill.path_to_skills_md.as_path() == path)
+                    && selected_skill_paths.insert(skill.path_to_skills_md.clone())
                 {
                     items.push(UserInput::Skill {
                         name: skill.name.clone(),
-                        path: skill.path.clone(),
+                        path: skill.path_to_skills_md.clone(),
                     });
                 }
             }
@@ -3977,13 +4095,13 @@ impl ChatWidget {
             let skill_mentions = find_skill_mentions_with_tool_mentions(&mentions, skills);
             for skill in skill_mentions {
                 if bound_names.contains(skill.name.as_str())
-                    || !selected_skill_paths.insert(skill.path.clone())
+                    || !selected_skill_paths.insert(skill.path_to_skills_md.clone())
                 {
                     continue;
                 }
                 items.push(UserInput::Skill {
                     name: skill.name.clone(),
-                    path: skill.path.clone(),
+                    path: skill.path_to_skills_md.clone(),
                 });
             }
         }
@@ -4043,7 +4161,7 @@ impl ChatWidget {
             sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),
-            summary: self.config.model_reasoning_summary,
+            summary: None,
             final_output_json_schema: None,
             collaboration_mode,
             personality,
@@ -4072,7 +4190,17 @@ impl ChatWidget {
 
         // Show replayable user content in conversation history.
         if !text.is_empty() {
-            let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
+            let local_image_paths = local_images
+                .into_iter()
+                .map(|img| img.path)
+                .collect::<Vec<_>>();
+            self.last_rendered_user_message_event =
+                Some(Self::rendered_user_message_event_from_parts(
+                    text.clone(),
+                    text_elements.clone(),
+                    local_image_paths.clone(),
+                    remote_image_urls.clone(),
+                ));
             self.add_to_history(history_cell::new_user_prompt(
                 text,
                 text_elements,
@@ -4080,6 +4208,13 @@ impl ChatWidget {
                 remote_image_urls,
             ));
         } else if !remote_image_urls.is_empty() {
+            self.last_rendered_user_message_event =
+                Some(Self::rendered_user_message_event_from_parts(
+                    String::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    remote_image_urls.clone(),
+                ));
             self.add_to_history(history_cell::new_user_prompt(
                 String::new(),
                 Vec::new(),
@@ -4302,7 +4437,7 @@ impl ChatWidget {
                 }
             }
             EventMsg::UserMessage(ev) => {
-                if from_replay {
+                if from_replay || self.should_render_realtime_user_message_event(&ev) {
                     self.on_user_message_event(ev);
                 }
             }
@@ -4326,6 +4461,10 @@ impl ChatWidget {
             EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
             EventMsg::CollabResumeEnd(ev) => self.on_collab_event(multi_agents::resume_end(ev)),
             EventMsg::ThreadRolledBack(rollback) => {
+                // Conservatively clear `/copy` state on rollback. The app layer trims visible
+                // transcript cells, but we do not maintain rollback-aware raw-markdown history yet,
+                // so keeping the previous cache can return content that was just removed.
+                self.last_copyable_output = None;
                 if from_replay {
                     self.app_event_tx.send(AppEvent::ApplyThreadRollback {
                         num_turns: rollback.num_turns,
@@ -4337,10 +4476,23 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::RealtimeConversationStarted(_)
-            | EventMsg::RealtimeConversationRealtime(_)
-            | EventMsg::RealtimeConversationClosed(_)
-            | EventMsg::DynamicToolCallRequest(_) => {}
+            | EventMsg::DynamicToolCallRequest(_)
+            | EventMsg::DynamicToolCallResponse(_) => {}
+            EventMsg::RealtimeConversationStarted(ev) => {
+                if !from_replay {
+                    self.on_realtime_conversation_started(ev);
+                }
+            }
+            EventMsg::RealtimeConversationRealtime(ev) => {
+                if !from_replay {
+                    self.on_realtime_conversation_realtime(ev);
+                }
+            }
+            EventMsg::RealtimeConversationClosed(ev) => {
+                if !from_replay {
+                    self.on_realtime_conversation_closed(ev);
+                }
+            }
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
@@ -4411,6 +4563,8 @@ impl ChatWidget {
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
+        self.last_rendered_user_message_event =
+            Some(Self::rendered_user_message_event_from_event(&event));
         let remote_image_urls = event.images.unwrap_or_default();
         if !event.message.trim().is_empty()
             || !event.text_elements.is_empty()
@@ -4502,6 +4656,10 @@ impl ChatWidget {
             .map(|m| m.text.clone())
             .collect();
         self.bottom_pane.set_queued_user_messages(messages);
+    }
+
+    pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {
+        self.bottom_pane.set_pending_thread_approvals(threads);
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
@@ -5125,6 +5283,161 @@ impl ChatWidget {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Select Personality".bold()));
         header.push(Line::from("Choose a communication style for Codex.".dim()));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_realtime_audio_popup(&mut self) {
+        let items = [
+            RealtimeAudioDeviceKind::Microphone,
+            RealtimeAudioDeviceKind::Speaker,
+        ]
+        .into_iter()
+        .map(|kind| {
+            let description = Some(format!(
+                "Current: {}",
+                self.current_realtime_audio_selection_label(kind)
+            ));
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenRealtimeAudioDeviceSelection { kind });
+            })];
+            SelectionItem {
+                name: kind.title().to_string(),
+                description,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            }
+        })
+        .collect();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Settings".to_string()),
+            subtitle: Some("Configure settings for Codex.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
+        match list_realtime_audio_device_names(kind) {
+            Ok(device_names) => {
+                self.open_realtime_audio_device_selection_with_names(kind, device_names);
+            }
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Failed to load realtime {} devices: {err}",
+                    kind.noun()
+                ));
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "linux", not(feature = "voice-input")))]
+    pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
+        let _ = kind;
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn open_realtime_audio_device_selection_with_names(
+        &mut self,
+        kind: RealtimeAudioDeviceKind,
+        device_names: Vec<String>,
+    ) {
+        let current_selection = self.current_realtime_audio_device_name(kind);
+        let current_available = current_selection
+            .as_deref()
+            .is_some_and(|name| device_names.iter().any(|device_name| device_name == name));
+        let mut items = vec![SelectionItem {
+            name: "System default".to_string(),
+            description: Some("Use your operating system default device.".to_string()),
+            is_current: current_selection.is_none(),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::PersistRealtimeAudioDeviceSelection { kind, name: None });
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
+        if let Some(selection) = current_selection.as_deref()
+            && !current_available
+        {
+            items.push(SelectionItem {
+                name: format!("Unavailable: {selection}"),
+                description: Some("Configured device is not currently available.".to_string()),
+                is_current: true,
+                is_disabled: true,
+                disabled_reason: Some("Reconnect the device or choose another one.".to_string()),
+                ..Default::default()
+            });
+        }
+
+        items.extend(device_names.into_iter().map(|device_name| {
+            let persisted_name = device_name.clone();
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::PersistRealtimeAudioDeviceSelection {
+                    kind,
+                    name: Some(persisted_name.clone()),
+                });
+            })];
+            SelectionItem {
+                is_current: current_selection.as_deref() == Some(device_name.as_str()),
+                name: device_name,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            }
+        }));
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(format!("Select {}", kind.title()).bold()));
+        header.push(Line::from(
+            "Saved devices apply to realtime voice only.".dim(),
+        ));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_realtime_audio_restart_prompt(&mut self, kind: RealtimeAudioDeviceKind) {
+        let restart_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::RestartRealtimeAudioDevice { kind });
+        })];
+        let items = vec![
+            SelectionItem {
+                name: "Restart now".to_string(),
+                description: Some(format!("Restart local {} audio now.", kind.noun())),
+                actions: restart_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Apply later".to_string(),
+                description: Some(format!(
+                    "Keep the current {} until local audio starts again.",
+                    kind.noun()
+                )),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(format!("Restart {} now?", kind.title()).bold()));
+        header.push(Line::from(
+            "Configuration is saved. Restart local audio to use it immediately.".dim(),
+        ));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
@@ -6380,11 +6693,21 @@ impl ChatWidget {
         } else {
             self.config.features.disable(feature);
         }
-        if feature == Feature::Steer {
-            self.bottom_pane.set_steer_enabled(enabled);
-        }
         if feature == Feature::VoiceTranscription {
             self.bottom_pane.set_voice_transcription_enabled(enabled);
+        }
+        if feature == Feature::RealtimeConversation {
+            let realtime_conversation_enabled = self.realtime_conversation_enabled();
+            self.bottom_pane
+                .set_realtime_conversation_enabled(realtime_conversation_enabled);
+            self.bottom_pane
+                .set_audio_device_selection_enabled(self.realtime_audio_device_selection_enabled());
+            if !realtime_conversation_enabled && self.realtime_conversation.is_live() {
+                self.request_realtime_conversation_close(Some(
+                    "Realtime voice mode was closed because the feature was disabled.".to_string(),
+                ));
+                self.reset_realtime_conversation_state();
+            }
         }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
@@ -6468,6 +6791,17 @@ impl ChatWidget {
         self.config.personality = Some(personality);
     }
 
+    pub(crate) fn set_realtime_audio_device(
+        &mut self,
+        kind: RealtimeAudioDeviceKind,
+        name: Option<String>,
+    ) {
+        match kind {
+            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone = name,
+            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker = name,
+        }
+    }
+
     /// Set the syntax theme override in the widget's config copy.
     pub(crate) fn set_tui_theme(&mut self, theme: Option<String>) {
         self.config.tui_theme = theme;
@@ -6494,6 +6828,22 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.as_deref())
             .unwrap_or_else(|| self.current_collaboration_mode.model())
+    }
+
+    pub(crate) fn realtime_conversation_is_live(&self) -> bool {
+        self.realtime_conversation.is_active()
+    }
+
+    fn current_realtime_audio_device_name(&self, kind: RealtimeAudioDeviceKind) -> Option<String> {
+        match kind {
+            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone.clone(),
+            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker.clone(),
+        }
+    }
+
+    fn current_realtime_audio_selection_label(&self, kind: RealtimeAudioDeviceKind) -> String {
+        self.current_realtime_audio_device_name(kind)
+            .unwrap_or_else(|| "System default".to_string())
     }
 
     fn sync_personality_command_enabled(&mut self) {
@@ -7177,6 +7527,11 @@ impl ChatWidget {
         self.bottom_pane.remote_image_urls()
     }
 
+    #[cfg(test)]
+    pub(crate) fn pending_thread_approvals(&self) -> &[String] {
+        self.bottom_pane.pending_thread_approvals()
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.bottom_pane.show_esc_backtrack_hint();
     }
@@ -7185,7 +7540,7 @@ impl ChatWidget {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
     /// Forward an `Op` directly to codex.
-    pub(crate) fn submit_op(&mut self, op: Op) {
+    pub(crate) fn submit_op(&mut self, op: Op) -> bool {
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
         if matches!(&op, Op::Review { .. }) && !self.bottom_pane.is_task_running() {
@@ -7193,7 +7548,9 @@ impl ChatWidget {
         }
         if let Err(e) = self.codex_op_tx.send(op) {
             tracing::error!("failed to submit op: {e}");
+            return false;
         }
+        true
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
@@ -7571,6 +7928,7 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
+        self.reset_realtime_conversation_state();
         self.stop_rate_limit_poller();
     }
 }

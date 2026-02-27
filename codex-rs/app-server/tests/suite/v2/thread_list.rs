@@ -78,6 +78,7 @@ async fn list_threads_with_sort(
             source_kinds,
             archived,
             cwd: None,
+            search_term: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -491,6 +492,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
             source_kinds: None,
             archived: None,
             cwd: Some(target_cwd.to_string_lossy().into_owned()),
+            search_term: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -507,6 +509,86 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
     assert_eq!(data[0].id, filtered_id);
     assert_ne!(data[0].id, unfiltered_id);
     assert_eq!(data[0].cwd, target_cwd);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_respects_search_term_filter() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+model = "mock-model"
+approval_policy = "never"
+suppress_unstable_features_warning = true
+
+[features]
+sqlite = true
+"#,
+    )?;
+
+    let older_match = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        "match: needle",
+        Some("mock_provider"),
+        None,
+    )?;
+    let _non_match = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T11-00-00",
+        "2025-01-02T11:00:00Z",
+        "no hit here",
+        Some("mock_provider"),
+        None,
+    )?;
+    let newer_match = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T12-00-00",
+        "2025-01-02T12:00:00Z",
+        "needle suffix",
+        Some("mock_provider"),
+        None,
+    )?;
+
+    // `thread/list` only applies `search_term` on the sqlite path. In this test we
+    // create rollouts manually, so we must also create the sqlite DB and mark backfill
+    // complete; otherwise app-server will permanently use filesystem fallback.
+    let state_db = codex_state::StateRuntime::init(
+        codex_home.path().to_path_buf(),
+        "mock_provider".into(),
+        None,
+    )
+    .await?;
+    state_db.mark_backfill_complete(None).await?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            search_term: Some("needle".to_string()),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = to_response::<ThreadListResponse>(resp)?;
+
+    assert_eq!(next_cursor, None);
+    let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
+    assert_eq!(ids, vec![newer_match, older_match]);
 
     Ok(())
 }
@@ -1335,6 +1417,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
             source_kinds: None,
             archived: None,
             cwd: None,
+            search_term: None,
         })
         .await?;
     let error: JSONRPCError = timeout(

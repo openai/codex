@@ -3,9 +3,12 @@ use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
+use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
+use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::InputItem;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::NewConversationParams;
@@ -27,6 +30,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::io::Write;
@@ -210,17 +214,13 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
         })
         .await?;
 
-    let permissions = read_raw_response_item(&mut mcp, conversation_id).await;
-    assert_permissions_message(&permissions);
-
     let developer = read_raw_response_item(&mut mcp, conversation_id).await;
+    assert_permissions_message(&developer);
     assert_developer_message(&developer, "Use the test harness tools.");
 
-    let instructions = read_raw_response_item(&mut mcp, conversation_id).await;
-    assert_instructions_message(&instructions);
-
-    let environment = read_raw_response_item(&mut mcp, conversation_id).await;
-    assert_environment_message(&environment);
+    let contextual_user = read_raw_response_item(&mut mcp, conversation_id).await;
+    assert_instructions_message(&contextual_user);
+    assert_environment_message(&contextual_user);
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -269,6 +269,66 @@ async fn test_send_message_session_not_found() -> Result<()> {
     )
     .await??;
     assert_eq!(err.id, RequestId::Integer(req_id));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_send_message_rejects_oversized_input() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let _response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let new_conv_id = mcp
+        .send_new_conversation_request(NewConversationParams {
+            ..Default::default()
+        })
+        .await?;
+    let new_conv_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
+    )
+    .await??;
+    let NewConversationResponse {
+        conversation_id, ..
+    } = to_response::<_>(new_conv_resp)?;
+
+    let oversized_input = "x".repeat(MAX_USER_INPUT_TEXT_CHARS + 1);
+    let req_id = mcp
+        .send_send_user_message_request(SendUserMessageParams {
+            conversation_id,
+            items: vec![InputItem::Text {
+                text: oversized_input.clone(),
+                text_elements: Vec::new(),
+            }],
+        })
+        .await?;
+
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, INVALID_PARAMS_ERROR_CODE);
+    assert_eq!(
+        err.error.message,
+        format!("Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters.")
+    );
+    let data = err.error.data.expect("expected structured error data");
+    assert_eq!(data["input_error_code"], INPUT_TOO_LARGE_ERROR_CODE);
+    assert_eq!(data["max_chars"], MAX_USER_INPUT_TEXT_CHARS);
+    assert_eq!(data["actual_chars"], oversized_input.chars().count());
+
     Ok(())
 }
 
@@ -478,11 +538,11 @@ fn assert_permissions_message(item: &ResponseItem) {
                 AskForApproval::Never,
                 &Policy::empty(),
                 &PathBuf::from("/tmp"),
+                false,
             )
             .into_text();
-            assert_eq!(
-                texts,
-                vec![expected.as_str()],
+            assert!(
+                texts.iter().any(|text| *text == expected),
                 "expected permissions developer message, got {texts:?}"
             );
         }
@@ -495,9 +555,8 @@ fn assert_developer_message(item: &ResponseItem, expected_text: &str) {
         ResponseItem::Message { role, content, .. } => {
             assert_eq!(role, "developer");
             let texts = content_texts(content);
-            assert_eq!(
-                texts,
-                vec![expected_text],
+            assert!(
+                texts.contains(&expected_text),
                 "expected developer instructions message, got {texts:?}"
             );
         }
@@ -561,6 +620,8 @@ fn append_rollout_turn_context(path: &Path, timestamp: &str, model: &str) -> std
         item: RolloutItem::TurnContext(TurnContextItem {
             turn_id: None,
             cwd: PathBuf::from("/"),
+            current_date: None,
+            timezone: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             network: None,

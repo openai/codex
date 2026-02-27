@@ -163,6 +163,10 @@ pub(crate) struct SelectionViewParams {
     /// When absent, `side_content` is reused.
     pub stacked_side_content: Option<Box<dyn Renderable>>,
 
+    /// Keep side-content background colors after rendering in side-by-side mode.
+    /// Disabled by default so existing popups preserve their reset-background look.
+    pub preserve_side_content_bg: bool,
+
     /// Called when the highlighted item changes (navigation, filter, number-key).
     /// Receives the *actual* item index, not the filtered/visible index.
     pub on_selection_changed: OnSelectionChangedCallback,
@@ -189,6 +193,7 @@ impl Default for SelectionViewParams {
             side_content_width: SideContentWidth::default(),
             side_content_min_width: 0,
             stacked_side_content: None,
+            preserve_side_content_bg: false,
             on_selection_changed: None,
             on_cancel: None,
         }
@@ -220,6 +225,7 @@ pub(crate) struct ListSelectionView {
     side_content_width: SideContentWidth,
     side_content_min_width: u16,
     stacked_side_content: Option<Box<dyn Renderable>>,
+    preserve_side_content_bg: bool,
 
     /// Called when the highlighted item changes (navigation, filter, number-key).
     on_selection_changed: OnSelectionChangedCallback,
@@ -271,6 +277,7 @@ impl ListSelectionView {
             side_content_width: params.side_content_width,
             side_content_min_width: params.side_content_min_width,
             stacked_side_content: params.stacked_side_content,
+            preserve_side_content_bg: params.preserve_side_content_bg,
             on_selection_changed: params.on_selection_changed,
             on_cancel: params.on_cancel,
         };
@@ -905,15 +912,17 @@ impl Renderable for ListSelectionView {
                 ),
             );
             self.side_content.render(side_area, buf);
-            Self::force_bg_to_terminal_bg(
-                buf,
-                Rect::new(
-                    clear_x,
-                    outer_content_area.y,
-                    clear_w,
-                    outer_content_area.height,
-                ),
-            );
+            if !self.preserve_side_content_bg {
+                Self::force_bg_to_terminal_bg(
+                    buf,
+                    Rect::new(
+                        clear_x,
+                        outer_content_area.y,
+                        clear_w,
+                        outer_content_area.height,
+                    ),
+                );
+            }
         } else if stacked_side_area.height > 0 {
             // Stacked fallback: render below the list (same as old footer_content).
             let clear_height = (outer_content_area.y + outer_content_area.height)
@@ -994,6 +1003,28 @@ mod tests {
                 for x in area.x..area.x.saturating_add(area.width) {
                     if x < buf.area().width && y < buf.area().height {
                         buf[(x, y)].set_symbol(self.marker);
+                    }
+                }
+            }
+        }
+
+        fn desired_height(&self, _width: u16) -> u16 {
+            self.height
+        }
+    }
+
+    struct StyledMarkerRenderable {
+        marker: &'static str,
+        style: Style,
+        height: u16,
+    }
+
+    impl Renderable for StyledMarkerRenderable {
+        fn render(&self, area: Rect, buf: &mut Buffer) {
+            for y in area.y..area.y.saturating_add(area.height) {
+                for x in area.x..area.x.saturating_add(area.width) {
+                    if x < buf.area().width && y < buf.area().height {
+                        buf[(x, y)].set_symbol(self.marker).set_style(self.style);
                     }
                 }
             }
@@ -1141,6 +1172,58 @@ mod tests {
 
         let rendered = render_lines_in_area(&view, 94, 35);
         assert!(rendered.contains("Move up/down to live preview themes"));
+    }
+
+    #[test]
+    fn theme_picker_enables_side_content_background_preservation() {
+        let params = crate::theme_picker::build_theme_picker_params(None, None, Some(120));
+        assert!(
+            params.preserve_side_content_bg,
+            "theme picker should preserve side-content backgrounds to keep diff preview styling",
+        );
+    }
+
+    #[test]
+    fn preserve_side_content_bg_keeps_rendered_background_colors() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Debug".to_string()),
+                items: vec![SelectionItem {
+                    name: "Item 1".to_string(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }],
+                side_content: Box::new(StyledMarkerRenderable {
+                    marker: "+",
+                    style: Style::default().bg(Color::Blue),
+                    height: 1,
+                }),
+                side_content_width: SideContentWidth::Half,
+                side_content_min_width: 10,
+                preserve_side_content_bg: true,
+                ..Default::default()
+            },
+            tx,
+        );
+        let area = Rect::new(0, 0, 120, 35);
+        let mut buf = Buffer::empty(area);
+
+        view.render(area, &mut buf);
+
+        let plus_bg = (0..area.height)
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .find_map(|(x, y)| {
+                let cell = &buf[(x, y)];
+                (cell.symbol() == "+").then(|| cell.style().bg)
+            })
+            .expect("expected side content to render at least one '+' marker");
+        assert_eq!(
+            plus_bg,
+            Some(Color::Blue),
+            "expected side-content marker to preserve custom background styling",
+        );
     }
 
     #[test]

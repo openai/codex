@@ -1,6 +1,7 @@
 use chrono::DateTime;
 use chrono::Utc;
 use codex_core::test_support::all_model_presets;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -24,14 +25,16 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         } else {
             ModelVisibility::Hide
         },
-        supported_in_api: true,
+        supported_in_api: preset.supported_in_api,
         priority,
         upgrade: preset.upgrade.as_ref().map(|u| u.into()),
         base_instructions: "base instructions".to_string(),
         model_messages: None,
         supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
+        availability_nux: None,
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
@@ -48,9 +51,9 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
 /// Write a models_cache.json file to the codex home directory.
 /// This prevents ModelsManager from making network requests to refresh models.
 /// The cache will be treated as fresh (within TTL) and used instead of fetching from the network.
-/// Uses the built-in model presets from ModelsManager, converted to ModelInfo format.
+/// Uses bundled-catalog-derived presets, converted to ModelInfo format.
 pub fn write_models_cache(codex_home: &Path) -> std::io::Result<()> {
-    // Get all presets and filter for show_in_picker (same as builtin_model_presets does)
+    // Get a stable bundled-catalog-derived preset list and filter for picker-visible entries.
     let presets: Vec<&ModelPreset> = all_model_presets()
         .iter()
         .filter(|preset| preset.show_in_picker)
