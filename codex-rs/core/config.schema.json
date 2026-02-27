@@ -644,6 +644,10 @@
           "format": "int64",
           "type": "integer"
         },
+        "no_memories_if_mcp_or_web_search": {
+          "description": "When `true`, web searches and MCP tool calls mark the thread `memory_mode` as `\"polluted\"`.",
+          "type": "boolean"
+        },
         "phase_1_model": {
           "description": "Model used for thread summarisation.",
           "type": "string"
