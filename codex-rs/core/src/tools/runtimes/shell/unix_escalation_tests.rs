@@ -39,6 +39,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "macos")]
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 fn host_absolute_path(segments: &[&str]) -> String {
