@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_app_server_protocol::Model;
+use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_core::ThreadManager;
 use codex_core::models_manager::manager::RefreshStrategy;
@@ -24,7 +25,13 @@ fn model_from_preset(preset: ModelPreset) -> Model {
     Model {
         id: preset.id.to_string(),
         model: preset.model.to_string(),
-        upgrade: preset.upgrade.map(|upgrade| upgrade.id),
+        upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
+        upgrade_info: preset.upgrade.as_ref().map(|upgrade| ModelUpgradeInfo {
+            model: upgrade.id.clone(),
+            upgrade_copy: upgrade.upgrade_copy.clone(),
+            model_link: upgrade.model_link.clone(),
+            migration_markdown: upgrade.migration_markdown.clone(),
+        }),
         display_name: preset.display_name.to_string(),
         description: preset.description.to_string(),
         hidden: !preset.show_in_picker,

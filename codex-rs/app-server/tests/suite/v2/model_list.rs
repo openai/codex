@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use anyhow::anyhow;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_models_cache;
@@ -10,6 +9,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
 use codex_protocol::openai_models::ModelPreset;
@@ -25,6 +25,12 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
         id: preset.id.clone(),
         model: preset.model.clone(),
         upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
+        upgrade_info: preset.upgrade.as_ref().map(|upgrade| ModelUpgradeInfo {
+            model: upgrade.id.clone(),
+            upgrade_copy: upgrade.upgrade_copy.clone(),
+            model_link: upgrade.model_link.clone(),
+            migration_markdown: upgrade.migration_markdown.clone(),
+        }),
         display_name: preset.display_name.clone(),
         description: preset.description.clone(),
         hidden: !preset.show_in_picker,
@@ -129,6 +135,50 @@ async fn list_models_includes_hidden_models() -> Result<()> {
 }
 
 #[tokio::test]
+async fn list_models_returns_upgrade_info_metadata() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(100),
+            cursor: None,
+            include_hidden: Some(true),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let ModelListResponse { data: items, .. } = to_response::<ModelListResponse>(response)?;
+
+    let item = items
+        .iter()
+        .find(|item| item.upgrade_info.is_some())
+        .expect("expected at least one model with upgrade info");
+    let upgrade_info = item
+        .upgrade_info
+        .as_ref()
+        .expect("expected upgrade info to be populated");
+
+    assert_eq!(item.upgrade.as_ref(), Some(&upgrade_info.model));
+    assert!(!upgrade_info.model.is_empty());
+    assert!(
+        upgrade_info.upgrade_copy.is_some()
+            || upgrade_info.model_link.is_some()
+            || upgrade_info.migration_markdown.is_some()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_models_pagination_works() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_models_cache(codex_home.path())?;
@@ -136,100 +186,45 @@ async fn list_models_pagination_works() -> Result<()> {
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let first_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: None,
-            include_hidden: None,
-        })
-        .await?;
-
-    let first_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(first_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: first_items,
-        next_cursor: first_cursor,
-    } = to_response::<ModelListResponse>(first_response)?;
-
     let expected_models = expected_visible_models();
+    let mut cursor = None;
+    let mut items = Vec::new();
 
-    assert_eq!(first_items.len(), 1);
-    assert_eq!(first_items[0].id, expected_models[0].id);
-    let next_cursor = first_cursor.ok_or_else(|| anyhow!("cursor for second page"))?;
+    for _ in 0..expected_models.len() {
+        let request_id = mcp
+            .send_list_models_request(ModelListParams {
+                limit: Some(1),
+                cursor: cursor.clone(),
+                include_hidden: None,
+            })
+            .await?;
 
-    let second_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(next_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
 
-    let second_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(second_request)),
-    )
-    .await??;
+        let ModelListResponse {
+            data: page_items,
+            next_cursor,
+        } = to_response::<ModelListResponse>(response)?;
 
-    let ModelListResponse {
-        data: second_items,
-        next_cursor: second_cursor,
-    } = to_response::<ModelListResponse>(second_response)?;
+        assert_eq!(page_items.len(), 1);
+        items.extend(page_items);
 
-    assert_eq!(second_items.len(), 1);
-    assert_eq!(second_items[0].id, expected_models[1].id);
-    let third_cursor = second_cursor.ok_or_else(|| anyhow!("cursor for third page"))?;
+        if let Some(next_cursor) = next_cursor {
+            cursor = Some(next_cursor);
+        } else {
+            assert_eq!(items, expected_models);
+            return Ok(());
+        }
+    }
 
-    let third_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(third_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
-
-    let third_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(third_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: third_items,
-        next_cursor: third_cursor,
-    } = to_response::<ModelListResponse>(third_response)?;
-
-    assert_eq!(third_items.len(), 1);
-    assert_eq!(third_items[0].id, expected_models[2].id);
-    let fourth_cursor = third_cursor.ok_or_else(|| anyhow!("cursor for fourth page"))?;
-
-    let fourth_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(fourth_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
-
-    let fourth_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(fourth_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: fourth_items,
-        next_cursor: fourth_cursor,
-    } = to_response::<ModelListResponse>(fourth_response)?;
-
-    assert_eq!(fourth_items.len(), 1);
-    assert_eq!(fourth_items[0].id, expected_models[3].id);
-    assert!(fourth_cursor.is_none());
-    Ok(())
+    panic!(
+        "model pagination did not terminate after {} pages",
+        expected_models.len()
+    );
 }
 
 #[tokio::test]

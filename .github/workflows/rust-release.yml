@@ -499,6 +499,7 @@ jobs:
           cp scripts/install/install.sh dist/install.sh
           cp scripts/install/install.ps1 dist/install.ps1
 
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:

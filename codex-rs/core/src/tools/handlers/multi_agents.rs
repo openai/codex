@@ -91,6 +91,7 @@ impl ToolHandler for MultiAgentHandler {
 
 mod spawn {
     use super::*;
+    use crate::agent::control::SpawnAgentOptions;
     use crate::agent::role::DEFAULT_ROLE_NAME;
     use crate::agent::role::apply_role_to_config;
 
@@ -103,6 +104,8 @@ mod spawn {
         message: Option<String>,
         items: Option<Vec<UserInput>>,
         agent_type: Option<String>,
+        #[serde(default)]
+        fork_context: bool,
     }
 
     #[derive(Debug, Serialize)]
@@ -155,7 +158,7 @@ mod spawn {
         let result = session
             .services
             .agent_control
-            .spawn_agent(
+            .spawn_agent_with_options(
                 config,
                 input_items,
                 Some(thread_spawn_source(
@@ -163,6 +166,9 @@ mod spawn {
                     child_depth,
                     role_name,
                 )),
+                SpawnAgentOptions {
+                    fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
+                },
             )
             .await
             .map_err(collab_spawn_error);
@@ -914,7 +920,7 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallE
     config.model = Some(turn.model_info.slug.clone());
     config.model_provider = turn.provider.clone();
     config.model_reasoning_effort = turn.reasoning_effort;
-    config.model_reasoning_summary = turn.reasoning_summary;
+    config.model_reasoning_summary = Some(turn.reasoning_summary);
     config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
@@ -2046,7 +2052,7 @@ mod tests {
         expected.model = Some(turn.model_info.slug.clone());
         expected.model_provider = turn.provider.clone();
         expected.model_reasoning_effort = turn.reasoning_effort;
-        expected.model_reasoning_summary = turn.reasoning_summary;
+        expected.model_reasoning_summary = Some(turn.reasoning_summary);
         expected.developer_instructions = turn.developer_instructions.clone();
         expected.compact_prompt = turn.compact_prompt.clone();
         expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
@@ -2098,7 +2104,7 @@ mod tests {
         expected.model = Some(turn.model_info.slug.clone());
         expected.model_provider = turn.provider.clone();
         expected.model_reasoning_effort = turn.reasoning_effort;
-        expected.model_reasoning_summary = turn.reasoning_summary;
+        expected.model_reasoning_summary = Some(turn.reasoning_summary);
         expected.developer_instructions = turn.developer_instructions.clone();
         expected.compact_prompt = turn.compact_prompt.clone();
         expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();

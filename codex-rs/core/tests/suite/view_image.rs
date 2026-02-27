@@ -112,7 +112,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -214,7 +214,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -344,7 +344,7 @@ console.log(out.output?.body?.text ?? "");
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -358,40 +358,26 @@ console.log(out.output?.body?.text ?? "");
     .await;
 
     let req = mock.single_request();
-    let (js_repl_output, js_repl_success) = req
-        .custom_tool_call_output_content_and_success(call_id)
-        .expect("custom tool output present");
-    let js_repl_output = js_repl_output.expect("custom tool output text present");
-    assert_ne!(
-        js_repl_success,
-        Some(false),
-        "js_repl call failed unexpectedly: {js_repl_output}"
+    let body = req.body_json();
+    assert_eq!(
+        image_messages(&body).len(),
+        0,
+        "js_repl view_image should not inject a pending input image message"
     );
 
-    let body = req.body_json();
-    let image_messages = image_messages(&body);
-    assert_eq!(
-        image_messages.len(),
-        1,
-        "js_repl view_image should inject exactly one pending input image message"
-    );
-    let image_message = image_messages
-        .into_iter()
-        .next()
-        .expect("pending input image message not included in request");
-    let image_url = image_message
-        .get("content")
+    let custom_output = req.custom_tool_call_output(call_id);
+    let output_items = custom_output
+        .get("output")
         .and_then(Value::as_array)
-        .and_then(|content| {
-            content.iter().find_map(|span| {
-                if span.get("type").and_then(Value::as_str) == Some("input_image") {
-                    span.get("image_url").and_then(Value::as_str)
-                } else {
-                    None
-                }
-            })
+        .expect("custom_tool_call_output should be a content item array");
+    let image_url = output_items
+        .iter()
+        .find_map(|item| {
+            (item.get("type").and_then(Value::as_str) == Some("input_image"))
+                .then(|| item.get("image_url").and_then(Value::as_str))
+                .flatten()
         })
-        .expect("image_url present");
+        .expect("image_url present in js_repl custom tool output");
     assert!(
         image_url.starts_with("data:image/png;base64,"),
         "expected png data URL, got {image_url}"
@@ -447,7 +433,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -522,7 +508,7 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -614,7 +600,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -675,6 +661,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         base_instructions: "base instructions".to_string(),
         model_messages: None,
         supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
@@ -736,7 +723,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: model_slug.to_string(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -812,7 +799,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

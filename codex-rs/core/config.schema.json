@@ -328,6 +328,9 @@
             "connectors": {
               "type": "boolean"
             },
+            "default_mode_request_user_input": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -404,9 +407,6 @@
               "type": "boolean"
             },
             "shell_zsh_fork": {
-              "type": "boolean"
-            },
-            "skill_approval": {
               "type": "boolean"
             },
             "skill_env_var_dependency_prompt": {
@@ -628,6 +628,11 @@
           "description": "Maximum number of rollout candidates processed per pass.",
           "format": "uint",
           "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_unused_days": {
+          "description": "Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.",
+          "format": "int64",
           "type": "integer"
         },
         "min_rollout_idle_hours": {
@@ -1141,6 +1146,10 @@
           },
           "type": "object"
         },
+        "oauth_resource": {
+          "default": null,
+          "type": "string"
+        },
         "required": {
           "default": null,
           "type": "boolean"
@@ -1169,6 +1178,18 @@
           "type": "number"
         },
         "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RealtimeAudioToml": {
+      "additionalProperties": false,
+      "properties": {
+        "microphone": {
+          "type": "string"
+        },
+        "speaker": {
           "type": "string"
         }
       },
@@ -1535,6 +1556,15 @@
       "default": null,
       "description": "Settings for app-specific controls."
     },
+    "audio": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RealtimeAudioToml"
+        }
+      ],
+      "default": null,
+      "description": "Machine-local realtime audio device preferences used by realtime voice."
+    },
     "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
       "format": "uint64",
@@ -1621,6 +1651,9 @@
         "connectors": {
           "type": "boolean"
         },
+        "default_mode_request_user_input": {
+          "type": "boolean"
+        },
         "elevated_windows_sandbox": {
           "type": "boolean"
         },
@@ -1697,9 +1730,6 @@
           "type": "boolean"
         },
         "shell_zsh_fork": {
-          "type": "boolean"
-        },
-        "skill_approval": {
           "type": "boolean"
         },
         "skill_env_var_dependency_prompt": {

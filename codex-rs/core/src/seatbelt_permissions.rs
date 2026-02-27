@@ -3,34 +3,9 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum MacOsPreferencesPermission {
-    // IMPORTANT: ReadOnly needs to be the default because it's the security-sensitive default.
-    // it's important for allowing cf prefs to work.
-    #[default]
-    ReadOnly,
-    ReadWrite,
-    None,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum MacOsAutomationPermission {
-    #[default]
-    None,
-    All,
-    BundleIds(Vec<String>),
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct MacOsSeatbeltProfileExtensions {
-    pub macos_preferences: MacOsPreferencesPermission,
-    pub macos_automation: MacOsAutomationPermission,
-    pub macos_accessibility: bool,
-    pub macos_calendar: bool,
-}
+pub use codex_protocol::models::MacOsAutomationPermission;
+pub use codex_protocol::models::MacOsPreferencesPermission;
+pub use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct SeatbeltExtensionPolicy {
@@ -38,25 +13,26 @@ pub(crate) struct SeatbeltExtensionPolicy {
     pub(crate) dir_params: Vec<(String, PathBuf)>,
 }
 
-impl MacOsSeatbeltProfileExtensions {
-    pub fn normalized(&self) -> Self {
-        let mut normalized = self.clone();
-        if let MacOsAutomationPermission::BundleIds(bundle_ids) = &self.macos_automation {
-            let bundle_ids = normalize_bundle_ids(bundle_ids);
-            normalized.macos_automation = if bundle_ids.is_empty() {
-                MacOsAutomationPermission::None
-            } else {
-                MacOsAutomationPermission::BundleIds(bundle_ids)
-            };
-        }
-        normalized
+fn normalized_extensions(
+    extensions: &MacOsSeatbeltProfileExtensions,
+) -> MacOsSeatbeltProfileExtensions {
+    let mut normalized = extensions.clone();
+    if let MacOsAutomationPermission::BundleIds(bundle_ids) = &extensions.macos_automation {
+        let bundle_ids = normalize_bundle_ids(bundle_ids);
+        normalized.macos_automation = if bundle_ids.is_empty() {
+            MacOsAutomationPermission::None
+        } else {
+            MacOsAutomationPermission::BundleIds(bundle_ids)
+        };
     }
+
+    normalized
 }
 
 pub(crate) fn build_seatbelt_extensions(
     extensions: &MacOsSeatbeltProfileExtensions,
 ) -> SeatbeltExtensionPolicy {
-    let extensions = extensions.normalized();
+    let extensions = normalized_extensions(extensions);
     let mut clauses = Vec::new();
 
     match extensions.macos_preferences {
