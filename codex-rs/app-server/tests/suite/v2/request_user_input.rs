@@ -100,7 +100,6 @@ async fn request_user_input_round_trip() -> Result<()> {
     )
     .await?;
     let mut saw_resolved = false;
-    let mut saw_task_complete = false;
     loop {
         let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
         let JSONRPCMessage::Notification(notification) = message else {
@@ -118,21 +117,10 @@ async fn request_user_input_round_trip() -> Result<()> {
                 assert_eq!(resolved.request_id, resolved_request_id);
                 saw_resolved = true;
             }
-            "codex/event/task_complete" => {
-                assert!(
-                    saw_resolved,
-                    "item/tool/requestUserInputResolved should arrive first"
-                );
-                saw_task_complete = true;
-            }
             "turn/completed" => {
                 assert!(
                     saw_resolved,
                     "item/tool/requestUserInputResolved should arrive first"
-                );
-                assert!(
-                    saw_task_complete,
-                    "task_complete should arrive before turn/completed"
                 );
                 break;
             }

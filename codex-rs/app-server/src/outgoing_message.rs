@@ -1,4 +1,3 @@
-use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
@@ -64,7 +63,6 @@ struct PendingCallbackEntry {
     callback: oneshot::Sender<ClientRequestResult>,
     thread_id: Option<ThreadId>,
     request: ServerRequest,
-    tracked_request: bool,
 }
 
 impl ThreadScopedOutgoingMessageSender {
@@ -83,31 +81,14 @@ impl ThreadScopedOutgoingMessageSender {
     pub(crate) async fn send_request(
         &self,
         payload: ServerRequestPayload,
-    ) -> oneshot::Receiver<ClientRequestResult> {
+    ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
         self.outgoing
-            .send_request_to_thread_connections(
-                self.thread_id,
-                self.connection_ids.as_slice(),
-                payload,
-            )
-            .await
-    }
-
-    pub(crate) async fn send_request_with_server_request(
-        &self,
-        payload: ServerRequestPayload,
-    ) -> (ServerRequest, oneshot::Receiver<ClientRequestResult>) {
-        let payload_clone = payload.clone();
-        let (request_id, rx) = self
-            .outgoing
-            .send_request_with_id_to_connections(
+            .send_request_to_connections(
                 Some(self.connection_ids.as_slice()),
                 payload,
                 Some(self.thread_id),
-                true,
             )
-            .await;
-        (payload_clone.request_with_id(request_id), rx)
+            .await
     }
 
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
@@ -119,9 +100,17 @@ impl ThreadScopedOutgoingMessageSender {
             .await;
     }
 
-    pub(crate) async fn cancel_tracked_requests_with_error(&self, error: JSONRPCErrorError) {
+    pub(crate) async fn abort_pending_client_requests(&self) {
         self.outgoing
-            .cancel_tracked_requests_for_thread(self.thread_id, Some(error))
+            .cancel_requests_for_thread(
+                self.thread_id,
+                Some(JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: "client request resolved because the turn state was changed"
+                        .to_string(),
+                    data: Some(serde_json::json!({ "reason": "turnTransition" })),
+                }),
+            )
             .await
     }
 
@@ -155,41 +144,18 @@ impl OutgoingMessageSender {
         &self,
         request: ServerRequestPayload,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
-        self.send_request_with_id_to_connections(None, request, None, false)
-            .await
-    }
-
-    async fn send_request_to_thread_connections(
-        &self,
-        thread_id: ThreadId,
-        connection_ids: &[ConnectionId],
-        request: ServerRequestPayload,
-    ) -> oneshot::Receiver<ClientRequestResult> {
-        if connection_ids.is_empty() {
-            let (_tx, rx) = oneshot::channel();
-            return rx;
-        }
-        let (_request_id, receiver) = self
-            .send_request_with_id_to_connections(
-                Some(connection_ids),
-                request,
-                Some(thread_id),
-                false,
-            )
-            .await;
-        receiver
+        self.send_request_to_connections(None, request, None).await
     }
 
     fn next_request_id(&self) -> RequestId {
         RequestId::Integer(self.next_server_request_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    async fn send_request_with_id_to_connections(
+    async fn send_request_to_connections(
         &self,
         connection_ids: Option<&[ConnectionId]>,
         request: ServerRequestPayload,
         thread_id: Option<ThreadId>,
-        tracked_request: bool,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
         let id = self.next_request_id();
         let outgoing_message_id = id.clone();
@@ -204,7 +170,6 @@ impl OutgoingMessageSender {
                     callback: tx_approve,
                     thread_id,
                     request: request.clone(),
-                    tracked_request,
                 },
             );
         }
@@ -248,18 +213,18 @@ impl OutgoingMessageSender {
         (outgoing_message_id, rx_approve)
     }
 
-    pub(crate) async fn replay_request_to_connections(
+    pub(crate) async fn replay_requests_to_connection_for_thread(
         &self,
-        connection_ids: &[ConnectionId],
-        request: ServerRequest,
+        connection_id: ConnectionId,
+        thread_id: ThreadId,
     ) {
-        let outgoing_message = OutgoingMessage::Request(request);
-        for connection_id in connection_ids {
+        let requests = self.pending_requests_for_thread(thread_id).await;
+        for request in requests {
             if let Err(err) = self
                 .sender
                 .send(OutgoingEnvelope::ToConnection {
-                    connection_id: *connection_id,
-                    message: outgoing_message.clone(),
+                    connection_id,
+                    message: OutgoingMessage::Request(request),
                 })
                 .await
             {
@@ -319,11 +284,10 @@ impl OutgoingMessageSender {
         let mut requests = request_id_to_callback
             .iter()
             .filter_map(|(_, entry)| {
-                (entry.thread_id == Some(thread_id) && entry.tracked_request)
-                    .then_some(entry.request.clone())
+                (entry.thread_id == Some(thread_id)).then_some(entry.request.clone())
             })
             .collect::<Vec<_>>();
-        sort_requests_by_id(&mut requests);
+        requests.sort_by(|left, right| left.id().cmp(right.id()));
         requests
     }
 
@@ -332,16 +296,7 @@ impl OutgoingMessageSender {
         thread_id: ThreadId,
         error: Option<JSONRPCErrorError>,
     ) {
-        self.cancel_requests_for_thread_matching(thread_id, error, false)
-            .await
-    }
-
-    pub(crate) async fn cancel_tracked_requests_for_thread(
-        &self,
-        thread_id: ThreadId,
-        error: Option<JSONRPCErrorError>,
-    ) {
-        self.cancel_requests_for_thread_matching(thread_id, error, true)
+        self.cancel_requests_for_thread_matching(thread_id, error)
             .await
     }
 
@@ -349,15 +304,13 @@ impl OutgoingMessageSender {
         &self,
         thread_id: ThreadId,
         error: Option<JSONRPCErrorError>,
-        tracked_only: bool,
     ) {
         let entries = {
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
             let request_ids = request_id_to_callback
                 .iter()
                 .filter_map(|(request_id, entry)| {
-                    (entry.thread_id == Some(thread_id) && (!tracked_only || entry.tracked_request))
-                        .then_some(request_id.clone())
+                    (entry.thread_id == Some(thread_id)).then_some(request_id.clone())
                 })
                 .collect::<Vec<_>>();
 
@@ -509,19 +462,6 @@ impl OutgoingMessageSender {
             warn!("failed to send error to client: {err:?}");
         }
     }
-}
-
-fn compare_request_ids(left: &RequestId, right: &RequestId) -> CmpOrdering {
-    match (left, right) {
-        (RequestId::Integer(left), RequestId::Integer(right)) => left.cmp(right),
-        (RequestId::String(left), RequestId::String(right)) => left.cmp(right),
-        (RequestId::Integer(_), RequestId::String(_)) => CmpOrdering::Less,
-        (RequestId::String(_), RequestId::Integer(_)) => CmpOrdering::Greater,
-    }
-}
-
-fn sort_requests_by_id(requests: &mut [ServerRequest]) {
-    requests.sort_by(|left, right| compare_request_ids(left.id(), right.id()));
 }
 
 /// Outgoing message from the server to the client.
@@ -854,7 +794,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_requests_for_thread_only_returns_tracked_requests_in_request_id_order() {
+    async fn pending_requests_for_thread_returns_thread_requests_in_request_id_order() {
         let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
         let thread_id = ThreadId::new();
@@ -864,7 +804,7 @@ mod tests {
             thread_id,
         );
 
-        let _dynamic_tool_waiter = thread_outgoing
+        let (dynamic_tool_request_id, _dynamic_tool_waiter) = thread_outgoing
             .send_request(ServerRequestPayload::DynamicToolCall(
                 DynamicToolCallParams {
                     thread_id: thread_id.to_string(),
@@ -875,8 +815,8 @@ mod tests {
                 },
             ))
             .await;
-        let (first_tracked_request, _first_waiter) = thread_outgoing
-            .send_request_with_server_request(ServerRequestPayload::ToolRequestUserInput(
+        let (first_request_id, _first_waiter) = thread_outgoing
+            .send_request(ServerRequestPayload::ToolRequestUserInput(
                 ToolRequestUserInputParams {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
@@ -885,8 +825,8 @@ mod tests {
                 },
             ))
             .await;
-        let (second_tracked_request, _second_waiter) = thread_outgoing
-            .send_request_with_server_request(ServerRequestPayload::FileChangeRequestApproval(
+        let (second_request_id, _second_waiter) = thread_outgoing
+            .send_request(ServerRequestPayload::FileChangeRequestApproval(
                 FileChangeRequestApprovalParams {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
@@ -896,16 +836,22 @@ mod tests {
                 },
             ))
             .await;
-
         let pending_requests = outgoing.pending_requests_for_thread(thread_id).await;
         assert_eq!(
-            pending_requests,
-            vec![first_tracked_request, second_tracked_request]
+            pending_requests
+                .iter()
+                .map(ServerRequest::id)
+                .collect::<Vec<_>>(),
+            vec![
+                &dynamic_tool_request_id,
+                &first_request_id,
+                &second_request_id
+            ]
         );
     }
 
     #[tokio::test]
-    async fn cancel_tracked_requests_for_thread_skips_untracked_requests() {
+    async fn cancel_requests_for_thread_cancels_all_thread_requests() {
         let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
         let thread_id = ThreadId::new();
@@ -915,7 +861,7 @@ mod tests {
             thread_id,
         );
 
-        let dynamic_tool_waiter = thread_outgoing
+        let (_dynamic_tool_request_id, dynamic_tool_waiter) = thread_outgoing
             .send_request(ServerRequestPayload::DynamicToolCall(
                 DynamicToolCallParams {
                     thread_id: thread_id.to_string(),
@@ -926,8 +872,8 @@ mod tests {
                 },
             ))
             .await;
-        let (_tracked_request, tracked_waiter) = thread_outgoing
-            .send_request_with_server_request(ServerRequestPayload::ToolRequestUserInput(
+        let (_request_id, user_input_waiter) = thread_outgoing
+            .send_request(ServerRequestPayload::ToolRequestUserInput(
                 ToolRequestUserInputParams {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
@@ -943,24 +889,24 @@ mod tests {
         };
 
         outgoing
-            .cancel_tracked_requests_for_thread(thread_id, Some(error.clone()))
+            .cancel_requests_for_thread(thread_id, Some(error.clone()))
             .await;
 
-        let tracked_result = timeout(Duration::from_secs(1), tracked_waiter)
+        let dynamic_tool_result = timeout(Duration::from_secs(1), dynamic_tool_waiter)
             .await
-            .expect("tracked waiter should resolve")
-            .expect("tracked waiter should receive a callback");
-        assert_eq!(tracked_result, Err(error));
+            .expect("dynamic tool waiter should resolve")
+            .expect("dynamic tool waiter should receive a callback");
+        let user_input_result = timeout(Duration::from_secs(1), user_input_waiter)
+            .await
+            .expect("user input waiter should resolve")
+            .expect("user input waiter should receive a callback");
+        assert_eq!(dynamic_tool_result, Err(error.clone()));
+        assert_eq!(user_input_result, Err(error));
         assert!(
             outgoing
                 .pending_requests_for_thread(thread_id)
                 .await
                 .is_empty()
-        );
-        assert!(
-            timeout(Duration::from_millis(50), dynamic_tool_waiter)
-                .await
-                .is_err()
         );
     }
 }

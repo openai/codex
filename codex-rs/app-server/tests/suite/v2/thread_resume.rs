@@ -879,25 +879,17 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
         }
     })
     .await??;
-    let ThreadItem::FileChange {
-        ref id,
-        ref status,
-        ref changes,
-    } = original_started
-    else {
-        unreachable!("loop ensures we break on file change items");
-    };
-    assert_eq!(id, "patch-call");
-    assert_eq!(status, &PatchApplyStatus::InProgress);
     let expected_readme_path = workspace.join("README.md");
-    assert_eq!(
-        changes,
-        &vec![codex_app_server_protocol::FileUpdateChange {
+    let expected_file_change = ThreadItem::FileChange {
+        id: "patch-call".to_string(),
+        changes: vec![codex_app_server_protocol::FileUpdateChange {
             path: expected_readme_path.to_string_lossy().into_owned(),
             kind: PatchChangeKind::Add,
             diff: "new line\n".to_string(),
-        }]
-    );
+        }],
+        status: PatchApplyStatus::InProgress,
+    };
+    assert_eq!(original_started, expected_file_change);
 
     let original_request = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -931,21 +923,6 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
             .iter()
             .any(|turn| matches!(turn.status, TurnStatus::InProgress))
     );
-
-    let replayed_started = timeout(DEFAULT_READ_TIMEOUT, async {
-        loop {
-            let notification = primary
-                .read_stream_until_notification_message("item/started")
-                .await?;
-            let started: ItemStartedNotification =
-                serde_json::from_value(notification.params.clone().expect("item/started params"))?;
-            if let ThreadItem::FileChange { .. } = started.item {
-                return Ok::<ThreadItem, anyhow::Error>(started.item);
-            }
-        }
-    })
-    .await??;
-    assert_eq!(replayed_started, original_started);
 
     let replayed_request = timeout(
         DEFAULT_READ_TIMEOUT,
