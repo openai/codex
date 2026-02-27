@@ -107,6 +107,7 @@ export type { McpToolCallResult } from "./McpToolCallResult";
 export type { McpToolCallStatus } from "./McpToolCallStatus";
 export type { MergeStrategy } from "./MergeStrategy";
 export type { Model } from "./Model";
+export type { ModelAvailabilityNux } from "./ModelAvailabilityNux";
 export type { ModelListParams } from "./ModelListParams";
 export type { ModelListResponse } from "./ModelListResponse";
 export type { ModelRerouteReason } from "./ModelRerouteReason";

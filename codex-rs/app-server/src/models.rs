@@ -25,6 +25,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
         id: preset.id.to_string(),
         model: preset.model.to_string(),
         upgrade: preset.upgrade.map(|upgrade| upgrade.id),
+        availability_nux: preset.availability_nux.map(Into::into),
         display_name: preset.display_name.to_string(),
         description: preset.description.to_string(),
         hidden: !preset.show_in_picker,

@@ -99,6 +99,12 @@ pub struct ModelUpgrade {
     pub migration_markdown: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct ModelAvailabilityNux {
+    pub id: String,
+    pub message: String,
+}
+
 /// Metadata describing a Codex-supported model.
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ModelPreset {
@@ -123,9 +129,8 @@ pub struct ModelPreset {
     pub upgrade: Option<ModelUpgrade>,
     /// Whether this preset should appear in the picker UI.
     pub show_in_picker: bool,
-    /// Whether to show NUX for this preset.
-    #[serde(default)]
-    pub show_nux: bool,
+    /// Availability NUX shown when this preset becomes accessible to the user.
+    pub availability_nux: Option<ModelAvailabilityNux>,
     /// whether this model is supported in the api
     pub supported_in_api: bool,
     /// Input modalities accepted when composing user turns for this preset.
@@ -228,8 +233,7 @@ pub struct ModelInfo {
     pub visibility: ModelVisibility,
     pub supported_in_api: bool,
     pub priority: i32,
-    #[serde(default)]
-    pub show_nux: bool,
+    pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -415,7 +419,7 @@ impl From<ModelInfo> for ModelPreset {
                 migration_markdown: Some(upgrade.migration_markdown.clone()),
             }),
             show_in_picker: info.visibility == ModelVisibility::List,
-            show_nux: info.show_nux,
+            availability_nux: info.availability_nux,
             supported_in_api: info.supported_in_api,
             input_modalities: info.input_modalities,
         }
@@ -501,7 +505,7 @@ mod tests {
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
-            show_nux: false,
+            availability_nux: None,
             upgrade: None,
             base_instructions: "base".to_string(),
             model_messages: spec,
@@ -677,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn model_info_defaults_show_nux_to_false_when_omitted() {
+    fn model_info_defaults_availability_nux_to_none_when_omitted() {
         let model: ModelInfo = serde_json::from_value(serde_json::json!({
             "slug": "test-model",
             "display_name": "Test Model",
@@ -709,16 +713,25 @@ mod tests {
         }))
         .expect("deserialize model info");
 
-        assert!(!model.show_nux);
+        assert_eq!(model.availability_nux, None);
     }
 
     #[test]
-    fn model_preset_preserves_show_nux() {
+    fn model_preset_preserves_availability_nux() {
         let preset = ModelPreset::from(ModelInfo {
-            show_nux: true,
+            availability_nux: Some(ModelAvailabilityNux {
+                id: "try_spark".to_string(),
+                message: "Try Spark.".to_string(),
+            }),
             ..test_model(None)
         });
 
-        assert!(preset.show_nux);
+        assert_eq!(
+            preset.availability_nux,
+            Some(ModelAvailabilityNux {
+                id: "try_spark".to_string(),
+                message: "Try Spark.".to_string(),
+            })
+        );
     }
 }
