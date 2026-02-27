@@ -3599,6 +3599,42 @@ async fn raw_response_item_with_canonicalized_user_payload_clears_pending_nudge(
 }
 
 #[tokio::test]
+async fn raw_response_item_only_pops_front_pending_nudge() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.pending_nudges
+        .push_back(ChatWidget::rendered_user_message_event_from_inputs(&[
+            UserInput::Text {
+                text: "first".to_string(),
+                text_elements: Vec::new(),
+            },
+        ]));
+    chat.pending_nudges
+        .push_back(ChatWidget::rendered_user_message_event_from_inputs(&[
+            UserInput::Text {
+                text: "second".to_string(),
+                text_elements: Vec::new(),
+            },
+        ]));
+    chat.refresh_pending_input_preview();
+
+    chat.handle_codex_event(raw_user_message_event("other"));
+
+    assert_eq!(chat.pending_nudges.len(), 2);
+    assert_eq!(chat.pending_nudges.front().unwrap().message(), "first");
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("other"));
+
+    chat.handle_codex_event(raw_user_message_event("first"));
+
+    assert_eq!(chat.pending_nudges.len(), 1);
+    assert_eq!(chat.pending_nudges.front().unwrap().message(), "second");
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("first"));
+}
+
+#[tokio::test]
 async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());

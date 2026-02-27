@@ -3359,15 +3359,17 @@ impl ChatWidget {
                     else {
                         return;
                     };
-                    let has_user_content = !user_message.text.is_empty()
-                        || !user_message.local_images.is_empty()
-                        || !user_message.remote_image_urls.is_empty();
+                    if user_message.text.is_empty()
+                        && user_message.local_images.is_empty()
+                        && user_message.remote_image_urls.is_empty()
+                    {
+                        return;
+                    }
                     let has_images = !user_message.local_images.is_empty()
                         || !user_message.remote_image_urls.is_empty();
                     let should_preview_as_pending_nudge = self.is_session_configured()
                         && self.bottom_pane.is_task_running()
                         && !self.is_review_mode
-                        && has_user_content
                         && user_message.text.strip_prefix('!').is_none()
                         && (!has_images || self.current_model_supports_images());
                     if should_preview_as_pending_nudge {
@@ -4463,15 +4465,11 @@ impl ChatWidget {
                     && let EventMsg::UserMessage(user_message) = item.as_legacy_event()
                 {
                     let rendered = Self::rendered_user_message_event_from_event(&user_message);
-                    if let Some(index) = self
-                        .pending_nudges
-                        .iter()
-                        .position(|pending| pending == &rendered)
-                    {
-                        self.pending_nudges.remove(index);
+                    if self.pending_nudges.front() == Some(&rendered) {
+                        self.pending_nudges.pop_front();
                         self.refresh_pending_input_preview();
-                        self.on_user_message_event(user_message);
                     }
+                    self.on_user_message_event(user_message);
                 }
             }
             EventMsg::EnteredReviewMode(review_request) => {
