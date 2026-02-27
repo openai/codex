@@ -1069,12 +1069,12 @@ impl App {
             self.primary_session_configured = Some(session.clone());
             self.ensure_thread_channel(thread_id);
             self.activate_thread_channel(thread_id).await;
+            self.enqueue_thread_event(thread_id, event).await?;
 
             let pending = std::mem::take(&mut self.pending_primary_events);
             for pending_event in pending {
                 self.enqueue_thread_event(thread_id, pending_event).await?;
             }
-            self.enqueue_thread_event(thread_id, event).await?;
         } else {
             self.pending_primary_events.push_back(event);
         }
@@ -3538,6 +3538,89 @@ mod tests {
             App::should_handle_active_thread_events(wait_for_fork, true),
             true
         );
+    }
+
+    #[tokio::test]
+    async fn enqueue_primary_event_delivers_session_configured_before_buffered_approval()
+    -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let approval_event = Event {
+            id: "approval-event".to_string(),
+            msg: EventMsg::ExecApprovalRequest(
+                codex_protocol::protocol::ExecApprovalRequestEvent {
+                    call_id: "call-1".to_string(),
+                    approval_id: None,
+                    turn_id: "turn-1".to_string(),
+                    command: vec!["echo".to_string(), "hello".to_string()],
+                    cwd: PathBuf::from("/tmp/project"),
+                    reason: Some("needs approval".to_string()),
+                    network_approval_context: None,
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
+                    additional_permissions: None,
+                    available_decisions: None,
+                    parsed_cmd: Vec::new(),
+                },
+            ),
+        };
+        let session_configured_event = Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        };
+
+        app.enqueue_primary_event(approval_event.clone()).await?;
+        app.enqueue_primary_event(session_configured_event.clone())
+            .await?;
+
+        let rx = app
+            .active_thread_rx
+            .as_mut()
+            .expect("primary thread receiver should be active");
+        let first_event = time::timeout(Duration::from_millis(50), rx.recv())
+            .await
+            .expect("timed out waiting for session configured event")
+            .expect("channel closed unexpectedly");
+        let second_event = time::timeout(Duration::from_millis(50), rx.recv())
+            .await
+            .expect("timed out waiting for buffered approval event")
+            .expect("channel closed unexpectedly");
+
+        assert!(matches!(first_event.msg, EventMsg::SessionConfigured(_)));
+        assert!(matches!(second_event.msg, EventMsg::ExecApprovalRequest(_)));
+
+        app.handle_codex_event_now(first_event);
+        app.handle_codex_event_now(second_event);
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        while let Ok(app_event) = app_event_rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                thread_id: op_thread_id,
+                ..
+            } = app_event
+            {
+                assert_eq!(op_thread_id, thread_id);
+                return Ok(());
+            }
+        }
+
+        panic!("expected approval action to submit a thread-scoped op");
     }
 
     #[tokio::test]
