@@ -1233,6 +1233,10 @@ impl SessionHeaderHistoryCell {
             ReasoningEffortConfig::None => "none",
         })
     }
+
+    pub(crate) fn is_loading_placeholder(&self) -> bool {
+        self.model == "loading"
+    }
 }
 
 impl HistoryCell for SessionHeaderHistoryCell {

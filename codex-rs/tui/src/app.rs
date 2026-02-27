@@ -614,7 +614,6 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
-    startup_header_pending_replacement: bool,
 }
 
 #[derive(Default)]
@@ -748,7 +747,6 @@ impl App {
             CODEX_CLI_VERSION,
         )) as Arc<dyn HistoryCell>;
         self.insert_history_cell(tui, header);
-        self.startup_header_pending_replacement = true;
     }
 
     fn replace_startup_header(
@@ -756,7 +754,17 @@ impl App {
         tui: &mut tui::Tui,
         cell: Arc<dyn HistoryCell>,
     ) -> Result<()> {
-        if !self.startup_header_pending_replacement || self.transcript_cells.is_empty() {
+        let Some(first_cell) = self.transcript_cells.first() else {
+            return Ok(());
+        };
+        let Some(startup_header) = first_cell
+            .as_ref()
+            .as_any()
+            .downcast_ref::<history_cell::SessionHeaderHistoryCell>()
+        else {
+            return Ok(());
+        };
+        if !startup_header.is_loading_placeholder() {
             return Ok(());
         }
 
@@ -767,7 +775,6 @@ impl App {
         }
         let display = cell.display_lines(tui.terminal.last_known_screen_size.width);
         tui.replace_top_visible_history_lines(display)?;
-        self.startup_header_pending_replacement = false;
         Ok(())
     }
 
@@ -832,7 +839,6 @@ impl App {
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
-        self.startup_header_pending_replacement = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
     }
@@ -1138,7 +1144,6 @@ impl App {
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
-        self.startup_header_pending_replacement = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
         tui.terminal.clear_scrollback()?;
@@ -1505,7 +1510,6 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
-            startup_header_pending_replacement: false,
         };
 
         if should_insert_startup_header {
@@ -3792,7 +3796,6 @@ mod tests {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
-            startup_header_pending_replacement: false,
         }
     }
 
@@ -3852,7 +3855,6 @@ mod tests {
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
-                startup_header_pending_replacement: false,
             },
             rx,
             op_rx,
