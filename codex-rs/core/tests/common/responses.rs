@@ -12,6 +12,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use serde_json::Value;
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 use tokio::sync::oneshot;
 use tokio_tungstenite::accept_hdr_async_with_config;
 use tokio_tungstenite::tungstenite::Message;
@@ -263,7 +264,7 @@ impl ResponsesRequest {
             .cloned()
             .unwrap_or(Value::Null);
         match output {
-            Value::String(text) => Some((Some(text), None)),
+            Value::String(_) | Value::Array(_) => Some((output_value_to_text(&output), None)),
             Value::Object(obj) => Some((
                 obj.get("content")
                     .and_then(Value::as_str)
@@ -292,6 +293,87 @@ impl ResponsesRequest {
             .query_pairs()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.to_string())
+    }
+}
+
+pub(crate) fn output_value_to_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(items) => match items.as_slice() {
+            [item] if item.get("type").and_then(Value::as_str) == Some("input_text") => {
+                item.get("text").and_then(Value::as_str).map(str::to_string)
+            }
+            [_] | [] | [_, _, ..] => None,
+        },
+        Value::Object(_) | Value::Number(_) | Value::Bool(_) | Value::Null => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use wiremock::http::HeaderMap;
+    use wiremock::http::Method;
+
+    fn request_with_input(input: Value) -> ResponsesRequest {
+        ResponsesRequest(wiremock::Request {
+            url: "http://localhost/v1/responses"
+                .parse()
+                .expect("valid request url"),
+            method: Method::POST,
+            headers: HeaderMap::new(),
+            body: serde_json::to_vec(&serde_json::json!({ "input": input }))
+                .expect("serialize request body"),
+        })
+    }
+
+    #[test]
+    fn call_output_content_and_success_returns_only_single_text_content_item() {
+        let single_text = request_with_input(serde_json::json!([
+            {
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": [{ "type": "input_text", "text": "hello" }]
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call-2",
+                "output": [{ "type": "input_text", "text": "world" }]
+            }
+        ]));
+        assert_eq!(
+            single_text.function_call_output_content_and_success("call-1"),
+            Some((Some("hello".to_string()), None))
+        );
+        assert_eq!(
+            single_text.custom_tool_call_output_content_and_success("call-2"),
+            Some((Some("world".to_string()), None))
+        );
+
+        let mixed_content = request_with_input(serde_json::json!([
+            {
+                "type": "function_call_output",
+                "call_id": "call-3",
+                "output": [
+                    { "type": "input_text", "text": "hello" },
+                    { "type": "input_image", "image_url": "data:image/png;base64,abc" }
+                ]
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call-4",
+                "output": [{ "type": "input_image", "image_url": "data:image/png;base64,abc" }]
+            }
+        ]));
+        assert_eq!(
+            mixed_content.function_call_output_content_and_success("call-3"),
+            Some((None, None))
+        );
+        assert_eq!(
+            mixed_content.custom_tool_call_output_content_and_success("call-4"),
+            Some((None, None))
+        );
     }
 }
 
@@ -335,6 +417,7 @@ pub struct WebSocketTestServer {
     uri: String,
     connections: Arc<Mutex<Vec<Vec<WebSocketRequest>>>>,
     handshakes: Arc<Mutex<Vec<WebSocketHandshake>>>,
+    request_log_updated: Arc<Notify>,
     shutdown: oneshot::Sender<()>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -354,6 +437,26 @@ impl WebSocketTestServer {
             panic!("expected 1 connection, got {}", connections.len());
         }
         connections.first().cloned().unwrap_or_default()
+    }
+
+    pub async fn wait_for_request(
+        &self,
+        connection_index: usize,
+        request_index: usize,
+    ) -> WebSocketRequest {
+        loop {
+            if let Some(request) = self
+                .connections
+                .lock()
+                .unwrap()
+                .get(connection_index)
+                .and_then(|connection| connection.get(request_index))
+                .cloned()
+            {
+                return request;
+            }
+            self.request_log_updated.notified().await;
+        }
     }
 
     pub fn handshakes(&self) -> Vec<WebSocketHandshake> {
@@ -1069,6 +1172,7 @@ pub async fn start_websocket_server(connections: Vec<Vec<Vec<Value>>>) -> WebSoc
 pub async fn start_websocket_server_with_headers(
     connections: Vec<WebSocketConnectionConfig>,
 ) -> WebSocketTestServer {
+    let start = std::time::Instant::now();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind websocket server");
@@ -1076,8 +1180,10 @@ pub async fn start_websocket_server_with_headers(
     let uri = format!("ws://{addr}");
     let connections_log = Arc::new(Mutex::new(Vec::new()));
     let handshakes_log = Arc::new(Mutex::new(Vec::new()));
+    let request_log_updated = Arc::new(Notify::new());
     let requests = Arc::clone(&connections_log);
     let handshakes = Arc::clone(&handshakes_log);
+    let request_log = Arc::clone(&request_log_updated);
     let connections = Arc::new(Mutex::new(VecDeque::from(connections)));
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
@@ -1159,9 +1265,51 @@ pub async fn start_websocket_server_with_headers(
                     let mut log = requests.lock().unwrap();
                     if let Some(connection_log) = log.get_mut(connection_index) {
                         connection_log.push(WebSocketRequest { body });
+                        let request_index = connection_log.len() - 1;
+                        let request = &connection_log[request_index];
+                        let request_body = request.body_json();
+                        eprintln!(
+                            "[ws test server +{}ms] connection={} received request={} type={:?} role={:?} text={:?} data={:?}",
+                            start.elapsed().as_millis(),
+                            connection_index,
+                            request_index,
+                            request_body.get("type").and_then(Value::as_str),
+                            request_body
+                                .get("item")
+                                .and_then(|item| item.get("role"))
+                                .and_then(Value::as_str),
+                            request_body
+                                .get("item")
+                                .and_then(|item| item.get("content"))
+                                .and_then(Value::as_array)
+                                .and_then(|content| content.first())
+                                .and_then(|content| content.get("text"))
+                                .and_then(Value::as_str),
+                            request_body
+                                .get("item")
+                                .and_then(|item| item.get("content"))
+                                .and_then(Value::as_array)
+                                .and_then(|content| content.first())
+                                .and_then(|content| content.get("data"))
+                                .and_then(Value::as_str),
+                        );
                     }
+                    request_log.notify_waiters();
                 }
 
+                eprintln!(
+                    "[ws test server +{}ms] connection={} sending batch_size={} event_types={:?} audio_data={:?}",
+                    start.elapsed().as_millis(),
+                    connection_index,
+                    request_events.len(),
+                    request_events
+                        .iter()
+                        .map(|event| event.get("type").and_then(Value::as_str))
+                        .collect::<Vec<_>>(),
+                    request_events
+                        .iter()
+                        .find_map(|event| event.get("delta").and_then(Value::as_str)),
+                );
                 for event in &request_events {
                     let Ok(payload) = serde_json::to_string(event) else {
                         continue;
@@ -1184,6 +1332,7 @@ pub async fn start_websocket_server_with_headers(
         uri,
         connections: connections_log,
         handshakes: handshakes_log,
+        request_log_updated,
         shutdown: shutdown_tx,
         task,
     }

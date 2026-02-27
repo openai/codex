@@ -620,6 +620,8 @@ fn append_rollout_turn_context(path: &Path, timestamp: &str, model: &str) -> std
         item: RolloutItem::TurnContext(TurnContextItem {
             turn_id: None,
             cwd: PathBuf::from("/"),
+            current_date: None,
+            timezone: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             network: None,

@@ -1,6 +1,7 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -2020,6 +2021,9 @@ impl App {
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
             }
+            AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
+                self.chat_widget.open_realtime_audio_device_selection(kind);
+            }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
@@ -2444,6 +2448,56 @@ impl App {
                         }
                     }
                 }
+            }
+            AppEvent::PersistRealtimeAudioDeviceSelection { kind, name } => {
+                let builder = match kind {
+                    RealtimeAudioDeviceKind::Microphone => {
+                        ConfigEditsBuilder::new(&self.config.codex_home)
+                            .set_realtime_microphone(name.as_deref())
+                    }
+                    RealtimeAudioDeviceKind::Speaker => {
+                        ConfigEditsBuilder::new(&self.config.codex_home)
+                            .set_realtime_speaker(name.as_deref())
+                    }
+                };
+
+                match builder.apply().await {
+                    Ok(()) => {
+                        match kind {
+                            RealtimeAudioDeviceKind::Microphone => {
+                                self.config.realtime_audio.microphone = name.clone();
+                            }
+                            RealtimeAudioDeviceKind::Speaker => {
+                                self.config.realtime_audio.speaker = name.clone();
+                            }
+                        }
+                        self.chat_widget
+                            .set_realtime_audio_device(kind, name.clone());
+
+                        if self.chat_widget.realtime_conversation_is_live() {
+                            self.chat_widget.open_realtime_audio_restart_prompt(kind);
+                        } else {
+                            let selection = name.unwrap_or_else(|| "System default".to_string());
+                            self.chat_widget.add_info_message(
+                                format!("Realtime {} set to {selection}", kind.noun()),
+                                None,
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist realtime audio selection"
+                        );
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save realtime {}: {err}",
+                            kind.noun()
+                        ));
+                    }
+                }
+            }
+            AppEvent::RestartRealtimeAudioDevice { kind } => {
+                self.chat_widget.restart_realtime_audio_device(kind);
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.runtime_approval_policy_override = Some(policy);
