@@ -153,6 +153,9 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
     ResponsesWebsocketsV2,
+    /// Allow Codex web_search to request image results and send the temporary
+    /// Responses feature-override header needed to enable that server-side path.
+    WebSearchImageSupport,
 }
 
 impl Feature {
@@ -691,6 +694,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WebSearchImageSupport,
+        key: "web_search_image_support",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
