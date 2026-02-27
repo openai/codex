@@ -277,7 +277,7 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/started"),
+        primary.read_stream_until_notification_message("codex/event/task_started"),
     )
     .await??;
 
@@ -384,7 +384,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         to_response::<TurnStartResponse>(running_turn_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/started"),
+        primary.read_stream_until_notification_message("codex/event/task_started"),
     )
     .await??;
 
@@ -500,7 +500,7 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         to_response::<TurnStartResponse>(running_turn_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/started"),
+        primary.read_stream_until_notification_message("codex/event/task_started"),
     )
     .await??;
 
@@ -603,7 +603,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/started"),
+        primary.read_stream_until_notification_message("codex/event/task_started"),
     )
     .await??;
 
