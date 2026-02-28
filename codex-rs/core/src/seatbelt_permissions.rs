@@ -82,7 +82,7 @@ pub(crate) fn build_seatbelt_extensions(
         MacOsAutomationPermission::BundleIds(bundle_ids) => {
             if !bundle_ids.is_empty() {
                 clauses.push(
-                    "(allow mach-lookup (global-name \"com.apple.coreservices.appleevents\"))"
+                    "(allow mach-lookup\n  (global-name \"com.apple.coreservices.launchservicesd\")\n  (global-name \"com.apple.coreservices.appleevents\"))"
                         .to_string(),
                 );
                 let destinations = bundle_ids
