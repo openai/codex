@@ -8,7 +8,6 @@ use crate::error::CodexErr;
 use crate::memories::metrics;
 use crate::memories::phase_one;
 use crate::memories::prompts::build_stage_one_input_message;
-use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::policy::should_persist_response_item_for_memories;
 use codex_api::ResponseEvent;
 use codex_otel::OtelManager;
@@ -19,6 +18,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_secrets::redact_secrets;
 use futures::StreamExt;
@@ -29,6 +29,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::info;
 use tracing::warn;
+
+const MEMORY_STAGE1_ALLOWED_SOURCES: &[SessionSource] = &[SessionSource::Exec];
 
 #[derive(Clone, Debug)]
 pub(in crate::memories) struct RequestContext {
@@ -158,7 +160,7 @@ async fn claim_startup_jobs(
         return None;
     };
 
-    let allowed_sources = INTERACTIVE_SESSION_SOURCES
+    let allowed_sources = MEMORY_STAGE1_ALLOWED_SOURCES
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
