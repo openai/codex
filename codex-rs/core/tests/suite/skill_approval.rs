@@ -408,10 +408,10 @@ async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Res
 /// and writes to an unrelated folder fail, both before and after cached approval.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> Result<()> {
+async fn shell_zsh_fork_skill_session_approval_merges_skill_permissions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let Some(runtime) = zsh_fork_runtime("zsh-fork explicit skill sandbox test")? else {
+    let Some(runtime) = zsh_fork_runtime("zsh-fork merged skill permissions test")? else {
         return Ok(());
     };
 
@@ -519,12 +519,12 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
         .to_string();
     assert!(
         first_output.contains("allowed"),
-        "expected skill sandbox to permit writes to the approved folder, got output: {first_output:?}"
+        "expected merged skill permissions to permit writes to the approved folder, got output: {first_output:?}"
     );
     assert_eq!(fs::read_to_string(&allowed_path)?, "allowed");
     assert!(
         !blocked_path.exists(),
-        "first run should not write outside the explicit skill sandbox"
+        "first run should not write outside the merged skill and turn sandbox"
     );
     assert!(
         !first_output.contains("blocked-created"),
@@ -567,16 +567,195 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
         .to_string();
     assert!(
         second_output.contains("allowed"),
-        "expected cached skill approval to retain the explicit skill sandbox, got output: {second_output:?}"
+        "expected cached skill approval to retain the merged skill permissions, got output: {second_output:?}"
     );
     assert_eq!(fs::read_to_string(&allowed_path)?, "allowed");
     assert!(
         !blocked_path.exists(),
-        "cached session approval should not widen skill execution beyond the explicit skill sandbox"
+        "cached session approval should not widen skill execution beyond the merged skill and turn sandbox"
     );
     assert!(
         !second_output.contains("blocked-created"),
         "blocked path should not have been created after cached approval: {second_output:?}"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_skill_exact_mode_replaces_turn_sandbox() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork exact skill sandbox test")? else {
+        return Ok(());
+    };
+
+    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let allowed_dir = outside_dir.path().join("allowed-output");
+    let blocked_dir = outside_dir.path().join("blocked-output");
+    fs::create_dir_all(&allowed_dir)?;
+    fs::create_dir_all(&blocked_dir)?;
+
+    let allowed_path = allowed_dir.join("allowed.txt");
+    let blocked_path = blocked_dir.join("blocked.txt");
+    let allowed_path_quoted = shlex::try_join([allowed_path.to_string_lossy().as_ref()])?;
+    let blocked_path_quoted = shlex::try_join([blocked_path.to_string_lossy().as_ref()])?;
+    let script_contents = format!(
+        "#!/bin/sh\nprintf '%s' allowed > {allowed_path_quoted}\ncat {allowed_path_quoted}\nprintf '%s' forbidden > {blocked_path_quoted}\nif [ -f {blocked_path_quoted} ]; then echo blocked-created; fi\n"
+    );
+    let allowed_dir_for_hook = allowed_dir.clone();
+    let allowed_path_for_hook = allowed_path.clone();
+    let blocked_path_for_hook = blocked_path.clone();
+    let script_contents_for_hook = script_contents.clone();
+
+    let permissions_yaml = format!(
+        "permissions:\n  mode: exact\n  file_system:\n    write:\n      - \"{}\"\n",
+        allowed_dir.display()
+    );
+
+    let server = start_mock_server().await;
+    let test = build_zsh_fork_test(
+        &server,
+        runtime,
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+        move |home| {
+            let _ = fs::remove_file(&allowed_path_for_hook);
+            let _ = fs::remove_file(&blocked_path_for_hook);
+            fs::create_dir_all(&allowed_dir_for_hook).unwrap();
+            fs::create_dir_all(blocked_path_for_hook.parent().unwrap()).unwrap();
+            write_skill_with_shell_script_contents(
+                home,
+                "mbolin-test-skill",
+                "sandboxed.sh",
+                &script_contents_for_hook,
+            )
+            .unwrap();
+            write_skill_metadata(home, "mbolin-test-skill", &permissions_yaml).unwrap();
+        },
+    )
+    .await?;
+
+    let (script_path_str, command) = skill_script_command(&test, "sandboxed.sh")?;
+
+    let first_call_id = "zsh-fork-skill-exact-1";
+    let first_arguments = shell_command_arguments(&command)?;
+    let first_mocks = mount_function_call_agent_response(
+        &server,
+        first_call_id,
+        &first_arguments,
+        "shell_command",
+    )
+    .await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let maybe_approval = wait_for_exec_approval_request(&test).await;
+    let approval = match maybe_approval {
+        Some(approval) => approval,
+        None => panic!("expected exec approval request before completion"),
+    };
+    assert_eq!(approval.call_id, first_call_id);
+    assert_eq!(approval.command, vec![script_path_str.clone()]);
+    assert_eq!(
+        approval.reason.as_deref(),
+        Some("Use the skill's declared sandbox exactly; do not merge it with the current sandbox.")
+    );
+    assert_eq!(
+        approval.additional_permissions,
+        Some(PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: None,
+                write: Some(vec![absolute_path(&allowed_dir)]),
+            }),
+            ..Default::default()
+        })
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::ApprovedForSession,
+        })
+        .await?;
+
+    wait_for_turn_complete(&test).await;
+
+    let first_output = first_mocks
+        .completion
+        .single_request()
+        .function_call_output(first_call_id)["output"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        first_output.contains("allowed"),
+        "expected exact skill sandbox to permit writes to the approved folder, got output: {first_output:?}"
+    );
+    assert_eq!(fs::read_to_string(&allowed_path)?, "allowed");
+    assert!(
+        !blocked_path.exists(),
+        "exact mode should replace the full-access turn sandbox instead of merging it"
+    );
+    assert!(
+        !first_output.contains("blocked-created"),
+        "blocked path should not have been created in exact mode: {first_output:?}"
+    );
+
+    let second_call_id = "zsh-fork-skill-exact-2";
+    let second_arguments = shell_command_arguments(&command)?;
+    let second_mocks = mount_function_call_agent_response(
+        &server,
+        second_call_id,
+        &second_arguments,
+        "shell_command",
+    )
+    .await;
+
+    let _ = fs::remove_file(&allowed_path);
+    let _ = fs::remove_file(&blocked_path);
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let cached_approval = wait_for_exec_approval_request(&test).await;
+    assert!(
+        cached_approval.is_none(),
+        "expected second run to reuse the cached session approval"
+    );
+
+    let second_output = second_mocks
+        .completion
+        .single_request()
+        .function_call_output(second_call_id)["output"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        second_output.contains("allowed"),
+        "expected cached exact skill approval to retain the exact skill sandbox, got output: {second_output:?}"
+    );
+    assert_eq!(fs::read_to_string(&allowed_path)?, "allowed");
+    assert!(
+        !blocked_path.exists(),
+        "cached session approval should continue to replace the turn sandbox in exact mode"
+    );
+    assert!(
+        !second_output.contains("blocked-created"),
+        "blocked path should not have been created after cached exact approval: {second_output:?}"
     );
 
     Ok(())
