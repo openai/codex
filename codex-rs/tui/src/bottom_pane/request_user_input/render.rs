@@ -67,6 +67,7 @@ impl Renderable for RequestUserInputOverlay {
         let inner = menu_surface_inset(outer);
         let inner_width = inner.width.max(1);
         let has_options = self.has_options();
+        let header_height = self.wrapped_header_lines(inner_width).len();
         let question_height = self.wrapped_question_lines(inner_width).len();
         let options_height = if has_options {
             self.options_preferred_height(inner_width) as usize
@@ -94,7 +95,8 @@ impl Renderable for RequestUserInputOverlay {
 
         // Tight minimum height: progress + question + (optional) titles/options
         // + notes composer + footer + menu padding.
-        let mut height = question_height
+        let mut height = header_height
+            .saturating_add(question_height)
             .saturating_add(options_height)
             .saturating_add(spacer_rows)
             .saturating_add(notes_height)
@@ -278,17 +280,39 @@ impl RequestUserInputOverlay {
         };
         Paragraph::new(progress_line).render(sections.progress_area, buf);
 
-        // Question prompt text.
-        let question_y = sections.question_area.y;
         let answered =
             self.is_question_answered(self.current_index(), &self.composer.current_text());
-        for (offset, line) in sections.question_lines.iter().enumerate() {
-            if question_y.saturating_add(offset as u16)
+        let mut prompt_y = sections.question_area.y;
+        for (offset, line) in sections.header_lines.iter().enumerate() {
+            if prompt_y.saturating_add(offset as u16)
                 >= sections.question_area.y + sections.question_area.height
             {
                 break;
             }
-            let question_line = if answered {
+            let header_line = if answered {
+                Line::from(line.clone()).bold()
+            } else {
+                Line::from(line.clone()).bold().cyan()
+            };
+            Paragraph::new(header_line).render(
+                Rect {
+                    x: sections.question_area.x,
+                    y: prompt_y.saturating_add(offset as u16),
+                    width: sections.question_area.width,
+                    height: 1,
+                },
+                buf,
+            );
+        }
+        prompt_y = prompt_y.saturating_add(sections.header_lines.len() as u16);
+
+        for (offset, line) in sections.question_lines.iter().enumerate() {
+            if prompt_y.saturating_add(offset as u16)
+                >= sections.question_area.y + sections.question_area.height
+            {
+                break;
+            }
+            let question_line = if answered || !sections.header_lines.is_empty() {
                 Line::from(line.clone())
             } else {
                 Line::from(line.clone()).cyan()
@@ -296,7 +320,7 @@ impl RequestUserInputOverlay {
             Paragraph::new(question_line).render(
                 Rect {
                     x: sections.question_area.x,
-                    y: question_y.saturating_add(offset as u16),
+                    y: prompt_y.saturating_add(offset as u16),
                     width: sections.question_area.width,
                     height: 1,
                 },

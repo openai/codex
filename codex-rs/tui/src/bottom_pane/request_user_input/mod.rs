@@ -35,6 +35,7 @@ use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
+use textwrap::Options;
 use unicode_width::UnicodeWidthStr;
 
 const NOTES_PLACEHOLDER: &str = "Add notes";
@@ -248,12 +249,13 @@ impl RequestUserInputOverlay {
 
     pub(super) fn wrapped_question_lines(&self, width: u16) -> Vec<String> {
         self.current_question()
-            .map(|q| {
-                textwrap::wrap(&q.question, width.max(1) as usize)
-                    .into_iter()
-                    .map(|line| line.to_string())
-                    .collect::<Vec<_>>()
-            })
+            .map(|question| wrap_plain_text_lines(&question.question, width))
+            .unwrap_or_default()
+    }
+
+    pub(super) fn wrapped_header_lines(&self, width: u16) -> Vec<String> {
+        self.current_question()
+            .map(|question| wrap_plain_text_lines(&question.header, width))
             .unwrap_or_default()
     }
 
@@ -985,6 +987,28 @@ impl RequestUserInputOverlay {
     }
 }
 
+fn wrap_plain_text_lines(text: &str, width: u16) -> Vec<String> {
+    let width = width.max(1) as usize;
+    text.split('\n')
+        .flat_map(|line| {
+            let line = line.trim_end_matches('\r');
+            if line.is_empty() {
+                return vec![String::new()];
+            }
+
+            let options = if line.starts_with("- ") {
+                Options::new(width).subsequent_indent("  ")
+            } else {
+                Options::new(width)
+            };
+            textwrap::wrap(line, options)
+                .into_iter()
+                .map(|wrapped| wrapped.into_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 impl BottomPaneView for RequestUserInputOverlay {
     fn prefer_esc_to_handle_key_event(&self) -> bool {
         true
@@ -1447,6 +1471,30 @@ mod tests {
             is_other: false,
             is_secret: false,
             options: None,
+        }
+    }
+
+    fn approval_style_question(id: &str) -> RequestUserInputQuestion {
+        RequestUserInputQuestion {
+            id: id.to_string(),
+            header: "Approve Gmail: Send Email?".to_string(),
+            question: "The Gmail app wants to run the tool \"Send Email\" (send_email), which may modify data and access external systems.\n\nTool call details:\n- to: [\"user@example.com\"]\n- subject: \"Quarterly update\"\n- body: \"Draft email body\"\n\nAllow this action?".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: "Approve Once".to_string(),
+                    description: "Run the tool and continue.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Deny".to_string(),
+                    description: "Decline this tool call and continue.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Cancel".to_string(),
+                    description: "Cancel this tool call.".to_string(),
+                },
+            ]),
         }
     }
 
@@ -2520,12 +2568,16 @@ mod tests {
         );
 
         let width = 48u16;
-        let question_height = overlay.wrapped_question_lines(width).len() as u16;
+        let prompt_height = overlay
+            .wrapped_header_lines(width)
+            .len()
+            .saturating_add(overlay.wrapped_question_lines(width).len())
+            as u16;
         let options_height = overlay.options_required_height(width);
         let extras = 1u16 // progress
             .saturating_add(DESIRED_SPACERS_BETWEEN_SECTIONS)
             .saturating_add(overlay.footer_required_height(width));
-        let height = question_height
+        let height = prompt_height
             .saturating_add(options_height)
             .saturating_add(extras);
         let sections = overlay.layout_sections(Rect::new(0, 0, width, height));
@@ -2619,15 +2671,36 @@ mod tests {
         }
 
         let width = 110u16;
-        let question_height = overlay.wrapped_question_lines(width).len() as u16;
+        let prompt_height = overlay
+            .wrapped_header_lines(width)
+            .len()
+            .saturating_add(overlay.wrapped_question_lines(width).len())
+            as u16;
         let options_height = overlay.options_required_height(width);
         let height = 1u16
-            .saturating_add(question_height)
+            .saturating_add(prompt_height)
             .saturating_add(options_height)
             .saturating_add(8);
         let area = Rect::new(0, 0, width, height);
         insta::assert_snapshot!(
             "request_user_input_wrapped_options",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_multiline_approval_snapshot() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![approval_style_question("q1")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let area = Rect::new(0, 0, 100, 18);
+        insta::assert_snapshot!(
+            "request_user_input_multiline_approval",
             render_snapshot(&overlay, area)
         );
     }

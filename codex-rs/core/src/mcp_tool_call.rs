@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -108,6 +110,7 @@ pub(crate) async fn handle_mcp_tool_call(
         &call_id,
         &server,
         &tool_name,
+        arguments_value.as_ref(),
         metadata.as_ref(),
         app_tool_policy.approval,
     )
@@ -315,6 +318,7 @@ struct McpToolApprovalMetadata {
     annotations: Option<ToolAnnotations>,
     connector_id: Option<String>,
     connector_name: Option<String>,
+    input_schema: serde_json::Value,
     tool_title: Option<String>,
 }
 
@@ -337,6 +341,7 @@ async fn maybe_request_mcp_tool_approval(
     call_id: &str,
     server: &str,
     tool_name: &str,
+    arguments: Option<&serde_json::Value>,
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
@@ -378,6 +383,8 @@ async fn maybe_request_mcp_tool_approval(
         question_id.clone(),
         server,
         tool_name,
+        arguments,
+        metadata.map(|metadata| &metadata.input_schema),
         metadata.and_then(|metadata| metadata.tool_title.as_deref()),
         metadata.and_then(|metadata| metadata.connector_name.as_deref()),
         annotations,
@@ -428,6 +435,9 @@ async fn lookup_mcp_tool_metadata(
                 annotations: tool_info.tool.annotations,
                 connector_id: tool_info.connector_id,
                 connector_name: tool_info.connector_name,
+                input_schema: serde_json::Value::Object(
+                    tool_info.tool.input_schema.as_ref().clone(),
+                ),
                 tool_title: tool_info.tool.title,
             })
         } else {
@@ -465,6 +475,8 @@ fn build_mcp_tool_approval_question(
     question_id: String,
     server: &str,
     tool_name: &str,
+    arguments: Option<&serde_json::Value>,
+    input_schema: Option<&serde_json::Value>,
     tool_title: Option<&str>,
     connector_name: Option<&str>,
     annotations: Option<&ToolAnnotations>,
@@ -480,7 +492,7 @@ fn build_mcp_tool_approval_question(
         (false, false) => "may have side effects",
     };
 
-    let tool_label = tool_title.unwrap_or(tool_name);
+    let tool_label = format_mcp_tool_label(tool_name, tool_title);
     let app_label = connector_name
         .map(|name| format!("The {name} app"))
         .unwrap_or_else(|| {
@@ -490,9 +502,14 @@ fn build_mcp_tool_approval_question(
                 format!("The {server} MCP server")
             }
         });
-    let question = format!(
-        "{app_label} wants to run the tool \"{tool_label}\", which {reason}. Allow this action?"
-    );
+    let mut question_sections = vec![format!(
+        "{app_label} wants to run the tool {tool_label}, which {reason}."
+    )];
+    if let Some(tool_call_details) = format_mcp_tool_call_details(arguments, input_schema) {
+        question_sections.push(tool_call_details);
+    }
+    question_sections.push("Allow this action?".to_string());
+    let question = question_sections.join("\n\n");
 
     let mut options = vec![RequestUserInputQuestionOption {
         label: MCP_TOOL_APPROVAL_ACCEPT.to_string(),
@@ -517,12 +534,128 @@ fn build_mcp_tool_approval_question(
 
     RequestUserInputQuestion {
         id: question_id,
-        header: "Approve app tool call?".to_string(),
+        header: build_mcp_tool_approval_header(server, tool_name, tool_title, connector_name),
         question,
         is_other: false,
         is_secret: false,
         options: Some(options),
     }
+}
+
+fn build_mcp_tool_approval_header(
+    server: &str,
+    tool_name: &str,
+    tool_title: Option<&str>,
+    connector_name: Option<&str>,
+) -> String {
+    let tool_label = tool_title.unwrap_or(tool_name);
+    match connector_name {
+        Some(connector_name) => format!("Approve {connector_name}: {tool_label}?"),
+        None if server == CODEX_APPS_MCP_SERVER_NAME => format!("Approve app tool: {tool_label}?"),
+        None => format!("Approve {server}: {tool_label}?"),
+    }
+}
+
+fn format_mcp_tool_label(tool_name: &str, tool_title: Option<&str>) -> String {
+    match tool_title {
+        Some(tool_title) if tool_title != tool_name => {
+            format!("\"{tool_title}\" ({tool_name})")
+        }
+        Some(tool_title) => format!("\"{tool_title}\""),
+        None => format!("\"{tool_name}\""),
+    }
+}
+
+fn format_mcp_tool_call_details(
+    arguments: Option<&serde_json::Value>,
+    input_schema: Option<&serde_json::Value>,
+) -> Option<String> {
+    const MAX_FIELDS: usize = 8;
+    const MAX_VALUE_CHARS: usize = 160;
+
+    let arguments = arguments?;
+    match arguments {
+        serde_json::Value::Object(arguments) if arguments.is_empty() => None,
+        serde_json::Value::Object(arguments) => {
+            let required_fields = input_schema
+                .and_then(|schema| schema.get("required"))
+                .and_then(serde_json::Value::as_array)
+                .map(|fields| {
+                    fields
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(ToString::to_string)
+                        .collect::<HashSet<_>>()
+                })
+                .unwrap_or_default();
+            let schema_field_positions = input_schema
+                .and_then(|schema| schema.get("properties"))
+                .and_then(serde_json::Value::as_object)
+                .map(|properties| {
+                    properties
+                        .keys()
+                        .enumerate()
+                        .map(|(idx, key)| (key.clone(), idx))
+                        .collect::<HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+            let total_fields = arguments.len();
+            let mut lines = vec!["Tool call details:".to_string()];
+            let mut entries = arguments.iter().collect::<Vec<_>>();
+            entries.sort_by(|(left_key, _), (right_key, _)| {
+                mcp_tool_detail_sort_key(left_key, &required_fields, &schema_field_positions).cmp(
+                    &mcp_tool_detail_sort_key(right_key, &required_fields, &schema_field_positions),
+                )
+            });
+            for (idx, (key, value)) in entries.into_iter().enumerate() {
+                if idx >= MAX_FIELDS {
+                    let remaining = total_fields.saturating_sub(MAX_FIELDS);
+                    let suffix = if remaining == 1 { "" } else { "s" };
+                    lines.push(format!("- … {remaining} more field{suffix}"));
+                    break;
+                }
+                let rendered_value = truncate_for_approval(
+                    serde_json::to_string(value).unwrap_or_else(|_| "<unavailable>".to_string()),
+                    MAX_VALUE_CHARS,
+                );
+                lines.push(format!("- {key}: {rendered_value}"));
+            }
+            Some(lines.join("\n"))
+        }
+        other => Some(format!(
+            "Tool call details:\n- arguments: {}",
+            truncate_for_approval(
+                serde_json::to_string(other).unwrap_or_else(|_| "<unavailable>".to_string()),
+                MAX_VALUE_CHARS,
+            )
+        )),
+    }
+}
+
+fn mcp_tool_detail_sort_key<'a>(
+    key: &'a str,
+    required_fields: &HashSet<String>,
+    schema_field_positions: &HashMap<String, usize>,
+) -> (usize, usize, &'a str) {
+    (
+        usize::from(!required_fields.contains(key)),
+        schema_field_positions
+            .get(key)
+            .copied()
+            .unwrap_or(usize::MAX),
+        key,
+    )
+}
+
+fn truncate_for_approval(value: String, max_chars: usize) -> String {
+    let char_count = value.chars().count();
+    if char_count <= max_chars {
+        return value;
+    }
+
+    let keep = max_chars.saturating_sub(1);
+    let truncated = value.chars().take(keep).collect::<String>();
+    format!("{truncated}…")
 }
 
 fn parse_mcp_tool_approval_response(
@@ -667,16 +800,18 @@ mod tests {
             "q".to_string(),
             "custom_server",
             "run_action",
+            None,
+            None,
             Some("Run Action"),
             None,
             Some(&annotations(Some(false), Some(true), None)),
             true,
         );
 
-        assert_eq!(question.header, "Approve app tool call?");
+        assert_eq!(question.header, "Approve custom_server: Run Action?");
         assert_eq!(
             question.question,
-            "The custom_server MCP server wants to run the tool \"Run Action\", which may modify or delete data. Allow this action?"
+            "The custom_server MCP server wants to run the tool \"Run Action\" (run_action), which may modify or delete data.\n\nAllow this action?"
         );
         assert!(
             question
@@ -694,6 +829,8 @@ mod tests {
             "q".to_string(),
             CODEX_APPS_MCP_SERVER_NAME,
             "run_action",
+            None,
+            None,
             Some("Run Action"),
             None,
             Some(&annotations(Some(false), Some(true), None)),
@@ -704,6 +841,41 @@ mod tests {
             question
                 .question
                 .starts_with("This app wants to run the tool \"Run Action\"")
+        );
+    }
+
+    #[test]
+    fn app_tool_question_orders_tool_call_details_generically() {
+        let question = build_mcp_tool_approval_question(
+            "q".to_string(),
+            CODEX_APPS_MCP_SERVER_NAME,
+            "create_issue",
+            Some(&serde_json::json!({
+                "description": "Audit approval prompt copy",
+                "projectId": "proj_123",
+                "body": "Draft email body",
+                "title": "Approval prompt follow-up",
+            })),
+            Some(&serde_json::json!({
+                "type": "object",
+                "required": ["projectId", "title"],
+                "properties": {
+                    "body": { "type": "string" },
+                    "description": { "type": "string" },
+                    "projectId": { "type": "string" },
+                    "title": { "type": "string" }
+                }
+            })),
+            Some("Create Issue"),
+            Some("Linear"),
+            Some(&annotations(Some(false), Some(true), Some(true))),
+            true,
+        );
+
+        assert_eq!(question.header, "Approve Linear: Create Issue?");
+        assert_eq!(
+            question.question,
+            "The Linear app wants to run the tool \"Create Issue\" (create_issue), which may modify data and access external systems.\n\nTool call details:\n- projectId: \"proj_123\"\n- title: \"Approval prompt follow-up\"\n- body: \"Draft email body\"\n- description: \"Audit approval prompt copy\"\n\nAllow this action?"
         );
     }
 
