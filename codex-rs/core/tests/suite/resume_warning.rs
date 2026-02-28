@@ -36,6 +36,7 @@ fn resume_history(
         model: previous_model.to_string(),
         personality: None,
         collaboration_mode: None,
+        realtime_active: None,
         effort: config.model_reasoning_effort,
         summary: config
             .model_reasoning_summary

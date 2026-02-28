@@ -1,3 +1,4 @@
+use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
 use crate::features::Feature;
@@ -64,6 +65,33 @@ fn build_collaboration_mode_update_item(
     }
 }
 
+pub(crate) fn build_realtime_update_item(
+    previous: Option<&TurnContextItem>,
+    previous_turn_settings: Option<&PreviousTurnSettings>,
+    next: &TurnContext,
+) -> Option<DeveloperInstructions> {
+    match (
+        previous.and_then(|item| item.realtime_active),
+        next.realtime_active,
+    ) {
+        (Some(true), false) => Some(DeveloperInstructions::realtime_end_message("inactive")),
+        (Some(false), true) | (None, true) => Some(DeveloperInstructions::realtime_start_message()),
+        (Some(true), true) | (Some(false), false) => None,
+        (None, false) => previous_turn_settings
+            .and_then(|settings| settings.realtime_active)
+            .filter(|realtime_active| *realtime_active)
+            .map(|_| DeveloperInstructions::realtime_end_message("inactive")),
+    }
+}
+
+pub(crate) fn build_initial_realtime_item(
+    previous: Option<&TurnContextItem>,
+    previous_turn_settings: Option<&PreviousTurnSettings>,
+    next: &TurnContext,
+) -> Option<DeveloperInstructions> {
+    build_realtime_update_item(previous, previous_turn_settings, next)
+}
+
 fn build_personality_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
@@ -100,11 +128,11 @@ pub(crate) fn personality_message_for(
 }
 
 pub(crate) fn build_model_instructions_update_item(
-    previous_user_turn_model: Option<&str>,
+    previous_turn_settings: Option<&PreviousTurnSettings>,
     next: &TurnContext,
 ) -> Option<DeveloperInstructions> {
-    let previous_model = previous_user_turn_model?;
-    if previous_model == next.model_info.slug {
+    let previous_turn_settings = previous_turn_settings?;
+    if previous_turn_settings.model == next.model_info.slug {
         return None;
     }
 
@@ -147,7 +175,7 @@ fn build_text_message(role: &str, text_sections: Vec<String>) -> Option<Response
 
 pub(crate) fn build_settings_update_items(
     previous: Option<&TurnContextItem>,
-    previous_user_turn_model: Option<&str>,
+    previous_turn_settings: Option<&PreviousTurnSettings>,
     next: &TurnContext,
     shell: &Shell,
     exec_policy: &Policy,
@@ -157,9 +185,10 @@ pub(crate) fn build_settings_update_items(
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
-        build_model_instructions_update_item(previous_user_turn_model, next),
+        build_model_instructions_update_item(previous_turn_settings, next),
         build_permissions_update_item(previous, next, exec_policy),
         build_collaboration_mode_update_item(previous, next),
+        build_realtime_update_item(previous, previous_turn_settings, next),
         build_personality_update_item(previous, next, personality_feature_enabled),
     ]
     .into_iter()
