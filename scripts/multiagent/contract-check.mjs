@@ -59,12 +59,14 @@ const errorExit = (message) => {
   finalizeAndExit('ERROR', 2, output);
 };
 
+const normalizeForComparison = (text) => text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+
 try {
   if (!existsSync(contractExpected)) {
     errorExit(`Expected contract file missing at ${contractExpected}`);
   }
 
-  const expected = readFileSync(contractExpected);
+  const expected = readFileSync(contractExpected, 'utf8');
   mkdirSync(schemaRootAbs, { recursive: true });
 
   const generate = spawnSync(
@@ -94,39 +96,50 @@ try {
     errorExit(`Generated schema path not found at ${generatedPath}`);
   }
 
-  const generated = readFileSync(generatedPath);
+  const generated = readFileSync(generatedPath, 'utf8');
+  const expectedNormalized = normalizeForComparison(expected);
+  const generatedNormalized = normalizeForComparison(generated);
 
-  result.expectedHash = createHash('sha256').update(expected).digest('hex');
-  result.generatedHash = createHash('sha256').update(generated).digest('hex');
+  result.expectedHash = createHash('sha256').update(expectedNormalized).digest('hex');
+  result.generatedHash = createHash('sha256').update(generatedNormalized).digest('hex');
+  const mismatch = result.expectedHash !== result.generatedHash;
+
+  if (!mismatch) {
+    finalizeAndExit('PASS', 0, 'No contract drift detected.\n');
+  }
 
   const diffProc = spawnSync(
     'git',
-    ['diff', '--no-index', '--', contractExpected, generatedPath],
+    [
+      '-c',
+      'core.safecrlf=false',
+      '-c',
+      'core.autocrlf=false',
+      'diff',
+      '--no-index',
+      '--ignore-cr-at-eol',
+      '--',
+      contractExpected,
+      generatedPath,
+    ],
     {
       cwd: repoRoot,
       encoding: 'utf8',
       shell: false,
     }
   );
-
-  const mismatch = result.expectedHash !== result.generatedHash;
   let diffText = `${diffProc.stdout || ''}${diffProc.stderr || ''}`;
-
   if (diffProc.error || (diffProc.status ?? 0) > 1) {
-    if (mismatch) {
-      diffText = [
-        'Contract drift detected, but git diff failed.',
-        `Expected file: ${contractExpected}`,
-        `Generated file: ${generatedPath}`,
-        `Expected hash: ${result.expectedHash}`,
-        `Generated hash: ${result.generatedHash}`,
-      ].join('\n');
-    } else {
-      diffText = 'No contract drift detected.\n';
-    }
+    diffText = [
+      'Contract drift detected, but git diff failed.',
+      `Expected file: ${contractExpected}`,
+      `Generated file: ${generatedPath}`,
+      `Expected hash: ${result.expectedHash}`,
+      `Generated hash: ${result.generatedHash}`,
+    ].join('\n');
   }
 
-  if (mismatch && diffText.trim() === '') {
+  if (diffText.trim() === '' || !diffText.includes('diff --git')) {
     diffText = [
       'Contract drift detected.',
       `Expected file: ${contractExpected}`,
@@ -136,11 +149,7 @@ try {
     ].join('\n');
   }
 
-  if (!mismatch && diffText.trim() === '') {
-    diffText = 'No contract drift detected.\n';
-  }
-
-  finalizeAndExit(mismatch ? 'FAIL' : 'PASS', mismatch ? 1 : 0, diffText);
+  finalizeAndExit('FAIL', 1, diffText);
 } catch (err) {
   const msg = `Runtime error during contract check: ${err instanceof Error ? err.message : String(err)}`;
   errorExit(msg);
