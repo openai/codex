@@ -1240,9 +1240,9 @@ mod tests {
             .await
             .expect("cloud requirements task")
             .expect_err("cloud requirements retry exhaustion should fail closed");
-        assert!(
-            err.to_string()
-                .contains("load required cloud configuration")
+        assert_eq!(
+            err.to_string(),
+            "failed to load your workspace-managed config"
         );
         assert_eq!(
             fetcher.request_count.load(Ordering::SeqCst),
