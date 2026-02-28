@@ -1210,9 +1210,12 @@ impl McpConnectionManager {
 
 fn is_transport_closed_error(error: &anyhow::Error) -> bool {
     error.chain().any(|err| {
-        err.to_string()
-            .to_ascii_lowercase()
-            .contains("transport closed")
+        let message = err.to_string().to_ascii_lowercase();
+        message.contains("transport closed")
+            || message.contains("transport send error")
+            || message.contains("transport receive error")
+            || (message.contains("transport")
+                && (message.contains("broken pipe") || message.contains("connection reset")))
     })
 }
 
@@ -2432,6 +2435,26 @@ mod tests {
             "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
             display
         );
+    }
+
+    #[test]
+    fn is_transport_closed_error_matches_transport_closed() {
+        let error = anyhow!("Transport closed");
+        assert!(is_transport_closed_error(&error));
+    }
+
+    #[test]
+    fn is_transport_closed_error_matches_transport_broken_pipe() {
+        let error = anyhow!(
+            "tool call error: tools/call failed: Transport send error: Transport [rmcp::transport::child_process::TokioChildProcess] error: Broken pipe (os error 32)"
+        );
+        assert!(is_transport_closed_error(&error));
+    }
+
+    #[test]
+    fn is_transport_closed_error_does_not_match_non_transport_error() {
+        let error = anyhow!("tool call error: invalid params");
+        assert!(!is_transport_closed_error(&error));
     }
 
     #[test]
