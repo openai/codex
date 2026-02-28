@@ -399,7 +399,10 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
                 FunctionCallOutputContentItem::InputText { text }
             }
             DynamicToolCallOutputContentItem::InputImage { image_url } => {
-                FunctionCallOutputContentItem::InputImage { image_url }
+                FunctionCallOutputContentItem::InputImage {
+                    image_url,
+                    detail: None,
+                }
             }
         })
         .collect::<Vec<FunctionCallOutputContentItem>>();

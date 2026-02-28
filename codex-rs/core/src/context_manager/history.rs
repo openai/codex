@@ -2,15 +2,19 @@ use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_bytes_for_tokens;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count_i64;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::TokenUsage;
@@ -428,7 +432,11 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
 ///
 /// The estimator later converts bytes to tokens using a 4-bytes/token heuristic
 /// with ceiling division, so 7,373 bytes maps to approximately 1,844 tokens.
-const IMAGE_BYTES_ESTIMATE: i64 = 7373;
+const RESIZED_IMAGE_BYTES_ESTIMATE: i64 = 7373;
+// See https://platform.openai.com/docs/guides/images-vision#calculating-costs.
+// Use a direct 32px patch count only for `detail: "original"`;
+// all other image inputs continue to use `RESIZED_IMAGE_BYTES_ESTIMATE`.
+const ORIGINAL_IMAGE_PATCH_SIZE: u32 = 32;
 
 pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
@@ -444,15 +452,15 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
             let raw = serde_json::to_string(item)
                 .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
                 .unwrap_or_default();
-            let (payload_bytes, image_count) = image_data_url_estimate_adjustment(item);
-            if payload_bytes == 0 || image_count == 0 {
+            let (payload_bytes, replacement_bytes) = image_data_url_estimate_adjustment(item);
+            if payload_bytes == 0 || replacement_bytes == 0 {
                 raw
             } else {
-                // Replace raw base64 payload bytes with a fixed per-image cost.
-                // We intentionally preserve the data URL prefix and JSON wrapper
-                // bytes already included in `raw`.
+                // Replace raw base64 payload bytes with a per-image estimate.
+                // We intentionally preserve the data URL prefix and JSON
+                // wrapper bytes already included in `raw`.
                 raw.saturating_sub(payload_bytes)
-                    .saturating_add(image_count.saturating_mul(IMAGE_BYTES_ESTIMATE))
+                    .saturating_add(replacement_bytes)
             }
         }
     }
@@ -463,7 +471,7 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
 ///
 /// We only discount payloads for `data:image/...;base64,...` URLs (case
 /// insensitive markers) and leave everything else at raw serialized size.
-fn base64_data_url_payload_len(url: &str) -> Option<usize> {
+fn parse_base64_image_data_url(url: &str) -> Option<&str> {
     if !url
         .get(.."data:".len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
@@ -489,22 +497,45 @@ fn base64_data_url_payload_len(url: &str) -> Option<usize> {
     if !has_base64_marker {
         return None;
     }
-    Some(payload.len())
+    Some(payload)
+}
+
+fn base64_data_url_payload_len(url: &str) -> Option<usize> {
+    parse_base64_image_data_url(url).map(str::len)
+}
+
+fn estimate_original_image_bytes(image_url: &str) -> Option<i64> {
+    let payload = parse_base64_image_data_url(image_url)?;
+    let bytes = BASE64_STANDARD.decode(payload).ok()?;
+    let dynamic = image::load_from_memory(&bytes).ok()?;
+    let width = i64::from(dynamic.width());
+    let height = i64::from(dynamic.height());
+    let patch_size = i64::from(ORIGINAL_IMAGE_PATCH_SIZE);
+    let patches_wide = width.saturating_add(patch_size.saturating_sub(1)) / patch_size;
+    let patches_high = height.saturating_add(patch_size.saturating_sub(1)) / patch_size;
+    let patch_count = patches_wide.saturating_mul(patches_high);
+    let patch_count = usize::try_from(patch_count).unwrap_or(usize::MAX);
+    Some(i64::try_from(approx_bytes_for_tokens(patch_count)).unwrap_or(i64::MAX))
 }
 
 /// Scans one response item for discount-eligible inline image data URLs and
 /// returns:
 /// - total base64 payload bytes to subtract from raw serialized size
-/// - count of qualifying images to replace with `IMAGE_BYTES_ESTIMATE`
+/// - total replacement byte estimate for those images
 fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
     let mut payload_bytes = 0i64;
-    let mut image_count = 0i64;
+    let mut replacement_bytes = 0i64;
 
-    let mut accumulate = |image_url: &str| {
+    let mut accumulate = |image_url: &str, detail: Option<ImageDetail>| {
         if let Some(payload_len) = base64_data_url_payload_len(image_url) {
             payload_bytes =
                 payload_bytes.saturating_add(i64::try_from(payload_len).unwrap_or(i64::MAX));
-            image_count = image_count.saturating_add(1);
+            replacement_bytes = replacement_bytes.saturating_add(match detail {
+                Some(ImageDetail::Original) => {
+                    estimate_original_image_bytes(image_url).unwrap_or(RESIZED_IMAGE_BYTES_ESTIMATE)
+                }
+                _ => RESIZED_IMAGE_BYTES_ESTIMATE,
+            });
         }
     };
 
@@ -512,7 +543,7 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
         ResponseItem::Message { content, .. } => {
             for content_item in content {
                 if let ContentItem::InputImage { image_url } = content_item {
-                    accumulate(image_url);
+                    accumulate(image_url, None);
                 }
             }
         }
@@ -520,8 +551,10 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
         | ResponseItem::CustomToolCallOutput { output, .. } => {
             if let FunctionCallOutputBody::ContentItems(items) = &output.body {
                 for content_item in items {
-                    if let FunctionCallOutputContentItem::InputImage { image_url } = content_item {
-                        accumulate(image_url);
+                    if let FunctionCallOutputContentItem::InputImage { image_url, detail } =
+                        content_item
+                    {
+                        accumulate(image_url, *detail);
                     }
                 }
             }
@@ -529,7 +562,7 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
         _ => {}
     }
 
-    (payload_bytes, image_count)
+    (payload_bytes, replacement_bytes)
 }
 
 fn is_model_generated_item(item: &ResponseItem) -> bool {

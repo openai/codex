@@ -430,6 +430,9 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
+            "view_image_original_resolution": {
+              "type": "boolean"
+            },
             "voice_transcription": {
               "type": "boolean"
             },
@@ -1776,6 +1779,9 @@
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
+          "type": "boolean"
+        },
+        "view_image_original_resolution": {
           "type": "boolean"
         },
         "voice_transcription": {

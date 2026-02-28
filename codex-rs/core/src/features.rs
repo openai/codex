@@ -119,6 +119,8 @@ pub enum Feature {
     MemoryTool,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
+    /// Preserve original-resolution bytes for `view_image` tool attachments on supported models.
+    ViewImageOriginalResolution,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
@@ -520,6 +522,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ChildAgentsMd,
         key: "child_agents_md",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ViewImageOriginalResolution,
+        key: "view_image_original_resolution",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
