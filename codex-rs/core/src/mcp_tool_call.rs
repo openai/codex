@@ -108,11 +108,13 @@ pub(crate) async fn handle_mcp_tool_call(
         sess.as_ref(),
         turn_context,
         &call_id,
-        &server,
-        &tool_name,
-        arguments_value.as_ref(),
-        metadata.as_ref(),
-        app_tool_policy.approval,
+        McpToolApprovalRequest {
+            server: &server,
+            tool_name: &tool_name,
+            arguments: arguments_value.as_ref(),
+            metadata: metadata.as_ref(),
+            approval_mode: app_tool_policy.approval,
+        },
     )
     .await
     {
@@ -335,21 +337,27 @@ struct McpToolApprovalKey {
     tool_name: String,
 }
 
+struct McpToolApprovalRequest<'a> {
+    server: &'a str,
+    tool_name: &'a str,
+    arguments: Option<&'a serde_json::Value>,
+    metadata: Option<&'a McpToolApprovalMetadata>,
+    approval_mode: AppToolApproval,
+}
+
 async fn maybe_request_mcp_tool_approval(
     sess: &Session,
     turn_context: &TurnContext,
     call_id: &str,
-    server: &str,
-    tool_name: &str,
-    arguments: Option<&serde_json::Value>,
-    metadata: Option<&McpToolApprovalMetadata>,
-    approval_mode: AppToolApproval,
+    request: McpToolApprovalRequest<'_>,
 ) -> Option<McpToolApprovalDecision> {
-    if approval_mode == AppToolApproval::Approve {
+    if request.approval_mode == AppToolApproval::Approve {
         return None;
     }
-    let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
-    if approval_mode == AppToolApproval::Auto {
+    let annotations = request
+        .metadata
+        .and_then(|metadata| metadata.annotations.as_ref());
+    if request.approval_mode == AppToolApproval::Auto {
         if is_full_access_mode(turn_context) {
             return None;
         }
@@ -358,15 +366,17 @@ async fn maybe_request_mcp_tool_approval(
         }
     }
 
-    let approval_key = if approval_mode == AppToolApproval::Auto {
-        let connector_id = metadata.and_then(|metadata| metadata.connector_id.clone());
-        if server == CODEX_APPS_MCP_SERVER_NAME && connector_id.is_none() {
+    let approval_key = if request.approval_mode == AppToolApproval::Auto {
+        let connector_id = request
+            .metadata
+            .and_then(|metadata| metadata.connector_id.clone());
+        if request.server == CODEX_APPS_MCP_SERVER_NAME && connector_id.is_none() {
             None
         } else {
             Some(McpToolApprovalKey {
-                server: server.to_string(),
+                server: request.server.to_string(),
                 connector_id,
-                tool_name: tool_name.to_string(),
+                tool_name: request.tool_name.to_string(),
             })
         }
     } else {
@@ -381,13 +391,10 @@ async fn maybe_request_mcp_tool_approval(
     let question_id = format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}");
     let question = build_mcp_tool_approval_question(
         question_id.clone(),
-        server,
-        tool_name,
-        arguments,
-        metadata.map(|metadata| &metadata.input_schema),
-        metadata.and_then(|metadata| metadata.tool_title.as_deref()),
-        metadata.and_then(|metadata| metadata.connector_name.as_deref()),
-        annotations,
+        request.server,
+        request.tool_name,
+        request.arguments,
+        request.metadata,
         approval_key.is_some(),
     );
     let args = RequestUserInputArgs {
@@ -398,7 +405,7 @@ async fn maybe_request_mcp_tool_approval(
         .await;
     let decision = normalize_approval_decision_for_mode(
         parse_mcp_tool_approval_response(response, &question_id),
-        approval_mode,
+        request.approval_mode,
     );
     if matches!(decision, McpToolApprovalDecision::AcceptAndRemember)
         && let Some(key) = approval_key
@@ -476,12 +483,10 @@ fn build_mcp_tool_approval_question(
     server: &str,
     tool_name: &str,
     arguments: Option<&serde_json::Value>,
-    input_schema: Option<&serde_json::Value>,
-    tool_title: Option<&str>,
-    connector_name: Option<&str>,
-    annotations: Option<&ToolAnnotations>,
+    metadata: Option<&McpToolApprovalMetadata>,
     allow_remember_option: bool,
 ) -> RequestUserInputQuestion {
+    let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
     let destructive =
         annotations.and_then(|annotations| annotations.destructive_hint) == Some(true);
     let open_world = annotations.and_then(|annotations| annotations.open_world_hint) == Some(true);
@@ -492,7 +497,9 @@ fn build_mcp_tool_approval_question(
         (false, false) => "may have side effects",
     };
 
+    let tool_title = metadata.and_then(|metadata| metadata.tool_title.as_deref());
     let tool_label = format_mcp_tool_label(tool_name, tool_title);
+    let connector_name = metadata.and_then(|metadata| metadata.connector_name.as_deref());
     let app_label = connector_name
         .map(|name| format!("The {name} app"))
         .unwrap_or_else(|| {
@@ -505,7 +512,9 @@ fn build_mcp_tool_approval_question(
     let mut question_sections = vec![format!(
         "{app_label} wants to run the tool {tool_label}, which {reason}."
     )];
-    if let Some(tool_call_details) = format_mcp_tool_call_details(arguments, input_schema) {
+    if let Some(tool_call_details) =
+        format_mcp_tool_call_details(arguments, metadata.map(|metadata| &metadata.input_schema))
+    {
         question_sections.push(tool_call_details);
     }
     question_sections.push("Allow this action?".to_string());
@@ -762,6 +771,21 @@ mod tests {
         }
     }
 
+    fn approval_metadata(
+        tool_title: Option<&str>,
+        connector_name: Option<&str>,
+        annotations: Option<ToolAnnotations>,
+        input_schema: serde_json::Value,
+    ) -> McpToolApprovalMetadata {
+        McpToolApprovalMetadata {
+            annotations,
+            connector_id: None,
+            connector_name: connector_name.map(str::to_string),
+            input_schema,
+            tool_title: tool_title.map(str::to_string),
+        }
+    }
+
     #[test]
     fn approval_required_when_read_only_false_and_destructive() {
         let annotations = annotations(Some(false), Some(true), None);
@@ -793,15 +817,18 @@ mod tests {
 
     #[test]
     fn custom_mcp_tool_question_mentions_server_name() {
+        let metadata = approval_metadata(
+            Some("Run Action"),
+            None,
+            Some(annotations(Some(false), Some(true), None)),
+            serde_json::json!({}),
+        );
         let question = build_mcp_tool_approval_question(
             "q".to_string(),
             "custom_server",
             "run_action",
             None,
-            None,
-            Some("Run Action"),
-            None,
-            Some(&annotations(Some(false), Some(true), None)),
+            Some(&metadata),
             true,
         );
 
@@ -822,15 +849,18 @@ mod tests {
 
     #[test]
     fn codex_apps_tool_question_keeps_legacy_app_label() {
+        let metadata = approval_metadata(
+            Some("Run Action"),
+            None,
+            Some(annotations(Some(false), Some(true), None)),
+            serde_json::json!({}),
+        );
         let question = build_mcp_tool_approval_question(
             "q".to_string(),
             CODEX_APPS_MCP_SERVER_NAME,
             "run_action",
             None,
-            None,
-            Some("Run Action"),
-            None,
-            Some(&annotations(Some(false), Some(true), None)),
+            Some(&metadata),
             true,
         );
 
@@ -843,6 +873,21 @@ mod tests {
 
     #[test]
     fn app_tool_question_orders_tool_call_details_generically() {
+        let metadata = approval_metadata(
+            Some("Create Issue"),
+            Some("Linear"),
+            Some(annotations(Some(false), Some(true), Some(true))),
+            serde_json::json!({
+                "type": "object",
+                "required": ["projectId", "title"],
+                "properties": {
+                    "body": { "type": "string" },
+                    "description": { "type": "string" },
+                    "projectId": { "type": "string" },
+                    "title": { "type": "string" }
+                }
+            }),
+        );
         let question = build_mcp_tool_approval_question(
             "q".to_string(),
             CODEX_APPS_MCP_SERVER_NAME,
@@ -853,19 +898,7 @@ mod tests {
                 "body": "Draft email body",
                 "title": "Approval prompt follow-up",
             })),
-            Some(&serde_json::json!({
-                "type": "object",
-                "required": ["projectId", "title"],
-                "properties": {
-                    "body": { "type": "string" },
-                    "description": { "type": "string" },
-                    "projectId": { "type": "string" },
-                    "title": { "type": "string" }
-                }
-            })),
-            Some("Create Issue"),
-            Some("Linear"),
-            Some(&annotations(Some(false), Some(true), Some(true))),
+            Some(&metadata),
             true,
         );
 
