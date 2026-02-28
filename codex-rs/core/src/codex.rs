@@ -108,6 +108,7 @@ use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
+use rmcp::model::Meta;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
@@ -3371,17 +3372,18 @@ impl Session {
             .await
     }
 
-    pub async fn call_tool(
+    pub(crate) async fn call_tool_with_meta(
         &self,
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
+        meta: Option<Meta>,
     ) -> anyhow::Result<CallToolResult> {
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .call_tool(server, tool, arguments)
+            .call_tool_with_meta(server, tool, arguments, meta)
             .await
     }
 

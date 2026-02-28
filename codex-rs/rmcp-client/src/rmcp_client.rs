@@ -27,6 +27,7 @@ use rmcp::model::InitializeResult;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::ListToolsResult;
+use rmcp::model::Meta;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
@@ -492,6 +493,17 @@ impl RmcpClient {
         arguments: Option<serde_json::Value>,
         timeout: Option<Duration>,
     ) -> Result<CallToolResult> {
+        self.call_tool_with_meta(name, arguments, None, timeout)
+            .await
+    }
+
+    pub async fn call_tool_with_meta(
+        &self,
+        name: String,
+        arguments: Option<serde_json::Value>,
+        meta: Option<Meta>,
+        timeout: Option<Duration>,
+    ) -> Result<CallToolResult> {
         self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
         let arguments = match arguments {
@@ -504,7 +516,7 @@ impl RmcpClient {
             None => None,
         };
         let rmcp_params = CallToolRequestParams {
-            meta: None,
+            meta,
             name: name.into(),
             arguments,
             task: None,
