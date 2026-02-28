@@ -525,16 +525,20 @@ impl EscalationPolicy for CoreShellActionProvider {
         } else {
             DecisionSource::UnmatchedCommandFallback
         };
-        let escalation_execution = Self::shell_request_escalation_execution(
-            self.sandbox_permissions,
-            &self.sandbox_policy,
-            self.prompt_permissions.as_ref(),
-            self.turn
-                .config
-                .permissions
-                .macos_seatbelt_profile_extensions
-                .as_ref(),
-        );
+        let escalation_execution = match decision_source {
+            DecisionSource::PrefixRule => EscalationExecution::Unsandboxed,
+            DecisionSource::UnmatchedCommandFallback => Self::shell_request_escalation_execution(
+                self.sandbox_permissions,
+                &self.sandbox_policy,
+                self.prompt_permissions.as_ref(),
+                self.turn
+                    .config
+                    .permissions
+                    .macos_seatbelt_profile_extensions
+                    .as_ref(),
+            ),
+            DecisionSource::SkillScript { .. } => unreachable!("handled above"),
+        };
         self.process_decision(
             evaluation.decision,
             needs_escalation,
