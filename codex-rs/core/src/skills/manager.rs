@@ -126,7 +126,9 @@ impl SkillsManager {
             }
         };
 
-        let loaded_plugins = self.plugins_manager.plugins(force_reload).await;
+        let loaded_plugins =
+            self.plugins_manager
+                .plugins_for_layer_stack(cwd, &config_layer_stack, force_reload);
         let mut roots = skill_roots(
             &config_layer_stack,
             cwd,
