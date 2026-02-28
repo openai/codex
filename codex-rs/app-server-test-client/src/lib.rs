@@ -604,6 +604,7 @@ fn trigger_zsh_fork_multi_cmd_approval(
     turn_params.approval_policy = Some(AskForApproval::OnRequest);
     turn_params.sandbox_policy = Some(SandboxPolicy::ReadOnly {
         access: ReadOnlyAccess::FullAccess,
+        network_access: false,
     });
 
     let turn_response = client.turn_start(turn_params)?;
@@ -734,6 +735,7 @@ fn trigger_cmd_approval(
         Some(AskForApproval::OnRequest),
         Some(SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
+            network_access: false,
         }),
         dynamic_tools,
     )
@@ -756,6 +758,7 @@ fn trigger_patch_approval(
         Some(AskForApproval::OnRequest),
         Some(SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
+            network_access: false,
         }),
         dynamic_tools,
     )

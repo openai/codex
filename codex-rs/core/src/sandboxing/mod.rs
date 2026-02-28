@@ -189,17 +189,17 @@ fn merge_read_only_access_with_additional_reads(
     }
 }
 
-fn sandbox_policy_with_additional_permissions(
+pub(crate) fn sandbox_policy_with_additional_permissions(
     sandbox_policy: &SandboxPolicy,
     additional_permissions: &PermissionProfile,
-) -> Result<SandboxPolicy, SandboxTransformError> {
+) -> SandboxPolicy {
     if additional_permissions.is_empty() {
-        return Ok(sandbox_policy.clone());
+        return sandbox_policy.clone();
     }
 
     let (extra_reads, extra_writes) = additional_permission_roots(additional_permissions);
 
-    let policy = match sandbox_policy {
+    match sandbox_policy {
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             sandbox_policy.clone()
         }
@@ -218,15 +218,20 @@ fn sandbox_policy_with_additional_permissions(
                     read_only_access,
                     extra_reads,
                 ),
-                network_access: *network_access,
+                network_access: *network_access || additional_permissions.network.unwrap_or(false),
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             }
         }
-        SandboxPolicy::ReadOnly { access } => {
+        SandboxPolicy::ReadOnly {
+            access,
+            network_access,
+        } => {
             if extra_writes.is_empty() {
                 SandboxPolicy::ReadOnly {
                     access: merge_read_only_access_with_additional_reads(access, extra_reads),
+                    network_access: *network_access
+                        || additional_permissions.network.unwrap_or(false),
                 }
             } else {
                 // todo(dylan) - for now, this grants more access than the request. We should restrict this,
@@ -238,15 +243,14 @@ fn sandbox_policy_with_additional_permissions(
                         access,
                         extra_reads,
                     ),
-                    network_access: false,
+                    network_access: *network_access
+                        || additional_permissions.network.unwrap_or(false),
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
                 }
             }
         }
-    };
-
-    Ok(policy)
+    }
 }
 
 #[derive(Default)]
@@ -312,7 +316,7 @@ impl SandboxManager {
         } = request;
         let effective_policy =
             if let Some(additional_permissions) = spec.additional_permissions.take() {
-                sandbox_policy_with_additional_permissions(policy, &additional_permissions)?
+                sandbox_policy_with_additional_permissions(policy, &additional_permissions)
             } else {
                 policy.clone()
             };
@@ -412,10 +416,13 @@ pub async fn execute_env(
 #[cfg(test)]
 mod tests {
     use super::SandboxManager;
+    use super::sandbox_policy_with_additional_permissions;
     use crate::exec::SandboxType;
     use crate::protocol::SandboxPolicy;
     use crate::tools::sandboxing::SandboxablePreference;
     use codex_protocol::config_types::WindowsSandboxLevel;
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::protocol::ReadOnlyAccess;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -441,5 +448,24 @@ mod tests {
             true,
         );
         assert_eq!(sandbox, expected);
+    }
+
+    #[test]
+    fn read_only_merge_preserves_network_only_permissions() {
+        let merged = sandbox_policy_with_additional_permissions(
+            &SandboxPolicy::new_read_only_policy(),
+            &PermissionProfile {
+                network: Some(true),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            merged,
+            SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
+                network_access: true,
+            }
+        );
     }
 }
