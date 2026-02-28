@@ -669,11 +669,13 @@ async fn project_trust_context(
     config_base_dir: &Path,
     user_config_file: &AbsolutePathBuf,
 ) -> io::Result<ProjectTrustContext> {
-    let _guard = AbsolutePathBufGuard::new(config_base_dir);
-    let project_trust_config: ProjectTrustConfigToml = merged_config
-        .clone()
-        .try_into()
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    let project_trust_config: ProjectTrustConfigToml = {
+        let _guard = AbsolutePathBufGuard::new(config_base_dir);
+        merged_config
+            .clone()
+            .try_into()
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?
+    };
 
     let project_root = find_project_root(cwd, project_root_markers).await?;
     let projects = project_trust_config.projects.unwrap_or_default();
