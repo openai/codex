@@ -7869,6 +7869,7 @@ fn build_thread_from_snapshot(
     Thread {
         id: thread_id.to_string(),
         preview: String::new(),
+        ephemeral: config_snapshot.ephemeral,
         model_provider: config_snapshot.model_provider_id.clone(),
         created_at: now,
         updated_at: now,
@@ -7910,6 +7911,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
     Thread {
         id: conversation_id.to_string(),
         preview,
+        ephemeral: false,
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         updated_at: updated_at.map(|dt| dt.timestamp()).unwrap_or(0),
