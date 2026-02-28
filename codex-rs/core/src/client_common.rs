@@ -174,6 +174,8 @@ pub(crate) mod tools {
         WebSearch {
             #[serde(skip_serializing_if = "Option::is_none")]
             external_web_access: Option<bool>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            search_content_types: Option<Vec<String>>,
         },
         #[serde(rename = "custom")]
         Freeform(FreeformTool),

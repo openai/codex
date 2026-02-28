@@ -208,3 +208,47 @@ async fn web_search_mode_updates_between_turns_with_sandbox_policy() {
         "danger-full-access policy should default web_search to live"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn web_search_image_support_feature_sets_content_types() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let resp_mock = responses::mount_sse_once(&server, sse).await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5-codex")
+        .with_config(|config| {
+            config.features.enable(Feature::WebSearchImageSupport);
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
+        });
+    let test = builder
+        .build(&server)
+        .await
+        .expect("create test Codex conversation");
+
+    test.submit_turn_with_policy(
+        "hello image web search",
+        SandboxPolicy::new_read_only_policy(),
+    )
+    .await
+    .expect("submit turn");
+
+    let body = resp_mock.single_request().body_json();
+    let tool = find_web_search_tool(&body);
+    assert_eq!(
+        tool.get("search_content_types").and_then(Value::as_array),
+        Some(&vec![
+            Value::String("text".to_string()),
+            Value::String("image".to_string()),
+        ]),
+        "web_search image support should request both text and image results"
+    );
+}
