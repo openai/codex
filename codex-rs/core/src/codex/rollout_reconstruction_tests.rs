@@ -141,6 +141,13 @@ async fn record_initial_history_resumed_hydrates_previous_model_from_lifecycle_t
 #[tokio::test]
 async fn rollout_reconstruction_state_backtracks_before_rollout_suffix() {
     let (session, turn_context) = make_session_and_context().await;
+    let mut older_context_item = turn_context.to_turn_context_item();
+    older_context_item.turn_id = Some("older-turn".to_string());
+    older_context_item.model = "older-model".to_string();
+    let older_turn_id = older_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
     let mut compacted_context_item = turn_context.to_turn_context_item();
     compacted_context_item.turn_id = Some("compacted-turn".to_string());
     compacted_context_item.model = "compacted-model".to_string();
@@ -155,10 +162,36 @@ async fn rollout_reconstruction_state_backtracks_before_rollout_suffix() {
         .turn_id
         .clone()
         .expect("turn context should have turn_id");
+    let older_user = user_message("older user");
+    let older_assistant = assistant_message("older assistant");
     let replacement_history = vec![user_message("compacted summary user")];
     let latest_user = user_message("latest user");
     let latest_assistant = assistant_message("latest assistant");
     let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: older_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "older user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(older_context_item.clone()),
+        RolloutItem::ResponseItem(older_user.clone()),
+        RolloutItem::ResponseItem(older_assistant.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: older_turn_id,
+                last_agent_message: None,
+            },
+        )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
                 turn_id: compacted_turn_id.clone(),
@@ -248,6 +281,22 @@ async fn rollout_reconstruction_state_backtracks_before_rollout_suffix() {
         serde_json::to_value(reconstructed.reference_context_item)
             .expect("serialize reconstructed reference context item"),
         serde_json::to_value(Some(compacted_context_item))
+            .expect("serialize expected reference context item")
+    );
+
+    reconstruction_state.apply_backtracking(1);
+    let reconstructed = session
+        .reconstruct_history_from_rollout_state(&turn_context, &reconstruction_state)
+        .await;
+    assert_eq!(reconstructed.history, vec![older_user, older_assistant]);
+    assert_eq!(
+        reconstructed.previous_model,
+        Some("older-model".to_string())
+    );
+    assert_eq!(
+        serde_json::to_value(reconstructed.reference_context_item)
+            .expect("serialize reconstructed reference context item"),
+        serde_json::to_value(Some(older_context_item))
             .expect("serialize expected reference context item")
     );
 }
