@@ -378,13 +378,25 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
             (summary, Some(web_search_details().to_string()))
         }
         _ => {
-            let summary = format!("`{alias}` is deprecated. Use `[features].{canonical}` instead.");
-            let details = if alias == canonical {
-                None
+            let (summary, details) = if alias == "collab" && feature == Feature::Collab {
+                (
+                    "Your configuration file has an error.".to_string(),
+                    Some(
+                        "Change collab=true to multi_agent=true in your config.toml or enable it by running codex --enable multi_agent".to_string(),
+                    ),
+                )
+            } else if alias == canonical {
+                (
+                    format!("`{alias}` is deprecated. Use `[features].{canonical}` instead."),
+                    None,
+                )
             } else {
-                Some(format!(
-                    "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://developers.openai.com/codex/config-basic#feature-flags for details."
-                ))
+                (
+                    format!("`{alias}` is deprecated. Use `[features].{canonical}` instead."),
+                    Some(format!(
+                        "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://developers.openai.com/codex/config-basic#feature-flags for details."
+                    )),
+                )
             };
             (summary, details)
         }
@@ -821,5 +833,18 @@ mod tests {
     fn collab_is_legacy_alias_for_multi_agent() {
         assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
         assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+    }
+
+    #[test]
+    fn collab_legacy_notice_uses_config_error_text() {
+        let (summary, details) = legacy_usage_notice("collab", Feature::Collab);
+
+        assert_eq!(summary, "Your configuration file has an error.".to_string());
+        assert_eq!(
+            details,
+            Some(
+                "Change collab=true to multi_agent=true in your config.toml or enable it by running codex --enable multi_agent".to_string()
+            )
+        );
     }
 }
