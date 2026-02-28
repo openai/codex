@@ -6,7 +6,6 @@ use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::REALTIME_CONVERSATION_CLOSE_TAG;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
@@ -369,113 +368,6 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn replacing_realtime_session_records_close_marker_in_next_model_request() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let api_server = start_mock_server().await;
-    let response_mock = responses::mount_sse_once(
-        &api_server,
-        responses::sse(vec![
-            responses::ev_response_created("resp_1"),
-            responses::ev_assistant_message("msg_1", "done"),
-            responses::ev_completed("resp_1"),
-        ]),
-    )
-    .await;
-
-    let realtime_server = start_websocket_server(vec![
-        vec![
-            vec![json!({
-                "type": "session.created",
-                "session": { "id": "sess_old" }
-            })],
-            vec![],
-            vec![],
-        ],
-        vec![vec![
-            json!({
-                "type": "session.created",
-                "session": { "id": "sess_new" }
-            }),
-            json!({
-                "type": "conversation.item.added",
-                "item": {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "replacement text"}]
-                }
-            }),
-        ]],
-    ])
-    .await;
-
-    let mut builder = test_codex().with_config({
-        let realtime_base_url = realtime_server.uri().to_string();
-        move |config| {
-            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
-        }
-    });
-    let test = builder.build(&api_server).await?;
-
-    test.codex
-        .submit(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "old".to_string(),
-            session_id: Some("conv_old".to_string()),
-        }))
-        .await?;
-    wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::SessionCreated { session_id },
-        }) if session_id == "sess_old" => Some(Ok(())),
-        EventMsg::Error(err) => Some(Err(err.clone())),
-        _ => None,
-    })
-    .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("first conversation start failed: {err:?}"));
-
-    test.codex
-        .submit(Op::RealtimeConversationText(ConversationTextParams {
-            text: "keepalive".to_string(),
-        }))
-        .await?;
-
-    test.codex
-        .submit(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "new".to_string(),
-            session_id: Some("conv_new".to_string()),
-        }))
-        .await?;
-    wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::SessionCreated { session_id },
-        }) if session_id == "sess_new" => Some(Ok(())),
-        EventMsg::Error(err) => Some(Err(err.clone())),
-        _ => None,
-    })
-    .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("second conversation start failed: {err:?}"));
-
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
-    let request = response_mock.single_request();
-    let developer_texts = request.message_input_texts("developer");
-    assert!(
-        developer_texts.iter().any(|text| {
-            text.contains(REALTIME_CONVERSATION_CLOSE_TAG) && text.contains("Reason: replaced")
-        }),
-        "expected replaced realtime session to record a closing developer message: {developer_texts:?}"
-    );
-
-    let user_texts = request.message_input_texts("user");
-    assert!(user_texts.iter().any(|text| text == "replacement text"));
-
-    realtime_server.shutdown().await;
-    Ok(())
-}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Result<()> {
     skip_if_no_network!(Ok(()));

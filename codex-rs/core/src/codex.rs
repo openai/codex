@@ -603,6 +603,7 @@ impl TurnSkillsContext {
 #[derive(Debug)]
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
+    pub(crate) is_live: bool,
     pub(crate) config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
@@ -690,6 +691,7 @@ impl TurnContext {
 
         Self {
             sub_id: self.sub_id.clone(),
+            is_live: self.is_live,
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
@@ -753,6 +755,7 @@ impl TurnContext {
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
+            is_live: Some(self.is_live),
             effort: self.reasoning_effort,
             summary: self.reasoning_summary,
             user_instructions: self.user_instructions.clone(),
@@ -1063,6 +1066,7 @@ impl Session {
         let (current_date, timezone) = local_time_context();
         TurnContext {
             sub_id,
+            is_live: false,
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
             model_info: model_info.clone(),
@@ -1732,7 +1736,7 @@ impl Session {
                 // TODO(ccunningham): Defer initial context insertion until the first real turn
                 // starts so it reflects the actual first-turn settings (permissions, etc.) and
                 // we do not emit model-visible "diff" updates before the first user message.
-                let items = self.build_initial_context(&turn_context, None).await;
+                let items = self.build_initial_context(&turn_context, None, None).await;
                 self.record_conversation_items(&turn_context, &items).await;
                 {
                     let mut state = self.state.lock().await;
@@ -1825,7 +1829,9 @@ impl Session {
                 }
 
                 // Append the current session's initial context after the reconstructed history.
-                let initial_context = self.build_initial_context(&turn_context, None).await;
+                let initial_context = self
+                    .build_initial_context(&turn_context, previous_regular_turn_context_item, None)
+                    .await;
                 self.record_conversation_items(&turn_context, &initial_context)
                     .await;
                 {
@@ -2067,6 +2073,7 @@ impl Session {
             Arc::clone(&self.js_repl),
             skills_outcome,
         );
+        turn_context.is_live = self.conversation.running_state().await.is_some();
 
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -2750,6 +2757,41 @@ impl Session {
         self.send_raw_response_items(turn_context, items).await;
     }
 
+    async fn reconstruct_history_from_rollout(
+        &self,
+        turn_context: &TurnContext,
+        rollout_items: &[RolloutItem],
+    ) -> Vec<ResponseItem> {
+        let mut history = ContextManager::new();
+        for item in rollout_items {
+            match item {
+                RolloutItem::ResponseItem(response_item) => {
+                    history.record_items(
+                        std::iter::once(response_item),
+                        turn_context.truncation_policy,
+                    );
+                }
+                RolloutItem::Compacted(compacted) => {
+                    if let Some(replacement) = &compacted.replacement_history {
+                        history.replace(replacement.clone());
+                    } else {
+                        let user_messages = collect_user_messages(history.raw_items());
+                        let rebuilt = compact::build_compacted_history(
+                            self.build_initial_context(turn_context, None, None).await,
+                            &user_messages,
+                            &compacted.message,
+                        );
+                        history.replace(rebuilt);
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    history.drop_last_n_user_turns(rollback.num_turns);
+                }
+                _ => {}
+            }
+        }
+        history.raw_items().to_vec()
+    }
     /// Append ResponseItems to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
         &self,
@@ -2879,6 +2921,7 @@ impl Session {
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
+        previous_context_item: Option<&TurnContextItem>,
         previous_user_turn_model: Option<&str>,
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
@@ -2925,6 +2968,12 @@ impl Session {
             DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
         {
             developer_sections.push(collab_instructions.into_text());
+        }
+        if let Some(realtime_update) = crate::context_manager::updates::build_realtime_update_item(
+            previous_context_item,
+            turn_context,
+        ) {
+            developer_sections.push(realtime_update.into_text());
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
@@ -3035,7 +3084,7 @@ impl Session {
         };
         let should_inject_full_context = reference_context_item.is_none();
         let context_items = if should_inject_full_context {
-            self.build_initial_context(turn_context, previous_user_turn_model)
+            self.build_initial_context(turn_context, None, previous_user_turn_model)
                 .await
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
@@ -4552,6 +4601,7 @@ async fn spawn_review_thread(
 
     let review_turn_context = TurnContext {
         sub_id: review_turn_id,
+        is_live: parent_turn_context.is_live,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
@@ -6506,6 +6556,23 @@ mod tests {
         }
     }
 
+    fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                ResponseItem::Message { role, content, .. } if role == "developer" => {
+                    Some(content.as_slice())
+                }
+                _ => None,
+            })
+            .flat_map(|content| content.iter())
+            .filter_map(|item| match item {
+                ContentItem::InputText { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn make_connector(id: &str, name: &str) -> AppInfo {
         AppInfo {
             id: id.to_string(),
@@ -7141,6 +7208,223 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_initial_history_resumed_hydrates_previous_model() {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_model = "previous-rollout-model";
+        let previous_context_item = TurnContextItem {
+            turn_id: Some(turn_context.sub_id.clone()),
+            cwd: turn_context.cwd.clone(),
+            current_date: turn_context.current_date.clone(),
+            timezone: turn_context.timezone.clone(),
+            approval_policy: turn_context.approval_policy.value(),
+            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            network: None,
+            model: previous_model.to_string(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+            is_live: Some(turn_context.is_live),
+            effort: turn_context.reasoning_effort,
+            summary: turn_context.reasoning_summary,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        };
+        let rollout_items = vec![RolloutItem::TurnContext(previous_context_item)];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(
+            session.previous_model().await,
+            Some(previous_model.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_hydrates_previous_model_from_lifecycle_turn_with_missing_turn_context_id()
+     {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_model = "previous-rollout-model";
+        let mut previous_context_item = TurnContextItem {
+            turn_id: Some(turn_context.sub_id.clone()),
+            cwd: turn_context.cwd.clone(),
+            current_date: turn_context.current_date.clone(),
+            timezone: turn_context.timezone.clone(),
+            approval_policy: turn_context.approval_policy.value(),
+            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            network: None,
+            model: previous_model.to_string(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+            is_live: Some(turn_context.is_live),
+            effort: turn_context.reasoning_effort,
+            summary: turn_context.reasoning_summary,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        };
+        let turn_id = previous_context_item
+            .turn_id
+            .clone()
+            .expect("turn context should have turn_id");
+        previous_context_item.turn_id = None;
+
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "seed".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::TurnContext(previous_context_item),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id,
+                    last_agent_message: None,
+                },
+            )),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(
+            session.previous_model().await,
+            Some(previous_model.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_context_item = turn_context.to_turn_context_item();
+        let user_turn_id = previous_context_item
+            .turn_id
+            .clone()
+            .expect("turn context should have turn_id");
+        let standalone_turn_id = "standalone-task-turn".to_string();
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: user_turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "seed".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::TurnContext(previous_context_item),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: user_turn_id,
+                    last_agent_message: None,
+                },
+            )),
+            // Standalone task turn (no UserMessage) should not consume rollback skips.
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: standalone_turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: standalone_turn_id,
+                    last_agent_message: None,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+                codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+            )),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(session.previous_model().await, None);
+        assert!(session.reference_context_item().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_seeds_reference_context_item_without_compaction() {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_context_item = turn_context.to_turn_context_item();
+        let rollout_items = vec![RolloutItem::TurnContext(previous_context_item.clone())];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(
+            serde_json::to_value(session.reference_context_item().await)
+                .expect("serialize seeded reference context item"),
+            serde_json::to_value(Some(previous_context_item))
+                .expect("serialize expected reference context item")
+        );
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_does_not_seed_reference_context_item_after_compaction()
+    {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_context_item = turn_context.to_turn_context_item();
+        let rollout_items = vec![
+            RolloutItem::TurnContext(previous_context_item),
+            RolloutItem::Compacted(CompactedItem {
+                message: String::new(),
+                replacement_history: Some(Vec::new()),
+            }),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert!(session.reference_context_item().await.is_none());
+    }
+
+    #[tokio::test]
     async fn resumed_history_injects_initial_context_on_first_context_update_only() {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
@@ -7159,7 +7443,11 @@ mod tests {
         session
             .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
-        expected.extend(session.build_initial_context(&turn_context, None).await);
+        expected.extend(
+            session
+                .build_initial_context(&turn_context, None, None)
+                .await,
+        );
         let history_after_seed = session.clone_history().await;
         assert_eq!(expected, history_after_seed.raw_items());
 
@@ -7324,7 +7612,7 @@ mod tests {
         let reconstruction_turn = session.new_default_turn().await;
         expected.extend(
             session
-                .build_initial_context(reconstruction_turn.as_ref(), None)
+                .build_initial_context(reconstruction_turn.as_ref(), None, None)
                 .await,
         );
         let history = session.state.lock().await.clone_history();
@@ -7346,6 +7634,7 @@ mod tests {
             model: previous_model.to_string(),
             personality: turn_context.personality,
             collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+            is_live: Some(turn_context.is_live),
             effort: turn_context.reasoning_effort,
             summary: turn_context.reasoning_summary,
             user_instructions: None,
@@ -7396,7 +7685,7 @@ mod tests {
     async fn thread_rollback_drops_last_turn_from_history() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
+        let initial_context = sess.build_initial_context(tc.as_ref(), None, None).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -7467,7 +7756,7 @@ mod tests {
     async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
+        let initial_context = sess.build_initial_context(tc.as_ref(), None, None).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -7495,7 +7784,7 @@ mod tests {
     async fn thread_rollback_fails_when_turn_in_progress() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
+        let initial_context = sess.build_initial_context(tc.as_ref(), None, None).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -7516,7 +7805,7 @@ mod tests {
     async fn thread_rollback_fails_when_num_turns_is_zero() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
+        let initial_context = sess.build_initial_context(tc.as_ref(), None, None).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -8575,6 +8864,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_settings_update_items_emits_realtime_start_when_session_becomes_live() {
+        let (session, previous_context) = make_session_and_context().await;
+        let previous_context = Arc::new(previous_context);
+        let mut current_context = previous_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+        current_context.is_live = true;
+
+        let update_items = session.build_settings_update_items(
+            Some(&previous_context.to_turn_context_item()),
+            None,
+            &current_context,
+        );
+
+        let developer_texts = developer_input_texts(&update_items);
+        assert!(
+            developer_texts
+                .iter()
+                .any(|text| text.contains("<realtime_conversation>")),
+            "expected a realtime start update, got {developer_texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_settings_update_items_emits_realtime_end_when_session_stops_being_live() {
+        let (session, mut previous_context) = make_session_and_context().await;
+        previous_context.is_live = true;
+        let mut current_context = previous_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+        current_context.is_live = false;
+
+        let update_items = session.build_settings_update_items(
+            Some(&previous_context.to_turn_context_item()),
+            None,
+            &current_context,
+        );
+
+        let developer_texts = developer_input_texts(&update_items);
+        assert!(
+            developer_texts
+                .iter()
+                .any(|text| text.contains("Reason: inactive")),
+            "expected a realtime end update, got {developer_texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_initial_context_uses_previous_realtime_state() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.is_live = true;
+
+        let initial_context = session
+            .build_initial_context(&turn_context, None, None)
+            .await;
+        let developer_texts = developer_input_texts(&initial_context);
+        assert!(
+            developer_texts
+                .iter()
+                .any(|text| text.contains("<realtime_conversation>")),
+            "expected initial context to describe active realtime state, got {developer_texts:?}"
+        );
+
+        let previous_context_item = turn_context.to_turn_context_item();
+        let resumed_context = session
+            .build_initial_context(&turn_context, Some(&previous_context_item), None)
+            .await;
+        let resumed_developer_texts = developer_input_texts(&resumed_context);
+        assert!(
+            !resumed_developer_texts
+                .iter()
+                .any(|text| text.contains("<realtime_conversation>")),
+            "did not expect a duplicate realtime update, got {resumed_developer_texts:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn record_context_updates_and_set_reference_context_item_injects_full_context_when_baseline_missing()
      {
         let (session, turn_context) = make_session_and_context().await;
@@ -8582,7 +8954,9 @@ mod tests {
             .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
         let history = session.clone_history().await;
-        let initial_context = session.build_initial_context(&turn_context, None).await;
+        let initial_context = session
+            .build_initial_context(&turn_context, None, None)
+            .await;
         assert_eq!(history.raw_items().to_vec(), initial_context);
 
         let current_context = session.reference_context_item().await;
@@ -8626,7 +9000,11 @@ mod tests {
 
         let history = session.clone_history().await;
         let mut expected_history = vec![compacted_summary];
-        expected_history.extend(session.build_initial_context(&turn_context, None).await);
+        expected_history.extend(
+            session
+                .build_initial_context(&turn_context, None, None)
+                .await,
+        );
         assert_eq!(history.raw_items().to_vec(), expected_history);
     }
 
@@ -8713,7 +9091,7 @@ mod tests {
         let (session, turn_context) = make_session_and_context().await;
 
         let initial_context = session
-            .build_initial_context(&turn_context, Some("previous-regular-model"))
+            .build_initial_context(&turn_context, None, Some("previous-regular-model"))
             .await;
 
         let ResponseItem::Message { role, content, .. } = &initial_context[0] else {
@@ -9198,7 +9576,7 @@ mod tests {
         // personality_spec) matches reconstruction.
         let reconstruction_turn = session.new_default_turn().await;
         let mut initial_context = session
-            .build_initial_context(reconstruction_turn.as_ref(), None)
+            .build_initial_context(reconstruction_turn.as_ref(), None, None)
             .await;
         // Ensure personality_spec is present when Personality is enabled, so expected matches
         // what reconstruction produces (build_initial_context may omit it when baked into model).

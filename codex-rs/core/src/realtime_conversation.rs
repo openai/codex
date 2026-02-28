@@ -14,8 +14,6 @@ use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
-use codex_protocol::models::DeveloperInstructions;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -26,10 +24,11 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
-use codex_protocol::protocol::RolloutItem;
 use http::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::debug;
@@ -41,32 +40,6 @@ const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const TEXT_IN_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 
-async fn record_realtime_start_developer_message(sess: &Arc<Session>, sub_id: &str) {
-    let realtime_start_message: ResponseItem =
-        DeveloperInstructions::realtime_start_message().into();
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id.to_string()).await;
-    sess.record_into_history(
-        std::slice::from_ref(&realtime_start_message),
-        turn_context.as_ref(),
-    )
-    .await;
-    sess.persist_rollout_items(&[RolloutItem::ResponseItem(realtime_start_message)])
-        .await;
-}
-
-async fn record_realtime_end_developer_message(sess: &Arc<Session>, sub_id: &str, reason: &str) {
-    let realtime_end_message: ResponseItem =
-        DeveloperInstructions::realtime_end_message(reason).into();
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id.to_string()).await;
-    sess.record_into_history(
-        std::slice::from_ref(&realtime_end_message),
-        turn_context.as_ref(),
-    )
-    .await;
-    sess.persist_rollout_items(&[RolloutItem::ResponseItem(realtime_end_message)])
-        .await;
-}
-
 pub(crate) struct RealtimeConversationManager {
     state: Mutex<Option<ConversationState>>,
 }
@@ -76,6 +49,7 @@ struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
     text_tx: Sender<String>,
     task: JoinHandle<()>,
+    is_live: Arc<AtomicBool>,
 }
 
 #[allow(dead_code)]
@@ -88,7 +62,9 @@ impl RealtimeConversationManager {
 
     pub(crate) async fn running_state(&self) -> Option<()> {
         let state = self.state.lock().await;
-        state.as_ref().map(|_| ())
+        state
+            .as_ref()
+            .and_then(|state| state.is_live.load(Ordering::Relaxed).then_some(()))
     }
 
     pub(crate) async fn start(
@@ -97,12 +73,13 @@ impl RealtimeConversationManager {
         extra_headers: Option<HeaderMap>,
         prompt: String,
         session_id: Option<String>,
-    ) -> CodexResult<Receiver<RealtimeEvent>> {
+    ) -> CodexResult<(Receiver<RealtimeEvent>, Arc<AtomicBool>)> {
         let previous_state = {
             let mut guard = self.state.lock().await;
             guard.take()
         };
         if let Some(state) = previous_state {
+            state.is_live.store(false, Ordering::Relaxed);
             state.task.abort();
             let _ = state.task.await;
         }
@@ -126,6 +103,7 @@ impl RealtimeConversationManager {
         let (events_tx, events_rx) =
             async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
+        let is_live = Arc::new(AtomicBool::new(true));
         let task = spawn_realtime_input_task(writer, events, text_rx, audio_rx, events_tx);
 
         let mut guard = self.state.lock().await;
@@ -133,8 +111,9 @@ impl RealtimeConversationManager {
             audio_tx,
             text_tx,
             task,
+            is_live: Arc::clone(&is_live),
         });
-        Ok(events_rx)
+        Ok((events_rx, is_live))
     }
 
     pub(crate) async fn audio_in(&self, frame: RealtimeAudioFrame) -> CodexResult<()> {
@@ -187,6 +166,7 @@ impl RealtimeConversationManager {
         };
 
         if let Some(state) = state {
+            state.is_live.store(false, Ordering::Relaxed);
             state.task.abort();
             let _ = state.task.await;
         }
@@ -214,11 +194,8 @@ pub(crate) async fn handle_start(
     let requested_session_id = params
         .session_id
         .or_else(|| Some(sess.conversation_id.to_string()));
-    if let Some(()) = sess.conversation.running_state().await {
-        record_realtime_end_developer_message(sess, &sub_id, "replaced").await;
-    }
     info!("starting realtime conversation");
-    let events_rx = match sess
+    let (events_rx, is_live) = match sess
         .conversation
         .start(api_provider, None, prompt, requested_session_id.clone())
         .await
@@ -232,8 +209,6 @@ pub(crate) async fn handle_start(
     };
 
     info!("realtime conversation started");
-
-    record_realtime_start_developer_message(sess, &sub_id).await;
 
     sess.send_event_raw(Event {
         id: sub_id.clone(),
@@ -270,9 +245,8 @@ pub(crate) async fn handle_start(
                 )))
                 .await;
         }
-        if let Some(()) = sess_clone.conversation.running_state().await {
+        if is_live.swap(false, Ordering::Relaxed) {
             info!("realtime conversation transport closed");
-            record_realtime_end_developer_message(&sess_clone, &sub_id, "transport_closed").await;
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationClosed(
                     RealtimeConversationClosedEvent {
@@ -335,7 +309,6 @@ pub(crate) async fn handle_text(
 pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
     match sess.conversation.shutdown().await {
         Ok(()) => {
-            record_realtime_end_developer_message(sess, &sub_id, "requested").await;
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::RealtimeConversationClosed(RealtimeConversationClosedEvent {

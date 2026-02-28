@@ -2148,6 +2148,8 @@ pub struct TurnContextItem {
     pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collaboration_mode: Option<CollaborationMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_live: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
     pub summary: ReasoningSummaryConfig,
@@ -3378,6 +3380,7 @@ mod tests {
             model: "gpt-5".to_string(),
             personality: None,
             collaboration_mode: None,
+            is_live: None,
             effort: None,
             summary: ReasoningSummaryConfig::Auto,
             user_instructions: None,

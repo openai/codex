@@ -1402,6 +1402,7 @@ mod tests {
                 model: "test-model".to_string(),
                 personality: None,
                 collaboration_mode: None,
+                is_live: None,
                 effort: None,
                 summary: ReasoningSummaryConfig::Auto,
                 user_instructions: None,

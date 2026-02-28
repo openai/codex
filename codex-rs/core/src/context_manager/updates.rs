@@ -64,6 +64,17 @@ fn build_collaboration_mode_update_item(
     }
 }
 
+pub(crate) fn build_realtime_update_item(
+    previous: Option<&TurnContextItem>,
+    next: &TurnContext,
+) -> Option<DeveloperInstructions> {
+    match (previous.and_then(|item| item.is_live), next.is_live) {
+        (Some(true), false) => Some(DeveloperInstructions::realtime_end_message("inactive")),
+        (Some(false), true) | (None, true) => Some(DeveloperInstructions::realtime_start_message()),
+        (Some(true), true) | (Some(false), false) | (None, false) => None,
+    }
+}
+
 fn build_personality_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
@@ -160,6 +171,7 @@ pub(crate) fn build_settings_update_items(
         build_model_instructions_update_item(previous_user_turn_model, next),
         build_permissions_update_item(previous, next, exec_policy),
         build_collaboration_mode_update_item(previous, next),
+        build_realtime_update_item(previous, next),
         build_personality_update_item(previous, next, personality_feature_enabled),
     ]
     .into_iter()
