@@ -17,25 +17,34 @@ It runs asynchronously in the background and executes two phases in order: Phase
 
 Phase 1 finds recent eligible rollouts and extracts a structured memory from each one.
 
-Eligible rollouts are selected from the state DB using startup claim rules. In practice this means
-the pipeline only considers rollouts that are:
+Eligible stage-1 sources are selected from the state DB using startup claim rules. In practice this means
+the pipeline only considers thread sources that are:
 
-- from configured stage-1 memory sources (defaults to `cli` and `vscode`)
+- from configured stage-1 memory sources (defaults to `cli` and `vscode`; optional values include `exec`, `mcp`, and `scratchpad`)
 - within the configured age window
-- idle long enough (to avoid summarizing still-active/fresh rollouts)
+- idle long enough (to avoid summarizing still-active/fresh sources)
 - not already owned by another in-flight phase-1 worker
 - within startup scan/claim limits (bounded work per startup)
 
+When `scratchpad` is enabled, phase 1 also scans repo-local `scratch/codex/pads/*.md` and
+`scratch/codex/backups/*.md` (if present) and mirrors eligible files into synthetic thread rows.
+This is optional: if a repo has no `scratch/codex` directory, scratchpad ingestion is skipped.
+
 What it does:
 
-- claims a bounded set of rollout jobs from the state DB (startup claim)
-- filters rollout content down to memory-relevant response items
-- sends each rollout to a model (in parallel, with a concurrency cap)
-- expects structured output containing:
-  - a detailed `raw_memory`
-  - a compact `rollout_summary`
-  - an optional `rollout_slug`
-- redacts secrets from the generated memory fields
+- claims a bounded set of stage-1 jobs from the state DB (startup claim)
+- for rollout-backed sources (`cli`, `vscode`, `exec`, `mcp`):
+  - filters rollout content down to memory-relevant response items
+  - sends each rollout to a model (in parallel, with a concurrency cap)
+  - expects structured output containing:
+    - a detailed `raw_memory`
+    - a compact `rollout_summary`
+    - an optional `rollout_slug`
+- for `scratchpad` sources:
+  - parses markdown `CSP#...` entries directly (no model call)
+  - emits a deterministic `raw_memory` trail plus breadcrumb graph (`follows`, `tag`, `ref` edges)
+  - derives `rollout_summary` and `rollout_slug` from parsed entries
+- redacts secrets from generated memory fields
 - stores successful outputs back into the state DB as stage-1 outputs
 
 Concurrency / coordination:
