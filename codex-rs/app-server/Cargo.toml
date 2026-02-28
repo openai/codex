@@ -31,6 +31,7 @@ codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }

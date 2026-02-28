@@ -274,6 +274,7 @@ use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
+use codex_state::log_db::LogDbLayer;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -384,6 +385,7 @@ pub(crate) struct CodexMessageProcessor {
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     feedback: CodexFeedback,
+    log_db: Option<LogDbLayer>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -420,6 +422,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) single_client_mode: bool,
     pub(crate) feedback: CodexFeedback,
+    pub(crate) log_db: Option<LogDbLayer>,
 }
 
 impl CodexMessageProcessor {
@@ -457,6 +460,7 @@ impl CodexMessageProcessor {
             cloud_requirements,
             single_client_mode,
             feedback,
+            log_db,
         } = args;
         Self {
             auth_manager,
@@ -474,6 +478,7 @@ impl CodexMessageProcessor {
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
             feedback,
+            log_db,
         }
     }
 
@@ -6909,6 +6914,30 @@ impl CodexMessageProcessor {
 
         let snapshot = self.feedback.snapshot(conversation_id);
         let thread_id = snapshot.thread_id.clone();
+        let sqlite_feedback_logs = if include_logs {
+            if let Some(log_db) = self.log_db.as_ref() {
+                log_db.flush().await;
+            }
+            let state_db_ctx = get_state_db(&self.config, None).await;
+            match (state_db_ctx.as_ref(), conversation_id) {
+                (Some(state_db_ctx), Some(conversation_id)) => {
+                    let thread_id_text = conversation_id.to_string();
+                    match state_db_ctx.query_feedback_logs(&thread_id_text).await {
+                        Ok(logs) if logs.is_empty() => None,
+                        Ok(logs) => Some(logs),
+                        Err(err) => {
+                            warn!(
+                                "failed to query feedback logs from sqlite for thread_id={thread_id_text}: {err}"
+                            );
+                            None
+                        }
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         let validated_rollout_path = if include_logs {
             match conversation_id {
@@ -6932,6 +6961,7 @@ impl CodexMessageProcessor {
                 include_logs,
                 &attachment_paths,
                 Some(session_source),
+                sqlite_feedback_logs,
             )
         })
         .await;

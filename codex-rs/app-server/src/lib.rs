@@ -38,16 +38,20 @@ use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
+use codex_core::features::Feature;
 use codex_feedback::CodexFeedback;
+use codex_state::log_db;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
+use tracing::Level;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -476,6 +480,21 @@ pub async fn run_main_with_transport(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
+    let log_db = if config.features.enabled(Feature::Sqlite) {
+        codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+            None,
+        )
+        .await
+        .ok()
+        .map(log_db::start)
+    } else {
+        None
+    };
+    let log_db_layer = log_db
+        .clone()
+        .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
@@ -483,6 +502,7 @@ pub async fn run_main_with_transport(
         .with(stderr_fmt)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
+        .with(log_db_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
@@ -562,6 +582,7 @@ pub async fn run_main_with_transport(
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
             feedback: feedback.clone(),
+            log_db,
             config_warnings,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
