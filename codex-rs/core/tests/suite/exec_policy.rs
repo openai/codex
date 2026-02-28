@@ -8,6 +8,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
@@ -19,6 +20,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
@@ -60,6 +62,33 @@ async fn submit_user_turn(
         })
         .await?;
     Ok(())
+}
+
+async fn expect_exec_approval(
+    test: &core_test_support::test_codex::TestCodex,
+    expected_command: &str,
+) -> codex_protocol::protocol::ExecApprovalRequestEvent {
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+
+    match event {
+        EventMsg::ExecApprovalRequest(approval) => {
+            let last_arg = approval
+                .command
+                .last()
+                .map(String::as_str)
+                .unwrap_or_default();
+            assert_eq!(last_arg, expected_command);
+            approval
+        }
+        EventMsg::TurnComplete(_) => panic!("expected approval request before completion"),
+        other => panic!("unexpected event: {other:?}"),
+    }
 }
 
 fn assert_no_matched_rules_invariant(output_item: &Value) {
@@ -156,6 +185,192 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             .contains("policy forbids commands starting with `echo`"),
         "unexpected output: {}",
         end.aggregated_output
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn shell_command_absolute_path_uses_host_executable_rules() -> Result<()> {
+    let git_path = "/tmp/codex-host-executable-shell/git";
+    let command = format!("{git_path} status");
+
+    let mut builder = test_codex().with_config(move |config| {
+        let policy_path = config.codex_home.join("rules").join("policy.rules");
+        fs::create_dir_all(
+            policy_path
+                .parent()
+                .expect("policy directory must have a parent"),
+        )
+        .expect("create policy directory");
+        fs::write(
+            &policy_path,
+            format!(
+                r#"host_executable(name = "git", paths = ["{git_path}"])
+prefix_rule(pattern = ["git", "status"], decision = "prompt")"#
+            ),
+        )
+        .expect("write policy file");
+    });
+    let server = start_mock_server().await;
+    let test = builder.build(&server).await?;
+
+    let call_id = "shell-host-executable-prompt";
+    let args = json!({
+        "command": command,
+        "timeout_ms": 1_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-shell-host-exec-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-shell-host-exec-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-shell-host-exec-1", "done"),
+            ev_completed("resp-shell-host-exec-2"),
+        ]),
+    )
+    .await;
+
+    submit_user_turn(
+        &test,
+        "run absolute git path through shell_command",
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+        None,
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, &command).await;
+    let reason = approval.reason.as_deref().unwrap_or_default();
+    assert!(
+        reason.contains("requires approval by policy"),
+        "unexpected approval reason: {reason}",
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output_item = results_mock.single_request().function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        output.contains("rejected by user"),
+        "unexpected output: {output}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn unified_exec_absolute_path_uses_host_executable_rules() -> Result<()> {
+    let git_path = "/tmp/codex-host-executable-unified/git";
+    let command = format!("{git_path} status");
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.features.enable(Feature::UnifiedExec);
+        let policy_path = config.codex_home.join("rules").join("policy.rules");
+        fs::create_dir_all(
+            policy_path
+                .parent()
+                .expect("policy directory must have a parent"),
+        )
+        .expect("create policy directory");
+        fs::write(
+            &policy_path,
+            format!(
+                r#"host_executable(name = "git", paths = ["{git_path}"])
+prefix_rule(pattern = ["git", "status"], decision = "prompt")"#
+            ),
+        )
+        .expect("write policy file");
+    });
+    let server = start_mock_server().await;
+    let test = builder.build(&server).await?;
+
+    let call_id = "unified-host-executable-prompt";
+    let args = json!({
+        "cmd": command,
+        "shell": "/bin/bash",
+        "yield_time_ms": 1_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-unified-host-exec-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-unified-host-exec-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-unified-host-exec-1", "done"),
+            ev_completed("resp-unified-host-exec-2"),
+        ]),
+    )
+    .await;
+
+    submit_user_turn(
+        &test,
+        "run absolute git path through exec_command",
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+        None,
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, &command).await;
+    let reason = approval.reason.as_deref().unwrap_or_default();
+    assert!(
+        reason.contains("requires approval by policy"),
+        "unexpected approval reason: {reason}",
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output_item = results_mock.single_request().function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        output.contains("rejected by user"),
+        "unexpected output: {output}",
     );
 
     Ok(())
