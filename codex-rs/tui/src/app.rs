@@ -1787,6 +1787,8 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
+                self.clear_terminal_ui(tui, false)?;
+                self.reset_app_ui_state_after_clear();
                 self.start_fresh_session_with_summary_hint(tui).await;
             }
             AppEvent::ClearUi => {
