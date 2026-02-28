@@ -1,6 +1,9 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use rmcp::ErrorData as McpError;
 use rmcp::ServiceExt;
@@ -25,6 +28,7 @@ use rmcp::model::Tool;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::task;
+use tokio::time;
 
 #[derive(Clone)]
 struct TestToolServer {
@@ -35,6 +39,8 @@ struct TestToolServer {
 
 const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
+const EXIT_AFTER_CALL_ENV_VAR: &str = "MCP_TEST_EXIT_AFTER_CALL";
+static SHOULD_EXIT_AFTER_CALL: AtomicBool = AtomicBool::new(true);
 const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
 pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
@@ -295,6 +301,13 @@ impl ServerHandler for TestToolServer {
         request: CallToolRequestParams,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let exit_after_call = std::env::var(EXIT_AFTER_CALL_ENV_VAR)
+            .map(|value| {
+                let value = value.trim();
+                value == "1" || value.eq_ignore_ascii_case("true")
+            })
+            .unwrap_or(false);
+
         match request.name.as_ref() {
             "echo" => {
                 let args: EchoArgs = match request.arguments {
@@ -315,6 +328,13 @@ impl ServerHandler for TestToolServer {
                     "echo": format!("ECHOING: {}", args.message),
                     "env": env_snapshot.get("MCP_TEST_VALUE"),
                 });
+
+                if exit_after_call && SHOULD_EXIT_AFTER_CALL.swap(false, Ordering::SeqCst) {
+                    task::spawn(async {
+                        time::sleep(Duration::from_millis(200)).await;
+                        std::process::exit(0);
+                    });
+                }
 
                 Ok(CallToolResult {
                     content: Vec::new(),
@@ -339,6 +359,13 @@ impl ServerHandler for TestToolServer {
                         None,
                     )
                 })?;
+
+                if exit_after_call && SHOULD_EXIT_AFTER_CALL.swap(false, Ordering::SeqCst) {
+                    task::spawn(async {
+                        time::sleep(Duration::from_millis(200)).await;
+                        std::process::exit(0);
+                    });
+                }
 
                 Ok(CallToolResult::success(vec![rmcp::model::Content::image(
                     data_b64, mime_type,
