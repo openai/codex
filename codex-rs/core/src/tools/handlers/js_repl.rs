@@ -367,9 +367,16 @@ fn format_poll_output(result: &JsExecPollResult) -> Result<JsReplPollOutput, Fun
         FunctionCallError::Fatal(format!("failed to serialize js_repl poll result: {err}"))
     })?;
 
-    Ok(JsReplPollOutput {
-        body: FunctionCallOutputBody::Text(content),
-    })
+    let body = if result.content_items.is_empty() {
+        FunctionCallOutputBody::Text(content)
+    } else {
+        let mut items = Vec::with_capacity(result.content_items.len() + 1);
+        items.push(FunctionCallOutputContentItem::InputText { text: content });
+        items.extend(result.content_items.clone());
+        FunctionCallOutputBody::ContentItems(items)
+    };
+
+    Ok(JsReplPollOutput { body })
 }
 
 fn parse_freeform_args(
@@ -532,6 +539,7 @@ mod tests {
     use crate::tools::js_repl::JS_REPL_TIMEOUT_ERROR_MESSAGE;
     use crate::tools::js_repl::JsExecPollResult;
     use codex_protocol::models::FunctionCallOutputBody;
+    use codex_protocol::models::FunctionCallOutputContentItem;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
@@ -661,6 +669,7 @@ mod tests {
             session_id: "session-1".to_string(),
             logs: vec!["line 1".to_string(), "line 2".to_string()],
             output: None,
+            content_items: Vec::new(),
             error: None,
             done: false,
         };
@@ -690,6 +699,7 @@ mod tests {
             session_id: "session-1".to_string(),
             logs: Vec::new(),
             output: Some(String::new()),
+            content_items: Vec::new(),
             error: None,
             done: true,
         };
@@ -709,6 +719,44 @@ mod tests {
                 "output": null,
                 "error": null,
             })
+        );
+    }
+
+    #[test]
+    fn format_poll_output_serializes_multimodal_content_items() {
+        let result = JsExecPollResult {
+            exec_id: "exec-1".to_string(),
+            session_id: "session-1".to_string(),
+            logs: Vec::new(),
+            output: Some("stdout".to_string()),
+            content_items: vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,abc".to_string(),
+            }],
+            error: None,
+            done: true,
+        };
+        let output = format_poll_output(&result).expect("format poll output");
+        let FunctionCallOutputBody::ContentItems(items) = output.body else {
+            panic!("expected content item poll output");
+        };
+        assert_eq!(
+            items,
+            vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: json!({
+                        "exec_id": "exec-1",
+                        "session_id": "session-1",
+                        "status": "completed",
+                        "logs": null,
+                        "output": "stdout",
+                        "error": null,
+                    })
+                    .to_string(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,abc".to_string(),
+                },
+            ]
         );
     }
 
