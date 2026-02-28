@@ -119,9 +119,9 @@ Example with notification opt-out:
 
 ## API Overview
 
-- `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
+- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
-- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
+- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for the new thread.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
@@ -272,10 +272,11 @@ When `nextCursor` is `null`, you’ve reached the final page.
 
 ### Example: Track thread status changes
 
-`thread/status/changed` is emitted whenever a loaded thread's status changes:
+`thread/status/changed` is emitted whenever a loaded thread's status changes after it has already been introduced to the client:
 
 - Includes `threadId` and the new `status`.
 - Status can be `notLoaded`, `idle`, `systemError`, or `active` (with `activeFlags`; `active` implies running).
+- `thread/start`, `thread/fork`, and detached review threads do not emit a separate initial `thread/status/changed`; their `thread/started` notification already carries the current `thread.status`.
 
 ```json
 { "method": "thread/status/changed", "params": {
