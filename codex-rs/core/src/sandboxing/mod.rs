@@ -189,17 +189,17 @@ fn merge_read_only_access_with_additional_reads(
     }
 }
 
-fn sandbox_policy_with_additional_permissions(
+pub(crate) fn sandbox_policy_with_additional_permissions(
     sandbox_policy: &SandboxPolicy,
     additional_permissions: &PermissionProfile,
-) -> Result<SandboxPolicy, SandboxTransformError> {
+) -> SandboxPolicy {
     if additional_permissions.is_empty() {
-        return Ok(sandbox_policy.clone());
+        return sandbox_policy.clone();
     }
 
     let (extra_reads, extra_writes) = additional_permission_roots(additional_permissions);
 
-    let policy = match sandbox_policy {
+    match sandbox_policy {
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             sandbox_policy.clone()
         }
@@ -218,7 +218,7 @@ fn sandbox_policy_with_additional_permissions(
                     read_only_access,
                     extra_reads,
                 ),
-                network_access: *network_access,
+                network_access: *network_access || additional_permissions.network.unwrap_or(false),
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             }
@@ -238,15 +238,13 @@ fn sandbox_policy_with_additional_permissions(
                         access,
                         extra_reads,
                     ),
-                    network_access: false,
+                    network_access: additional_permissions.network.unwrap_or(false),
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
                 }
             }
         }
-    };
-
-    Ok(policy)
+    }
 }
 
 #[derive(Default)]
@@ -312,7 +310,7 @@ impl SandboxManager {
         } = request;
         let effective_policy =
             if let Some(additional_permissions) = spec.additional_permissions.take() {
-                sandbox_policy_with_additional_permissions(policy, &additional_permissions)?
+                sandbox_policy_with_additional_permissions(policy, &additional_permissions)
             } else {
                 policy.clone()
             };
