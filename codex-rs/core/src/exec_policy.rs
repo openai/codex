@@ -17,7 +17,7 @@ use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
-use codex_execpolicy::blocking_append_allow_prefix_rule;
+use codex_execpolicy::blocking_append_allow_prefix_rule_with_justification;
 use codex_execpolicy::blocking_append_network_rule;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
@@ -41,6 +41,7 @@ const REJECT_RULES_APPROVAL_REASON: &str =
 const RULES_DIR_NAME: &str = "rules";
 const RULE_EXTENSION: &str = "rules";
 const DEFAULT_POLICY_FILE: &str = "default.rules";
+const THREAD_PERSISTED_JUSTIFICATION: &str = "persisted during thread";
 static BANNED_PREFIX_SUGGESTIONS: &[&[&str]] = &[
     &["python3"],
     &["python3", "-"],
@@ -281,7 +282,13 @@ impl ExecPolicyManager {
         spawn_blocking({
             let policy_path = policy_path.clone();
             let prefix = prefix.clone();
-            move || blocking_append_allow_prefix_rule(&policy_path, &prefix)
+            move || {
+                blocking_append_allow_prefix_rule_with_justification(
+                    &policy_path,
+                    &prefix,
+                    Some(THREAD_PERSISTED_JUSTIFICATION),
+                )
+            }
         })
         .await
         .map_err(|source| ExecPolicyUpdateError::JoinBlockingTask { source })?
@@ -291,7 +298,11 @@ impl ExecPolicyManager {
         })?;
 
         let mut updated_policy = self.current().as_ref().clone();
-        updated_policy.add_prefix_rule(&prefix, Decision::Allow)?;
+        updated_policy.add_prefix_rule_with_justification(
+            &prefix,
+            Decision::Allow,
+            Some(THREAD_PERSISTED_JUSTIFICATION.to_string()),
+        )?;
         self.policy.store(Arc::new(updated_policy));
         Ok(())
     }
@@ -1731,19 +1742,23 @@ prefix_rule(
             &["echo".to_string(), "hello".to_string(), "world".to_string()],
             &|_| Decision::Allow,
         );
-        assert!(matches!(
+        assert_eq!(
             evaluation,
             Evaluation {
                 decision: Decision::Allow,
-                ..
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["echo".to_string(), "hello".to_string()],
+                    decision: Decision::Allow,
+                    justification: Some(THREAD_PERSISTED_JUSTIFICATION.to_string()),
+                }],
             }
-        ));
+        );
 
         let contents = fs::read_to_string(default_policy_path(codex_home.path()))
             .expect("policy file should have been created");
         assert_eq!(
             contents,
-            r#"prefix_rule(pattern=["echo", "hello"], decision="allow")
+            r#"prefix_rule(pattern=["echo", "hello"], decision="allow", justification="persisted during thread")
 "#
         );
     }

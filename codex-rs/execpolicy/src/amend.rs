@@ -67,6 +67,16 @@ pub fn blocking_append_allow_prefix_rule(
     policy_path: &Path,
     prefix: &[String],
 ) -> Result<(), AmendError> {
+    blocking_append_allow_prefix_rule_with_justification(policy_path, prefix, None)
+}
+
+/// Note this thread uses advisory file locking and performs blocking I/O, so it should be used with
+/// [`tokio::task::spawn_blocking`] when called from an async context.
+pub fn blocking_append_allow_prefix_rule_with_justification(
+    policy_path: &Path,
+    prefix: &[String],
+    justification: Option<&str>,
+) -> Result<(), AmendError> {
     if prefix.is_empty() {
         return Err(AmendError::EmptyPrefix);
     }
@@ -77,8 +87,18 @@ pub fn blocking_append_allow_prefix_rule(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|source| AmendError::SerializePrefix { source })?;
     let pattern = format!("[{}]", tokens.join(", "));
-    let rule = format!(r#"prefix_rule(pattern={pattern}, decision="allow")"#);
-    append_rule_line(policy_path, &rule)
+    let rule = match justification {
+        Some(justification) => {
+            let justification = serde_json::to_string(justification)
+                .map_err(|source| AmendError::SerializePrefix { source })?;
+            format!(
+                r#"prefix_rule(pattern={pattern}, decision="allow", justification={justification})"#
+            )
+        }
+        None => format!(r#"prefix_rule(pattern={pattern}, decision="allow")"#),
+    };
+    let base_rule = format!(r#"prefix_rule(pattern={pattern}, decision="allow")"#);
+    append_rule_line(policy_path, &rule, Some(&base_rule))
 }
 
 /// Note this function uses advisory file locking and performs blocking I/O, so it should be used
@@ -122,10 +142,14 @@ pub fn blocking_append_network_rule(
         args.push(format!("justification={justification}"));
     }
     let rule = format!("network_rule({})", args.join(", "));
-    append_rule_line(policy_path, &rule)
+    append_rule_line(policy_path, &rule, None)
 }
 
-fn append_rule_line(policy_path: &Path, rule: &str) -> Result<(), AmendError> {
+fn append_rule_line(
+    policy_path: &Path,
+    rule: &str,
+    base_rule: Option<&str>,
+) -> Result<(), AmendError> {
     let dir = policy_path
         .parent()
         .ok_or_else(|| AmendError::MissingParent {
@@ -141,11 +165,14 @@ fn append_rule_line(policy_path: &Path, rule: &str) -> Result<(), AmendError> {
             });
         }
     }
-
-    append_locked_line(policy_path, rule)
+    append_locked_line(policy_path, rule, base_rule)
 }
 
-fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> {
+fn append_locked_line(
+    policy_path: &Path,
+    line: &str,
+    base_rule: Option<&str>,
+) -> Result<(), AmendError> {
     let mut file = OpenOptions::new()
         .create(true)
         .read(true)
@@ -172,7 +199,18 @@ fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> 
             source,
         })?;
 
-    if contents.lines().any(|existing| existing == line) {
+    if contents.lines().any(|existing| {
+        if existing == line {
+            return true;
+        }
+        let Some(base_rule) = base_rule else {
+            return false;
+        };
+        existing == base_rule
+            || existing
+                .strip_prefix(base_rule.strip_suffix(')').unwrap_or(base_rule))
+                .is_some_and(|suffix| suffix.starts_with(", justification="))
+    }) {
         return Ok(());
     }
 
@@ -294,6 +332,26 @@ prefix_rule(pattern=["echo", "Hello, world!"], decision="allow")
     }
 
     #[test]
+    fn appends_rule_with_justification() {
+        let tmp = tempdir().expect("create temp dir");
+        let policy_path = tmp.path().join("rules").join("default.rules");
+
+        blocking_append_allow_prefix_rule_with_justification(
+            &policy_path,
+            &[String::from("echo"), String::from("Hello, world!")],
+            Some("persisted during thread"),
+        )
+        .expect("append rule");
+
+        let contents = std::fs::read_to_string(&policy_path).expect("default.rules should exist");
+        assert_eq!(
+            contents,
+            r#"prefix_rule(pattern=["echo", "Hello, world!"], decision="allow", justification="persisted during thread")
+"#
+        );
+    }
+
+    #[test]
     fn appends_prefix_and_network_rules() {
         let tmp = tempdir().expect("create temp dir");
         let policy_path = tmp.path().join("rules").join("default.rules");
@@ -319,6 +377,33 @@ network_rule(host="api.github.com", protocol="https", decision="allow", justific
     }
 
     #[test]
+    fn dedupes_justified_rule_against_unjustified_existing_rule() {
+        let tmp = tempdir().expect("create temp dir");
+        let policy_path = tmp.path().join("rules").join("default.rules");
+        std::fs::create_dir_all(policy_path.parent().expect("policy parent")).expect("mkdir");
+        std::fs::write(
+            &policy_path,
+            r#"prefix_rule(pattern=["python3"], decision="allow")
+"#,
+        )
+        .expect("write seed rule");
+
+        blocking_append_allow_prefix_rule_with_justification(
+            &policy_path,
+            &[String::from("python3")],
+            Some("persisted during thread"),
+        )
+        .expect("append rule");
+
+        let contents = std::fs::read_to_string(&policy_path).expect("read policy");
+        assert_eq!(
+            contents,
+            r#"prefix_rule(pattern=["python3"], decision="allow")
+"#
+        );
+    }
+
+    #[test]
     fn rejects_wildcard_network_rule_host() {
         let tmp = tempdir().expect("create temp dir");
         let policy_path = tmp.path().join("rules").join("default.rules");
@@ -333,6 +418,29 @@ network_rule(host="api.github.com", protocol="https", decision="allow", justific
         assert_eq!(
             err.to_string(),
             "invalid network rule: invalid rule: network_rule host must be a specific host; wildcards are not allowed"
+        );
+    }
+
+    #[test]
+    fn dedupes_unjustified_rule_against_justified_existing_rule() {
+        let tmp = tempdir().expect("create temp dir");
+        let policy_path = tmp.path().join("rules").join("default.rules");
+        std::fs::create_dir_all(policy_path.parent().expect("policy parent")).expect("mkdir");
+        std::fs::write(
+            &policy_path,
+            r#"prefix_rule(pattern=["python3"], decision="allow", justification="persisted during thread")
+"#,
+        )
+        .expect("write seed rule");
+
+        blocking_append_allow_prefix_rule(&policy_path, &[String::from("python3")])
+            .expect("append rule");
+
+        let contents = std::fs::read_to_string(&policy_path).expect("read policy");
+        assert_eq!(
+            contents,
+            r#"prefix_rule(pattern=["python3"], decision="allow", justification="persisted during thread")
+"#
         );
     }
 }

@@ -1899,7 +1899,9 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     let policy_contents = fs::read_to_string(&policy_path)?;
     assert!(
         policy_contents
-            .contains(r#"prefix_rule(pattern=["touch", "allow-prefix.txt"], decision="allow")"#),
+            .contains(
+                r#"prefix_rule(pattern=["touch", "allow-prefix.txt"], decision="allow", justification="persisted during thread")"#
+            ),
         "unexpected policy contents: {policy_contents}"
     );
 

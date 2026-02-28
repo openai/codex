@@ -15,6 +15,7 @@ use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
 use codex_execpolicy::RuleRef;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
+use codex_execpolicy::blocking_append_allow_prefix_rule_with_justification;
 use codex_execpolicy::rule::PatternToken;
 use codex_execpolicy::rule::PrefixPattern;
 use codex_execpolicy::rule::PrefixRule;
@@ -137,6 +138,38 @@ fn network_rule_rejects_wildcard_hosts() {
         )
         .expect_err("wildcard network_rule host should fail");
     assert!(err.to_string().contains("wildcards are not allowed"));
+}
+
+#[test]
+fn append_allow_prefix_rule_with_justification_round_trips() -> Result<()> {
+    let tmp = tempdir().context("create temp dir")?;
+    let policy_path = tmp.path().join("rules").join("default.rules");
+    let prefix = tokens(&["python3"]);
+
+    blocking_append_allow_prefix_rule_with_justification(
+        &policy_path,
+        &prefix,
+        Some("persisted during thread"),
+    )?;
+
+    let policy_src = fs::read_to_string(&policy_path).context("read policy")?;
+    let mut parser = PolicyParser::new();
+    parser.parse("default.rules", &policy_src)?;
+    let policy = parser.build();
+    let evaluation = policy.check(&tokens(&["python3", "-V"]), &allow_all);
+
+    assert_eq!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: tokens(&["python3"]),
+                decision: Decision::Allow,
+                justification: Some("persisted during thread".to_string()),
+            }],
+        }
+    );
+    Ok(())
 }
 
 #[test]
