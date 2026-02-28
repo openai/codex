@@ -153,3 +153,45 @@ fn manager_attaches_optional_service_name_tag() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn manager_attaches_chatgpt_user_id_tags_when_present() -> Result<()> {
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
+    let manager = OtelManager::new(
+        ThreadId::new(),
+        "gpt-5.1",
+        "gpt-5.1",
+        Some("account-id".to_string()),
+        None,
+        Some(TelemetryAuthMode::Chatgpt),
+        "codex_vscode".to_string(),
+        true,
+        "tty".to_string(),
+        SessionSource::Cli,
+    )
+    .with_chatgpt_user_id("user-123")
+    .with_metrics(metrics);
+
+    manager.counter("codex.session_started", 1, &[]);
+    manager.shutdown_metrics()?;
+
+    let resource_metrics = latest_metrics(&exporter);
+    let metric =
+        find_metric(&resource_metrics, "codex.session_started").expect("counter metric missing");
+    let attrs = match metric.data() {
+        AggregatedMetrics::U64(data) => match data {
+            MetricData::Sum(sum) => {
+                let points: Vec<_> = sum.data_points().collect();
+                assert_eq!(points.len(), 1);
+                attributes_to_map(points[0].attributes())
+            }
+            _ => panic!("unexpected counter aggregation"),
+        },
+        _ => panic!("unexpected counter data type"),
+    };
+
+    assert_eq!(attrs.get("enduser.id"), Some(&"user-123".to_string()));
+    assert_eq!(attrs.get("user_id"), Some(&"user-123".to_string()));
+
+    Ok(())
+}

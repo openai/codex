@@ -78,6 +78,7 @@ impl OtelManager {
                 auth_mode: auth_mode.map(|m| m.to_string()),
                 account_id,
                 account_email,
+                chatgpt_user_id: None,
                 originator: sanitize_metric_tag_value(originator.as_str()),
                 service_name: None,
                 session_source: session_source.to_string(),

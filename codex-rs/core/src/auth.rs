@@ -262,6 +262,12 @@ impl CodexAuth {
         self.get_current_token_data().and_then(|t| t.id_token.email)
     }
 
+    /// Returns `None` if `is_chatgpt_auth()` is false.
+    pub fn get_chatgpt_user_id(&self) -> Option<String> {
+        self.get_current_token_data()
+            .and_then(|t| t.id_token.chatgpt_user_id)
+    }
+
     /// Account-facing plan classification derived from the current token.
     /// Returns a high-level `AccountPlanType` (e.g., Free/Plus/Pro/Team/…)
     /// mapped from the ID token's internal plan value. Prefer this when you
