@@ -1686,6 +1686,19 @@ impl App {
                 Some(event) = tui_events.next() => {
                     app.handle_tui_event(tui, event).await?
                 }
+                // Handle SIGINT (Ctrl+C delivered as signal rather than key event).
+                // On some platforms/terminals (notably WSL2), Ctrl+C may be delivered
+                // as SIGINT instead of a key event. We synthesize a key event so the
+                // existing double-press quit logic and session summary printing work.
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::debug!("Received SIGINT, synthesizing Ctrl+C key event");
+                    let ctrl_c_event = TuiEvent::Key(KeyEvent::new_with_kind(
+                        KeyCode::Char('c'),
+                        crossterm::event::KeyModifiers::CONTROL,
+                        KeyEventKind::Press,
+                    ));
+                    app.handle_tui_event(tui, ctrl_c_event).await?
+                }
                 // Listen on new thread creation due to collab tools.
                 created = thread_created_rx.recv(), if listen_for_threads => {
                     match created {
