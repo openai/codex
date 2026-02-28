@@ -4146,7 +4146,11 @@ impl CodexMessageProcessor {
             }
         };
 
-        let mcp_servers = match serde_json::to_value(config.mcp_servers.get()) {
+        let configured_servers = self
+            .thread_manager
+            .mcp_manager()
+            .configured_servers(&config);
+        let mcp_servers = match serde_json::to_value(configured_servers) {
             Ok(value) => value,
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -4207,7 +4211,11 @@ impl CodexMessageProcessor {
             timeout_secs,
         } = params;
 
-        let Some(server) = config.mcp_servers.get().get(&name) else {
+        let configured_servers = self
+            .thread_manager
+            .mcp_manager()
+            .configured_servers(&config);
+        let Some(server) = configured_servers.get(&name) else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!("No MCP server named '{name}' found."),

@@ -16,6 +16,7 @@ use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
+use crate::config::types::PluginConfig;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
@@ -1210,6 +1211,10 @@ pub struct ConfigToml {
 
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
+
+    /// User-level plugin config entries keyed by plugin name.
+    #[serde(default)]
+    pub plugins: HashMap<String, PluginConfig>,
 
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
