@@ -1145,6 +1145,10 @@ impl ChatWidget {
             Some(event.reasoning_effort),
             None,
         );
+        if let Some(mask) = self.active_collaboration_mask.as_mut() {
+            mask.model = Some(model_for_header.clone());
+            mask.reasoning_effort = Some(event.reasoning_effort);
+        }
         self.refresh_model_display();
         self.sync_personality_command_enabled();
         let startup_tooltip_override = self.startup_tooltip_override.take();
