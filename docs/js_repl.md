@@ -77,7 +77,7 @@ For `CODEX_JS_REPL_NODE_MODULE_DIRS` and `js_repl_node_module_dirs`, module reso
 1. Submit with `js_repl` and `poll=true` pragma.
 2. Read `exec_id` and `session_id` from the JSON response.
 3. Call `js_repl_poll` with `{"exec_id":"...","yield_time_ms":5000}`.
-4. Repeat until `status` is `completed` or `error`. If a poll returns `status: running`, keep polling the same `exec_id` even if the logs or output already look complete.
+4. Repeat until `status` is `completed` or `error`. If a poll returns `status: running`, keep polling the same `exec_id` even if the logs or output already look complete. Completed polls can also include nested multimodal tool output after the JSON status item.
 5. Optional: reuse session state by submitting another polled `js_repl` call with `session_id=<id>` (must already exist). Omit `session_id` to create a new polling session.
 6. Reset one session with `js_repl_reset({"session_id":"..."})`, or reset all kernels with `js_repl_reset({})`.
 
