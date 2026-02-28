@@ -2205,7 +2205,7 @@ impl CodexMessageProcessor {
 
                 listener_task_context
                     .thread_watch_manager
-                    .upsert_thread(thread.clone())
+                    .upsert_thread_silently(thread.clone())
                     .await;
 
                 thread.status = resolve_thread_status(
@@ -3711,7 +3711,7 @@ impl CodexMessageProcessor {
         }
 
         self.thread_watch_manager
-            .upsert_thread(thread.clone())
+            .upsert_thread_silently(thread.clone())
             .await;
 
         thread.status = resolve_thread_status(
@@ -6325,7 +6325,7 @@ impl CodexMessageProcessor {
                 Ok(summary) => {
                     let mut thread = summary_to_thread(summary);
                     self.thread_watch_manager
-                        .upsert_thread(thread.clone())
+                        .upsert_thread_silently(thread.clone())
                         .await;
                     thread.status = resolve_thread_status(
                         self.thread_watch_manager

@@ -91,8 +91,11 @@ impl ThreadWatchManager {
     }
 
     pub(crate) async fn upsert_thread(&self, thread: Thread) {
-        self.mutate_and_publish(move |state| state.upsert_thread(thread.id))
-            .await;
+        self.upsert_thread_with_notification(thread, true).await;
+    }
+
+    pub(crate) async fn upsert_thread_silently(&self, thread: Thread) {
+        self.upsert_thread_with_notification(thread, false).await;
     }
 
     pub(crate) async fn remove_thread(&self, thread_id: &str) {
@@ -256,6 +259,11 @@ impl ThreadWatchManager {
             .await;
     }
 
+    async fn upsert_thread_with_notification(&self, thread: Thread, emit_notification: bool) {
+        self.mutate_and_publish(move |state| state.upsert_thread(thread.id, emit_notification))
+            .await;
+    }
+
     fn pending_counter(
         runtime: &mut RuntimeFacts,
         guard_type: ThreadWatchActiveGuardType,
@@ -289,14 +297,22 @@ struct ThreadWatchState {
 }
 
 impl ThreadWatchState {
-    fn upsert_thread(&mut self, thread_id: String) -> Option<ThreadStatusChangedNotification> {
+    fn upsert_thread(
+        &mut self,
+        thread_id: String,
+        emit_notification: bool,
+    ) -> Option<ThreadStatusChangedNotification> {
         let previous_status = self.status_for(&thread_id);
         let runtime = self
             .runtime_by_thread_id
             .entry(thread_id.clone())
             .or_default();
         runtime.is_loaded = true;
-        self.status_changed_notification(thread_id, previous_status)
+        if emit_notification {
+            self.status_changed_notification(thread_id, previous_status)
+        } else {
+            None
+        }
     }
 
     fn remove_thread(&mut self, thread_id: &str) -> Option<ThreadStatusChangedNotification> {
@@ -688,6 +704,45 @@ mod tests {
             ThreadStatusChangedNotification {
                 thread_id: INTERACTIVE_THREAD_ID.to_string(),
                 status: ThreadStatus::NotLoaded,
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn silent_upsert_skips_initial_notification() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(8);
+        let manager = ThreadWatchManager::new_with_outgoing(Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+        )));
+
+        manager
+            .upsert_thread_silently(test_thread(
+                INTERACTIVE_THREAD_ID,
+                codex_app_server_protocol::SessionSource::Cli,
+            ))
+            .await;
+
+        assert_eq!(
+            manager
+                .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
+                .await,
+            ThreadStatus::Idle,
+        );
+        assert!(
+            timeout(Duration::from_millis(100), outgoing_rx.recv())
+                .await
+                .is_err(),
+            "silent upsert should not emit thread/status/changed"
+        );
+
+        manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
+        assert_eq!(
+            recv_status_changed_notification(&mut outgoing_rx).await,
+            ThreadStatusChangedNotification {
+                thread_id: INTERACTIVE_THREAD_ID.to_string(),
+                status: ThreadStatus::Active {
+                    active_flags: vec![],
+                },
             },
         );
     }
