@@ -558,9 +558,6 @@ fn build_mcp_tool_approval_header(
 
 fn format_mcp_tool_label(tool_name: &str, tool_title: Option<&str>) -> String {
     match tool_title {
-        Some(tool_title) if tool_title != tool_name => {
-            format!("\"{tool_title}\" ({tool_name})")
-        }
         Some(tool_title) => format!("\"{tool_title}\""),
         None => format!("\"{tool_name}\""),
     }
@@ -811,7 +808,7 @@ mod tests {
         assert_eq!(question.header, "Approve custom_server: Run Action?");
         assert_eq!(
             question.question,
-            "The custom_server MCP server wants to run the tool \"Run Action\" (run_action), which may modify or delete data.\n\nAllow this action?"
+            "The custom_server MCP server wants to run the tool \"Run Action\", which may modify or delete data.\n\nAllow this action?"
         );
         assert!(
             question
@@ -875,7 +872,7 @@ mod tests {
         assert_eq!(question.header, "Approve Linear: Create Issue?");
         assert_eq!(
             question.question,
-            "The Linear app wants to run the tool \"Create Issue\" (create_issue), which may modify data and access external systems.\n\nTool call details:\n- projectId: \"proj_123\"\n- title: \"Approval prompt follow-up\"\n- body: \"Draft email body\"\n- description: \"Audit approval prompt copy\"\n\nAllow this action?"
+            "The Linear app wants to run the tool \"Create Issue\", which may modify data and access external systems.\n\nTool call details:\n- projectId: \"proj_123\"\n- title: \"Approval prompt follow-up\"\n- body: \"Draft email body\"\n- description: \"Audit approval prompt copy\"\n\nAllow this action?"
         );
     }
 
