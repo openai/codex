@@ -19,6 +19,7 @@ use tokio_tungstenite::tungstenite::extensions::ExtensionsConfig;
 use tokio_tungstenite::tungstenite::extensions::compression::deflate::DeflateConfig;
 use tokio_tungstenite::tungstenite::handshake::server::Request;
 use tokio_tungstenite::tungstenite::handshake::server::Response;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use wiremock::BodyPrintLimit;
 use wiremock::Match;
@@ -295,6 +296,12 @@ impl WebSocketHandshake {
 }
 
 #[derive(Debug, Clone)]
+pub struct WebSocketCloseFrame {
+    pub code: u16,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct WebSocketConnectionConfig {
     pub requests: Vec<Vec<Value>>,
     pub response_headers: Vec<(String, String)>,
@@ -303,6 +310,8 @@ pub struct WebSocketConnectionConfig {
     /// Tests use this to force websocket setup into an in-flight state so first-turn warmup paths
     /// can be exercised deterministically.
     pub accept_delay: Option<Duration>,
+    /// Optional close frame sent after all configured request events are emitted.
+    pub close_frame: Option<WebSocketCloseFrame>,
 }
 
 pub struct WebSocketTestServer {
@@ -1035,6 +1044,7 @@ pub async fn start_websocket_server(connections: Vec<Vec<Vec<Value>>>) -> WebSoc
             requests,
             response_headers: Vec::new(),
             accept_delay: None,
+            close_frame: None,
         })
         .collect();
     start_websocket_server_with_headers(connections).await
@@ -1146,7 +1156,11 @@ pub async fn start_websocket_server_with_headers(
                 }
             }
 
-            let _ = ws_stream.close(None).await;
+            let close_frame = connection.close_frame.map(|frame| CloseFrame {
+                code: frame.code.into(),
+                reason: frame.reason.into(),
+            });
+            let _ = ws_stream.close(close_frame).await;
 
             if connections.lock().unwrap().is_empty() {
                 return;

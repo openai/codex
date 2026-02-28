@@ -74,6 +74,11 @@ pub enum CodexErr {
     #[error("stream disconnected before completion: {0}")]
     Stream(String, Option<Duration>),
 
+    /// Returned when the stream terminated in a way that should be surfaced immediately instead
+    /// of retried automatically.
+    #[error("stream disconnected before completion: {0}")]
+    NonRetryableStream(String),
+
     #[error(
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."
     )]
@@ -208,6 +213,7 @@ impl CodexErr {
             | CodexErr::LandlockSandboxExecutableNotProvided
             | CodexErr::RetryLimit(_)
             | CodexErr::ContextWindowExceeded
+            | CodexErr::NonRetryableStream(_)
             | CodexErr::ThreadNotFound(_)
             | CodexErr::AgentLimitReached { .. }
             | CodexErr::Spawn

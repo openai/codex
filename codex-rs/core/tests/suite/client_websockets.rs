@@ -26,6 +26,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
+use core_test_support::responses::WebSocketCloseFrame;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
 use core_test_support::responses::ev_assistant_message;
@@ -658,6 +659,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
         requests: vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
         response_headers: vec![("X-Reasoning-Included".to_string(), "true".to_string())],
         accept_delay: None,
+        close_frame: None,
     }])
     .await;
 
@@ -729,6 +731,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             ("X-Reasoning-Included".to_string(), "true".to_string()),
         ],
         accept_delay: None,
+        close_frame: None,
     }])
     .await;
 
@@ -954,6 +957,102 @@ async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
     test.submit_turn("hello")
         .await
         .expect("submission should reconnect after websocket connection limit error");
+
+    let total_websocket_requests: usize = server.connections().iter().map(Vec::len).sum();
+    assert_eq!(total_websocket_requests, 2);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_policy_close_with_reason_does_not_retry() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![ev_response_created("resp-1")]],
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_frame: Some(WebSocketCloseFrame {
+            code: 1008,
+            reason: "policy violation".to_string(),
+        }),
+    }])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &harness.model_info,
+            &harness.otel_manager,
+            harness.effort,
+            harness.summary,
+            None,
+        )
+        .await
+        .expect("websocket stream should start");
+
+    let err = loop {
+        let event = stream
+            .next()
+            .await
+            .expect("expected websocket event before stream termination");
+        match event {
+            Ok(_) => {}
+            Err(err) => break err,
+        }
+    };
+    let message = err.to_string();
+    assert!(message.contains("code 1008"), "unexpected error: {message}");
+    assert!(
+        message.contains("policy violation"),
+        "unexpected error: {message}"
+    );
+
+    let total_websocket_requests: usize = server.connections().iter().map(Vec::len).sum();
+    assert_eq!(total_websocket_requests, 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_again_close_with_reason_retries_and_completes() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server_with_headers(vec![
+        WebSocketConnectionConfig {
+            requests: vec![vec![ev_response_created("resp-1")]],
+            response_headers: Vec::new(),
+            accept_delay: None,
+            close_frame: Some(WebSocketCloseFrame {
+                code: 1013,
+                reason: "retry after rebalance".to_string(),
+            }),
+        },
+        WebSocketConnectionConfig {
+            requests: vec![vec![ev_response_created("resp-2"), ev_completed("resp-2")]],
+            response_headers: Vec::new(),
+            accept_delay: None,
+            close_frame: None,
+        },
+    ])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.model_provider.request_max_retries = Some(0);
+        config.model_provider.stream_max_retries = Some(1);
+    });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    test.submit_turn("hello")
+        .await
+        .expect("submission should retry after websocket again close");
 
     let total_websocket_requests: usize = server.connections().iter().map(Vec::len).sum();
     assert_eq!(total_websocket_requests, 2);
