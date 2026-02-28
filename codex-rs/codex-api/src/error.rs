@@ -12,6 +12,8 @@ pub enum ApiError {
     Api { status: StatusCode, message: String },
     #[error("stream error: {0}")]
     Stream(String),
+    #[error("stream error: {0}")]
+    NonRetryableStream(String),
     #[error("context window exceeded")]
     ContextWindowExceeded,
     #[error("quota exceeded")]
