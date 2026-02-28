@@ -9,6 +9,7 @@ use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::MemoriesConfig;
 use crate::config::types::MemoriesToml;
+use crate::config::types::ModelAvailabilityNuxConfig;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
@@ -275,6 +276,9 @@ pub struct Config {
 
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
+
+    /// Persisted startup availability NUX state for model tooltips.
+    pub model_availability_nux: ModelAvailabilityNuxConfig,
 
     /// Start the TUI in the specified collaboration mode (plan/default).
 
@@ -2213,6 +2217,11 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            model_availability_nux: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.model_availability_nux.clone())
+                .unwrap_or_default(),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()
@@ -2401,6 +2410,7 @@ mod tests {
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::MemoriesConfig;
     use crate::config::types::MemoriesToml;
+    use crate::config::types::ModelAvailabilityNuxConfig;
     use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
@@ -2540,6 +2550,51 @@ phase_2_model = "gpt-5"
     }
 
     #[test]
+    fn config_toml_deserializes_model_availability_nux() {
+        let toml = r#"
+[tui.model_availability_nux]
+"gpt-foo" = 2
+"gpt-bar" = 4
+"#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for TUI NUX");
+
+        assert_eq!(
+            cfg.tui.expect("tui config should deserialize"),
+            Tui {
+                notifications: Notifications::default(),
+                notification_method: NotificationMethod::default(),
+                animations: true,
+                show_tooltips: true,
+                alternate_screen: AltScreenMode::default(),
+                status_line: None,
+                theme: None,
+                model_availability_nux: ModelAvailabilityNuxConfig {
+                    shown_count: HashMap::from([
+                        ("gpt-bar".to_string(), 4),
+                        ("gpt-foo".to_string(), 2),
+                    ]),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_config_defaults_model_availability_nux() {
+        let cfg = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            tempdir().expect("tempdir").path().to_path_buf(),
+        )
+        .expect("load config");
+
+        assert_eq!(
+            cfg.model_availability_nux,
+            ModelAvailabilityNuxConfig::default()
+        );
+    }
+
+    #[test]
     fn config_toml_deserializes_permissions_network() {
         let toml = r#"
 [permissions.network]
@@ -2673,6 +2728,7 @@ theme = "dracula"
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
                 theme: None,
+                model_availability_nux: ModelAvailabilityNuxConfig::default(),
             }
         );
     }
@@ -4884,6 +4940,7 @@ model_verbosity = "high"
                 tui_notification_method: Default::default(),
                 animations: true,
                 show_tooltips: true,
+                model_availability_nux: ModelAvailabilityNuxConfig::default(),
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
@@ -5011,6 +5068,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
@@ -5136,6 +5194,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
@@ -5247,6 +5306,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,

@@ -1,0 +1,13 @@
+---
+source: tui/src/history_cell.rs
+assertion_line: 2608
+expression: rendered
+---
+╭─────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)            │
+│                                     │
+│ model:     gpt-5   /model to change │
+│ directory: /tmp/project             │
+╰─────────────────────────────────────╯
+
+  Tip: Model just became available

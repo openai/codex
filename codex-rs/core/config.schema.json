@@ -659,6 +659,14 @@
       },
       "type": "object"
     },
+    "ModelAvailabilityNuxConfig": {
+      "additionalProperties": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "type": "object"
+    },
     "ModelProviderInfo": {
       "additionalProperties": false,
       "description": "Serializable representation of a provider definition.",
@@ -1419,6 +1427,15 @@
           "default": true,
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
+        },
+        "model_availability_nux": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelAvailabilityNuxConfig"
+            }
+          ],
+          "default": {},
+          "description": "Startup tooltip availability NUX state persisted by the TUI."
         },
         "notification_method": {
           "allOf": [

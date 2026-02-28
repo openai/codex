@@ -2085,16 +2085,10 @@ impl ChatComposer {
             path.to_string()
         };
 
-        // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
-        let mut new_text =
-            String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
-        new_text.push_str(&text[..start_idx]);
-        new_text.push_str(&inserted);
-        new_text.push(' ');
-        new_text.push_str(&text[end_idx..]);
-
-        // Path replacement is plain text; rebuild without carrying elements.
-        self.textarea.set_text_clearing_elements(&new_text);
+        // Replace just the active `@token` so unrelated text elements, such as
+        // large-paste placeholders, remain atomic and can still expand on submit.
+        self.textarea
+            .replace_range(start_idx..end_idx, &format!("{inserted} "));
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
     }
@@ -6928,6 +6922,61 @@ mod tests {
                 );
             }
             _ => panic!("expected CommandWithArgs for /plan with args"),
+        }
+    }
+
+    #[test]
+    fn file_completion_preserves_large_paste_placeholder_elements() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        let placeholder = format!("[Pasted Content {} chars]", large.chars().count());
+
+        composer.handle_paste(large.clone());
+        composer.insert_str(" @ma");
+        composer.on_file_search_result(
+            "ma".to_string(),
+            vec![FileMatch {
+                score: 1,
+                path: PathBuf::from("src/main.rs"),
+                root: PathBuf::from("/tmp"),
+                indices: None,
+            }],
+        );
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        let text = composer.textarea.text().to_string();
+        assert_eq!(text, format!("{placeholder} src/main.rs "));
+        let elements = composer.textarea.text_elements();
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].placeholder(&text), Some(placeholder.as_str()));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                assert_eq!(text, format!("{large} src/main.rs"));
+                assert!(text_elements.is_empty());
+            }
+            _ => panic!("expected Submitted"),
         }
     }
 

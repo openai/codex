@@ -46,6 +46,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -61,6 +62,7 @@ use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::TurnItem;
+use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -451,12 +453,77 @@ fn target_preset_for_upgrade<'a>(
         .find(|preset| preset.model == target_model && preset.show_in_picker)
 }
 
+const MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT: u32 = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StartupTooltipOverride {
+    model_slug: String,
+    message: String,
+}
+
+fn select_model_availability_nux(
+    available_models: &[ModelPreset],
+    nux_config: &ModelAvailabilityNuxConfig,
+) -> Option<StartupTooltipOverride> {
+    available_models.iter().find_map(|preset| {
+        let ModelAvailabilityNux { message } = preset.availability_nux.as_ref()?;
+        let shown_count = nux_config
+            .shown_count
+            .get(&preset.model)
+            .copied()
+            .unwrap_or_default();
+        (shown_count < MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT).then(|| StartupTooltipOverride {
+            model_slug: preset.model.clone(),
+            message: message.clone(),
+        })
+    })
+}
+
+async fn prepare_startup_tooltip_override(
+    config: &mut Config,
+    available_models: &[ModelPreset],
+    is_first_run: bool,
+) -> Option<String> {
+    if is_first_run || !config.show_tooltips {
+        return None;
+    }
+
+    let tooltip_override =
+        select_model_availability_nux(available_models, &config.model_availability_nux)?;
+
+    let shown_count = config
+        .model_availability_nux
+        .shown_count
+        .get(&tooltip_override.model_slug)
+        .copied()
+        .unwrap_or_default();
+    let next_count = shown_count.saturating_add(1);
+    let mut updated_shown_count = config.model_availability_nux.shown_count.clone();
+    updated_shown_count.insert(tooltip_override.model_slug.clone(), next_count);
+
+    if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
+        .set_model_availability_nux_count(&updated_shown_count)
+        .apply()
+        .await
+    {
+        tracing::error!(
+            error = %err,
+            model = %tooltip_override.model_slug,
+            "failed to persist model availability nux count"
+        );
+        return Some(tooltip_override.message);
+    }
+
+    config.model_availability_nux.shown_count = updated_shown_count;
+    Some(tooltip_override.message)
+}
+
 async fn handle_model_migration_prompt_if_needed(
     tui: &mut tui::Tui,
     config: &mut Config,
     model: &str,
     app_event_tx: &AppEventSender,
-    available_models: Vec<ModelPreset>,
+    available_models: &[ModelPreset],
 ) -> Option<AppExitInfo> {
     let upgrade = available_models
         .iter()
@@ -481,13 +548,13 @@ async fn handle_model_migration_prompt_if_needed(
             model,
             &target_model,
             &config.notices.model_migrations,
-            &available_models,
+            available_models,
         ) {
             return None;
         }
 
         let current_preset = available_models.iter().find(|preset| preset.model == model);
-        let target_preset = target_preset_for_upgrade(&available_models, &target_model);
+        let target_preset = target_preset_for_upgrade(available_models, &target_model);
         let target_preset = target_preset?;
         let target_display_name = target_preset.display_name.clone();
         let heading_label = if target_display_name == model {
@@ -668,6 +735,7 @@ impl App {
             is_first_run: false,
             feedback_audience: self.feedback_audience,
             model: Some(self.chat_widget.current_model().to_string()),
+            startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         }
@@ -1194,6 +1262,7 @@ impl App {
             is_first_run: false,
             feedback_audience: self.feedback_audience,
             model: Some(model),
+            startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         };
@@ -1340,7 +1409,7 @@ impl App {
             &mut config,
             model.as_str(),
             &app_event_tx,
-            available_models,
+            &available_models,
         )
         .await;
         if let Some(exit_info) = exit_info {
@@ -1349,7 +1418,6 @@ impl App {
         if let Some(updated_model) = config.model.clone() {
             model = updated_model;
         }
-
         let auth = auth_manager.auth().await;
         let auth_ref = auth.as_ref();
         // Determine who should see internal Slack routing. We treat
@@ -1393,6 +1461,9 @@ impl App {
             Self::should_wait_for_initial_session(&session_selection);
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
+                let startup_tooltip_override =
+                    prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
+                        .await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -1410,6 +1481,7 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: Some(model.clone()),
+                    startup_tooltip_override,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
@@ -1444,6 +1516,7 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: config.model.clone(),
+                    startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
@@ -1480,6 +1553,7 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: config.model.clone(),
+                    startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
@@ -3413,8 +3487,10 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
+    use codex_core::config::types::ModelAvailabilityNuxConfig;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::openai_models::ModelAvailabilityNux;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -3866,6 +3942,7 @@ mod tests {
                 event,
                 is_first,
                 None,
+                None,
             )) as Arc<dyn HistoryCell>
         };
 
@@ -4068,6 +4145,15 @@ mod tests {
         codex_core::test_support::all_model_presets().clone()
     }
 
+    fn model_availability_nux_config(shown_count: &[(&str, u32)]) -> ModelAvailabilityNuxConfig {
+        ModelAvailabilityNuxConfig {
+            shown_count: shown_count
+                .iter()
+                .map(|(model, count)| ((*model).to_string(), *count))
+                .collect(),
+        }
+    }
+
     fn model_migration_copy_to_plain_text(
         copy: &crate::model_migration::ModelMigrationCopy,
     ) -> String {
@@ -4122,6 +4208,120 @@ mod tests {
             &seen,
             &all_model_presets()
         ));
+    }
+
+    #[test]
+    fn select_model_availability_nux_picks_only_eligible_model() {
+        let mut presets = all_model_presets();
+        presets.iter_mut().for_each(|preset| {
+            preset.availability_nux = None;
+        });
+        let target = presets
+            .iter_mut()
+            .find(|preset| preset.model == "gpt-5")
+            .expect("target preset present");
+        target.availability_nux = Some(ModelAvailabilityNux {
+            message: "gpt-5 is available".to_string(),
+        });
+
+        let selected = select_model_availability_nux(&presets, &model_availability_nux_config(&[]));
+
+        assert_eq!(
+            selected,
+            Some(StartupTooltipOverride {
+                model_slug: "gpt-5".to_string(),
+                message: "gpt-5 is available".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn select_model_availability_nux_skips_missing_and_exhausted_models() {
+        let mut presets = all_model_presets();
+        presets.iter_mut().for_each(|preset| {
+            preset.availability_nux = None;
+        });
+        let gpt_5 = presets
+            .iter_mut()
+            .find(|preset| preset.model == "gpt-5")
+            .expect("gpt-5 preset present");
+        gpt_5.availability_nux = Some(ModelAvailabilityNux {
+            message: "gpt-5 is available".to_string(),
+        });
+        let gpt_5_2 = presets
+            .iter_mut()
+            .find(|preset| preset.model == "gpt-5.2")
+            .expect("gpt-5.2 preset present");
+        gpt_5_2.availability_nux = Some(ModelAvailabilityNux {
+            message: "gpt-5.2 is available".to_string(),
+        });
+
+        let selected = select_model_availability_nux(
+            &presets,
+            &model_availability_nux_config(&[("gpt-5", MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT)]),
+        );
+
+        assert_eq!(
+            selected,
+            Some(StartupTooltipOverride {
+                model_slug: "gpt-5.2".to_string(),
+                message: "gpt-5.2 is available".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn select_model_availability_nux_uses_existing_model_order_as_priority() {
+        let mut presets = all_model_presets();
+        presets.iter_mut().for_each(|preset| {
+            preset.availability_nux = None;
+        });
+        let first = presets
+            .iter_mut()
+            .find(|preset| preset.model == "gpt-5")
+            .expect("gpt-5 preset present");
+        first.availability_nux = Some(ModelAvailabilityNux {
+            message: "first".to_string(),
+        });
+        let second = presets
+            .iter_mut()
+            .find(|preset| preset.model == "gpt-5.2")
+            .expect("gpt-5.2 preset present");
+        second.availability_nux = Some(ModelAvailabilityNux {
+            message: "second".to_string(),
+        });
+
+        let selected = select_model_availability_nux(&presets, &model_availability_nux_config(&[]));
+
+        assert_eq!(
+            selected,
+            Some(StartupTooltipOverride {
+                model_slug: "gpt-5.2".to_string(),
+                message: "second".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn select_model_availability_nux_returns_none_when_all_models_are_exhausted() {
+        let mut presets = all_model_presets();
+        presets.iter_mut().for_each(|preset| {
+            preset.availability_nux = None;
+        });
+        let target = presets
+            .iter_mut()
+            .find(|preset| preset.model == "gpt-5")
+            .expect("target preset present");
+        target.availability_nux = Some(ModelAvailabilityNux {
+            message: "gpt-5 is available".to_string(),
+        });
+
+        let selected = select_model_availability_nux(
+            &presets,
+            &model_availability_nux_config(&[("gpt-5", MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT)]),
+        );
+
+        assert_eq!(selected, None);
     }
 
     #[tokio::test]
@@ -4362,6 +4562,7 @@ mod tests {
                 app.chat_widget.current_model(),
                 event,
                 is_first,
+                None,
                 None,
             )) as Arc<dyn HistoryCell>
         };

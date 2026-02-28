@@ -1041,6 +1041,7 @@ pub(crate) fn new_session_info(
     requested_model: &str,
     event: SessionConfiguredEvent,
     is_first_event: bool,
+    tooltip_override: Option<String>,
     auth_plan: Option<PlanType>,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
@@ -1094,7 +1095,9 @@ pub(crate) fn new_session_info(
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
         if config.show_tooltips
-            && let Some(tooltips) = tooltips::get_tooltip(auth_plan).map(TooltipHistoryCell::new)
+            && let Some(tooltips) = tooltip_override
+                .or_else(|| tooltips::get_tooltip(auth_plan))
+                .map(TooltipHistoryCell::new)
         {
             parts.push(Box::new(tooltips));
         }
@@ -2396,13 +2399,19 @@ mod tests {
     use codex_core::config::types::McpServerTransportConfig;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
+    use codex_protocol::ThreadId;
+    use codex_protocol::account::PlanType;
     use codex_protocol::models::WebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::McpAuthStatus;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SessionConfiguredEvent;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::mcp::Tool;
@@ -2461,6 +2470,25 @@ mod tests {
             meta: None,
         }))
         .expect("resource link content should serialize")
+    }
+
+    fn session_configured_event(model: &str) -> SessionConfiguredEvent {
+        SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: model.to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/tmp/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        }
     }
 
     #[test]
@@ -2545,6 +2573,73 @@ mod tests {
         let cell = new_unified_exec_processes_output(Vec::new());
         let rendered = render_lines(&cell.display_lines(60)).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn session_info_uses_availability_nux_tooltip_override() {
+        let config = test_config().await;
+        let cell = new_session_info(
+            &config,
+            "gpt-5",
+            session_configured_event("gpt-5"),
+            false,
+            Some("Model just became available".to_string()),
+            Some(PlanType::Free),
+        );
+
+        let rendered = render_transcript(&cell).join("\n");
+        assert!(rendered.contains("Model just became available"));
+    }
+
+    #[tokio::test]
+    async fn session_info_availability_nux_tooltip_snapshot() {
+        let mut config = test_config().await;
+        config.cwd = PathBuf::from("/tmp/project");
+        let cell = new_session_info(
+            &config,
+            "gpt-5",
+            session_configured_event("gpt-5"),
+            false,
+            Some("Model just became available".to_string()),
+            Some(PlanType::Free),
+        );
+
+        let rendered = render_transcript(&cell).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn session_info_first_event_suppresses_tooltips_and_nux() {
+        let config = test_config().await;
+        let cell = new_session_info(
+            &config,
+            "gpt-5",
+            session_configured_event("gpt-5"),
+            true,
+            Some("Model just became available".to_string()),
+            Some(PlanType::Free),
+        );
+
+        let rendered = render_transcript(&cell).join("\n");
+        assert!(!rendered.contains("Model just became available"));
+        assert!(rendered.contains("To get started"));
+    }
+
+    #[tokio::test]
+    async fn session_info_hides_tooltips_when_disabled() {
+        let mut config = test_config().await;
+        config.show_tooltips = false;
+        let cell = new_session_info(
+            &config,
+            "gpt-5",
+            session_configured_event("gpt-5"),
+            false,
+            Some("Model just became available".to_string()),
+            Some(PlanType::Free),
+        );
+
+        let rendered = render_transcript(&cell).join("\n");
+        assert!(!rendered.contains("Model just became available"));
     }
 
     #[test]

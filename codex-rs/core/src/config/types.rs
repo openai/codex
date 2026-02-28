@@ -667,6 +667,14 @@ impl fmt::Display for NotificationMethod {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelAvailabilityNuxConfig {
+    /// Number of times a startup availability NUX has been shown per model slug.
+    #[serde(default, flatten)]
+    pub shown_count: HashMap<String, u32>,
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -716,6 +724,10 @@ pub struct Tui {
     /// Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.
     #[serde(default)]
     pub theme: Option<String>,
+
+    /// Startup tooltip availability NUX state persisted by the TUI.
+    #[serde(default)]
+    pub model_availability_nux: ModelAvailabilityNuxConfig,
 }
 
 const fn default_true() -> bool {

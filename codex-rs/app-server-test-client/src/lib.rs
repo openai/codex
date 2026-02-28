@@ -188,6 +188,10 @@ enum CliCommand {
         /// Existing thread id to resume.
         thread_id: String,
     },
+    /// Initialize the app-server and dump all inbound messages until interrupted.
+    ///
+    /// This command does not auto-exit; stop it with SIGINT/SIGTERM/SIGKILL.
+    Watch,
     /// Start a V2 turn that elicits an ExecCommand approval.
     #[command(name = "trigger-cmd-approval")]
     TriggerCmdApproval {
@@ -290,6 +294,11 @@ pub fn run() -> Result<()> {
             ensure_dynamic_tools_unused(&dynamic_tools, "thread-resume")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
             thread_resume_follow(&endpoint, &config_overrides, thread_id)
+        }
+        CliCommand::Watch => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "watch")?;
+            let endpoint = resolve_endpoint(codex_bin, url)?;
+            watch(&endpoint, &config_overrides)
         }
         CliCommand::TriggerCmdApproval { user_message } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
@@ -694,6 +703,16 @@ fn thread_resume_follow(
     })?;
     println!("< thread/resume response: {resume_response:?}");
     println!("< streaming notifications until process is terminated");
+
+    client.stream_notifications_forever()
+}
+
+fn watch(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
+    let mut client = CodexClient::connect(endpoint, config_overrides)?;
+
+    let initialize = client.initialize()?;
+    println!("< initialize response: {initialize:?}");
+    println!("< streaming inbound messages until process is terminated");
 
     client.stream_notifications_forever()
 }
