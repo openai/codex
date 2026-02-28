@@ -5559,6 +5559,11 @@ mod tests {
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('あ'), KeyModifiers::NONE));
 
+        // The paste-burst heuristic intentionally treats a very fast `Char` -> `Enter` sequence as
+        // paste-like input (to avoid submitting mid-paste on terminals that emit multiline pastes
+        // as key events). Add a tiny delay here to model real typing.
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
@@ -5589,6 +5594,78 @@ mod tests {
 
         assert_eq!(composer.textarea.text(), "あ");
         assert!(!composer.is_in_paste_burst());
+    }
+
+    fn run_key_stream_case(stream: &str) -> ChatComposer {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        for ch in stream.chars() {
+            let code = if ch == '\n' {
+                KeyCode::Enter
+            } else {
+                KeyCode::Char(ch)
+            };
+            let (result, _needs_redraw) =
+                composer.handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
+            assert_eq!(
+                result,
+                InputResult::None,
+                "unexpected input result {result:?} while feeding stream {stream:?}",
+            );
+        }
+
+        // Force any pending first-char / active burst to flush without depending on real time.
+        let flush_at = Instant::now() + PasteBurst::recommended_active_flush_delay();
+        while composer.handle_paste_burst_flush(flush_at) {}
+        composer
+    }
+
+    #[test]
+    fn paste_like_key_stream_round_trips_various_inputs() {
+        // These are intentionally small "key event stream" cases: many terminals (especially on
+        // Windows) deliver multiline pastes as `KeyCode::Char` + `KeyCode::Enter` sequences.
+        // This test ensures we never submit mid-paste and that the final text matches exactly.
+        for case in [
+            // Short ASCII + newline (the first ASCII char is held briefly for flicker suppression).
+            "h\ni",
+            "h\n",
+            "h\n ",
+            // ASCII-only multiline.
+            "hello\nworld",
+            "a\nb\nc",
+            // Non-ASCII + newline.
+            "你\n",
+            "你\n ",
+            "你\n好",
+            // Mixed ASCII / non-ASCII in both directions.
+            "h\n你",
+            "你\nh",
+            "你好\nhi",
+            "hi\n你好",
+            "你好\n你好",
+        ] {
+            let composer = run_key_stream_case(case);
+            assert_eq!(composer.textarea.text(), case, "case={case:?}");
+            assert_eq!(
+                composer.textarea.cursor(),
+                composer.textarea.text().len(),
+                "cursor should end up at end of text for case={case:?}",
+            );
+            assert!(!composer.is_in_paste_burst(), "case={case:?}");
+        }
     }
 
     /// Behavior: while we're capturing a paste-like burst, Enter should be treated as a newline
@@ -9068,6 +9145,61 @@ mod tests {
         assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
         assert_eq!(composer.pending_pastes[0].1.len(), count);
         assert!(composer.pending_pastes[0].1.chars().all(|c| c == 'x'));
+    }
+
+    /// Regression test (Windows): some terminals can have a slower gap between the first and
+    /// second char of a pasted key-event stream, which used to leave a stray prefix char before
+    /// the large-paste placeholder (e.g. `在[Pasted Content ...]`).
+    #[cfg(windows)]
+    #[test]
+    fn burst_paste_slow_start_large_does_not_leave_prefix_char() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let first = '你';
+        let rest = '好';
+        let rest_count = LARGE_PASTE_CHAR_THRESHOLD + 10;
+        let total_count = rest_count + 1;
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(first), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), first.to_string());
+
+        // Force the first gap to exceed `PASTE_BURST_CHAR_INTERVAL` so the fast-streak counter
+        // would reset, while still being within the Windows paste window.
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+
+        for _ in 0..rest_count {
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char(rest), KeyModifiers::NONE));
+        }
+
+        let flushed = flush_after_paste_burst(&mut composer);
+        assert!(flushed, "expected flush after stopping fast input");
+
+        let expected_placeholder = format!("[Pasted Content {total_count} chars]");
+        assert_eq!(composer.textarea.text(), expected_placeholder);
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
+        assert_eq!(composer.pending_pastes[0].1.chars().count(), total_count);
+        assert_eq!(composer.pending_pastes[0].1.chars().next(), Some(first));
+        assert!(
+            composer.pending_pastes[0]
+                .1
+                .chars()
+                .skip(1)
+                .all(|c| c == rest)
+        );
     }
 
     /// Behavior: human-like typing (with delays between chars) should not be classified as a paste

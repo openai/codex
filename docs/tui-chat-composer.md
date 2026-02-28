@@ -291,15 +291,24 @@ enough run) to avoid misclassifying IME composition as paste.
 
 ### `KeyCode::Enter`: newline vs submit
 
-There are two distinct “Enter becomes newline” mechanisms:
+There are three distinct “Enter becomes newline” mechanisms:
 
 - **While in a burst context** (`paste_burst.is_active()`): `append_newline_if_active(now)` appends
-  `\n` into the burst buffer so multi-line pastes stay buffered as one explicit paste.
+  `\n` into the burst buffer so multi-line pastes stay buffered as one explicit paste. If the ASCII
+  path is still holding the first char (`pending_first_char`) and an Enter arrives immediately
+  after (within `PASTE_BURST_CHAR_INTERVAL`), `append_newline_if_active` promotes the held char into
+  the burst buffer _before_ appending `\n` (preserving ordering for streams like `h\ni`).
 - **Immediately after burst activity** (enter suppression window):
   `newline_should_insert_instead_of_submit(now)` inserts `\n` into the textarea and calls
   `extend_window(now)` so a slightly-late Enter keeps behaving like “newline” rather than “submit”.
+- **Immediately after a plain char** (very fast `Char` → `Enter`): `newline_should_insert_instead_of_submit(now)`
+  also treats Enter as “newline” when the last plain char was seen very recently, even if we
+  haven’t started buffering or entered the suppression window yet. This prevents “submit mid-paste”
+  on terminals that emit very short multiline pastes as key events. On Windows, the single-ASCII-
+  char case tolerates a slightly slower initial gap (up to `PASTE_BURST_ACTIVE_IDLE_TIMEOUT`) to
+  handle terminals that pause briefly before emitting the first newline in a multiline paste.
 
-Both are disabled inside slash-command context (command popup is active or the first line begins
+All of the above are disabled inside slash-command context (command popup is active or the first line begins
 with `/`) so Enter keeps its normal “submit/execute” semantics while composing commands.
 
 ### Non-char keys / Ctrl+modified input

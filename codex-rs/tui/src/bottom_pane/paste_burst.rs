@@ -46,8 +46,15 @@
 //! - `pending_first_char`: a single held ASCII char used for flicker suppression. The caller must
 //!   not render this char until it either becomes part of a burst (`BeginBufferFromPending`) or
 //!   flushes as a normal typed char (`FlushResult::Typed`).
+//!   If an Enter arrives soon after a held first char (within `PASTE_BURST_ACTIVE_IDLE_TIMEOUT` on
+//!   Windows, `PASTE_BURST_CHAR_INTERVAL` elsewhere), the state machine may promote the held char
+//!   into the burst buffer before appending `\n` so key-event paste streams preserve ordering
+//!   (e.g. `h\ni`).
 //! - `last_plain_char_time`/`consecutive_plain_char_burst`: the timing/count heuristic for
-//!   "paste-like" streams.
+//!   "paste-like" streams. The timestamp is also used for a short "recent char → Enter becomes
+//!   newline" heuristic to avoid submitting mid-paste on very short key-event streams. On Windows,
+//!   the single-ASCII-char case uses `PASTE_BURST_ACTIVE_IDLE_TIMEOUT` to tolerate a slower initial
+//!   gap before the first Enter in a multiline paste stream.
 //! - `burst_window_until`: the Enter suppression window ("Enter inserts newline") that outlives the
 //!   buffer itself.
 //!
@@ -99,6 +106,10 @@
 //! - **Pending first char**: `pending_first_char` holds one ASCII char for up to
 //!   `PASTE_BURST_CHAR_INTERVAL` while we wait to see if a burst follows.
 //! - **Active buffer**: `active`/`buffer` holds paste-like content until it times out and flushes.
+//! - **Recent plain char**: a very fast `Char` → `Enter` sequence is treated as "Enter inserts
+//!   newline" even before we have committed to buffering, to avoid submitting mid-paste on
+//!   terminals that emit multiline pastes as key events. On Windows, the single-ASCII-char case
+//!   tolerates a slightly slower initial gap (up to `PASTE_BURST_ACTIVE_IDLE_TIMEOUT`).
 //! - **Enter suppress window**: `burst_window_until` keeps Enter treated as newline briefly after
 //!   burst activity so multiline pastes stay grouped.
 //!
@@ -171,6 +182,7 @@ const PASTE_BURST_ACTIVE_IDLE_TIMEOUT: Duration = Duration::from_millis(60);
 #[derive(Default)]
 pub(crate) struct PasteBurst {
     last_plain_char_time: Option<Instant>,
+    last_plain_char_is_ascii: bool,
     consecutive_plain_char_burst: u16,
     burst_window_until: Option<Instant>,
     buffer: String,
@@ -221,6 +233,7 @@ impl PasteBurst {
     /// Entry point: decide how to treat a plain char with current timing.
     pub fn on_plain_char(&mut self, ch: char, now: Instant) -> CharDecision {
         self.note_plain_char(now);
+        self.last_plain_char_is_ascii = true;
 
         if self.active {
             self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
@@ -259,6 +272,7 @@ impl PasteBurst {
     /// Note: This method will only ever return BufferAppend or BeginBuffer.
     pub fn on_plain_char_no_hold(&mut self, now: Instant) -> Option<CharDecision> {
         self.note_plain_char(now);
+        self.last_plain_char_is_ascii = false;
 
         if self.active {
             self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
@@ -276,13 +290,34 @@ impl PasteBurst {
 
     fn note_plain_char(&mut self, now: Instant) {
         match self.last_plain_char_time {
-            Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
-                self.consecutive_plain_char_burst =
-                    self.consecutive_plain_char_burst.saturating_add(1)
+            Some(prev) => {
+                let gap = now.duration_since(prev);
+                if gap <= PASTE_BURST_CHAR_INTERVAL {
+                    self.consecutive_plain_char_burst =
+                        self.consecutive_plain_char_burst.saturating_add(1)
+                } else if self.consecutive_plain_char_burst == 1
+                    && gap <= PASTE_BURST_ACTIVE_IDLE_TIMEOUT
+                {
+                    // Some Windows terminals have a slower gap between the first and second
+                    // character of a pasted key-event stream. Treat that single slower gap as
+                    // still part of the burst so retro-grab includes the leading char and we
+                    // don't leave a stray prefix before a large-paste placeholder.
+                    self.consecutive_plain_char_burst = 2;
+                } else {
+                    self.consecutive_plain_char_burst = 1;
+                }
             }
-            _ => self.consecutive_plain_char_burst = 1,
+            None => self.consecutive_plain_char_burst = 1,
         }
         self.last_plain_char_time = Some(now);
+        // If we're seeing a tight stream of plain chars, treat the period immediately after as
+        // "paste-like" for Enter handling so a newline does not accidentally submit mid-paste.
+        //
+        // Note: shorter sequences like `Char, Enter` are handled by
+        // `newline_should_insert_instead_of_submit()` via `last_plain_char_time`.
+        if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
+            self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+        }
     }
 
     /// Flushes any buffered burst if the inter-key timeout has elapsed.
@@ -326,19 +361,47 @@ impl PasteBurst {
     /// Returns true if a newline was appended (we are in a burst context),
     /// false otherwise.
     pub fn append_newline_if_active(&mut self, now: Instant) -> bool {
-        if self.is_active() {
+        if self.is_active_internal() {
             self.buffer.push('\n');
             self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
             true
         } else {
-            false
+            let Some((held, held_at)) = self.pending_first_char.take() else {
+                return false;
+            };
+            if now.duration_since(held_at) <= PASTE_BURST_ACTIVE_IDLE_TIMEOUT {
+                // Windows terminals can emit pasted multiline text as `Char('h')` then `Enter`
+                // etc. If we were holding the first ASCII char (flicker suppression) and
+                // soon see an Enter, treat it as paste-like input and preserve ordering by
+                // promoting the held char into the burst buffer *before* the newline.
+                self.active = true;
+                self.buffer.push(held);
+                self.buffer.push('\n');
+                // Keep the timeout clock based on the most recent input so the burst does not
+                // flush prematurely if the next pasted char arrives after a slow gap.
+                self.last_plain_char_time = Some(now);
+                self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+                true
+            } else {
+                // Not part of a burst context; keep holding the char so it can flush normally.
+                self.pending_first_char = Some((held, held_at));
+                false
+            }
         }
     }
 
     /// Decide if Enter should insert a newline (burst context) vs submit.
     pub fn newline_should_insert_instead_of_submit(&self, now: Instant) -> bool {
         let in_burst_window = self.burst_window_until.is_some_and(|until| now <= until);
-        self.is_active() || in_burst_window
+        let recently_saw_plain_char = self.last_plain_char_time.is_some_and(|t| {
+            let gap = now.duration_since(t);
+            if self.last_plain_char_is_ascii && self.consecutive_plain_char_burst == 1 {
+                gap <= PASTE_BURST_ACTIVE_IDLE_TIMEOUT
+            } else {
+                gap <= PASTE_BURST_CHAR_INTERVAL
+            }
+        });
+        self.is_active() || in_burst_window || recently_saw_plain_char
     }
 
     /// Keep the burst window alive.
@@ -366,6 +429,13 @@ impl PasteBurst {
     /// Returns true when the char was captured into the existing burst, false otherwise.
     pub fn try_append_char_if_active(&mut self, ch: char, now: Instant) -> bool {
         if self.active || !self.buffer.is_empty() {
+            // Keep the timing state up to date even in this "already active" fast path.
+            //
+            // Without this, bursts captured via non-ASCII key events (which call this helper)
+            // would not update `last_plain_char_time`, making `flush_if_due()` unable to time out
+            // (or making it flaky until an ASCII char arrives).
+            self.note_plain_char(now);
+            self.last_plain_char_is_ascii = false;
             self.append_char_to_buffer(ch, now);
             true
         } else {
@@ -426,6 +496,7 @@ impl PasteBurst {
     pub fn clear_window_after_non_char(&mut self) {
         self.consecutive_plain_char_burst = 0;
         self.last_plain_char_time = None;
+        self.last_plain_char_is_ascii = false;
         self.burst_window_until = None;
         self.active = false;
         self.pending_first_char = None;
@@ -444,6 +515,7 @@ impl PasteBurst {
 
     pub fn clear_after_explicit_paste(&mut self) {
         self.last_plain_char_time = None;
+        self.last_plain_char_is_ascii = false;
         self.consecutive_plain_char_burst = 0;
         self.burst_window_until = None;
         self.active = false;
@@ -508,6 +580,89 @@ mod tests {
             burst.flush_if_due(t2),
             FlushResult::Paste(ref s) if s == "ab"
         ));
+    }
+
+    #[test]
+    fn enter_promotes_pending_first_char_updates_timeout_timestamp() {
+        let mut burst = PasteBurst::default();
+        let t0 = Instant::now();
+        assert!(matches!(
+            burst.on_plain_char('h', t0),
+            CharDecision::RetainFirstChar
+        ));
+
+        let t1 = t0 + PASTE_BURST_CHAR_INTERVAL;
+        assert!(burst.append_newline_if_active(t1));
+        assert!(burst.is_active());
+
+        // If the timeout clock is not updated at the Enter, a UI tick here could flush the buffer
+        // based on the original first-char timestamp and split a key-event paste stream.
+        let t2 = t1 + PASTE_BURST_ACTIVE_IDLE_TIMEOUT - Duration::from_millis(1);
+        assert!(matches!(burst.flush_if_due(t2), FlushResult::None));
+
+        assert!(matches!(
+            burst.on_plain_char('i', t2),
+            CharDecision::BufferAppend
+        ));
+        burst.append_char_to_buffer('i', t2);
+
+        let t3 = t2 + PasteBurst::recommended_active_flush_delay() + Duration::from_millis(1);
+        assert!(matches!(
+            burst.flush_if_due(t3),
+            FlushResult::Paste(ref s) if s == "h\ni"
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn slow_char_to_enter_paste_promotes_pending_first_char_on_windows() {
+        let mut burst = PasteBurst::default();
+        let t0 = Instant::now();
+        assert!(matches!(
+            burst.on_plain_char('h', t0),
+            CharDecision::RetainFirstChar
+        ));
+
+        // Windows terminals can show a slower initial gap between the first char and the
+        // following newline (Enter) in a key-event paste stream.
+        let t1 = t0 + PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(1);
+        assert!(
+            t1.duration_since(t0) > PASTE_BURST_CHAR_INTERVAL
+                && t1.duration_since(t0) <= PASTE_BURST_ACTIVE_IDLE_TIMEOUT
+        );
+
+        assert!(burst.append_newline_if_active(t1));
+        assert!(burst.is_active());
+
+        let t2 = t1 + PasteBurst::recommended_active_flush_delay() + Duration::from_millis(1);
+        assert!(matches!(
+            burst.flush_if_due(t2),
+            FlushResult::Paste(ref s) if s == "h\n"
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn newline_should_insert_after_recent_plain_char_within_windows_paste_window() {
+        let mut burst = PasteBurst::default();
+        let t0 = Instant::now();
+        assert!(matches!(
+            burst.on_plain_char('h', t0),
+            CharDecision::RetainFirstChar
+        ));
+
+        // Simulate a UI tick flushing the held char as normal typing.
+        let t_flush = t0 + PasteBurst::recommended_flush_delay() + Duration::from_millis(1);
+        assert!(matches!(
+            burst.flush_if_due(t_flush),
+            FlushResult::Typed('h')
+        ));
+        assert!(!burst.is_active());
+
+        // Then a multiline paste stream can deliver Enter a bit later, still within the Windows
+        // paste-burst window. We should treat that Enter as "insert newline", not submit.
+        let t1 = t0 + Duration::from_millis(20);
+        assert!(burst.newline_should_insert_instead_of_submit(t1));
     }
 
     /// Behavior: when non-char input is about to be applied, we flush any transient burst state
