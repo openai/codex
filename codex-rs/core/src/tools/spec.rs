@@ -1360,7 +1360,7 @@ fn create_js_repl_poll_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "js_repl_poll".to_string(),
         description:
-            "Poll a running js_repl exec for incremental logs or completion. Keep polling the same exec_id until status becomes completed or error."
+            "Poll a running js_repl exec for incremental logs or completion. Keep polling the same exec_id until status becomes completed or error. Completed polls may also include nested multimodal tool output after the JSON status item."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {

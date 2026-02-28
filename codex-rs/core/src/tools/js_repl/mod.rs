@@ -175,6 +175,7 @@ pub struct JsExecPollResult {
     pub session_id: String,
     pub logs: Vec<String>,
     pub output: Option<String>,
+    pub content_items: Vec<FunctionCallOutputContentItem>,
     pub error: Option<String>,
     pub done: bool,
 }
@@ -248,6 +249,7 @@ struct ExecBuffer {
     all_logs_bytes: usize,
     all_logs_truncated: bool,
     output: Option<String>,
+    content_items: Vec<FunctionCallOutputContentItem>,
     error: Option<String>,
     done: bool,
     host_terminating: bool,
@@ -276,6 +278,7 @@ impl ExecBuffer {
             all_logs_bytes: 0,
             all_logs_truncated: false,
             output: None,
+            content_items: Vec::new(),
             error: None,
             done: false,
             host_terminating: false,
@@ -361,6 +364,14 @@ impl ExecBuffer {
             None
         } else {
             Some(display_output)
+        }
+    }
+
+    fn poll_content_items(&self) -> Vec<FunctionCallOutputContentItem> {
+        if self.done && self.error.is_none() {
+            self.content_items.clone()
+        } else {
+            Vec::new()
         }
     }
 
@@ -1016,6 +1027,7 @@ impl JsReplManager {
         exec_id: &str,
         terminal_kind: ExecTerminalKind,
         output: Option<String>,
+        content_items: Option<Vec<FunctionCallOutputContentItem>>,
         error: Option<String>,
         override_kernel_exit: bool,
     ) -> bool {
@@ -1040,6 +1052,9 @@ impl JsReplManager {
             entry.host_terminating = false;
             if let Some(output) = output {
                 entry.output = Some(output);
+            }
+            if let Some(content_items) = content_items {
+                entry.content_items = content_items;
             }
             if error.is_some() || terminal_kind != ExecTerminalKind::Success {
                 entry.error = error;
@@ -1084,6 +1099,7 @@ impl JsReplManager {
             session_id,
             logs: entry.poll_logs(),
             output: entry.poll_output(),
+            content_items: entry.poll_content_items(),
             error,
             done,
         })
@@ -1161,6 +1177,7 @@ impl JsReplManager {
                 &self.exec_store,
                 &exec_id,
                 ExecTerminalKind::Cancelled,
+                None,
                 None,
                 Some(JS_REPL_CANCEL_ERROR_MESSAGE.to_string()),
                 true,
@@ -1998,6 +2015,7 @@ impl JsReplManager {
                         &id,
                         terminal_kind,
                         Some(output),
+                        ok.then_some(content_items),
                         completion_error,
                         false,
                     )
@@ -2159,6 +2177,7 @@ impl JsReplManager {
                 &exec_store,
                 exec_id,
                 ExecTerminalKind::KernelExit,
+                None,
                 None,
                 Some(kernel_exit_message.clone()),
                 false,
@@ -3092,6 +3111,7 @@ mod tests {
             exec_id,
             ExecTerminalKind::KernelExit,
             None,
+            None,
             Some("js_repl kernel exited unexpectedly".to_string()),
             false,
         )
@@ -3111,6 +3131,7 @@ mod tests {
             &exec_store,
             exec_id,
             ExecTerminalKind::Cancelled,
+            None,
             None,
             Some(JS_REPL_CANCEL_ERROR_MESSAGE.to_string()),
             false,
@@ -3536,6 +3557,188 @@ console.log("attached-two-images");
             };
             assert!(image_url.starts_with("data:image/png;base64,"));
         }
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_poll_multiple_view_image_calls_attach_multiple_images() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, mut turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+const fs = await import("node:fs/promises");
+const path = await import("node:path");
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+  "base64"
+);
+const imagePathA = path.join(codex.tmpDir, "js-repl-poll-view-image-a.png");
+const imagePathB = path.join(codex.tmpDir, "js-repl-poll-view-image-b.png");
+await fs.writeFile(imagePathA, png);
+await fs.writeFile(imagePathB, png);
+await codex.tool("view_image", { path: imagePathA });
+await codex.tool("view_image", { path: imagePathB });
+console.log("attached-two-images");
+"#;
+
+        let submission = Arc::clone(&manager)
+            .submit(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                tracker,
+                "call-poll-two-view-images".to_string(),
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: None,
+                    poll: true,
+                    session_id: None,
+                },
+            )
+            .await?;
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let result = loop {
+            let result = manager.poll(&submission.exec_id, Some(200)).await?;
+            if result.done {
+                assert_eq!(result.session_id, submission.session_id);
+                assert_eq!(result.error, None);
+                let output = result.output.clone().unwrap_or_default();
+                assert!(output.contains("attached-two-images"));
+                break result;
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for polling multi-view_image exec completion");
+            }
+        };
+        assert_eq!(
+            result.content_items.len(),
+            2,
+            "expected one input_image content item per nested view_image call"
+        );
+        for item in &result.content_items {
+            let FunctionCallOutputContentItem::InputImage { image_url } = item else {
+                panic!("expected each content item to be an image");
+            };
+            assert!(image_url.starts_with("data:image/png;base64,"));
+        }
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_poll_completed_multimodal_exec_is_replayable() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, mut turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+const fs = await import("node:fs/promises");
+const path = await import("node:path");
+const imagePath = path.join(codex.tmpDir, "js-repl-poll-replay-image.png");
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+  "base64"
+);
+await fs.writeFile(imagePath, png);
+await codex.tool("view_image", { path: imagePath });
+console.log("replay-image-ready");
+"#;
+
+        let submission = Arc::clone(&manager)
+            .submit(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                tracker,
+                "call-poll-replay-image".to_string(),
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: None,
+                    poll: true,
+                    session_id: None,
+                },
+            )
+            .await?;
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let first_result = loop {
+            let result = manager.poll(&submission.exec_id, Some(200)).await?;
+            if result.done {
+                break result;
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for polling replay-image exec completion");
+            }
+        };
+        assert_eq!(first_result.session_id, submission.session_id);
+        assert_eq!(first_result.error, None);
+        assert!(
+            first_result
+                .output
+                .as_deref()
+                .is_some_and(|output| output.contains("replay-image-ready"))
+        );
+        assert_eq!(
+            first_result.content_items.as_slice(),
+            [FunctionCallOutputContentItem::InputImage {
+                image_url:
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+                        .to_string(),
+            }]
+            .as_slice()
+        );
+
+        let second_result = manager.poll(&submission.exec_id, Some(50)).await?;
+        assert!(second_result.done);
+        assert_eq!(second_result.session_id, submission.session_id);
+        assert_eq!(second_result.error, None);
+        assert_eq!(second_result.output, first_result.output);
+        assert_eq!(second_result.content_items, first_result.content_items);
         assert!(session.get_pending_input().await.is_empty());
 
         Ok(())
