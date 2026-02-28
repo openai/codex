@@ -733,6 +733,7 @@ mod tests {
         Thread {
             id: thread_id.to_string(),
             preview: String::new(),
+            ephemeral: false,
             model_provider: "mock-provider".to_string(),
             created_at: 0,
             updated_at: 0,
