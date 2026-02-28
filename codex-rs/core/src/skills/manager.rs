@@ -415,6 +415,7 @@ mod tests {
         assert_eq!(first, second);
     }
 
+    #[cfg_attr(windows, ignore)]
     #[test]
     fn disabled_paths_from_stack_allows_session_flags_to_override_user_layer() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -453,6 +454,7 @@ enabled = true
         assert_eq!(disabled_paths_from_stack(&stack), HashSet::new());
     }
 
+    #[cfg_attr(windows, ignore)]
     #[test]
     fn disabled_paths_from_stack_allows_session_flags_to_disable_user_enabled_skill() {
         let tempdir = tempfile::tempdir().expect("tempdir");

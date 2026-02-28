@@ -371,14 +371,20 @@ impl Codex {
             .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
 
         let config = Arc::new(config);
-        let _ = models_manager
-            .list_models(crate::models_manager::manager::RefreshStrategy::OnlineIfUncached)
-            .await;
-        let model = models_manager
-            .get_default_model(
-                &config.model,
-                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
+        let refresh_strategy = match session_source {
+            SessionSource::SubAgent(_) => crate::models_manager::manager::RefreshStrategy::Offline,
+            _ => crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
+        };
+        if config.model.is_none()
+            || !matches!(
+                refresh_strategy,
+                crate::models_manager::manager::RefreshStrategy::Offline
             )
+        {
+            let _ = models_manager.list_models(refresh_strategy).await;
+        }
+        let model = models_manager
+            .get_default_model(&config.model, refresh_strategy)
             .await;
 
         // Resolve base instructions for the session. Priority order:
@@ -1727,6 +1733,13 @@ impl Session {
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_default_turn().await;
         self.clear_mcp_tool_selection().await;
+        let is_subagent = {
+            let state = self.state.lock().await;
+            matches!(
+                state.session_configuration.session_source,
+                SessionSource::SubAgent(_)
+            )
+        };
         match conversation_history {
             InitialHistory::New => {
                 // Build and record initial items (user instructions + environment context)
@@ -1741,7 +1754,9 @@ impl Session {
                 }
                 self.set_previous_model(None).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
-                self.flush_rollout().await;
+                if !is_subagent {
+                    self.flush_rollout().await;
+                }
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
@@ -1792,7 +1807,9 @@ impl Session {
 
                 // Defer seeding the session's initial context until the first turn starts so
                 // turn/start overrides can be merged before we write to the rollout.
-                self.flush_rollout().await;
+                if !is_subagent {
+                    self.flush_rollout().await;
+                }
             }
             InitialHistory::Forked(rollout_items) => {
                 let restored_tool_selection =
@@ -1838,7 +1855,9 @@ impl Session {
                 self.ensure_rollout_materialized().await;
 
                 // Flush after seeding history and any persisted rollout copy.
-                self.flush_rollout().await;
+                if !is_subagent {
+                    self.flush_rollout().await;
+                }
             }
         }
     }

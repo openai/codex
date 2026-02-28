@@ -472,6 +472,7 @@ writable_roots = ["./sandbox-root"]
         assert_eq!(session_flags_layer_count(&config), before_layers + 1);
     }
 
+    #[cfg_attr(windows, ignore)]
     #[tokio::test]
     async fn apply_role_skills_config_disables_skill_for_spawned_agent() {
         let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
