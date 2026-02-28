@@ -20,7 +20,7 @@ Phase 1 finds recent eligible rollouts and extracts a structured memory from eac
 Eligible rollouts are selected from the state DB using startup claim rules. In practice this means
 the pipeline only considers rollouts that are:
 
-- from allowed interactive session sources
+- from configured stage-1 memory sources (defaults to `cli` and `vscode`)
 - within the configured age window
 - idle long enough (to avoid summarizing still-active/fresh rollouts)
 - not already owned by another in-flight phase-1 worker

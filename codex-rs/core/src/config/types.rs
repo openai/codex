@@ -8,6 +8,7 @@ pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::protocol::SessionSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -385,10 +386,32 @@ pub struct MemoriesToml {
     pub max_rollouts_per_startup: Option<usize>,
     /// Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.
     pub min_rollout_idle_hours: Option<i64>,
+    /// Session sources eligible for stage-1 memory extraction.
+    pub stage_1_sources: Option<Vec<MemoriesStageOneSource>>,
     /// Model used for thread summarisation.
     pub phase_1_model: Option<String>,
     /// Model used for memory consolidation.
     pub phase_2_model: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoriesStageOneSource {
+    Cli,
+    VSCode,
+    Exec,
+    Mcp,
+}
+
+impl From<MemoriesStageOneSource> for SessionSource {
+    fn from(value: MemoriesStageOneSource) -> Self {
+        match value {
+            MemoriesStageOneSource::Cli => SessionSource::Cli,
+            MemoriesStageOneSource::VSCode => SessionSource::VSCode,
+            MemoriesStageOneSource::Exec => SessionSource::Exec,
+            MemoriesStageOneSource::Mcp => SessionSource::Mcp,
+        }
+    }
 }
 
 /// Effective memories settings after defaults are applied.
@@ -401,6 +424,7 @@ pub struct MemoriesConfig {
     pub max_rollout_age_days: i64,
     pub max_rollouts_per_startup: usize,
     pub min_rollout_idle_hours: i64,
+    pub stage_1_sources: Vec<SessionSource>,
     pub phase_1_model: Option<String>,
     pub phase_2_model: Option<String>,
 }
@@ -415,6 +439,7 @@ impl Default for MemoriesConfig {
             max_rollout_age_days: DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS,
             max_rollouts_per_startup: DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
             min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
+            stage_1_sources: vec![SessionSource::Cli, SessionSource::VSCode],
             phase_1_model: None,
             phase_2_model: None,
         }
@@ -447,6 +472,23 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .min_rollout_idle_hours
                 .unwrap_or(defaults.min_rollout_idle_hours)
                 .clamp(1, 48),
+            stage_1_sources: toml.stage_1_sources.map_or_else(
+                || defaults.stage_1_sources.clone(),
+                |sources| {
+                    let mut mapped_sources = Vec::new();
+                    for source in sources {
+                        let source = SessionSource::from(source);
+                        if !mapped_sources.contains(&source) {
+                            mapped_sources.push(source);
+                        }
+                    }
+                    if mapped_sources.is_empty() {
+                        defaults.stage_1_sources.clone()
+                    } else {
+                        mapped_sources
+                    }
+                },
+            ),
             phase_1_model: toml.phase_1_model,
             phase_2_model: toml.phase_2_model,
         }

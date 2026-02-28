@@ -2409,6 +2409,7 @@ mod tests {
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::MemoriesConfig;
+    use crate::config::types::MemoriesStageOneSource;
     use crate::config::types::MemoriesToml;
     use crate::config::types::ModelAvailabilityNuxConfig;
     use crate::config::types::NotificationMethod;
@@ -2416,6 +2417,7 @@ mod tests {
     use crate::config_loader::RequirementSource;
     use crate::features::Feature;
     use codex_config::CONFIG_TOML_FILE;
+    use codex_protocol::protocol::SessionSource;
 
     use super::*;
     use core_test_support::test_absolute_path;
@@ -2507,6 +2509,7 @@ max_unused_days = 21
 max_rollout_age_days = 42
 max_rollouts_per_startup = 9
 min_rollout_idle_hours = 24
+stage_1_sources = ["exec"]
 phase_1_model = "gpt-5-mini"
 phase_2_model = "gpt-5"
 "#;
@@ -2521,6 +2524,7 @@ phase_2_model = "gpt-5"
                 max_rollout_age_days: Some(42),
                 max_rollouts_per_startup: Some(9),
                 min_rollout_idle_hours: Some(24),
+                stage_1_sources: Some(vec![MemoriesStageOneSource::Exec]),
                 phase_1_model: Some("gpt-5-mini".to_string()),
                 phase_2_model: Some("gpt-5".to_string()),
             }),
@@ -2543,9 +2547,25 @@ phase_2_model = "gpt-5"
                 max_rollout_age_days: 42,
                 max_rollouts_per_startup: 9,
                 min_rollout_idle_hours: 24,
+                stage_1_sources: vec![SessionSource::Exec],
                 phase_1_model: Some("gpt-5-mini".to_string()),
                 phase_2_model: Some("gpt-5".to_string()),
             }
+        );
+    }
+
+    #[test]
+    fn memories_stage_1_sources_default_to_interactive_sources() {
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            tempdir().expect("tempdir").path().to_path_buf(),
+        )
+        .expect("load config from defaults");
+
+        assert_eq!(
+            config.memories.stage_1_sources,
+            vec![SessionSource::Cli, SessionSource::VSCode]
         );
     }
 
