@@ -64,6 +64,7 @@ use codex_core::git_info::current_branch_name;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
+use codex_core::parse_turn_item;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
@@ -82,7 +83,9 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
@@ -611,6 +614,11 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // Nudges already submitted to core but not yet committed into history.
+    //
+    // The bottom pane shows these above queued drafts until core records the
+    // corresponding user message and emits the matching raw response item.
+    pending_nudges: VecDeque<RenderedUserMessageEvent>,
     /// Terminal-appropriate keybinding for popping the most-recently queued
     /// message back into the composer.  Determined once at construction time via
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
@@ -1278,15 +1286,22 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_agent_message(&mut self, message: String) {
-        // If we have a stream_controller, then the final agent message is redundant and will be a
-        // duplicate of what has already been streamed.
-        if self.stream_controller.is_none() && !message.is_empty() {
-            self.handle_streaming_delta(message);
+    fn finalize_completed_assistant_message(&mut self, message: Option<&str>) {
+        // If we have a stream_controller, the finalized message payload is redundant because the
+        // visible content has already been accumulated through deltas.
+        if self.stream_controller.is_none()
+            && let Some(message) = message
+            && !message.is_empty()
+        {
+            self.handle_streaming_delta(message.to_string());
         }
         self.flush_answer_stream_with_separator();
         self.handle_stream_finished();
         self.request_redraw();
+    }
+
+    fn on_agent_message(&mut self, message: String) {
+        self.finalize_completed_assistant_message(Some(&message));
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -1827,7 +1842,7 @@ impl ChatWidget {
 
         if let Some(combined) = self.drain_queued_messages_for_restore() {
             self.restore_user_message_to_composer(combined);
-            self.refresh_queued_user_messages();
+            self.refresh_pending_input_preview();
         }
 
         self.request_redraw();
@@ -2303,6 +2318,15 @@ impl ChatWidget {
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
     fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
+        let mut message = String::new();
+        for content in &item.content {
+            match content {
+                AgentMessageContent::Text { text } => message.push_str(text),
+            }
+        }
+        self.finalize_completed_assistant_message(
+            (!message.is_empty()).then_some(message.as_str()),
+        );
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
             Some(MessagePhase::FinalAnswer) | None => false,
@@ -2868,6 +2892,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_nudges: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3051,6 +3076,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
+            pending_nudges: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3215,6 +3241,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_nudges: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: false,
             startup_tooltip_override: None,
@@ -3344,7 +3371,7 @@ impl ChatWidget {
         {
             if let Some(user_message) = self.queued_user_messages.pop_back() {
                 self.restore_user_message_to_composer(user_message);
-                self.refresh_queued_user_messages();
+                self.refresh_pending_input_preview();
                 self.request_redraw();
             }
             return;
@@ -3379,20 +3406,24 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
                     };
+                    if user_message.text.is_empty()
+                        && user_message.local_images.is_empty()
+                        && user_message.remote_image_urls.is_empty()
+                    {
+                        return;
+                    }
                     let Some(user_message) =
                         self.maybe_defer_user_message_for_realtime(user_message)
                     else {
                         return;
                     };
-                    // Submissions during active final-answer streaming can race with turn
-                    // completion and strand the UI in a running state. Queue those inputs instead
-                    // of injecting immediately; `on_task_complete()` drains this FIFO via
-                    // `maybe_send_next_queued_input()`, so no typed prompt is dropped.
-                    let should_submit_now = self.is_session_configured()
-                        && !self.is_plan_streaming_in_tui()
-                        && self.stream_controller.is_none();
-                    if should_submit_now {
-                        // Submitted is emitted when user submits.
+                    let should_preview_as_pending_nudge = self.is_session_configured()
+                        && self.bottom_pane.is_task_running()
+                        && !self.is_review_mode;
+                    if should_preview_as_pending_nudge {
+                        self.submit_user_message_internal(user_message, false);
+                    } else if self.is_session_configured() {
+                        // Submitted is only emitted when steer is enabled.
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
@@ -4007,17 +4038,21 @@ impl ChatWidget {
             || self.is_review_mode
         {
             self.queued_user_messages.push_back(user_message);
-            self.refresh_queued_user_messages();
+            self.refresh_pending_input_preview();
         } else {
             self.submit_user_message(user_message);
         }
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_internal(user_message, true);
+    }
+
+    fn submit_user_message_internal(&mut self, user_message: UserMessage, render_in_history: bool) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
-            self.refresh_queued_user_messages();
+            self.refresh_pending_input_preview();
             return;
         }
 
@@ -4172,6 +4207,8 @@ impl ChatWidget {
         } else {
             None
         };
+        let pending_nudge =
+            (!render_in_history).then(|| Self::rendered_user_message_event_from_inputs(&items));
         let personality = self
             .config
             .personality
@@ -4190,9 +4227,9 @@ impl ChatWidget {
             personality,
         };
 
-        self.codex_op_tx.send(op).unwrap_or_else(|e| {
-            tracing::error!("failed to send message: {e}");
-        });
+        if !self.submit_op(op) {
+            return;
+        }
 
         // Persist the text to cross-session message history.
         if !text.is_empty() {
@@ -4211,8 +4248,13 @@ impl ChatWidget {
                 });
         }
 
+        if let Some(pending_nudge) = pending_nudge {
+            self.pending_nudges.push_back(pending_nudge);
+            self.refresh_pending_input_preview();
+        }
+
         // Show replayable user content in conversation history.
-        if !text.is_empty() {
+        if render_in_history && !text.is_empty() {
             let local_image_paths = local_images
                 .into_iter()
                 .map(|img| img.path)
@@ -4230,7 +4272,7 @@ impl ChatWidget {
                 local_image_paths,
                 remote_image_urls,
             ));
-        } else if !remote_image_urls.is_empty() {
+        } else if render_in_history && !remote_image_urls.is_empty() {
             self.last_rendered_user_message_event =
                 Some(Self::rendered_user_message_event_from_parts(
                     String::new(),
@@ -4343,9 +4385,10 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
-            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) if from_replay => {
                 self.on_agent_message(message)
             }
+            EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }
@@ -4464,6 +4507,24 @@ impl ChatWidget {
                     self.on_user_message_event(ev);
                 }
             }
+            EventMsg::RawResponseItem(event) => {
+                if !from_replay
+                    && let Some(TurnItem::UserMessage(item)) = parse_turn_item(&event.item)
+                    && let EventMsg::UserMessage(user_message) = item.as_legacy_event()
+                {
+                    let rendered = Self::rendered_user_message_event_from_event(&user_message);
+                    let should_render = if self.pending_nudges.front() == Some(&rendered) {
+                        self.pending_nudges.pop_front();
+                        self.refresh_pending_input_preview();
+                        true
+                    } else {
+                        self.last_rendered_user_message_event.as_ref() != Some(&rendered)
+                    };
+                    if should_render {
+                        self.on_user_message_event(user_message);
+                    }
+                }
+            }
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request, from_replay)
             }
@@ -4494,8 +4555,7 @@ impl ChatWidget {
                     });
                 }
             }
-            EventMsg::RawResponseItem(_)
-            | EventMsg::ItemStarted(_)
+            EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
@@ -4668,17 +4728,23 @@ impl ChatWidget {
             self.submit_user_message(user_message);
         }
         // Update the list to reflect the remaining queued messages (if any).
-        self.refresh_queued_user_messages();
+        self.refresh_pending_input_preview();
     }
 
-    /// Rebuild and update the queued user messages from the current queue.
-    fn refresh_queued_user_messages(&mut self) {
+    /// Rebuild and update the bottom-pane pending-input preview.
+    fn refresh_pending_input_preview(&mut self) {
         let messages: Vec<String> = self
             .queued_user_messages
             .iter()
             .map(|m| m.text.clone())
             .collect();
-        self.bottom_pane.set_queued_user_messages(messages);
+        let pending_nudges: Vec<String> = self
+            .pending_nudges
+            .iter()
+            .map(|nudge| nudge.message().to_string())
+            .collect();
+        self.bottom_pane
+            .set_pending_input_preview(messages, pending_nudges);
     }
 
     pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {
@@ -7491,6 +7557,13 @@ impl ChatWidget {
         {
             collaboration_mode.reasoning_effort = Some(Some(effort));
         }
+        let user_message = UserMessage {
+            text,
+            local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
+            text_elements: Vec::new(),
+            mention_bindings: Vec::new(),
+        };
         if self.agent_turn_running
             && self.active_collaboration_mask.as_ref() != Some(&collaboration_mode)
         {
@@ -7500,15 +7573,7 @@ impl ChatWidget {
             return;
         }
         self.set_collaboration_mask(collaboration_mode);
-        let should_queue = self.is_plan_streaming_in_tui();
-        let user_message = UserMessage {
-            text,
-            local_images: Vec::new(),
-            remote_image_urls: Vec::new(),
-            text_elements: Vec::new(),
-            mention_bindings: Vec::new(),
-        };
-        if should_queue {
+        if self.is_plan_streaming_in_tui() {
             self.queue_user_message(user_message);
         } else {
             self.submit_user_message(user_message);

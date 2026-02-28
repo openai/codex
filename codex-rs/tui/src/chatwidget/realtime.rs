@@ -1,4 +1,6 @@
 use super::*;
+use codex_core::parse_turn_item;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
@@ -55,6 +57,12 @@ pub(super) struct RenderedUserMessageEvent {
     text_elements: Vec<TextElement>,
 }
 
+impl RenderedUserMessageEvent {
+    pub(super) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
 impl ChatWidget {
     pub(super) fn rendered_user_message_event_from_parts(
         message: String,
@@ -79,6 +87,19 @@ impl ChatWidget {
             event.local_images.clone(),
             event.images.clone().unwrap_or_default(),
         )
+    }
+
+    pub(super) fn rendered_user_message_event_from_inputs(
+        items: &[UserInput],
+    ) -> RenderedUserMessageEvent {
+        let response_item = ResponseInputItem::from(items.to_vec()).into();
+        let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) else {
+            unreachable!("user inputs must round-trip into a user-message turn item");
+        };
+        let EventMsg::UserMessage(event) = user_message.as_legacy_event() else {
+            unreachable!("UserMessageItem::as_legacy_event must return UserMessage");
+        };
+        Self::rendered_user_message_event_from_event(&event)
     }
 
     pub(super) fn should_render_realtime_user_message_event(

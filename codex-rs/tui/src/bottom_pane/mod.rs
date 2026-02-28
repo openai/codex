@@ -17,8 +17,8 @@ use std::path::PathBuf;
 
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::pending_input_preview::PendingInputPreview;
 use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
-use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -93,9 +93,9 @@ pub(crate) use skills_toggle_view::SkillsToggleView;
 pub(crate) use status_line_setup::StatusLineItem;
 pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
+mod pending_input_preview;
 mod pending_thread_approvals;
 pub mod popup_consts;
-mod queued_user_messages;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
@@ -171,8 +171,8 @@ pub(crate) struct BottomPane {
     /// When a status row exists, this summary is mirrored inline in that row;
     /// when no status row exists, it renders as its own footer row.
     unified_exec_footer: UnifiedExecFooter,
-    /// Queued user messages to show above the composer while a turn is running.
-    queued_user_messages: QueuedUserMessages,
+    /// Preview of pending nudges and queued drafts shown above the composer.
+    pending_input_preview: PendingInputPreview,
     /// Inactive threads with pending approval requests.
     pending_thread_approvals: PendingThreadApprovals,
     context_window_percent: Option<i64>,
@@ -222,7 +222,7 @@ impl BottomPane {
             is_task_running: false,
             status: None,
             unified_exec_footer: UnifiedExecFooter::new(),
-            queued_user_messages: QueuedUserMessages::new(),
+            pending_input_preview: PendingInputPreview::new(),
             pending_thread_approvals: PendingThreadApprovals::new(),
             esc_backtrack_hint: false,
             animations_enabled,
@@ -311,7 +311,7 @@ impl BottomPane {
     /// Update the key hint shown next to queued messages so it matches the
     /// binding that `ChatWidget` actually listens for.
     pub(crate) fn set_queued_message_edit_binding(&mut self, binding: KeyBinding) {
-        self.queued_user_messages.set_edit_binding(binding);
+        self.pending_input_preview.set_edit_binding(binding);
         self.request_redraw();
     }
 
@@ -759,9 +759,14 @@ impl BottomPane {
         true
     }
 
-    /// Update the queued messages preview shown above the composer.
-    pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
-        self.queued_user_messages.messages = queued;
+    /// Update the pending-input preview shown above the composer.
+    pub(crate) fn set_pending_input_preview(
+        &mut self,
+        queued: Vec<String>,
+        pending_nudges: Vec<String>,
+    ) {
+        self.pending_input_preview.pending_nudges = pending_nudges;
+        self.pending_input_preview.messages = queued;
         self.request_redraw();
     }
 
@@ -1004,18 +1009,19 @@ impl BottomPane {
                 flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
             }
             let has_pending_thread_approvals = !self.pending_thread_approvals.is_empty();
-            let has_queued_messages = !self.queued_user_messages.messages.is_empty();
+            let has_pending_input = !self.pending_input_preview.messages.is_empty()
+                || !self.pending_input_preview.pending_nudges.is_empty();
             let has_status_or_footer =
                 self.status.is_some() || !self.unified_exec_footer.is_empty();
-            let has_inline_previews = has_pending_thread_approvals || has_queued_messages;
+            let has_inline_previews = has_pending_thread_approvals || has_pending_input;
             if has_inline_previews && has_status_or_footer {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             flex.push(1, RenderableItem::Borrowed(&self.pending_thread_approvals));
-            if has_pending_thread_approvals && has_queued_messages {
+            if has_pending_thread_approvals && has_pending_input {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
-            flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
+            flex.push(1, RenderableItem::Borrowed(&self.pending_input_preview));
             if !has_inline_previews && has_status_or_footer {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
@@ -1391,7 +1397,7 @@ mod tests {
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
-        pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
+        pane.set_pending_input_preview(vec!["Queued follow-up question".to_string()], Vec::new());
 
         let width = 48;
         let height = pane.desired_height(width);
@@ -1418,7 +1424,7 @@ mod tests {
         });
 
         pane.set_task_running(true);
-        pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
+        pane.set_pending_input_preview(vec!["Queued follow-up question".to_string()], Vec::new());
         pane.hide_status_indicator();
 
         let width = 48;
@@ -1446,7 +1452,7 @@ mod tests {
         });
 
         pane.set_task_running(true);
-        pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
+        pane.set_pending_input_preview(vec!["Queued follow-up question".to_string()], Vec::new());
 
         let width = 48;
         let height = pane.desired_height(width);
