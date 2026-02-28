@@ -73,8 +73,17 @@ pub(crate) enum AppEvent {
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
 
-    /// Recompute the list of inactive threads that still need approval.
-    RefreshPendingThreadApprovals,
+    /// Submit an op to the specified thread, regardless of current focus.
+    SubmitThreadOp {
+        thread_id: ThreadId,
+        op: codex_protocol::protocol::Op,
+    },
+
+    /// Forward an event from a non-primary thread into the app-level thread router.
+    ThreadEvent {
+        thread_id: ThreadId,
+        event: Event,
+    },
 
     /// Start a new session.
     NewSession,

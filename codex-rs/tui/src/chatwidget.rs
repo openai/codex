@@ -2582,6 +2582,8 @@ impl ChatWidget {
 
         let available_decisions = ev.effective_available_decisions();
         let request = ApprovalRequest::Exec {
+            thread_id: self.thread_id.unwrap_or_default(),
+            thread_label: None,
             id: ev.effective_approval_id(),
             command: ev.command,
             reason: ev.reason,
@@ -2598,6 +2600,8 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
 
         let request = ApprovalRequest::ApplyPatch {
+            thread_id: self.thread_id.unwrap_or_default(),
+            thread_label: None,
             id: ev.call_id,
             reason: ev.reason,
             changes: ev.changes.clone(),
@@ -2620,10 +2624,18 @@ impl ChatWidget {
         });
 
         let request = ApprovalRequest::McpElicitation {
+            thread_id: self.thread_id.unwrap_or_default(),
+            thread_label: None,
             server_name: ev.server_name,
             request_id: ev.id,
             message: ev.message,
         };
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    pub(crate) fn push_approval_request(&mut self, request: ApprovalRequest) {
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
         self.request_redraw();
@@ -7541,6 +7553,11 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn pending_thread_approvals(&self) -> &[String] {
         self.bottom_pane.pending_thread_approvals()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_active_view(&self) -> bool {
+        self.bottom_pane.has_active_view()
     }
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
