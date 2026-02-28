@@ -23,6 +23,12 @@ dependencies:
 
 policy:
   allow_implicit_invocation: true
+
+permissions:
+  mode: "merge"
+  file_system:
+    write:
+      - "/absolute/path/for/skill-output"
 ```
 
 ## Field descriptions and constraints
@@ -47,3 +53,10 @@ Top-level constraints:
 - `policy.allow_implicit_invocation`: When false, the skill is not injected into
   the model context by default, but can still be invoked explicitly via `$skill`.
   Defaults to true.
+- `permissions.mode`: Optional sandbox behavior for skill script approvals.
+  `merge` is the default and adds the declared permissions to the current turn sandbox.
+  `exact` uses only the sandbox compiled from the declared permissions instead of merging.
+- `permissions.network`: Optional network access hint for the skill permission profile.
+- `permissions.file_system.read`: Optional absolute paths the skill may read.
+- `permissions.file_system.write`: Optional absolute paths the skill may write.
+- `permissions.macos`: Optional macOS-specific permission hints for skill execution.
