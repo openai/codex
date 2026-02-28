@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::Form;
 use axum::extract::State;
 use axum::http::Request;
 use axum::http::StatusCode;
@@ -15,6 +16,7 @@ use axum::middleware;
 use axum::middleware::Next;
 use axum::response::Response;
 use axum::routing::get;
+use axum::routing::post;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::CallToolRequestParams;
@@ -39,6 +41,8 @@ use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::task;
 
 #[derive(Clone)]
@@ -46,6 +50,22 @@ struct TestToolServer {
     tools: Arc<Vec<Tool>>,
     resources: Arc<Vec<Resource>>,
     resource_templates: Arc<Vec<ResourceTemplate>>,
+}
+
+#[derive(Clone)]
+struct AuthState {
+    current_bearer: Arc<RwLock<Option<String>>>,
+    refresh_state: Option<Arc<Mutex<RefreshTokenState>>>,
+}
+
+#[derive(Debug)]
+struct RefreshTokenState {
+    current_refresh_token: String,
+    next_access_token: String,
+    next_refresh_token: String,
+    expires_in: u64,
+    single_use: bool,
+    used_once: bool,
 }
 
 const MEMO_URI: &str = "memo://codex/example-note";
@@ -263,6 +283,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     eprintln!("starting rmcp streamable http test server on http://{bind_addr}/mcp");
 
+    let auth_state = AuthState {
+        current_bearer: Arc::new(RwLock::new(
+            std::env::var("MCP_EXPECT_BEARER")
+                .ok()
+                .map(|token| format!("Bearer {token}")),
+        )),
+        refresh_state: refresh_state_from_env(),
+    };
+
     let router = Router::new()
         .route(
             "/.well-known/oauth-authorization-server/mcp",
@@ -284,6 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }),
         )
+        .route("/oauth/token", post(oauth_refresh_token))
         .nest_service(
             "/mcp",
             StreamableHttpService::new(
@@ -291,28 +321,108 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::new(LocalSessionManager::default()),
                 StreamableHttpServerConfig::default(),
             ),
-        );
-
-    let router = if let Ok(token) = std::env::var("MCP_EXPECT_BEARER") {
-        let expected = Arc::new(format!("Bearer {token}"));
-        router.layer(middleware::from_fn_with_state(expected, require_bearer))
-    } else {
-        router
-    };
+        )
+        .with_state(auth_state.clone())
+        .layer(middleware::from_fn_with_state(auth_state, require_bearer));
 
     axum::serve(listener, router).await?;
     task::yield_now().await;
     Ok(())
 }
 
+fn refresh_state_from_env() -> Option<Arc<Mutex<RefreshTokenState>>> {
+    let current_refresh_token = std::env::var("MCP_EXPECT_REFRESH_TOKEN").ok()?;
+    let next_access_token = std::env::var("MCP_REFRESH_NEXT_ACCESS_TOKEN").ok()?;
+    let next_refresh_token = std::env::var("MCP_REFRESH_NEXT_REFRESH_TOKEN").ok()?;
+    let expires_in = std::env::var("MCP_REFRESH_EXPIRES_IN")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(3600);
+    let single_use = std::env::var("MCP_REFRESH_SINGLE_USE")
+        .ok()
+        .is_some_and(|value| value == "1");
+
+    Some(Arc::new(Mutex::new(RefreshTokenState {
+        current_refresh_token,
+        next_access_token,
+        next_refresh_token,
+        expires_in,
+        single_use,
+        used_once: false,
+    })))
+}
+
+async fn oauth_refresh_token(
+    State(state): State<AuthState>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    let Some(refresh_state) = state.refresh_state.clone() else {
+        return json_response(StatusCode::NOT_FOUND, json!({ "error": "not_found" }));
+    };
+
+    if form.get("grant_type").map(String::as_str) != Some("refresh_token") {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "unsupported_grant_type" }),
+        );
+    }
+
+    let provided_refresh_token = form.get("refresh_token").map(String::as_str);
+    let mut refresh_state = refresh_state.lock().await;
+    if refresh_state.single_use && refresh_state.used_once {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            json!({
+                "error": "invalid_grant",
+                "error_description": "refresh token was already used",
+                "code": "refresh_token_reused",
+            }),
+        );
+    }
+    if provided_refresh_token != Some(refresh_state.current_refresh_token.as_str()) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            json!({
+                "error": "invalid_grant",
+                "error_description": "refresh token was already used",
+                "code": "refresh_token_reused",
+            }),
+        );
+    }
+
+    let access_token = refresh_state.next_access_token.clone();
+    let refresh_token = refresh_state.next_refresh_token.clone();
+    let expires_in = refresh_state.expires_in;
+    refresh_state.current_refresh_token = refresh_token.clone();
+    refresh_state.used_once = true;
+    *state.current_bearer.write().await = Some(format!("Bearer {access_token}"));
+
+    json_response(
+        StatusCode::OK,
+        json!({
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "refresh_token": refresh_token,
+            "expires_in": expires_in,
+        }),
+    )
+}
+
 async fn require_bearer(
-    State(expected): State<Arc<String>>,
+    State(state): State<AuthState>,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if request.uri().path().contains("/.well-known/") {
+    let request_path = request.uri().path();
+    if request_path.contains("/.well-known/") || request_path.contains("/oauth/token") {
         return Ok(next.run(request).await);
     }
+
+    let expected = state.current_bearer.read().await.clone();
+    let Some(expected) = expected else {
+        return Ok(next.run(request).await);
+    };
+
     if request
         .headers()
         .get(AUTHORIZATION)
@@ -322,4 +432,15 @@ async fn require_bearer(
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }
+}
+
+fn json_response(status: StatusCode, body: serde_json::Value) -> Response {
+    #[expect(clippy::expect_used)]
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&body).expect("failed to serialize JSON response"),
+        ))
+        .expect("valid JSON response")
 }
