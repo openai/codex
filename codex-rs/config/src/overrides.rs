@@ -53,3 +53,40 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::merge::merge_toml_values;
+    use pretty_assertions::assert_eq;
+    use toml::toml;
+
+    #[test]
+    fn build_cli_overrides_layer_preserves_empty_table_values() {
+        let cli_overrides = vec![(
+            "mcp_servers".to_string(),
+            TomlValue::Table(toml::map::Map::new()),
+        )];
+
+        let layer = build_cli_overrides_layer(&cli_overrides);
+
+        assert_eq!(layer, TomlValue::Table(toml! { mcp_servers = {} }));
+    }
+
+    #[test]
+    fn empty_table_cli_override_clears_existing_map() {
+        let cli_overrides = vec![(
+            "mcp_servers".to_string(),
+            TomlValue::Table(toml::map::Map::new()),
+        )];
+        let cli_layer = build_cli_overrides_layer(&cli_overrides);
+        let mut merged = TomlValue::Table(toml! {
+            [mcp_servers.docs]
+            command = "uvx"
+        });
+
+        merge_toml_values(&mut merged, &cli_layer);
+
+        assert_eq!(merged, TomlValue::Table(toml! { mcp_servers = {} }));
+    }
+}
