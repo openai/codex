@@ -4303,19 +4303,57 @@ mod handlers {
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
-        let mut history = sess.clone_history().await;
-        // TODO(ccunningham): Fix rollback/backtracking baseline handling.
-        // We clear `reference_context_item` here, but should restore the
-        // post-rollback baseline from the surviving history/rollout instead.
-        // Truncating history should also invalidate/recompute `previous_model`
-        // so the next regular turn replays any dropped model-switch
-        // instructions.
-        history.drop_last_n_user_turns(num_turns);
+        let rollout_path = {
+            let guard = sess.services.rollout.lock().await;
+            guard
+                .as_ref()
+                .map(|recorder| recorder.rollout_path().to_path_buf())
+        };
+        let reconstructed_rollout = if let Some(rollout_path) = rollout_path {
+            sess.ensure_rollout_materialized().await;
+            sess.flush_rollout().await;
 
-        // Replace with the raw items. We don't want to replace with a normalized
-        // version of the history.
-        sess.replace_history(history.raw_items().to_vec(), None)
+            match crate::RolloutRecorder::load_rollout_items(&rollout_path).await {
+                Ok((rollout_items, _, _)) if !rollout_items.is_empty() => {
+                    let mut reconstruction_state =
+                        crate::codex::rollout_reconstruction::RolloutReconstructionState::new(
+                            rollout_items,
+                        );
+                    reconstruction_state.apply_backtracking(num_turns);
+                    Some(
+                        sess.reconstruct_history_from_rollout_state(
+                            turn_context.as_ref(),
+                            &reconstruction_state,
+                        )
+                        .await,
+                    )
+                }
+                Ok(_) => None,
+                Err(err) => {
+                    warn!("failed to reload rollout for thread rollback: {err}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(reconstructed_rollout) = reconstructed_rollout {
+            sess.replace_history(
+                reconstructed_rollout.history,
+                reconstructed_rollout.reference_context_item,
+            )
             .await;
+            sess.set_previous_model(reconstructed_rollout.previous_model)
+                .await;
+        } else {
+            let mut history = sess.clone_history().await;
+            history.drop_last_n_user_turns(num_turns);
+
+            // Replace with the raw items. We don't want to replace with a normalized
+            // version of the history.
+            sess.replace_history(history.raw_items().to_vec(), None)
+                .await;
+        }
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
         sess.send_event_raw_flushed(Event {
@@ -6440,6 +6478,7 @@ mod tests {
     use crate::protocol::TokenCountEvent;
     use crate::protocol::TokenUsage;
     use crate::protocol::TokenUsageInfo;
+    use crate::protocol::TurnCompleteEvent;
     use crate::protocol::UserMessageEvent;
     use crate::rollout::policy::EventPersistenceMode;
     use crate::rollout::recorder::RolloutRecorder;
@@ -7489,6 +7528,127 @@ mod tests {
 
         let history = sess.clone_history().await;
         assert_eq!(initial_context, history.raw_items());
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_reconstructs_history_and_metadata_from_rollout() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+        let config = sess.get_config().await;
+        let recorder = RolloutRecorder::new(
+            config.as_ref(),
+            RolloutRecorderParams::new(
+                ThreadId::default(),
+                None,
+                SessionSource::Exec,
+                BaseInstructions::default(),
+                Vec::new(),
+                EventPersistenceMode::Limited,
+            ),
+            None,
+            None,
+        )
+        .await
+        .expect("create rollout recorder");
+        {
+            let mut rollout = sess.services.rollout.lock().await;
+            *rollout = Some(recorder);
+        }
+
+        let mut first_context_item = tc.to_turn_context_item();
+        first_context_item.turn_id = Some("turn-1".to_string());
+        first_context_item.model = "turn-1-model".to_string();
+        let mut second_context_item = first_context_item.clone();
+        second_context_item.turn_id = Some("turn-2".to_string());
+        second_context_item.model = "turn-2-model".to_string();
+
+        let turn_1 = vec![
+            user_message("turn 1 user"),
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "turn 1 assistant".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        let turn_2 = vec![
+            user_message("turn 2 user"),
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "turn 2 assistant".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            })),
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "turn 1 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            })),
+            RolloutItem::TurnContext(first_context_item.clone()),
+            RolloutItem::ResponseItem(turn_1[0].clone()),
+            RolloutItem::ResponseItem(turn_1[1].clone()),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".to_string(),
+                last_agent_message: None,
+            })),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-2".to_string(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            })),
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "turn 2 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            })),
+            RolloutItem::TurnContext(second_context_item.clone()),
+            RolloutItem::ResponseItem(turn_2[0].clone()),
+            RolloutItem::ResponseItem(turn_2[1].clone()),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-2".to_string(),
+                last_agent_message: None,
+            })),
+        ];
+        sess.persist_rollout_items(&rollout_items).await;
+        sess.ensure_rollout_materialized().await;
+        sess.flush_rollout().await;
+
+        let mut latest_history = turn_1.clone();
+        latest_history.extend(turn_2);
+        sess.replace_history(latest_history, Some(second_context_item))
+            .await;
+        sess.set_previous_model(Some("turn-2-model".to_string()))
+            .await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 1);
+        assert_eq!(sess.clone_history().await.raw_items(), turn_1);
+        assert_eq!(
+            sess.previous_model().await,
+            Some("turn-1-model".to_string())
+        );
+        assert_eq!(
+            serde_json::to_value(sess.reference_context_item().await)
+                .expect("serialize current reference context item"),
+            serde_json::to_value(Some(first_context_item))
+                .expect("serialize expected reference context item")
+        );
     }
 
     #[tokio::test]

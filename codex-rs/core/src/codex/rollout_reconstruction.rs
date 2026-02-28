@@ -9,6 +9,30 @@ pub(super) struct RolloutReconstruction {
     pub(super) reference_context_item: Option<TurnContextItem>,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct RolloutReconstructionState {
+    // Eager bridge for the future lazy reverse source: keep the loaded rollout items plus any
+    // extra backtracking request so callers can resume replay without inventing new persisted
+    // events.
+    rollout_items: Arc<[RolloutItem]>,
+    additional_rollback_turns: u32,
+}
+
+impl RolloutReconstructionState {
+    pub(super) fn new(rollout_items: Vec<RolloutItem>) -> Self {
+        Self {
+            rollout_items: Arc::<[RolloutItem]>::from(rollout_items),
+            additional_rollback_turns: 0,
+        }
+    }
+
+    pub(super) fn apply_backtracking(&mut self, additional_user_turns: u32) {
+        self.additional_rollback_turns = self
+            .additional_rollback_turns
+            .saturating_add(additional_user_turns);
+    }
+}
+
 #[derive(Debug, Default)]
 enum TurnReferenceContextItem {
     /// No `TurnContextItem` has been seen for this replay span yet.
@@ -88,6 +112,29 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
+        self.reconstruct_history_from_rollout_with_backtracking(turn_context, rollout_items, 0)
+            .await
+    }
+
+    pub(super) async fn reconstruct_history_from_rollout_state(
+        &self,
+        turn_context: &TurnContext,
+        reconstruction_state: &RolloutReconstructionState,
+    ) -> RolloutReconstruction {
+        self.reconstruct_history_from_rollout_with_backtracking(
+            turn_context,
+            reconstruction_state.rollout_items.as_ref(),
+            reconstruction_state.additional_rollback_turns,
+        )
+        .await
+    }
+
+    async fn reconstruct_history_from_rollout_with_backtracking(
+        &self,
+        turn_context: &TurnContext,
+        rollout_items: &[RolloutItem],
+        additional_rollback_turns: u32,
+    ) -> RolloutReconstruction {
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
@@ -98,7 +145,8 @@ impl Session {
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
-        let mut pending_rollback_turns = 0usize;
+        let mut pending_rollback_turns =
+            usize::try_from(additional_rollback_turns).unwrap_or(usize::MAX);
         // Borrowed suffix of rollout items newer than the newest surviving replacement-history
         // checkpoint. If no such checkpoint exists, this remains the full rollout.
         let mut rollout_suffix = rollout_items;
@@ -203,7 +251,8 @@ impl Session {
                 | RolloutItem::SessionMeta(_) => {}
             }
 
-            if base_replacement_history.is_some()
+            if pending_rollback_turns == 0
+                && base_replacement_history.is_some()
                 && previous_model.is_some()
                 && !matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
             {
@@ -253,8 +302,9 @@ impl Session {
                         // `reference_context_item`, reinject canonical context at the end of the
                         // resumed conversation, and accept the temporary out-of-distribution
                         // prompt shape.
-                        // TODO(ccunningham): if we drop support for None replacement_history compaction items,
-                        // we can get rid of this second loop entirely and just build `history` directly in the first loop.
+                        // If we eventually drop support for None replacement_history compaction
+                        // items, we can remove this legacy branch and build `history` directly in
+                        // the first replay loop.
                         let user_messages = collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
                             Vec::new(),
@@ -271,6 +321,9 @@ impl Session {
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::SessionMeta(_) => {}
             }
+        }
+        if additional_rollback_turns > 0 {
+            history.drop_last_n_user_turns(additional_rollback_turns);
         }
 
         let reference_context_item = match reference_context_item {

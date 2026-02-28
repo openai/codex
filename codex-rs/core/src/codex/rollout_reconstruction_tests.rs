@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::codex::rollout_reconstruction::RolloutReconstructionState;
 use crate::protocol::CompactedItem;
 use crate::protocol::InitialHistory;
 use crate::protocol::ResumedHistory;
@@ -134,6 +135,120 @@ async fn record_initial_history_resumed_hydrates_previous_model_from_lifecycle_t
     assert_eq!(
         session.previous_model().await,
         Some(previous_model.to_string())
+    );
+}
+
+#[tokio::test]
+async fn rollout_reconstruction_state_backtracks_before_rollout_suffix() {
+    let (session, turn_context) = make_session_and_context().await;
+    let mut compacted_context_item = turn_context.to_turn_context_item();
+    compacted_context_item.turn_id = Some("compacted-turn".to_string());
+    compacted_context_item.model = "compacted-model".to_string();
+    let compacted_turn_id = compacted_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let mut latest_context_item = compacted_context_item.clone();
+    latest_context_item.turn_id = Some("latest-turn".to_string());
+    latest_context_item.model = "latest-model".to_string();
+    let latest_turn_id = latest_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let replacement_history = vec![user_message("compacted summary user")];
+    let latest_user = user_message("latest user");
+    let latest_assistant = assistant_message("latest assistant");
+    let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: compacted_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "compacted user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(compacted_context_item.clone()),
+        RolloutItem::Compacted(CompactedItem {
+            message: "COMPACTED_SUMMARY".to_string(),
+            replacement_history: Some(replacement_history.clone()),
+        }),
+        RolloutItem::TurnContext(compacted_context_item.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: compacted_turn_id,
+                last_agent_message: None,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: latest_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "latest user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(latest_context_item.clone()),
+        RolloutItem::ResponseItem(latest_user.clone()),
+        RolloutItem::ResponseItem(latest_assistant.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: latest_turn_id,
+                last_agent_message: None,
+            },
+        )),
+    ];
+
+    let mut reconstruction_state = RolloutReconstructionState::new(rollout_items);
+    let reconstructed = session
+        .reconstruct_history_from_rollout_state(&turn_context, &reconstruction_state)
+        .await;
+    assert_eq!(
+        reconstructed.history,
+        vec![
+            replacement_history[0].clone(),
+            latest_user.clone(),
+            latest_assistant.clone()
+        ]
+    );
+    assert_eq!(
+        reconstructed.previous_model,
+        Some("latest-model".to_string())
+    );
+    assert_eq!(
+        serde_json::to_value(reconstructed.reference_context_item)
+            .expect("serialize reconstructed reference context item"),
+        serde_json::to_value(Some(latest_context_item))
+            .expect("serialize expected reference context item")
+    );
+
+    reconstruction_state.apply_backtracking(1);
+    let reconstructed = session
+        .reconstruct_history_from_rollout_state(&turn_context, &reconstruction_state)
+        .await;
+    assert_eq!(reconstructed.history, replacement_history);
+    assert_eq!(
+        reconstructed.previous_model,
+        Some("compacted-model".to_string())
+    );
+    assert_eq!(
+        serde_json::to_value(reconstructed.reference_context_item)
+            .expect("serialize reconstructed reference context item"),
+        serde_json::to_value(Some(compacted_context_item))
+            .expect("serialize expected reference context item")
     );
 }
 
