@@ -26,6 +26,8 @@ use std::sync::RwLock;
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+pub const CODEX_INTERNAL_EMIT_CHATGPT_USER_ID_METRICS_ENV_VAR: &str =
+    "CODEX_INTERNAL_EMIT_CHATGPT_USER_ID_METRICS";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
 #[derive(Debug, Clone)]
@@ -116,6 +118,15 @@ pub fn is_first_party_originator(originator_value: &str) -> bool {
 
 pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
     originator_value == "codex_atlas" || originator_value == "codex_chatgpt_desktop"
+}
+
+pub fn is_app_originator_allowed_for_chatgpt_user_id_metrics(originator_value: &str) -> bool {
+    originator_value == "codex_vscode" || originator_value == "Codex Desktop"
+}
+
+pub fn should_emit_chatgpt_user_id_metrics(originator_value: &str) -> bool {
+    std::env::var_os(CODEX_INTERNAL_EMIT_CHATGPT_USER_ID_METRICS_ENV_VAR).is_some()
+        && is_app_originator_allowed_for_chatgpt_user_id_metrics(originator_value)
 }
 
 pub fn get_codex_user_agent() -> String {
@@ -247,6 +258,30 @@ mod tests {
         );
         assert_eq!(is_first_party_chat_originator(DEFAULT_ORIGINATOR), false);
         assert_eq!(is_first_party_chat_originator("codex_vscode"), false);
+    }
+
+    #[test]
+    fn app_originator_allowlist_for_chatgpt_user_id_metrics_is_narrow() {
+        assert_eq!(
+            is_app_originator_allowed_for_chatgpt_user_id_metrics("codex_vscode"),
+            true
+        );
+        assert_eq!(
+            is_app_originator_allowed_for_chatgpt_user_id_metrics("Codex Desktop"),
+            true
+        );
+        assert_eq!(
+            is_app_originator_allowed_for_chatgpt_user_id_metrics(DEFAULT_ORIGINATOR),
+            false
+        );
+        assert_eq!(
+            is_app_originator_allowed_for_chatgpt_user_id_metrics("Codex Something Else"),
+            false
+        );
+        assert_eq!(
+            is_app_originator_allowed_for_chatgpt_user_id_metrics("codex_chatgpt_desktop"),
+            false
+        );
     }
 
     #[tokio::test]

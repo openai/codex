@@ -1560,18 +1560,27 @@ impl App {
         let auth_mode = auth_ref
             .map(CodexAuth::auth_mode)
             .map(TelemetryAuthMode::from);
-        let otel_manager = OtelManager::new(
+        let originator = codex_core::default_client::originator().value;
+        let chatgpt_user_id = auth_ref
+            .and_then(CodexAuth::get_chatgpt_user_id)
+            .filter(|_| {
+                codex_core::default_client::should_emit_chatgpt_user_id_metrics(originator.as_str())
+            });
+        let mut otel_manager = OtelManager::new(
             ThreadId::new(),
             model.as_str(),
             model.as_str(),
             auth_ref.and_then(CodexAuth::get_account_id),
             auth_ref.and_then(CodexAuth::get_account_email),
             auth_mode,
-            codex_core::default_client::originator().value,
+            originator,
             config.otel.log_user_prompt,
             codex_core::terminal::user_agent(),
             SessionSource::Cli,
         );
+        if let Some(chatgpt_user_id) = chatgpt_user_id.as_deref() {
+            otel_manager = otel_manager.with_chatgpt_user_id(chatgpt_user_id);
+        }
         if config
             .tui_status_line
             .as_ref()
