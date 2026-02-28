@@ -1653,6 +1653,10 @@
       "description": "When true, disables burst-paste detection for typed input entirely. All characters are inserted as they are received, and no buffering or placeholder replacement will occur for fast keypress bursts.",
       "type": "boolean"
     },
+    "experimental_app_server_remote_control_url": {
+      "description": "Experimental / do not use. Provides the app-server remote control URL. The app-server uses the presence of this field to opt into remote mode.",
+      "type": "string"
+    },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },

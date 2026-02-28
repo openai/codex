@@ -86,6 +86,58 @@ sandbox_mode = "workspace-write"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_experimental_app_server_remote_control_url() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+experimental_app_server_remote_control_url = "https://example.com/remote-control"
+"#,
+    )?;
+    let codex_home_path = codex_home.path().canonicalize()?;
+    let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config,
+        origins,
+        layers,
+    } = to_response(resp)?;
+
+    assert_eq!(
+        config.experimental_app_server_remote_control_url.as_deref(),
+        Some("https://example.com/remote-control")
+    );
+    assert_eq!(
+        origins
+            .get("experimental_app_server_remote_control_url")
+            .expect("origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+
+    let layers = layers.expect("layers present");
+    assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_includes_tools() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(

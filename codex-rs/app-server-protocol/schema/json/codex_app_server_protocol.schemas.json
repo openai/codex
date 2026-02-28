@@ -8390,6 +8390,12 @@
               "null"
             ]
           },
+          "experimental_app_server_remote_control_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "forced_chatgpt_workspace_id": {
             "type": [
               "string",
