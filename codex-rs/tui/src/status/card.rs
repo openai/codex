@@ -199,6 +199,10 @@ impl StatusHistoryCell {
             .unwrap_or_else(|| "<unknown>".to_string());
         let sandbox = match config.permissions.sandbox_policy.get() {
             SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
+            SandboxPolicy::ReadOnly {
+                network_access: true,
+                ..
+            } => "read-only with network access".to_string(),
             SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
             SandboxPolicy::WorkspaceWrite {
                 network_access: true,

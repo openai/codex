@@ -1,9 +1,15 @@
+#[cfg(target_os = "macos")]
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::path::Path;
 
 #[cfg(target_os = "macos")]
+use codex_protocol::models::MacOsAutomationPermission;
+#[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsAutomationValue;
 use codex_protocol::models::MacOsPermissions;
+#[cfg(target_os = "macos")]
+use codex_protocol::models::MacOsPreferencesPermission;
 #[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsPreferencesValue;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
@@ -23,11 +29,12 @@ pub(crate) fn compile_permission_profile(
     _skill_dir: &Path,
     permissions: Option<PermissionProfile>,
 ) -> Option<Permissions> {
+    let permissions = normalize_permission_profile(permissions?);
     let PermissionProfile {
         network,
         file_system,
         macos,
-    } = permissions?;
+    } = permissions;
     let file_system = file_system.unwrap_or_default();
     let fs_read = normalize_permission_paths(
         file_system.read.as_deref().unwrap_or_default(),
@@ -52,16 +59,18 @@ pub(crate) fn compile_permission_profile(
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
-    } else if !fs_read.is_empty() {
-        SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: fs_read,
-            },
-        }
     } else {
-        // Default sandbox policy
-        SandboxPolicy::new_read_only_policy()
+        SandboxPolicy::ReadOnly {
+            access: if fs_read.is_empty() {
+                ReadOnlyAccess::FullAccess
+            } else {
+                ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: fs_read,
+                }
+            },
+            network_access: network.unwrap_or_default(),
+        }
     };
     let macos_permissions = macos.unwrap_or_default();
     let macos_seatbelt_profile_extensions =
@@ -76,6 +85,36 @@ pub(crate) fn compile_permission_profile(
         windows_sandbox_mode: None,
         macos_seatbelt_profile_extensions,
     })
+}
+
+pub(crate) fn normalize_permission_profile(permissions: PermissionProfile) -> PermissionProfile {
+    let PermissionProfile {
+        network,
+        file_system,
+        macos,
+    } = permissions;
+    let file_system = file_system.and_then(|file_system| {
+        let read = file_system
+            .read
+            .map(|paths| normalize_permission_paths(&paths, "permissions.file_system.read"))
+            .filter(|paths| !paths.is_empty());
+        let write = file_system
+            .write
+            .map(|paths| normalize_permission_paths(&paths, "permissions.file_system.write"))
+            .filter(|paths| !paths.is_empty());
+
+        if read.is_none() && write.is_none() {
+            None
+        } else {
+            Some(codex_protocol::models::FileSystemPermissions { read, write })
+        }
+    });
+
+    PermissionProfile {
+        network,
+        file_system,
+        macos,
+    }
 }
 
 fn normalize_permission_paths(values: &[AbsolutePathBuf], field: &str) -> Vec<AbsolutePathBuf> {
@@ -126,6 +165,117 @@ fn build_macos_seatbelt_profile_extensions(
         macos_calendar: permissions.calendar.unwrap_or(defaults.macos_calendar),
     };
     Some(extensions)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn merge_macos_seatbelt_profile_extensions(
+    current: Option<&MacOsSeatbeltProfileExtensions>,
+    permissions: Option<&MacOsPermissions>,
+) -> Option<MacOsSeatbeltProfileExtensions> {
+    let Some(permissions) = permissions else {
+        return current.cloned();
+    };
+
+    let defaults = current.cloned().unwrap_or_default();
+    let merged = MacOsSeatbeltProfileExtensions {
+        macos_preferences: merge_macos_preferences_permission(
+            permissions.preferences.as_ref(),
+            defaults.macos_preferences,
+        ),
+        macos_automation: merge_macos_automation_permission(
+            permissions.automations.as_ref(),
+            defaults.macos_automation,
+        ),
+        macos_accessibility: defaults.macos_accessibility
+            || permissions.accessibility.unwrap_or(false),
+        macos_calendar: defaults.macos_calendar || permissions.calendar.unwrap_or(false),
+    };
+    Some(merged)
+}
+
+#[cfg(target_os = "macos")]
+fn merge_macos_preferences_permission(
+    value: Option<&MacOsPreferencesValue>,
+    current: MacOsPreferencesPermission,
+) -> MacOsPreferencesPermission {
+    let requested = match value {
+        Some(MacOsPreferencesValue::Bool(true)) => Some(MacOsPreferencesPermission::ReadOnly),
+        Some(MacOsPreferencesValue::Bool(false)) | None => None,
+        Some(MacOsPreferencesValue::Mode(mode)) => {
+            let mode = mode.trim();
+            if mode.eq_ignore_ascii_case("readonly") || mode.eq_ignore_ascii_case("read-only") {
+                Some(MacOsPreferencesPermission::ReadOnly)
+            } else if mode.eq_ignore_ascii_case("readwrite")
+                || mode.eq_ignore_ascii_case("read-write")
+            {
+                Some(MacOsPreferencesPermission::ReadWrite)
+            } else {
+                warn!(
+                    "ignoring permissions.macos.preferences: expected true/false, readonly, or readwrite"
+                );
+                None
+            }
+        }
+    };
+
+    match (current, requested) {
+        (MacOsPreferencesPermission::ReadWrite, _) => MacOsPreferencesPermission::ReadWrite,
+        (MacOsPreferencesPermission::ReadOnly, Some(MacOsPreferencesPermission::ReadWrite)) => {
+            MacOsPreferencesPermission::ReadWrite
+        }
+        (MacOsPreferencesPermission::None, Some(permission)) => permission,
+        (existing, Some(_)) | (existing, None) => existing,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn merge_macos_automation_permission(
+    value: Option<&MacOsAutomationValue>,
+    current: MacOsAutomationPermission,
+) -> MacOsAutomationPermission {
+    let requested = match value {
+        Some(MacOsAutomationValue::Bool(true)) => Some(MacOsAutomationPermission::All),
+        Some(MacOsAutomationValue::Bool(false)) | None => None,
+        Some(MacOsAutomationValue::BundleIds(bundle_ids)) => {
+            let bundle_ids = bundle_ids
+                .iter()
+                .map(|bundle_id| bundle_id.trim())
+                .filter(|bundle_id| !bundle_id.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<String>>();
+            if bundle_ids.is_empty() {
+                None
+            } else {
+                Some(MacOsAutomationPermission::BundleIds(bundle_ids))
+            }
+        }
+    };
+
+    match (current, requested) {
+        (MacOsAutomationPermission::All, _) | (_, Some(MacOsAutomationPermission::All)) => {
+            MacOsAutomationPermission::All
+        }
+        (MacOsAutomationPermission::None, Some(permission)) => permission,
+        (
+            MacOsAutomationPermission::BundleIds(existing),
+            Some(MacOsAutomationPermission::BundleIds(requested)),
+        ) => {
+            let merged = existing
+                .into_iter()
+                .chain(requested)
+                .map(|bundle_id| bundle_id.trim().to_string())
+                .filter(|bundle_id| !bundle_id.is_empty())
+                .collect::<BTreeSet<String>>()
+                .into_iter()
+                .collect::<Vec<String>>();
+            if merged.is_empty() {
+                MacOsAutomationPermission::None
+            } else {
+                MacOsAutomationPermission::BundleIds(merged)
+            }
+        }
+        (existing, Some(_)) | (existing, None) => existing,
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -189,6 +339,14 @@ fn build_macos_seatbelt_profile_extensions(
     _: &MacOsPermissions,
 ) -> Option<MacOsSeatbeltProfileExtensions> {
     None
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn merge_macos_seatbelt_profile_extensions(
+    current: Option<&MacOsSeatbeltProfileExtensions>,
+    _: Option<&MacOsPermissions>,
+) -> Option<MacOsSeatbeltProfileExtensions> {
+    current.cloned()
 }
 
 #[cfg(test)]
@@ -308,7 +466,10 @@ mod tests {
             profile,
             Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::ReadOnly {
+                    access: ReadOnlyAccess::FullAccess,
+                    network_access: true,
+                }),
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -357,6 +518,7 @@ mod tests {
                             .expect("absolute read path")
                         ],
                     },
+                    network_access: true,
                 }),
                 network: None,
                 allow_login_shell: true,

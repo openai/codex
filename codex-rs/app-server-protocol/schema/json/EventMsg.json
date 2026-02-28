@@ -5261,6 +5261,10 @@
               ],
               "description": "Read access granted while running under this policy."
             },
+            "network_access": {
+              "description": "When set to `true`, outbound network access is allowed. `false` by default.",
+              "type": "boolean"
+            },
             "type": {
               "enum": [
                 "read-only"

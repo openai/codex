@@ -572,7 +572,7 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 Notes:
 
 - Empty `command` arrays are rejected.
-- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`).
+- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly` with optional `networkAccess`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`).
 - When omitted, `timeoutMs` falls back to the server default.
 
 ## Events
