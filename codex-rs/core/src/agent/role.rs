@@ -227,11 +227,13 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::config_loader::ConfigLayerStackOrdering;
+    use crate::plugins::PluginsManager;
     use crate::skills::SkillsManager;
     use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     async fn test_config_with_cli_overrides(
@@ -508,7 +510,8 @@ enabled = false
             .await
             .expect("custom role should apply");
 
-        let skills_manager = SkillsManager::new(home.path().to_path_buf());
+        let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
+        let skills_manager = SkillsManager::new(home.path().to_path_buf(), plugins_manager);
         let outcome = skills_manager.skills_for_config(&config);
         let skill = outcome
             .skills
