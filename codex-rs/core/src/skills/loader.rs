@@ -13,6 +13,7 @@ use crate::skills::model::SkillMetadata;
 use crate::skills::model::SkillPolicy;
 use crate::skills::model::SkillToolDependency;
 use crate::skills::permissions::compile_permission_profile;
+use crate::skills::permissions::normalize_permission_profile;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::models::PermissionProfile;
@@ -55,7 +56,23 @@ struct SkillMetadataFile {
     #[serde(default)]
     policy: Option<Policy>,
     #[serde(default)]
-    permissions: Option<PermissionProfile>,
+    permissions: Option<SkillPermissionsConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SkillPermissionsMode {
+    #[default]
+    Merge,
+    Exact,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SkillPermissionsConfig {
+    #[serde(default)]
+    mode: SkillPermissionsMode,
+    #[serde(flatten)]
+    profile: PermissionProfile,
 }
 
 #[derive(Default)]
@@ -595,14 +612,24 @@ fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
         policy,
         permissions,
     } = parsed;
-    let permission_profile = permissions.clone().filter(|profile| !profile.is_empty());
+    let permission_profile = permissions
+        .as_ref()
+        .map(|permissions| normalize_permission_profile(permissions.profile.clone()))
+        .filter(|profile| !profile.is_empty());
+    let exact_permissions = permissions.and_then(|permissions| {
+        if matches!(permissions.mode, SkillPermissionsMode::Exact) {
+            compile_permission_profile(skill_dir, Some(permissions.profile))
+        } else {
+            None
+        }
+    });
 
     LoadedSkillMetadata {
         interface: resolve_interface(interface, skill_dir),
         dependencies: resolve_dependencies(dependencies),
         policy: resolve_policy(policy),
         permission_profile,
-        permissions: compile_permission_profile(skill_dir, permissions),
+        permissions: exact_permissions,
     }
 }
 
@@ -1392,6 +1419,66 @@ permissions:
                 macos: None,
             })
         );
+        assert_eq!(outcome.skills[0].permissions, None);
+    }
+
+    #[tokio::test]
+    async fn empty_skill_permissions_do_not_create_profile() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "permissions-empty", "from yaml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+
+        write_skill_metadata_at(
+            skill_dir,
+            r#"
+permissions: {}
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills_for_test(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].permission_profile, None);
+        assert_eq!(outcome.skills[0].permissions, None);
+    }
+
+    #[tokio::test]
+    async fn loads_exact_skill_permissions_from_yaml() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "permissions-skill-exact", "from yaml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+        fs::create_dir_all(skill_dir.join("data")).expect("create read path");
+        fs::create_dir_all(skill_dir.join("output")).expect("create write path");
+
+        write_skill_metadata_at(
+            skill_dir,
+            r#"
+permissions:
+  mode: exact
+  network: true
+  file_system:
+    read:
+      - "./data"
+    write:
+      - "./output"
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills_for_test(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
         #[cfg(target_os = "macos")]
         let macos_seatbelt_profile_extensions =
             Some(crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions::default());
@@ -1433,15 +1520,16 @@ permissions:
     }
 
     #[tokio::test]
-    async fn empty_skill_permissions_do_not_create_profile() {
+    async fn empty_exact_skill_permissions_compile_default_sandbox() {
         let codex_home = tempfile::tempdir().expect("tempdir");
-        let skill_path = write_skill(&codex_home, "demo", "permissions-empty", "from yaml");
+        let skill_path = write_skill(&codex_home, "demo", "permissions-empty-exact", "from yaml");
         let skill_dir = skill_path.parent().expect("skill dir");
 
         write_skill_metadata_at(
             skill_dir,
             r#"
-permissions: {}
+permissions:
+  mode: exact
 "#,
         );
 
@@ -1495,6 +1583,7 @@ permissions: {}
             skill_dir,
             r#"
 permissions:
+  mode: exact
   macos:
     preferences: "readwrite"
     automations:
@@ -1545,6 +1634,7 @@ permissions:
             skill_dir,
             r#"
 permissions:
+  mode: exact
   macos:
     preferences: "readwrite"
     automations:
