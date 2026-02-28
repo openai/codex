@@ -177,6 +177,7 @@ mod tests {
                 model_provider: None,
                 base_instructions: None,
                 dynamic_tools: None,
+                memory_mode: None,
             },
             git: None,
         };

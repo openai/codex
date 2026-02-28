@@ -58,7 +58,29 @@ pub(crate) async fn record_completed_response_item(
 ) {
     sess.record_conversation_items(turn_context, std::slice::from_ref(item))
         .await;
+    maybe_mark_thread_memory_mode_polluted_from_web_search(sess, turn_context, item).await;
     record_stage1_output_usage_for_completed_item(turn_context, item).await;
+}
+
+async fn maybe_mark_thread_memory_mode_polluted_from_web_search(
+    sess: &Session,
+    turn_context: &TurnContext,
+    item: &ResponseItem,
+) {
+    if !turn_context
+        .config
+        .memories
+        .no_memories_if_mcp_or_web_search
+        || !matches!(item, ResponseItem::WebSearchCall { .. })
+    {
+        return;
+    }
+    state_db::mark_thread_memory_mode_polluted(
+        sess.services.state_db.as_deref(),
+        sess.conversation_id,
+        "record_completed_response_item",
+    )
+    .await;
 }
 
 async fn record_stage1_output_usage_for_completed_item(

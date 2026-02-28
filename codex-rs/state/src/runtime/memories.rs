@@ -277,7 +277,8 @@ SELECT
 FROM stage1_outputs AS so
 LEFT JOIN threads AS t
     ON t.id = so.thread_id
-WHERE length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0
+WHERE t.memory_mode = 'enabled'
+  AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
 LIMIT ?
             "#,
@@ -304,11 +305,13 @@ LIMIT ?
     ///   `thread_id DESC`
     /// - previously selected rows are identified by `selected_for_phase2 = 1`
     /// - `previous_selected` contains the current persisted rows that belonged
-    ///   to the last successful phase-2 baseline
+    ///   to the last successful phase-2 baseline, even if those threads are no
+    ///   longer memory-eligible
     /// - `retained_thread_ids` records which current rows still match the exact
     ///   snapshot selected in the last successful phase-2 run
     /// - removed rows are previously selected rows that are still present in
-    ///   `stage1_outputs` but fall outside the current top-`n` selection
+    ///   `stage1_outputs` but are no longer in the current selection, including
+    ///   threads that are no longer memory-eligible
     pub async fn get_phase2_input_selection(
         &self,
         n: usize,
@@ -336,7 +339,8 @@ SELECT
 FROM stage1_outputs AS so
 LEFT JOIN threads AS t
     ON t.id = so.thread_id
-WHERE (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
+WHERE t.memory_mode = 'enabled'
+  AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
   AND (
         (so.last_usage IS NOT NULL AND so.last_usage >= ?)
         OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
@@ -419,6 +423,51 @@ ORDER BY so.source_updated_at DESC, so.thread_id DESC
             retained_thread_ids,
             removed,
         })
+    }
+
+    /// Marks a thread as polluted and enqueues phase-2 forgetting when the
+    /// thread participated in the last successful phase-2 baseline.
+    pub async fn mark_thread_memory_mode_polluted(
+        &self,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let thread_id = thread_id.to_string();
+        let mut tx = self.pool.begin().await?;
+        let rows_affected = sqlx::query(
+            r#"
+UPDATE threads
+SET memory_mode = 'polluted'
+WHERE id = ? AND memory_mode != 'polluted'
+            "#,
+        )
+        .bind(thread_id.as_str())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            tx.commit().await?;
+            return Ok(false);
+        }
+
+        let selected_for_phase2 = sqlx::query_scalar::<_, i64>(
+            r#"
+SELECT selected_for_phase2
+FROM stage1_outputs
+WHERE thread_id = ?
+            "#,
+        )
+        .bind(thread_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or(0);
+        if selected_for_phase2 != 0 {
+            enqueue_global_consolidation_with_executor(&mut *tx, now).await?;
+        }
+
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// Attempts to claim a stage-1 job for a thread at `source_updated_at`.
@@ -2570,6 +2619,71 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
+    async fn list_stage1_outputs_for_global_skips_polluted_threads() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id_enabled =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_polluted =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        for (thread_id, workspace) in [
+            (thread_id_enabled, "workspace-enabled"),
+            (thread_id_polluted, "workspace-polluted"),
+        ] {
+            runtime
+                .upsert_thread(&test_thread_metadata(
+                    &codex_home,
+                    thread_id,
+                    codex_home.join(workspace),
+                ))
+                .await
+                .expect("upsert thread");
+
+            let claim = runtime
+                .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+                .await
+                .expect("claim stage1");
+            let ownership_token = match claim {
+                Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+                other => panic!("unexpected stage1 claim outcome: {other:?}"),
+            };
+            assert!(
+                runtime
+                    .mark_stage1_job_succeeded(
+                        thread_id,
+                        ownership_token.as_str(),
+                        100,
+                        "raw memory",
+                        "summary",
+                        None,
+                    )
+                    .await
+                    .expect("mark stage1 succeeded"),
+                "stage1 success should persist output"
+            );
+        }
+
+        runtime
+            .set_thread_memory_mode(thread_id_polluted, "polluted")
+            .await
+            .expect("mark thread polluted");
+
+        let outputs = runtime
+            .list_stage1_outputs_for_global(10)
+            .await
+            .expect("list stage1 outputs for global");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].thread_id, thread_id_enabled);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn get_phase2_input_selection_reports_added_retained_and_removed_rows() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
@@ -2677,6 +2791,197 @@ VALUES (?, ?, ?, ?, ?)
             selection.removed[0].rollout_slug.as_deref(),
             Some("rollout-a")
         );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn get_phase2_input_selection_marks_polluted_previous_selection_as_removed() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id_enabled =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_polluted =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        for (thread_id, updated_at) in [(thread_id_enabled, 100), (thread_id_polluted, 101)] {
+            runtime
+                .upsert_thread(&test_thread_metadata(
+                    &codex_home,
+                    thread_id,
+                    codex_home.join(thread_id.to_string()),
+                ))
+                .await
+                .expect("upsert thread");
+
+            let claim = runtime
+                .try_claim_stage1_job(thread_id, owner, updated_at, 3600, 64)
+                .await
+                .expect("claim stage1");
+            let ownership_token = match claim {
+                Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+                other => panic!("unexpected stage1 claim outcome: {other:?}"),
+            };
+            assert!(
+                runtime
+                    .mark_stage1_job_succeeded(
+                        thread_id,
+                        ownership_token.as_str(),
+                        updated_at,
+                        &format!("raw-{updated_at}"),
+                        &format!("summary-{updated_at}"),
+                        None,
+                    )
+                    .await
+                    .expect("mark stage1 succeeded"),
+                "stage1 success should persist output"
+            );
+        }
+
+        let claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2");
+        let (ownership_token, input_watermark) = match claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim outcome: {other:?}"),
+        };
+        let selected_outputs = runtime
+            .list_stage1_outputs_for_global(10)
+            .await
+            .expect("list stage1 outputs for global");
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(
+                    ownership_token.as_str(),
+                    input_watermark,
+                    &selected_outputs,
+                )
+                .await
+                .expect("mark phase2 success"),
+            "phase2 success should persist selected rows"
+        );
+
+        runtime
+            .set_thread_memory_mode(thread_id_polluted, "polluted")
+            .await
+            .expect("mark thread polluted");
+
+        let selection = runtime
+            .get_phase2_input_selection(2, 36_500)
+            .await
+            .expect("load phase2 input selection");
+
+        assert_eq!(selection.selected.len(), 1);
+        assert_eq!(selection.selected[0].thread_id, thread_id_enabled);
+        assert_eq!(selection.previous_selected.len(), 2);
+        assert!(
+            selection
+                .previous_selected
+                .iter()
+                .any(|item| item.thread_id == thread_id_enabled)
+        );
+        assert!(
+            selection
+                .previous_selected
+                .iter()
+                .any(|item| item.thread_id == thread_id_polluted)
+        );
+        assert_eq!(selection.retained_thread_ids, vec![thread_id_enabled]);
+        assert_eq!(selection.removed.len(), 1);
+        assert_eq!(selection.removed[0].thread_id, thread_id_polluted);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn mark_thread_memory_mode_polluted_enqueues_phase2_for_selected_threads() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join("workspace"),
+            ))
+            .await
+            .expect("upsert thread");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .await
+            .expect("claim stage1");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    100,
+                    "raw",
+                    "summary",
+                    None,
+                )
+                .await
+                .expect("mark stage1 succeeded"),
+            "stage1 success should persist output"
+        );
+
+        let phase2_claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2");
+        let (phase2_token, input_watermark) = match phase2_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim outcome: {other:?}"),
+        };
+        let selected_outputs = runtime
+            .list_stage1_outputs_for_global(10)
+            .await
+            .expect("list stage1 outputs");
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(
+                    phase2_token.as_str(),
+                    input_watermark,
+                    &selected_outputs,
+                )
+                .await
+                .expect("mark phase2 success"),
+            "phase2 success should persist selected rows"
+        );
+
+        assert!(
+            runtime
+                .mark_thread_memory_mode_polluted(thread_id)
+                .await
+                .expect("mark thread polluted"),
+            "thread should transition to polluted"
+        );
+
+        let next_claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2 after pollution");
+        assert!(matches!(next_claim, Phase2JobClaimOutcome::Claimed { .. }));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

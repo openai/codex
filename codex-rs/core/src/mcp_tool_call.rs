@@ -15,6 +15,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
+use crate::state_db;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -121,6 +122,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 });
                 notify_mcp_tool_call_event(sess.as_ref(), turn_context, tool_call_begin_event)
                     .await;
+                maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context).await;
 
                 let start = Instant::now();
                 let result = sess
@@ -189,6 +191,7 @@ pub(crate) async fn handle_mcp_tool_call(
         invocation: invocation.clone(),
     });
     notify_mcp_tool_call_event(sess.as_ref(), turn_context, tool_call_begin_event).await;
+    maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context).await;
 
     let start = Instant::now();
     // Perform the tool call.
@@ -222,6 +225,22 @@ pub(crate) async fn handle_mcp_tool_call(
         .counter("codex.mcp.call", 1, &[("status", status)]);
 
     ResponseInputItem::McpToolCallOutput { call_id, result }
+}
+
+async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
+    if !turn_context
+        .config
+        .memories
+        .no_memories_if_mcp_or_web_search
+    {
+        return;
+    }
+    state_db::mark_thread_memory_mode_polluted(
+        sess.services.state_db.as_deref(),
+        sess.conversation_id,
+        "mcp_tool_call",
+    )
+    .await;
 }
 
 fn sanitize_mcp_tool_result_for_model(

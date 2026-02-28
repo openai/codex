@@ -242,6 +242,7 @@ mod tests {
                     model_provider: Some("openai".to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
+                    memory_mode: None,
                 },
                 git: None,
             }),

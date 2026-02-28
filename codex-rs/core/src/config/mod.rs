@@ -2500,6 +2500,7 @@ persistence = "none"
 
         let memories = r#"
 [memories]
+no_memories_if_mcp_or_web_search = true
 generate_memories = false
 use_memories = false
 max_raw_memories_for_global = 512
@@ -2514,6 +2515,7 @@ phase_2_model = "gpt-5"
             toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
         assert_eq!(
             Some(MemoriesToml {
+                no_memories_if_mcp_or_web_search: Some(true),
                 generate_memories: Some(false),
                 use_memories: Some(false),
                 max_raw_memories_for_global: Some(512),
@@ -2536,6 +2538,7 @@ phase_2_model = "gpt-5"
         assert_eq!(
             config.memories,
             MemoriesConfig {
+                no_memories_if_mcp_or_web_search: true,
                 generate_memories: false,
                 use_memories: false,
                 max_raw_memories_for_global: 512,
