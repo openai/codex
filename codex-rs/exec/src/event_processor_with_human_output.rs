@@ -878,6 +878,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         if should_print_final_message_to_stdout(
             self.final_message.as_deref(),
             std::io::stdout().is_terminal(),
+            std::io::stderr().is_terminal(),
         ) && let Some(message) = &self.final_message
         {
             if message.ends_with('\n') {
@@ -1033,8 +1034,9 @@ impl EventProcessorWithHumanOutput {
 fn should_print_final_message_to_stdout(
     final_message: Option<&str>,
     stdout_is_terminal: bool,
+    stderr_is_terminal: bool,
 ) -> bool {
-    final_message.is_some() && !stdout_is_terminal
+    final_message.is_some() && !(stdout_is_terminal && stderr_is_terminal)
 }
 
 struct AgentJobProgressStats {
@@ -1211,9 +1213,9 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn suppresses_final_stdout_message_when_stdout_is_terminal() {
+    fn suppresses_final_stdout_message_when_both_streams_are_terminals() {
         assert_eq!(
-            should_print_final_message_to_stdout(Some("hello"), true),
+            should_print_final_message_to_stdout(Some("hello"), true, true),
             false
         );
     }
@@ -1221,13 +1223,24 @@ mod tests {
     #[test]
     fn prints_final_stdout_message_when_stdout_is_not_terminal() {
         assert_eq!(
-            should_print_final_message_to_stdout(Some("hello"), false),
+            should_print_final_message_to_stdout(Some("hello"), false, true),
+            true
+        );
+    }
+
+    #[test]
+    fn prints_final_stdout_message_when_stderr_is_not_terminal() {
+        assert_eq!(
+            should_print_final_message_to_stdout(Some("hello"), true, false),
             true
         );
     }
 
     #[test]
     fn does_not_print_when_message_is_missing() {
-        assert_eq!(should_print_final_message_to_stdout(None, false), false);
+        assert_eq!(
+            should_print_final_message_to_stdout(None, false, false),
+            false
+        );
     }
 }
