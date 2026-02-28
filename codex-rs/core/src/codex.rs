@@ -603,7 +603,7 @@ impl TurnSkillsContext {
 #[derive(Debug)]
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
-    pub(crate) is_live: bool,
+    pub(crate) realtime_active: bool,
     pub(crate) config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
@@ -691,7 +691,7 @@ impl TurnContext {
 
         Self {
             sub_id: self.sub_id.clone(),
-            is_live: self.is_live,
+            realtime_active: self.realtime_active,
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
@@ -755,7 +755,7 @@ impl TurnContext {
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
-            is_live: Some(self.is_live),
+            realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort,
             summary: self.reasoning_summary,
             user_instructions: self.user_instructions.clone(),
@@ -1066,7 +1066,7 @@ impl Session {
         let (current_date, timezone) = local_time_context();
         TurnContext {
             sub_id,
-            is_live: false,
+            realtime_active: false,
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
             model_info: model_info.clone(),
@@ -2074,7 +2074,7 @@ impl Session {
             Arc::clone(&self.js_repl),
             skills_outcome,
         );
-        turn_context.is_live = self.conversation.running_state().await.is_some();
+        turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -4567,7 +4567,7 @@ async fn spawn_review_thread(
 
     let review_turn_context = TurnContext {
         sub_id: review_turn_id,
-        is_live: parent_turn_context.is_live,
+        realtime_active: parent_turn_context.realtime_active,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
@@ -7188,7 +7188,7 @@ mod tests {
             model: previous_model.to_string(),
             personality: turn_context.personality,
             collaboration_mode: Some(turn_context.collaboration_mode.clone()),
-            is_live: Some(turn_context.is_live),
+            realtime_active: Some(turn_context.realtime_active),
             effort: turn_context.reasoning_effort,
             summary: turn_context.reasoning_summary,
             user_instructions: None,
@@ -7228,7 +7228,7 @@ mod tests {
             model: previous_model.to_string(),
             personality: turn_context.personality,
             collaboration_mode: Some(turn_context.collaboration_mode.clone()),
-            is_live: Some(turn_context.is_live),
+            realtime_active: Some(turn_context.realtime_active),
             effort: turn_context.reasoning_effort,
             summary: turn_context.reasoning_summary,
             user_instructions: None,
@@ -7600,7 +7600,7 @@ mod tests {
             model: previous_model.to_string(),
             personality: turn_context.personality,
             collaboration_mode: Some(turn_context.collaboration_mode.clone()),
-            is_live: Some(turn_context.is_live),
+            realtime_active: Some(turn_context.realtime_active),
             effort: turn_context.reasoning_effort,
             summary: turn_context.reasoning_summary,
             user_instructions: None,
@@ -8839,7 +8839,7 @@ mod tests {
                 &session.services.models_manager,
             )
             .await;
-        current_context.is_live = true;
+        current_context.realtime_active = true;
 
         let update_items = session.build_settings_update_items(
             Some(&previous_context.to_turn_context_item()),
@@ -8859,14 +8859,14 @@ mod tests {
     #[tokio::test]
     async fn build_settings_update_items_emits_realtime_end_when_session_stops_being_live() {
         let (session, mut previous_context) = make_session_and_context().await;
-        previous_context.is_live = true;
+        previous_context.realtime_active = true;
         let mut current_context = previous_context
             .with_model(
                 previous_context.model_info.slug.clone(),
                 &session.services.models_manager,
             )
             .await;
-        current_context.is_live = false;
+        current_context.realtime_active = false;
 
         let update_items = session.build_settings_update_items(
             Some(&previous_context.to_turn_context_item()),
@@ -8886,7 +8886,7 @@ mod tests {
     #[tokio::test]
     async fn build_initial_context_uses_previous_realtime_state() {
         let (session, mut turn_context) = make_session_and_context().await;
-        turn_context.is_live = true;
+        turn_context.realtime_active = true;
 
         let initial_context = session
             .build_initial_context(&turn_context, None, None)

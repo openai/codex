@@ -49,7 +49,7 @@ struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
     text_tx: Sender<String>,
     task: JoinHandle<()>,
-    is_live: Arc<AtomicBool>,
+    realtime_active: Arc<AtomicBool>,
 }
 
 #[allow(dead_code)]
@@ -64,7 +64,7 @@ impl RealtimeConversationManager {
         let state = self.state.lock().await;
         state
             .as_ref()
-            .and_then(|state| state.is_live.load(Ordering::Relaxed).then_some(()))
+            .and_then(|state| state.realtime_active.load(Ordering::Relaxed).then_some(()))
     }
 
     pub(crate) async fn start(
@@ -79,7 +79,7 @@ impl RealtimeConversationManager {
             guard.take()
         };
         if let Some(state) = previous_state {
-            state.is_live.store(false, Ordering::Relaxed);
+            state.realtime_active.store(false, Ordering::Relaxed);
             state.task.abort();
             let _ = state.task.await;
         }
@@ -103,7 +103,7 @@ impl RealtimeConversationManager {
         let (events_tx, events_rx) =
             async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
-        let is_live = Arc::new(AtomicBool::new(true));
+        let realtime_active = Arc::new(AtomicBool::new(true));
         let task = spawn_realtime_input_task(writer, events, text_rx, audio_rx, events_tx);
 
         let mut guard = self.state.lock().await;
@@ -111,9 +111,9 @@ impl RealtimeConversationManager {
             audio_tx,
             text_tx,
             task,
-            is_live: Arc::clone(&is_live),
+            realtime_active: Arc::clone(&realtime_active),
         });
-        Ok((events_rx, is_live))
+        Ok((events_rx, realtime_active))
     }
 
     pub(crate) async fn audio_in(&self, frame: RealtimeAudioFrame) -> CodexResult<()> {
@@ -166,7 +166,7 @@ impl RealtimeConversationManager {
         };
 
         if let Some(state) = state {
-            state.is_live.store(false, Ordering::Relaxed);
+            state.realtime_active.store(false, Ordering::Relaxed);
             state.task.abort();
             let _ = state.task.await;
         }
@@ -195,7 +195,7 @@ pub(crate) async fn handle_start(
         .session_id
         .or_else(|| Some(sess.conversation_id.to_string()));
     info!("starting realtime conversation");
-    let (events_rx, is_live) = match sess
+    let (events_rx, realtime_active) = match sess
         .conversation
         .start(api_provider, None, prompt, requested_session_id.clone())
         .await
@@ -245,7 +245,7 @@ pub(crate) async fn handle_start(
                 )))
                 .await;
         }
-        if is_live.swap(false, Ordering::Relaxed) {
+        if realtime_active.swap(false, Ordering::Relaxed) {
             info!("realtime conversation transport closed");
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationClosed(

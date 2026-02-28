@@ -68,7 +68,10 @@ pub(crate) fn build_realtime_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
 ) -> Option<DeveloperInstructions> {
-    match (previous.and_then(|item| item.is_live), next.is_live) {
+    match (
+        previous.and_then(|item| item.realtime_active),
+        next.realtime_active,
+    ) {
         (Some(true), false) => Some(DeveloperInstructions::realtime_end_message("inactive")),
         (Some(false), true) | (None, true) => Some(DeveloperInstructions::realtime_start_message()),
         (Some(true), true) | (Some(false), false) | (None, false) => None,
