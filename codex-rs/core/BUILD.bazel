@@ -6,6 +6,7 @@ filegroup(
         "models.json",
         "tests/cli_responses_fixture.sse",
     ],
+    visibility = ["//visibility:public"],
 )
 
 codex_rust_crate(
