@@ -126,6 +126,8 @@ WHERE thread_id = ?
     /// - excludes the current thread id
     /// - keeps only threads in the age window:
     ///   `updated_at >= now - max_age_days` and `updated_at <= now - min_rollout_idle_hours`
+    /// - when `scratchpad_cwd` is provided, keeps scratchpad threads only when
+    ///   `cwd = scratchpad_cwd`
     /// - keeps only threads whose memory is stale:
     ///   `COALESCE(stage1_outputs.source_updated_at, -1) < threads.updated_at` and
     ///   `COALESCE(jobs.last_success_watermark, -1) < threads.updated_at`
@@ -145,6 +147,7 @@ WHERE thread_id = ?
             max_age_days,
             min_rollout_idle_hours,
             allowed_sources,
+            scratchpad_cwd,
             lease_seconds,
         } = params;
         if scan_limit == 0 || max_claimed == 0 {
@@ -200,6 +203,13 @@ LEFT JOIN jobs
             SortKey::UpdatedAt,
             None,
         );
+        if let Some(scratchpad_cwd) = scratchpad_cwd {
+            builder.push(" AND (source != ");
+            builder.push_bind("scratchpad");
+            builder.push(" OR cwd = ");
+            builder.push_bind(scratchpad_cwd);
+            builder.push(")");
+        }
         builder.push(" AND threads.memory_mode = 'enabled'");
         builder
             .push(" AND id != ")
@@ -1509,6 +1519,7 @@ mod tests {
                     max_age_days: 30,
                     min_rollout_idle_hours: 12,
                     allowed_sources: allowed_sources.as_slice(),
+                    scratchpad_cwd: None,
                     lease_seconds: 3600,
                 },
             )
@@ -1609,6 +1620,7 @@ mod tests {
                     max_age_days: 30,
                     min_rollout_idle_hours: 12,
                     allowed_sources: allowed_sources.as_slice(),
+                    scratchpad_cwd: None,
                     lease_seconds: 3600,
                 },
             )
@@ -1679,6 +1691,7 @@ mod tests {
                     max_age_days: 30,
                     min_rollout_idle_hours: 12,
                     allowed_sources: allowed_sources.as_slice(),
+                    scratchpad_cwd: None,
                     lease_seconds: 3600,
                 },
             )
@@ -1687,6 +1700,104 @@ mod tests {
 
         assert_eq!(claims.len(), 1);
         assert_eq!(claims[0].thread.id, enabled_thread_id);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn claim_stage1_jobs_filters_scratchpad_rows_to_requested_repo_root() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let now = Utc::now();
+        let eligible_at = now - Duration::hours(13);
+
+        let current_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
+        let local_scratchpad_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("local scratchpad thread id");
+        let foreign_scratchpad_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())
+            .expect("foreign scratchpad thread id");
+        let cli_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("cli thread id");
+
+        let local_repo_root = codex_home.join("repo-local");
+        let foreign_repo_root = codex_home.join("repo-foreign");
+
+        let mut current =
+            test_thread_metadata(&codex_home, current_thread_id, codex_home.join("current"));
+        current.created_at = now;
+        current.updated_at = now;
+        runtime
+            .upsert_thread(&current)
+            .await
+            .expect("upsert current thread");
+
+        let mut local_scratchpad = test_thread_metadata(
+            &codex_home,
+            local_scratchpad_thread_id,
+            local_repo_root.clone(),
+        );
+        local_scratchpad.created_at = eligible_at;
+        local_scratchpad.updated_at = eligible_at;
+        local_scratchpad.source = "scratchpad".to_string();
+        local_scratchpad.rollout_path = local_repo_root.join("scratch/codex/pads/local.md");
+        runtime
+            .upsert_thread(&local_scratchpad)
+            .await
+            .expect("upsert local scratchpad thread");
+
+        let mut foreign_scratchpad = test_thread_metadata(
+            &codex_home,
+            foreign_scratchpad_thread_id,
+            foreign_repo_root.clone(),
+        );
+        foreign_scratchpad.created_at = eligible_at + Duration::seconds(1);
+        foreign_scratchpad.updated_at = eligible_at + Duration::seconds(1);
+        foreign_scratchpad.source = "scratchpad".to_string();
+        foreign_scratchpad.rollout_path = foreign_repo_root.join("scratch/codex/pads/foreign.md");
+        runtime
+            .upsert_thread(&foreign_scratchpad)
+            .await
+            .expect("upsert foreign scratchpad thread");
+
+        let mut cli_thread =
+            test_thread_metadata(&codex_home, cli_thread_id, codex_home.join("cli"));
+        cli_thread.created_at = eligible_at - Duration::seconds(1);
+        cli_thread.updated_at = eligible_at - Duration::seconds(1);
+        runtime
+            .upsert_thread(&cli_thread)
+            .await
+            .expect("upsert cli thread");
+
+        let allowed_sources = vec!["scratchpad".to_string(), "cli".to_string()];
+        let local_repo_root = local_repo_root.to_string_lossy().to_string();
+        let claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 10,
+                    max_claimed: 10,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    scratchpad_cwd: Some(local_repo_root.as_str()),
+                    lease_seconds: 3600,
+                },
+            )
+            .await
+            .expect("claim stage1 jobs");
+
+        let claimed_ids = claims
+            .iter()
+            .map(|claim| claim.thread.id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(claims.len(), 2);
+        assert!(claimed_ids.contains(&local_scratchpad_thread_id.to_string()));
+        assert!(claimed_ids.contains(&cli_thread_id.to_string()));
+        assert!(!claimed_ids.contains(&foreign_scratchpad_thread_id.to_string()));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1883,6 +1994,7 @@ INSERT INTO jobs (
                     max_age_days: 30,
                     min_rollout_idle_hours: 12,
                     allowed_sources: allowed_sources.as_slice(),
+                    scratchpad_cwd: None,
                     lease_seconds: 3600,
                 },
             )
@@ -1917,6 +2029,7 @@ WHERE kind = 'memory_stage1'
                     max_age_days: 30,
                     min_rollout_idle_hours: 12,
                     allowed_sources: allowed_sources.as_slice(),
+                    scratchpad_cwd: None,
                     lease_seconds: 3600,
                 },
             )
@@ -1971,6 +2084,7 @@ WHERE kind = 'memory_stage1'
                     max_age_days: 30,
                     min_rollout_idle_hours: 12,
                     allowed_sources: allowed_sources.as_slice(),
+                    scratchpad_cwd: None,
                     lease_seconds: 3_600,
                 },
             )
@@ -2004,6 +2118,7 @@ WHERE kind = 'memory_stage1'
                     max_age_days: 30,
                     min_rollout_idle_hours: 12,
                     allowed_sources: allowed_sources.as_slice(),
+                    scratchpad_cwd: None,
                     lease_seconds: 3_600,
                 },
             )

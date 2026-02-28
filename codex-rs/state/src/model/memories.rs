@@ -130,6 +130,8 @@ pub struct Stage1StartupClaimParams<'a> {
     pub max_age_days: i64,
     pub min_rollout_idle_hours: i64,
     pub allowed_sources: &'a [String],
+    /// Restrict `scratchpad` source claims to threads whose `cwd` matches this repo root.
+    pub scratchpad_cwd: Option<&'a str>,
     pub lease_seconds: i64,
 }
 

@@ -125,7 +125,7 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
     }
 
     // 2. Claim startup job.
-    let Some(claimed_candidates) = claim_startup_jobs(session, &config.memories).await else {
+    let Some(claimed_candidates) = claim_startup_jobs(session, config).await else {
         return;
     };
     if claimed_candidates.is_empty() {
@@ -188,19 +188,37 @@ impl RequestContext {
 
 async fn claim_startup_jobs(
     session: &Arc<Session>,
-    memories_config: &MemoriesConfig,
+    config: &Config,
 ) -> Option<Vec<codex_state::Stage1JobClaim>> {
+    let memories_config = &config.memories;
     let Some(state_db) = session.services.state_db.as_deref() else {
         // This should not happen.
         warn!("state db unavailable while claiming phase-1 startup jobs; skipping");
         return None;
     };
 
-    let allowed_sources = memories_config
+    let scratchpad_source_enabled = has_scratchpad_stage_one_source(memories_config);
+    let scratchpad_cwd = if scratchpad_source_enabled {
+        find_repo_root_with_scratchpad(&config.cwd)
+            .map(|repo_root| dunce::canonicalize(&repo_root).unwrap_or(repo_root))
+            .map(|repo_root| repo_root.to_string_lossy().to_string())
+    } else {
+        None
+    };
+
+    let mut allowed_sources = memories_config
         .stage_1_sources
         .iter()
         .map(|source| source.as_db_source_str().to_string())
         .collect::<Vec<_>>();
+
+    if scratchpad_source_enabled && scratchpad_cwd.is_none() {
+        allowed_sources.retain(|source| source != SCRATCHPAD_SOURCE);
+    }
+
+    if allowed_sources.is_empty() {
+        return Some(Vec::new());
+    }
 
     match state_db
         .claim_stage1_jobs_for_startup(
@@ -211,6 +229,7 @@ async fn claim_startup_jobs(
                 max_age_days: memories_config.max_rollout_age_days,
                 min_rollout_idle_hours: memories_config.min_rollout_idle_hours,
                 allowed_sources: allowed_sources.as_slice(),
+                scratchpad_cwd: scratchpad_cwd.as_deref(),
                 lease_seconds: phase_one::JOB_LEASE_SECONDS,
             },
         )

@@ -29,6 +29,7 @@ the pipeline only considers thread sources that are:
 When `scratchpad` is enabled, phase 1 also scans repo-local `scratch/codex/pads/*.md` and
 `scratch/codex/backups/*.md` (if present) and mirrors eligible files into synthetic thread rows.
 This is optional: if a repo has no `scratch/codex` directory, scratchpad ingestion is skipped.
+Scratchpad claims are also constrained to that same repo root (`cwd`) during phase-1 startup selection.
 
 What it does:
 
