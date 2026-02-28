@@ -6,6 +6,7 @@ use super::RequestUserInputOverlay;
 pub(super) struct LayoutSections {
     pub(super) progress_area: Rect,
     pub(super) question_area: Rect,
+    pub(super) header_lines: Vec<String>,
     // Wrapped question text lines to render in the question area.
     pub(super) question_lines: Vec<String>,
     pub(super) options_area: Rect,
@@ -21,37 +22,42 @@ impl RequestUserInputOverlay {
         let notes_visible = !has_options || self.notes_ui_visible();
         let footer_pref = self.footer_required_height(area.width);
         let notes_pref_height = self.notes_input_height(area.width);
+        let mut header_lines = self.wrapped_header_lines(area.width);
         let mut question_lines = self.wrapped_question_lines(area.width);
+        let header_height = header_lines.len() as u16;
         let question_height = question_lines.len() as u16;
+        let prompt_height = header_height.saturating_add(question_height);
 
         let layout = if has_options {
             self.layout_with_options(
                 OptionsLayoutArgs {
                     available_height: area.height,
                     width: area.width,
-                    question_height,
+                    prompt_height,
                     notes_pref_height,
                     footer_pref,
                     notes_visible,
                 },
+                &mut header_lines,
                 &mut question_lines,
             )
         } else {
             self.layout_without_options(
                 area.height,
-                question_height,
+                prompt_height,
                 notes_pref_height,
                 footer_pref,
+                &mut header_lines,
                 &mut question_lines,
             )
         };
-
         let (progress_area, question_area, options_area, notes_area) =
             self.build_layout_areas(area, layout);
 
         LayoutSections {
             progress_area,
             question_area,
+            header_lines,
             question_lines,
             options_area,
             notes_area,
@@ -63,26 +69,44 @@ impl RequestUserInputOverlay {
     fn layout_with_options(
         &self,
         args: OptionsLayoutArgs,
+        header_lines: &mut Vec<String>,
         question_lines: &mut Vec<String>,
     ) -> LayoutPlan {
         let OptionsLayoutArgs {
             available_height,
             width,
-            mut question_height,
+            prompt_height,
             notes_pref_height,
             footer_pref,
             notes_visible,
         } = args;
         let min_options_height = available_height.min(1);
-        let max_question_height = available_height.saturating_sub(min_options_height);
-        if question_height > max_question_height {
-            question_height = max_question_height;
-            question_lines.truncate(question_height as usize);
+        let max_prompt_height = available_height.saturating_sub(min_options_height);
+        if prompt_height > max_prompt_height {
+            let overflow = prompt_height.saturating_sub(max_prompt_height);
+            let question_overflow = overflow.min(question_lines.len() as u16);
+            if question_overflow > 0 {
+                let remaining_questions = question_lines
+                    .len()
+                    .saturating_sub(question_overflow as usize);
+                question_lines.truncate(remaining_questions);
+            }
+
+            let header_overflow = overflow.saturating_sub(question_overflow);
+            if header_overflow > 0 {
+                let remaining_headers = header_lines.len().saturating_sub(header_overflow as usize);
+                header_lines.truncate(remaining_headers);
+            }
         }
+        let prompt_height = header_lines
+            .len()
+            .saturating_add(question_lines.len())
+            .try_into()
+            .unwrap_or(u16::MAX);
         self.layout_with_options_normal(
             OptionsNormalArgs {
                 available_height,
-                question_height,
+                prompt_height,
                 notes_pref_height,
                 footer_pref,
                 notes_visible,
@@ -103,18 +127,18 @@ impl RequestUserInputOverlay {
     ) -> LayoutPlan {
         let OptionsNormalArgs {
             available_height,
-            question_height,
+            prompt_height,
             notes_pref_height,
             footer_pref,
             notes_visible,
         } = args;
-        let max_options_height = available_height.saturating_sub(question_height);
+        let max_options_height = available_height.saturating_sub(prompt_height);
         let min_options_height = max_options_height.min(1);
         let mut options_height = options
             .preferred
             .min(max_options_height)
             .max(min_options_height);
-        let used = question_height.saturating_add(options_height);
+        let used = prompt_height.saturating_add(options_height);
         let mut remaining = available_height.saturating_sub(used);
 
         // When notes are hidden, prefer to reserve room for progress, footer,
@@ -159,7 +183,7 @@ impl RequestUserInputOverlay {
             let grow_by = remaining.min(options.full.saturating_sub(options_height));
             options_height = options_height.saturating_add(grow_by);
             return LayoutPlan {
-                question_height,
+                prompt_height,
                 progress_height,
                 spacer_after_question,
                 options_height,
@@ -185,7 +209,7 @@ impl RequestUserInputOverlay {
         notes_height = notes_height.saturating_add(remaining);
 
         LayoutPlan {
-            question_height,
+            prompt_height,
             progress_height,
             spacer_after_question,
             options_height,
@@ -203,18 +227,24 @@ impl RequestUserInputOverlay {
     fn layout_without_options(
         &self,
         available_height: u16,
-        question_height: u16,
+        prompt_height: u16,
         notes_pref_height: u16,
         footer_pref: u16,
+        header_lines: &mut Vec<String>,
         question_lines: &mut Vec<String>,
     ) -> LayoutPlan {
-        let required = question_height;
+        let required = prompt_height;
         if required > available_height {
-            self.layout_without_options_tight(available_height, question_height, question_lines)
+            self.layout_without_options_tight(
+                available_height,
+                prompt_height,
+                header_lines,
+                question_lines,
+            )
         } else {
             self.layout_without_options_normal(
                 available_height,
-                question_height,
+                prompt_height,
                 notes_pref_height,
                 footer_pref,
             )
@@ -225,15 +255,36 @@ impl RequestUserInputOverlay {
     fn layout_without_options_tight(
         &self,
         available_height: u16,
-        question_height: u16,
+        prompt_height: u16,
+        header_lines: &mut Vec<String>,
         question_lines: &mut Vec<String>,
     ) -> LayoutPlan {
-        let max_question_height = available_height;
-        let adjusted_question_height = question_height.min(max_question_height);
-        question_lines.truncate(adjusted_question_height as usize);
+        let max_prompt_height = available_height;
+        if prompt_height > max_prompt_height {
+            let overflow = prompt_height.saturating_sub(max_prompt_height);
+            let question_overflow = overflow.min(question_lines.len() as u16);
+            if question_overflow > 0 {
+                let remaining_questions = question_lines
+                    .len()
+                    .saturating_sub(question_overflow as usize);
+                question_lines.truncate(remaining_questions);
+            }
+
+            let header_overflow = overflow.saturating_sub(question_overflow);
+            if header_overflow > 0 {
+                let remaining_headers = header_lines.len().saturating_sub(header_overflow as usize);
+                header_lines.truncate(remaining_headers);
+            }
+        }
+
+        let prompt_height = header_lines
+            .len()
+            .saturating_add(question_lines.len())
+            .try_into()
+            .unwrap_or(u16::MAX);
 
         LayoutPlan {
-            question_height: adjusted_question_height,
+            prompt_height,
             progress_height: 0,
             spacer_after_question: 0,
             options_height: 0,
@@ -247,11 +298,11 @@ impl RequestUserInputOverlay {
     fn layout_without_options_normal(
         &self,
         available_height: u16,
-        question_height: u16,
+        prompt_height: u16,
         notes_pref_height: u16,
         footer_pref: u16,
     ) -> LayoutPlan {
-        let required = question_height;
+        let required = prompt_height;
         let mut remaining = available_height.saturating_sub(required);
         let mut notes_height = notes_pref_height.min(remaining);
         remaining = remaining.saturating_sub(notes_height);
@@ -268,7 +319,7 @@ impl RequestUserInputOverlay {
         notes_height = notes_height.saturating_add(remaining);
 
         LayoutPlan {
-            question_height,
+            prompt_height,
             progress_height,
             spacer_after_question: 0,
             options_height: 0,
@@ -301,9 +352,9 @@ impl RequestUserInputOverlay {
             x: area.x,
             y: cursor_y,
             width: area.width,
-            height: heights.question_height,
+            height: heights.prompt_height,
         };
-        cursor_y = cursor_y.saturating_add(heights.question_height);
+        cursor_y = cursor_y.saturating_add(heights.prompt_height);
         cursor_y = cursor_y.saturating_add(heights.spacer_after_question);
 
         let options_area = Rect {
@@ -329,7 +380,7 @@ impl RequestUserInputOverlay {
 #[derive(Clone, Copy, Debug)]
 struct LayoutPlan {
     progress_height: u16,
-    question_height: u16,
+    prompt_height: u16,
     spacer_after_question: u16,
     options_height: u16,
     spacer_after_options: u16,
@@ -341,7 +392,7 @@ struct LayoutPlan {
 struct OptionsLayoutArgs {
     available_height: u16,
     width: u16,
-    question_height: u16,
+    prompt_height: u16,
     notes_pref_height: u16,
     footer_pref: u16,
     notes_visible: bool,
@@ -350,7 +401,7 @@ struct OptionsLayoutArgs {
 #[derive(Clone, Copy, Debug)]
 struct OptionsNormalArgs {
     available_height: u16,
-    question_height: u16,
+    prompt_height: u16,
     notes_pref_height: u16,
     footer_pref: u16,
     notes_visible: bool,
