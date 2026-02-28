@@ -58,6 +58,11 @@ const main = async () => {
   await fs.mkdir(packetDir, { recursive: true });
 
   const commands = [runCommand('cargo', ['test', '-p', 'codex-app-server-protocol', 'schema_fixtures_match_generated'], path.join(repoRoot, 'codex-rs'))];
+  const baselineSchemaRefresh = {
+    status: 'SKIPPED',
+    code: 0,
+    label: 'Not configured for watcher path',
+  };
 
   // Capture git patch from current branch integration state.
   const gitDiff = spawnSync('git', ['diff', '--binary'], {
@@ -120,8 +125,8 @@ const main = async () => {
         command: commands[0].label,
       },
       baselineSchemaRefresh: {
-        status: commands[1].status,
-        command: commands[1].label,
+        status: baselineSchemaRefresh.status,
+        command: baselineSchemaRefresh.label,
       },
       contractGate: {
         status: contractCheck.status,
