@@ -1003,7 +1003,7 @@ fn wrap_plain_text_lines(text: &str, width: u16) -> Vec<String> {
             };
             textwrap::wrap(line, options)
                 .into_iter()
-                .map(|wrapped| wrapped.into_owned())
+                .map(std::borrow::Cow::into_owned)
                 .collect::<Vec<_>>()
         })
         .collect()
