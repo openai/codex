@@ -47,10 +47,27 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         return false;
     };
 
-    match std::path::Path::new(&cmd0)
+    #[cfg(windows)]
+    let executable_name = std::path::Path::new(cmd0)
         .file_name()
         .and_then(|osstr| osstr.to_str())
-    {
+        .map(|cmd| {
+            let cmd = cmd.to_ascii_lowercase();
+            for suffix in [".exe", ".cmd", ".bat", ".com"] {
+                if let Some(stripped) = cmd.strip_suffix(suffix) {
+                    return stripped.to_string();
+                }
+            }
+            cmd
+        });
+
+    #[cfg(not(windows))]
+    let executable_name = std::path::Path::new(cmd0)
+        .file_name()
+        .and_then(|osstr| osstr.to_str())
+        .map(std::borrow::ToOwned::to_owned);
+
+    match executable_name.as_deref() {
         Some(cmd) if cfg!(target_os = "linux") && matches!(cmd, "numfmt" | "tac") => true,
 
         #[rustfmt::skip]
@@ -492,6 +509,18 @@ mod tests {
             r"C:\Program Files\PowerShell\7\pwsh.exe",
             "-Command",
             "Get-Location",
+        ])));
+    }
+
+    #[test]
+    fn windows_git_full_path_is_safe() {
+        if !cfg!(windows) {
+            return;
+        }
+
+        assert!(is_known_safe_command(&vec_str(&[
+            r"C:\Program Files\Git\cmd\git.exe",
+            "status",
         ])));
     }
 
