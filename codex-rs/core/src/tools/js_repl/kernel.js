@@ -453,35 +453,47 @@ function formatLog(args) {
     .join(" ");
 }
 
-function withCapturedConsole(ctx, fn) {
-  const logs = [];
+function withCapturedConsole(ctx, onLog, captureLogs, fn) {
+  const logs = captureLogs ? [] : null;
   const original = ctx.console ?? console;
+  function record(line) {
+    if (logs) {
+      logs.push(line);
+    }
+    if (onLog) onLog(line);
+  }
   const captured = {
     ...original,
     log: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     info: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     warn: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     error: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     debug: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
   };
   ctx.console = captured;
-  return fn(logs).finally(() => {
+  return fn(logs ?? []).finally(() => {
     ctx.console = original;
   });
 }
 
 async function handleExec(message) {
   activeExecId = message.id;
+  send({ type: "exec_started", id: message.id });
   const tool = (toolName, args) => {
     if (typeof toolName !== "string" || !toolName) {
       return Promise.reject(new Error("codex.tool expects a tool name string"));
@@ -515,53 +527,56 @@ async function handleExec(message) {
 
   try {
     const code = typeof message.code === "string" ? message.code : "";
+    const streamLogs = Boolean(message.stream_logs);
     const { source, nextBindings } = await buildModuleSource(code);
     let output = "";
 
     context.codex = { tmpDir, tool };
     context.tmpDir = tmpDir;
 
-    await withCapturedConsole(context, async (logs) => {
-      const module = new SourceTextModule(source, {
-        context,
-        identifier: `cell-${cellCounter++}.mjs`,
-        initializeImportMeta(meta, mod) {
-          meta.url = `file://${mod.identifier}`;
-        },
-        importModuleDynamically(specifier) {
-          return importResolved(resolveSpecifier(specifier));
-        },
-      });
+    await withCapturedConsole(
+      context,
+      streamLogs ? (line) => send({ type: "exec_log", id: message.id, text: line }) : null,
+      !streamLogs,
+      async (logs) => {
+        const module = new SourceTextModule(source, {
+          context,
+          identifier: `cell-${cellCounter++}.mjs`,
+          initializeImportMeta(meta, mod) {
+            meta.url = `file://${mod.identifier}`;
+          },
+          importModuleDynamically(specifier) {
+            return importResolved(resolveSpecifier(specifier));
+          },
+        });
 
-      await module.link(async (specifier) => {
-        if (specifier === "@prev" && previousModule) {
-          const exportNames = previousBindings.map((b) => b.name);
-          // Build a synthetic module snapshot of the prior cell's exports.
-          // This is the bridge that carries values from cell N to cell N+1.
-          const synthetic = new SyntheticModule(
-            exportNames,
-            function initSynthetic() {
-              for (const binding of previousBindings) {
-                this.setExport(
-                  binding.name,
-                  previousModule.namespace[binding.name],
-                );
-              }
-            },
-            { context },
-          );
-          return synthetic;
-        }
+        await module.link(async (specifier) => {
+          if (specifier === "@prev" && previousModule) {
+            const exportNames = previousBindings.map((b) => b.name);
+            // Build a synthetic module snapshot of the prior cell's exports.
+            // This is the bridge that carries values from cell N to cell N+1.
+            const synthetic = new SyntheticModule(
+              exportNames,
+              function initSynthetic() {
+                for (const binding of previousBindings) {
+                  this.setExport(binding.name, previousModule.namespace[binding.name]);
+                }
+              },
+              { context },
+            );
+            return synthetic;
+          }
 
-        const resolved = resolveSpecifier(specifier);
-        return importResolved(resolved);
-      });
+          const resolved = resolveSpecifier(specifier);
+          return importResolved(resolved);
+        });
 
-      await module.evaluate();
-      previousModule = module;
-      previousBindings = nextBindings;
-      output = logs.join("\n");
-    });
+        await module.evaluate();
+        previousModule = module;
+        previousBindings = nextBindings;
+        output = logs.join("\n");
+      },
+    );
 
     send({
       type: "exec_result",

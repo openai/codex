@@ -19,7 +19,17 @@ js_repl = true
 js_repl_tools_only = true
 ```
 
-When enabled, direct model tool calls are restricted to `js_repl` and `js_repl_reset`; other tools remain available via `await codex.tool(...)` inside js_repl.
+When enabled, direct model tool calls are restricted to `js_repl` and `js_repl_reset` (and `js_repl_poll` if polling is enabled). Other tools remain available via `await codex.tool(...)` inside `js_repl`.
+
+`js_repl_polling` can be enabled to allow async/polled execution:
+
+```toml
+[features]
+js_repl = true
+js_repl_polling = true
+```
+
+When enabled, `js_repl` accepts `poll=true` in the first-line pragma and returns both `exec_id` and `session_id`. Reuse polling state by passing `session_id=<id>` in later `js_repl` pragmas. Omit `session_id` to create a new polling session; unknown `session_id` values return an error. Use `js_repl_poll` with `exec_id` until `status` becomes `completed` or `error`.
 
 ## Node runtime
 
@@ -55,9 +65,23 @@ For `CODEX_JS_REPL_NODE_MODULE_DIRS` and `js_repl_node_module_dirs`, module reso
 - `js_repl` is a freeform tool: send raw JavaScript source text.
 - Optional first-line pragma:
   - `// codex-js-repl: timeout_ms=15000`
+  - `// codex-js-repl: poll=true`
+  - `// codex-js-repl: poll=true session_id=my-session`
+  - Use space-separated pragma arguments.
 - Top-level bindings persist across calls.
 - Top-level static import declarations (for example `import x from "pkg"`) are currently unsupported; use dynamic imports with `await import("pkg")`.
 - Use `js_repl_reset` to clear the kernel state.
+
+### Polling flow
+
+1. Submit with `js_repl` and `poll=true` pragma.
+2. Read `exec_id` and `session_id` from the JSON response.
+3. Call `js_repl_poll` with `{"exec_id":"...","yield_time_ms":5000}`.
+4. Repeat until `status` is `completed` or `error`. If a poll returns `status: running`, keep polling the same `exec_id` even if the logs or output already look complete.
+5. Optional: reuse session state by submitting another polled `js_repl` call with `session_id=<id>` (must already exist). Omit `session_id` to create a new polling session.
+6. Reset one session with `js_repl_reset({"session_id":"..."})`, or reset all kernels with `js_repl_reset({})`.
+
+`timeout_ms` is only supported for non-polling `js_repl` executions. With `poll=true`, use `js_repl_poll.yield_time_ms` to control how long each poll waits before returning. If omitted, or set below `5000`, `js_repl_poll` waits up to 5 seconds before returning if nothing new arrives.
 
 ## Helper APIs inside the kernel
 
