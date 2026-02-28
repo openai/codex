@@ -3,16 +3,18 @@ use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCNotification;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::Path;
 use tempfile::TempDir;
@@ -83,11 +85,27 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     assert_eq!(thread.name, None);
 
     // A corresponding thread/started notification should arrive.
-    let notif: JSONRPCNotification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("thread/started"),
-    )
-    .await??;
+    let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
+    let notif = loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let message = timeout(remaining, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notif) = message else {
+            continue;
+        };
+        if notif.method == "thread/status/changed" {
+            let status_changed: ThreadStatusChangedNotification =
+                serde_json::from_value(notif.params.expect("params must be present"))?;
+            if status_changed.thread_id == thread.id {
+                anyhow::bail!(
+                    "thread/start should introduce the thread without a preceding thread/status/changed"
+                );
+            }
+            continue;
+        }
+        if notif.method == "thread/started" {
+            break notif;
+        }
+    };
     let started_params = notif.params.clone().expect("params must be present");
     let started_thread_json = started_params
         .get("thread")
