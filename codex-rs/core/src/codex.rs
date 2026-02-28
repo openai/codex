@@ -1804,6 +1804,7 @@ impl Session {
                     .reconstruct_history_from_rollout(&turn_context, &rollout_items)
                     .await;
                 let previous_model = reconstructed_rollout.previous_model.clone();
+                let previous_context_item = reconstructed_rollout.reference_context_item.clone();
                 self.set_previous_model(previous_model).await;
 
                 // Always add response items to conversation history
@@ -1830,7 +1831,7 @@ impl Session {
 
                 // Append the current session's initial context after the reconstructed history.
                 let initial_context = self
-                    .build_initial_context(&turn_context, previous_regular_turn_context_item, None)
+                    .build_initial_context(&turn_context, previous_context_item.as_ref(), None)
                     .await;
                 self.record_conversation_items(&turn_context, &initial_context)
                     .await;
@@ -2757,41 +2758,6 @@ impl Session {
         self.send_raw_response_items(turn_context, items).await;
     }
 
-    async fn reconstruct_history_from_rollout(
-        &self,
-        turn_context: &TurnContext,
-        rollout_items: &[RolloutItem],
-    ) -> Vec<ResponseItem> {
-        let mut history = ContextManager::new();
-        for item in rollout_items {
-            match item {
-                RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(
-                        std::iter::once(response_item),
-                        turn_context.truncation_policy,
-                    );
-                }
-                RolloutItem::Compacted(compacted) => {
-                    if let Some(replacement) = &compacted.replacement_history {
-                        history.replace(replacement.clone());
-                    } else {
-                        let user_messages = collect_user_messages(history.raw_items());
-                        let rebuilt = compact::build_compacted_history(
-                            self.build_initial_context(turn_context, None, None).await,
-                            &user_messages,
-                            &compacted.message,
-                        );
-                        history.replace(rebuilt);
-                    }
-                }
-                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                    history.drop_last_n_user_turns(rollback.num_turns);
-                }
-                _ => {}
-            }
-        }
-        history.raw_items().to_vec()
-    }
     /// Append ResponseItems to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
         &self,
