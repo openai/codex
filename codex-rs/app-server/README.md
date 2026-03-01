@@ -952,7 +952,7 @@ The JSON-RPC auth/account surface exposes request/response methods plus server-i
 
 ### Authentication modes
 
-Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`) and can be inferred from `account/read`.
+Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`), which also includes the current ChatGPT `planType` when available, and can be inferred from `account/read`.
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"`; Codex persists tokens to disk and refreshes them automatically.
@@ -964,7 +964,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated`.
-- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`).
+- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
@@ -1008,7 +1008,7 @@ Field notes:
 3. Notifications:
    ```json
    { "method": "account/login/completed", "params": { "loginId": null, "success": true, "error": null } }
-   { "method": "account/updated", "params": { "authMode": "apikey" } }
+   { "method": "account/updated", "params": { "authMode": "apikey", "planType": null } }
    ```
 
 ### 3) Log in with ChatGPT (browser flow)
@@ -1022,7 +1022,7 @@ Field notes:
 3. Wait for notifications:
    ```json
    { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": true, "error": null } }
-   { "method": "account/updated", "params": { "authMode": "chatgpt" } }
+   { "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "plus" } }
    ```
 
 ### 4) Cancel a ChatGPT login
@@ -1037,7 +1037,7 @@ Field notes:
 ```json
 { "method": "account/logout", "id": 5 }
 { "id": 5, "result": {} }
-{ "method": "account/updated", "params": { "authMode": null } }
+{ "method": "account/updated", "params": { "authMode": null, "planType": null } }
 ```
 
 ### 6) Rate limits (ChatGPT)

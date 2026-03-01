@@ -423,6 +423,14 @@ pub(crate) struct CodexMessageProcessorArgs {
 }
 
 impl CodexMessageProcessor {
+    fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
+        let auth = self.auth_manager.auth_cached();
+        AccountUpdatedNotification {
+            auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
+            plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+        }
+    }
+
     async fn load_thread(
         &self,
         thread_id: &str,
@@ -1057,15 +1065,10 @@ impl CodexMessageProcessor {
                     ))
                     .await;
 
-                let payload_v2 = AccountUpdatedNotification {
-                    auth_mode: self
-                        .auth_manager
-                        .auth_cached()
-                        .as_ref()
-                        .map(CodexAuth::api_auth_mode),
-                };
                 self.outgoing
-                    .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+                    .send_server_notification(ServerNotification::AccountUpdated(
+                        self.current_account_updated_notification(),
+                    ))
                     .await;
             }
             Err(error) => {
@@ -1281,12 +1284,10 @@ impl CodexMessageProcessor {
                             .await;
 
                             // Notify clients with the actual current auth mode.
-                            let current_auth_method = auth_manager
-                                .auth_cached()
-                                .as_ref()
-                                .map(CodexAuth::api_auth_mode);
+                            let auth = auth_manager.auth_cached();
                             let payload_v2 = AccountUpdatedNotification {
-                                auth_mode: current_auth_method,
+                                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
+                                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
                             };
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
@@ -1467,11 +1468,10 @@ impl CodexMessageProcessor {
             ))
             .await;
 
-        let payload_v2 = AccountUpdatedNotification {
-            auth_mode: self.auth_manager.get_api_auth_mode(),
-        };
         self.outgoing
-            .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
+            ))
             .await;
     }
 
@@ -1529,6 +1529,7 @@ impl CodexMessageProcessor {
 
                 let payload_v2 = AccountUpdatedNotification {
                     auth_mode: current_auth_method,
+                    plan_type: None,
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))

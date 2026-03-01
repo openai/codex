@@ -46,6 +46,16 @@
               "type": "null"
             }
           ]
+        },
+        "planType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PlanType"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
