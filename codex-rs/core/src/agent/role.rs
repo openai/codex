@@ -38,15 +38,9 @@ pub(crate) async fn apply_role_to_config(
     role_name: Option<&str>,
 ) -> Result<(), String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-    let (config_file, is_built_in) = config
-        .agent_roles
-        .get(role_name)
-        .map(|role| (&role.config_file, false))
-        .or_else(|| {
-            built_in::configs()
-                .get(role_name)
-                .map(|role| (&role.config_file, true))
-        })
+    let is_built_in = !config.agent_roles.contains_key(role_name);
+    let (config_file, is_built_in) = resolve_role_config(config, role_name)
+        .map(|role| (&role.config_file, is_built_in))
         .ok_or_else(|| format!("unknown agent_type '{role_name}'"))?;
     let Some(config_file) = config_file.as_ref() else {
         return Ok(());
@@ -139,6 +133,16 @@ pub(crate) async fn apply_role_to_config(
     Ok(())
 }
 
+pub(crate) fn resolve_role_config<'a>(
+    config: &'a Config,
+    role_name: &str,
+) -> Option<&'a AgentRoleConfig> {
+    config
+        .agent_roles
+        .get(role_name)
+        .or_else(|| built_in::configs().get(role_name))
+}
+
 pub(crate) mod spawn_tool_spec {
     use super::*;
 
@@ -196,6 +200,7 @@ mod built_in {
                     AgentRoleConfig {
                         description: Some("Default agent.".to_string()),
                         config_file: None,
+                        nickname_candidates: None,
                     }
                 ),
                 (
@@ -210,6 +215,7 @@ Rules:
 - Run explorers in parallel when useful.
 - Reuse existing explorers for related questions."#.to_string()),
                         config_file: Some("explorer.toml".to_string().parse().unwrap_or_default()),
+                        nickname_candidates: None,
                     }
                 ),
                 (
@@ -224,6 +230,7 @@ Rules:
 - Explicitly assign **ownership** of the task (files / responsibility).
 - Always tell workers they are **not alone in the codebase**, and they should ignore edits made by others without touching them."#.to_string()),
                         config_file: None,
+                        nickname_candidates: None,
                     }
                 ),
                 // Awaiter is temp removed
@@ -354,6 +361,7 @@ mod tests {
             AgentRoleConfig {
                 description: None,
                 config_file: Some(PathBuf::from("/path/does/not/exist.toml")),
+                nickname_candidates: None,
             },
         );
 
@@ -373,6 +381,7 @@ mod tests {
             AgentRoleConfig {
                 description: None,
                 config_file: Some(role_path),
+                nickname_candidates: None,
             },
         );
 
@@ -403,6 +412,7 @@ mod tests {
             AgentRoleConfig {
                 description: None,
                 config_file: Some(role_path),
+                nickname_candidates: None,
             },
         );
 
@@ -671,6 +681,7 @@ writable_roots = ["./sandbox-root"]
             AgentRoleConfig {
                 description: None,
                 config_file: Some(role_path),
+                nickname_candidates: None,
             },
         );
 
@@ -724,6 +735,7 @@ writable_roots = ["./sandbox-root"]
             AgentRoleConfig {
                 description: None,
                 config_file: Some(role_path),
+                nickname_candidates: None,
             },
         );
 
@@ -764,6 +776,7 @@ enabled = false
             AgentRoleConfig {
                 description: None,
                 config_file: Some(role_path),
+                nickname_candidates: None,
             },
         );
 
@@ -791,6 +804,7 @@ enabled = false
                 AgentRoleConfig {
                     description: Some("user override".to_string()),
                     config_file: None,
+                    nickname_candidates: None,
                 },
             ),
             ("researcher".to_string(), AgentRoleConfig::default()),
@@ -811,6 +825,7 @@ enabled = false
             AgentRoleConfig {
                 description: Some("first".to_string()),
                 config_file: None,
+                nickname_candidates: None,
             },
         )]);
 
