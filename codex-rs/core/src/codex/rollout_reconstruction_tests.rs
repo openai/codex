@@ -33,16 +33,6 @@ fn assistant_message(text: &str) -> ResponseItem {
     }
 }
 
-fn previous_turn_settings(
-    model: impl Into<String>,
-    realtime_active: Option<bool>,
-) -> PreviousTurnSettings {
-    PreviousTurnSettings {
-        model: model.into(),
-        realtime_active,
-    }
-}
-
 #[tokio::test]
 async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previous_turn_settings()
 {
@@ -146,10 +136,10 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
 
     assert_eq!(
         session.previous_turn_settings().await,
-        Some(previous_turn_settings(
-            previous_model,
-            Some(turn_context.realtime_active),
-        ))
+        Some(PreviousTurnSettings {
+            model: previous_model.to_string(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
     );
 }
 
@@ -237,10 +227,10 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
     );
     assert_eq!(
         reconstructed.previous_turn_settings,
-        Some(previous_turn_settings(
-            turn_context.model_info.slug.clone(),
-            Some(turn_context.realtime_active),
-        ))
+        Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
     );
     assert_eq!(
         serde_json::to_value(reconstructed.reference_context_item)
@@ -319,10 +309,10 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
     );
     assert_eq!(
         reconstructed.previous_turn_settings,
-        Some(previous_turn_settings(
-            turn_context.model_info.slug.clone(),
-            Some(turn_context.realtime_active),
-        ))
+        Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
     );
     assert_eq!(
         serde_json::to_value(reconstructed.reference_context_item)
@@ -425,10 +415,10 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
     );
     assert_eq!(
         reconstructed.previous_turn_settings,
-        Some(previous_turn_settings(
-            turn_context.model_info.slug.clone(),
-            Some(turn_context.realtime_active),
-        ))
+        Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
     );
     assert_eq!(
         serde_json::to_value(reconstructed.reference_context_item)
@@ -615,10 +605,10 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
 
     assert_eq!(
         session.previous_turn_settings().await,
-        Some(previous_turn_settings(
-            turn_context.model_info.slug.clone(),
-            Some(turn_context.realtime_active),
-        ))
+        Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
     );
     assert_eq!(
         serde_json::to_value(session.reference_context_item().await)
@@ -810,10 +800,10 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
 
     assert_eq!(
         session.previous_turn_settings().await,
-        Some(previous_turn_settings(
-            previous_model,
-            Some(turn_context.realtime_active),
-        ))
+        Some(PreviousTurnSettings {
+            model: previous_model.to_string(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
     );
     assert_eq!(
         serde_json::to_value(session.reference_context_item().await)
@@ -931,10 +921,10 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
 
     assert_eq!(
         session.previous_turn_settings().await,
-        Some(previous_turn_settings(
-            previous_model,
-            Some(turn_context.realtime_active),
-        ))
+        Some(PreviousTurnSettings {
+            model: previous_model.to_string(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
     );
     assert!(session.reference_context_item().await.is_none());
 }
@@ -1034,10 +1024,10 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
 
     assert_eq!(
         session.previous_turn_settings().await,
-        Some(previous_turn_settings(
-            current_model,
-            Some(turn_context.realtime_active),
-        ))
+        Some(PreviousTurnSettings {
+            model: current_model.to_string(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
     );
     assert_eq!(
         serde_json::to_value(session.reference_context_item().await)
@@ -1131,10 +1121,10 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
 
     assert_eq!(
         session.previous_turn_settings().await,
-        Some(previous_turn_settings(
-            previous_model,
-            Some(turn_context.realtime_active),
-        ))
+        Some(PreviousTurnSettings {
+            model: previous_model.to_string(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
     );
     assert!(session.reference_context_item().await.is_none());
 }
@@ -1177,10 +1167,10 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_preserves_turn_
 
     assert_eq!(
         session.previous_turn_settings().await,
-        Some(previous_turn_settings(
-            turn_context.model_info.slug.clone(),
-            Some(turn_context.realtime_active),
-        ))
+        Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
     );
     assert_eq!(
         serde_json::to_value(session.reference_context_item().await)
@@ -1284,10 +1274,10 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
 
     assert_eq!(
         session.previous_turn_settings().await,
-        Some(previous_turn_settings(
-            previous_model,
-            Some(turn_context.realtime_active),
-        ))
+        Some(PreviousTurnSettings {
+            model: previous_model.to_string(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
     );
     assert!(session.reference_context_item().await.is_none());
 }
