@@ -375,6 +375,7 @@ mod tests {
             id: "turn-1".to_string(),
             response: codex_protocol::request_user_input::RequestUserInputResponse {
                 answers: HashMap::new(),
+                interrupted: false,
             },
         });
 
@@ -439,6 +440,7 @@ mod tests {
             id: "turn-1".to_string(),
             response: codex_protocol::request_user_input::RequestUserInputResponse {
                 answers: HashMap::new(),
+                interrupted: false,
             },
         });
 
@@ -489,6 +491,7 @@ mod tests {
             id: "turn-1".to_string(),
             response: codex_protocol::request_user_input::RequestUserInputResponse {
                 answers: HashMap::new(),
+                interrupted: false,
             },
         });
 

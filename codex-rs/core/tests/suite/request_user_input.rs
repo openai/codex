@@ -6,6 +6,7 @@ use std::time::Duration;
 use codex_core::features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -257,7 +258,7 @@ async fn request_user_input_interrupted_response_preserves_tool_output() -> anyh
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model.clone(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Plan,
                 settings: Settings {
@@ -314,7 +315,7 @@ async fn request_user_input_interrupted_response_preserves_tool_output() -> anyh
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Plan,
                 settings: Settings {
@@ -415,7 +416,7 @@ async fn request_user_input_interrupt_not_blocked_by_earlier_tool() -> anyhow::R
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Plan,
                 settings: Settings {

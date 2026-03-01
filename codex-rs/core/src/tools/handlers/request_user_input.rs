@@ -186,7 +186,9 @@ mod tests {
 
     #[test]
     fn interrupted_response_interrupts_turn() {
-        let handler = RequestUserInputHandler;
+        let handler = RequestUserInputHandler {
+            default_mode_request_user_input: false,
+        };
         let output = ToolOutput::Function {
             body: FunctionCallOutputBody::Text(r#"{"answers":{},"interrupted":true}"#.to_string()),
             success: Some(true),
@@ -197,7 +199,9 @@ mod tests {
 
     #[test]
     fn non_interrupted_response_does_not_interrupt_turn() {
-        let handler = RequestUserInputHandler;
+        let handler = RequestUserInputHandler {
+            default_mode_request_user_input: false,
+        };
         let output = ToolOutput::Function {
             body: FunctionCallOutputBody::Text(r#"{"answers":{}}"#.to_string()),
             success: Some(true),
