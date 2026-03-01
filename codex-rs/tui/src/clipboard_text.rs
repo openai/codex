@@ -5,8 +5,10 @@ use std::ffi::OsStr;
 #[cfg(all(not(target_os = "android"), unix))]
 use std::fs::OpenOptions;
 #[cfg(not(target_os = "android"))]
+use std::io::IsTerminal;
+#[cfg(not(target_os = "android"))]
 use std::io::Write;
-#[cfg(all(not(target_os = "android"), windows))]
+#[cfg(not(target_os = "android"))]
 use std::io::stdout;
 #[cfg(all(not(target_os = "android"), target_os = "linux"))]
 use std::process::Stdio;
@@ -30,52 +32,37 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
         std::env::var_os("SSH_TTY").as_deref(),
         wsl_clipboard_supported(),
     ) {
-        ClipboardCopyPath::Osc52 => {
-            let sequence = osc52_sequence(text, std::env::var_os("TMUX").is_some());
-            #[cfg(unix)]
-            let mut tty = OpenOptions::new()
-                .write(true)
-                .open("/dev/tty")
-                .map_err(|e| {
-                    format!("clipboard unavailable: failed to open /dev/tty for OSC 52 copy: {e}")
-                })?;
-            #[cfg(unix)]
-            tty.write_all(sequence.as_bytes()).map_err(|e| {
-                format!("clipboard unavailable: failed to write OSC 52 escape sequence: {e}")
-            })?;
-            #[cfg(unix)]
-            tty.flush().map_err(|e| {
-                format!("clipboard unavailable: failed to flush OSC 52 escape sequence: {e}")
-            })?;
-            #[cfg(windows)]
-            stdout().write_all(sequence.as_bytes()).map_err(|e| {
-                format!("clipboard unavailable: failed to write OSC 52 escape sequence: {e}")
-            })?;
-            #[cfg(windows)]
-            stdout().flush().map_err(|e| {
-                format!("clipboard unavailable: failed to flush OSC 52 escape sequence: {e}")
-            })?;
-            Ok(())
-        }
+        ClipboardCopyPath::Osc52 => copy_via_osc52(text),
         #[cfg(target_os = "linux")]
         ClipboardCopyPath::WslClip => {
-            let mut child = std::process::Command::new("clip.exe")
+            let mut child = std::process::Command::new("powershell.exe")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
+                .args([
+                    "-NoProfile",
+                    "-Command",
+                    "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'Stop'; $text = [Console]::In.ReadToEnd(); Set-Clipboard -Value $text",
+                ])
                 .spawn()
-                .map_err(|e| format!("clipboard unavailable: failed to spawn clip.exe: {e}"))?;
+                .map_err(|e| {
+                    format!("clipboard unavailable: failed to spawn powershell.exe: {e}")
+                })?;
 
             child
                 .stdin
                 .take()
-                .ok_or_else(|| "clipboard unavailable: failed to open clip.exe stdin".to_string())?
+                .ok_or_else(|| {
+                    "clipboard unavailable: failed to open powershell.exe stdin".to_string()
+                })?
                 .write_all(text.as_bytes())
-                .map_err(|e| format!("clipboard unavailable: failed to write to clip.exe: {e}"))?;
+                .map_err(|e| {
+                    format!("clipboard unavailable: failed to write to powershell.exe: {e}")
+                })?;
 
-            let output = child
-                .wait_with_output()
-                .map_err(|e| format!("clipboard unavailable: failed to wait for clip.exe: {e}"))?;
+            let output = child.wait_with_output().map_err(|e| {
+                format!("clipboard unavailable: failed to wait for powershell.exe: {e}")
+            })?;
 
             if output.status.success() {
                 Ok(())
@@ -83,19 +70,38 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                 if stderr.is_empty() {
                     Err(format!(
-                        "clipboard unavailable: clip.exe exited with status {}",
+                        "clipboard unavailable: powershell.exe exited with status {}",
                         output.status
                     ))
                 } else {
-                    Err(format!("clipboard unavailable: clip.exe failed: {stderr}"))
+                    Err(format!(
+                        "clipboard unavailable: powershell.exe failed: {stderr}"
+                    ))
                 }
             }
         }
         ClipboardCopyPath::Native => {
-            let mut cb =
-                arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
-            cb.set_text(text.to_string())
+            let native_result = arboard::Clipboard::new()
                 .map_err(|e| format!("clipboard unavailable: {e}"))
+                .and_then(|mut cb| {
+                    cb.set_text(text.to_string())
+                        .map_err(|e| format!("clipboard unavailable: {e}"))
+                });
+
+            native_result.or_else(|native_err| {
+                if should_try_osc52_fallback(
+                    stdout().is_terminal(),
+                    std::env::var_os("DISPLAY").as_deref(),
+                    std::env::var_os("WAYLAND_DISPLAY").as_deref(),
+                    std::env::var_os("TERM_PROGRAM").as_deref(),
+                ) {
+                    copy_via_osc52(text).map_err(|osc_err| {
+                        format!("{native_err}; OSC 52 fallback failed: {osc_err}")
+                    })
+                } else {
+                    Err(native_err)
+                }
+            })
         }
     }
 }
@@ -103,6 +109,35 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
 #[cfg(not(target_os = "android"))]
 fn is_ssh_session(ssh_connection: Option<&OsStr>, ssh_tty: Option<&OsStr>) -> bool {
     ssh_connection.is_some() || ssh_tty.is_some()
+}
+
+#[cfg(not(target_os = "android"))]
+fn copy_via_osc52(text: &str) -> Result<(), String> {
+    let sequence = osc52_sequence(text, std::env::var_os("TMUX").is_some());
+    #[cfg(unix)]
+    let mut tty = OpenOptions::new()
+        .write(true)
+        .open("/dev/tty")
+        .map_err(|e| {
+            format!("clipboard unavailable: failed to open /dev/tty for OSC 52 copy: {e}")
+        })?;
+    #[cfg(unix)]
+    tty.write_all(sequence.as_bytes()).map_err(|e| {
+        format!("clipboard unavailable: failed to write OSC 52 escape sequence: {e}")
+    })?;
+    #[cfg(unix)]
+    tty.flush().map_err(|e| {
+        format!("clipboard unavailable: failed to flush OSC 52 escape sequence: {e}")
+    })?;
+    #[cfg(windows)]
+    stdout().write_all(sequence.as_bytes()).map_err(|e| {
+        format!("clipboard unavailable: failed to write OSC 52 escape sequence: {e}")
+    })?;
+    #[cfg(windows)]
+    stdout().flush().map_err(|e| {
+        format!("clipboard unavailable: failed to flush OSC 52 escape sequence: {e}")
+    })?;
+    Ok(())
 }
 
 #[cfg(all(not(target_os = "android"), target_os = "linux"))]
@@ -141,6 +176,18 @@ fn osc52_sequence(text: &str, tmux: bool) -> String {
     } else {
         format!("\x1b]52;c;{payload}\x07")
     }
+}
+
+#[cfg(not(target_os = "android"))]
+fn should_try_osc52_fallback(
+    stdout_is_terminal: bool,
+    display: Option<&OsStr>,
+    wayland_display: Option<&OsStr>,
+    term_program: Option<&OsStr>,
+) -> bool {
+    stdout_is_terminal
+        && (term_program == Some(OsStr::new("vscode"))
+            || (cfg!(target_os = "linux") && display.is_none() && wayland_display.is_none()))
 }
 
 #[cfg(all(not(target_os = "android"), target_os = "linux"))]
@@ -201,6 +248,42 @@ mod tests {
             clipboard_copy_path(None, None, false),
             ClipboardCopyPath::Native
         );
+    }
+
+    #[test]
+    fn osc52_fallback_is_used_for_vscode_terminals() {
+        assert!(should_try_osc52_fallback(
+            true,
+            Some(OsStr::new(":1")),
+            None,
+            Some(OsStr::new("vscode"))
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn osc52_fallback_is_used_for_headless_terminals() {
+        assert!(should_try_osc52_fallback(true, None, None, None));
+    }
+
+    #[test]
+    fn osc52_fallback_is_not_used_without_terminal() {
+        assert!(!should_try_osc52_fallback(
+            false,
+            Some(OsStr::new(":1")),
+            None,
+            None
+        ));
+    }
+
+    #[test]
+    fn osc52_fallback_is_not_used_for_gui_native_terminals() {
+        assert!(!should_try_osc52_fallback(
+            true,
+            Some(OsStr::new(":1")),
+            Some(OsStr::new("wayland-0")),
+            None
+        ));
     }
 
     #[test]
