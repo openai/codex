@@ -8216,6 +8216,26 @@ async fn terminal_title_status_uses_ellipses_for_other_transient_states() {
 }
 
 #[tokio::test]
+async fn default_terminal_title_refreshes_when_status_changes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let project = chat
+        .terminal_title_project_name()
+        .expect("default title should include a project segment");
+
+    chat.config.tui_terminal_title = None;
+    chat.last_terminal_title = Some(format!("{project} | Ready"));
+    chat.bottom_pane.set_task_running(true);
+    chat.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
+
+    chat.set_status_header("Thinking".to_string());
+
+    assert_eq!(
+        chat.last_terminal_title,
+        Some(format!("{project} | Thinking..."))
+    );
+}
+
+#[tokio::test]
 async fn on_task_started_resets_terminal_title_task_progress() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.last_plan_progress = Some((2, 5));
