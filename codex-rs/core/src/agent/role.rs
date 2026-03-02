@@ -62,7 +62,21 @@ pub(crate) async fn apply_role_to_config(
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
     let role_selects_provider = role_layer_toml.get("model_provider").is_some();
     let role_selects_profile = role_layer_toml.get("profile").is_some();
-    let preserve_current_provider_and_profile = !role_selects_provider && !role_selects_profile;
+    let role_updates_active_profile_provider = config
+        .active_profile
+        .as_ref()
+        .and_then(|active_profile| {
+            role_layer_toml
+                .get("profiles")
+                .and_then(TomlValue::as_table)
+                .and_then(|profiles| profiles.get(active_profile))
+                .and_then(TomlValue::as_table)
+                .map(|profile| profile.contains_key("model_provider"))
+        })
+        .unwrap_or(false);
+    let preserve_current_profile = !role_selects_provider && !role_selects_profile;
+    let preserve_current_provider =
+        preserve_current_profile && !role_updates_active_profile_provider;
 
     let mut layers: Vec<ConfigLayerEntry> = config
         .config_layer_stack
@@ -89,9 +103,8 @@ pub(crate) async fn apply_role_to_config(
         merged_config,
         ConfigOverrides {
             cwd: Some(config.cwd.clone()),
-            model_provider: preserve_current_provider_and_profile
-                .then(|| config.model_provider_id.clone()),
-            config_profile: preserve_current_provider_and_profile
+            model_provider: preserve_current_provider.then(|| config.model_provider_id.clone()),
+            config_profile: preserve_current_profile
                 .then(|| config.active_profile.clone())
                 .flatten(),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
@@ -548,6 +561,68 @@ model_provider = "base-provider"
         assert_eq!(config.active_profile, None);
         assert_eq!(config.model_provider_id, "role-provider");
         assert_eq!(config.model_provider.name, "Role Provider");
+    }
+
+    #[tokio::test]
+    async fn apply_role_uses_active_profile_model_provider_update() {
+        let home = TempDir::new().expect("create temp dir");
+        tokio::fs::write(
+            home.path().join(CONFIG_TOML_FILE),
+            r#"
+[model_providers.base-provider]
+name = "Base Provider"
+base_url = "https://base.example.com/v1"
+env_key = "BASE_PROVIDER_API_KEY"
+wire_api = "responses"
+
+[model_providers.role-provider]
+name = "Role Provider"
+base_url = "https://role.example.com/v1"
+env_key = "ROLE_PROVIDER_API_KEY"
+wire_api = "responses"
+
+[profiles.base-profile]
+model_provider = "base-provider"
+model_reasoning_effort = "low"
+"#,
+        )
+        .await
+        .expect("write config.toml");
+        let mut config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                config_profile: Some("base-profile".to_string()),
+                ..Default::default()
+            })
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .build()
+            .await
+            .expect("load config");
+        let role_path = write_role_config(
+            &home,
+            "profile-edit-role.toml",
+            r#"[profiles.base-profile]
+model_provider = "role-provider"
+model_reasoning_effort = "high"
+"#,
+        )
+        .await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+            },
+        );
+
+        apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect("custom role should apply");
+
+        assert_eq!(config.active_profile.as_deref(), Some("base-profile"));
+        assert_eq!(config.model_provider_id, "role-provider");
+        assert_eq!(config.model_provider.name, "Role Provider");
+        assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
     }
 
     #[tokio::test]
