@@ -63,6 +63,7 @@ use codex_otel::OtelManager;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -190,6 +191,7 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
+    service_tier: ServiceTier,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -261,9 +263,14 @@ impl ModelClient {
     /// This constructor does not perform network I/O itself; the session opens a websocket lazily
     /// when the first stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
+        self.new_session_with_service_tier(ServiceTier::Standard)
+    }
+
+    pub fn new_session_with_service_tier(&self, service_tier: ServiceTier) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
+            service_tier,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -520,6 +527,7 @@ impl ModelClientSession {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: ServiceTier,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
@@ -569,6 +577,7 @@ impl ModelClientSession {
             store: provider.is_azure_responses_endpoint(),
             stream: true,
             include,
+            service_tier: service_tier.as_api_service_tier().map(str::to_string),
             prompt_cache_key,
             text,
         };
@@ -823,6 +832,7 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
+                self.service_tier,
             )?;
             let client = ApiResponsesClient::new(
                 transport,
@@ -877,6 +887,7 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
+                self.service_tier,
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: build_ws_client_metadata(turn_metadata_header),

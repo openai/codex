@@ -13,6 +13,7 @@ use crate::rollout::policy::should_persist_response_item_for_memories;
 use codex_api::ResponseEvent;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -36,6 +37,7 @@ pub(in crate::memories) struct RequestContext {
     pub(in crate::memories) otel_manager: OtelManager,
     pub(in crate::memories) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(in crate::memories) reasoning_summary: ReasoningSummaryConfig,
+    pub(in crate::memories) service_tier: ServiceTier,
     pub(in crate::memories) turn_metadata_header: Option<String>,
 }
 
@@ -144,6 +146,7 @@ impl RequestContext {
             otel_manager: turn_context.otel_manager.clone(),
             reasoning_effort: Some(phase_one::REASONING_EFFORT),
             reasoning_summary: turn_context.reasoning_summary,
+            service_tier: turn_context.config.service_tier,
         }
     }
 }
@@ -314,7 +317,10 @@ mod job {
             output_schema: Some(output_schema()),
         };
 
-        let mut client_session = session.services.model_client.new_session();
+        let mut client_session = session
+            .services
+            .model_client
+            .new_session_with_service_tier(stage_one_context.service_tier);
         let mut stream = client_session
             .stream(
                 &prompt,

@@ -18,6 +18,7 @@ use crate::config_types::CollaborationMode;
 use crate::config_types::ModeKind;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use crate::config_types::ServiceTier;
 use crate::config_types::WindowsSandboxLevel;
 use crate::custom_prompts::CustomPrompt;
 use crate::dynamic_tools::DynamicToolCallOutputContentItem;
@@ -190,6 +191,7 @@ pub enum Op {
         /// fall back to the selected model's default on new sessions).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+
         // The JSON schema to use for the final assistant message
         final_output_json_schema: Option<Value>,
 
@@ -241,6 +243,10 @@ pub enum Op {
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+
+        /// Updated service tier preference for future turns.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        service_tier: Option<ServiceTier>,
 
         /// EXPERIMENTAL - set a pre-set collaboration mode.
         /// Takes precedence over model, effort, and developer instructions if set.

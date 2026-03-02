@@ -16,6 +16,7 @@ use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -90,6 +91,34 @@ async fn responses_websocket_streams_request() {
         handshake.header(OPENAI_BETA_HEADER),
         Some(OPENAI_BETA_RESPONSES_WEBSOCKETS.to_string())
     );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_streams_service_tier_when_service_tier_enabled() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness
+        .client
+        .new_session_with_service_tier(ServiceTier::Fast);
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 1);
+    let body = connection.first().expect("missing request").body_json();
+
+    assert_eq!(body["type"].as_str(), Some("response.create"));
+    assert_eq!(body["service_tier"].as_str(), Some("priority"));
 
     server.shutdown().await;
 }

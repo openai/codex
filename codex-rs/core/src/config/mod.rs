@@ -62,6 +62,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
@@ -184,6 +185,9 @@ pub struct Config {
 
     /// Optional override of model selection.
     pub model: Option<String>,
+
+    /// Service tier preference for new turns.
+    pub service_tier: ServiceTier,
 
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
@@ -1180,6 +1184,9 @@ pub struct ConfigToml {
     /// Optionally specify a personality for the model
     pub personality: Option<Personality>,
 
+    /// Service tier preference for new turns.
+    pub service_tier: Option<ServiceTier>,
+
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
@@ -1940,6 +1947,10 @@ impl Config {
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(config_profile.model).or(cfg.model);
+        let service_tier = config_profile
+            .service_tier
+            .or(cfg.service_tier)
+            .unwrap_or_default();
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
@@ -2086,6 +2097,7 @@ impl Config {
 
         let config = Self {
             model,
+            service_tier,
             review_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
@@ -4866,6 +4878,7 @@ model_verbosity = "high"
                 review_model: None,
                 model_context_window: None,
                 model_auto_compact_token_limit: None,
+                service_tier: ServiceTier::Standard,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 permissions: Permissions {
@@ -4994,6 +5007,7 @@ model_verbosity = "high"
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
+            service_tier: ServiceTier::Standard,
             model_provider_id: "openai-custom".to_string(),
             model_provider: fixture.openai_custom_provider.clone(),
             permissions: Permissions {
@@ -5120,6 +5134,7 @@ model_verbosity = "high"
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
+            service_tier: ServiceTier::Standard,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {
@@ -5232,6 +5247,7 @@ model_verbosity = "high"
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
+            service_tier: ServiceTier::Standard,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {

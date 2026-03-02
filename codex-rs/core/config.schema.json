@@ -505,6 +505,9 @@
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
         },
+        "service_tier": {
+          "$ref": "#/definitions/ServiceTier"
+        },
         "tools_view_image": {
           "type": "boolean"
         },
@@ -1317,6 +1320,13 @@
       },
       "type": "object"
     },
+    "ServiceTier": {
+      "enum": [
+        "standard",
+        "fast"
+      ],
+      "type": "string"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -2103,6 +2113,14 @@
         }
       ],
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
+    },
+    "service_tier": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ServiceTier"
+        }
+      ],
+      "description": "Service tier preference for new turns."
     },
     "shell_environment_policy": {
       "allOf": [

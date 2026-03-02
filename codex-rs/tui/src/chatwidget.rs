@@ -81,6 +81,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -3562,6 +3563,14 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
+            SlashCommand::Fast => {
+                let next_tier = if self.config.service_tier.is_fast() {
+                    ServiceTier::Standard
+                } else {
+                    ServiceTier::Fast
+                };
+                self.set_service_tier_selection(next_tier);
+            }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
                     return;
@@ -3841,6 +3850,27 @@ impl ChatWidget {
 
         let trimmed = args.trim();
         match cmd {
+            SlashCommand::Fast => {
+                if trimmed.is_empty() {
+                    self.dispatch_command(cmd);
+                    return;
+                }
+                match trimmed.to_ascii_lowercase().as_str() {
+                    "on" => self.set_service_tier_selection(ServiceTier::Fast),
+                    "off" => self.set_service_tier_selection(ServiceTier::Standard),
+                    "status" => {
+                        let status = if self.config.service_tier.is_fast() {
+                            "on"
+                        } else {
+                            "off"
+                        };
+                        self.add_info_message(format!("Fast mode is {status}."), None);
+                    }
+                    _ => {
+                        self.add_error_message("Usage: /fast [on|off|status]".to_string());
+                    }
+                }
+            }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 self.otel_manager.counter("codex.thread.rename", 1, &[]);
                 let Some((prepared_args, _prepared_elements)) =
@@ -5167,6 +5197,7 @@ impl ChatWidget {
                 model: Some(switch_model_for_events.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
+                service_tier: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -5286,6 +5317,7 @@ impl ChatWidget {
                         model: None,
                         effort: None,
                         summary: None,
+                        service_tier: None,
                         collaboration_mode: None,
                         windows_sandbox_level: None,
                         personality: Some(personality),
@@ -6199,6 +6231,7 @@ impl ChatWidget {
                 model: None,
                 effort: None,
                 summary: None,
+                service_tier: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -6816,6 +6849,11 @@ impl ChatWidget {
         self.config.personality = Some(personality);
     }
 
+    /// Set Fast mode in the widget's config copy.
+    pub(crate) fn set_service_tier(&mut self, service_tier: ServiceTier) {
+        self.config.service_tier = service_tier;
+    }
+
     pub(crate) fn set_realtime_audio_device(
         &mut self,
         kind: RealtimeAudioDeviceKind,
@@ -6843,6 +6881,26 @@ impl ChatWidget {
             mask.model = Some(model.to_string());
         }
         self.refresh_model_display();
+    }
+
+    fn set_service_tier_selection(&mut self, service_tier: ServiceTier) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                service_tier: Some(service_tier),
+                collaboration_mode: None,
+                personality: None,
+            }));
+        self.app_event_tx
+            .send(AppEvent::UpdateServiceTier(service_tier));
+        self.app_event_tx
+            .send(AppEvent::PersistServiceTierSelection { service_tier });
     }
 
     pub(crate) fn current_model(&self) -> &str {

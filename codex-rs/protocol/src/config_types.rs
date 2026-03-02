@@ -113,6 +113,30 @@ pub enum WebSearchMode {
     Live,
 }
 
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS, Default,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ServiceTier {
+    #[default]
+    Standard,
+    Fast,
+}
+
+impl ServiceTier {
+    pub const fn as_api_service_tier(self) -> Option<&'static str> {
+        match self {
+            Self::Standard => None,
+            Self::Fast => Some("priority"),
+        }
+    }
+
+    pub const fn is_fast(self) -> bool {
+        matches!(self, Self::Fast)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]

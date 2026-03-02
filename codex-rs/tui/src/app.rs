@@ -2221,6 +2221,10 @@ impl App {
                 self.chat_widget.set_model(&model);
                 self.refresh_status_line();
             }
+            AppEvent::UpdateServiceTier(service_tier) => {
+                self.chat_widget.set_service_tier(service_tier);
+                self.refresh_status_line();
+            }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
                 self.refresh_status_line();
@@ -2651,6 +2655,38 @@ impl App {
                         } else {
                             self.chat_widget.add_error_message(format!(
                                 "Failed to save default personality: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistServiceTierSelection { service_tier } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_service_tier(service_tier)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let status = if service_tier.is_fast() { "on" } else { "off" };
+                        let mut message = format!("Fast mode set to {status}");
+                        if let Some(profile) = profile {
+                            message.push_str(" for ");
+                            message.push_str(profile);
+                            message.push_str(" profile");
+                        }
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist fast mode selection");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save Fast mode for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save default Fast mode: {err}"
                             ));
                         }
                     }
