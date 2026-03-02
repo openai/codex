@@ -682,6 +682,145 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_handoff_persists_across_item_done_until_turn_complete() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (gate_second_message_tx, gate_second_message_rx) = oneshot::channel();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(responses::ev_response_created("resp-1")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(responses::ev_assistant_message(
+                "msg-1",
+                "assistant message 1",
+            )),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_second_message_rx),
+            body: sse_event(responses::ev_assistant_message(
+                "msg-2",
+                "assistant message 2",
+            )),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(responses::ev_completed("resp-1")),
+        },
+    ];
+    let (api_server, completions) = start_streaming_sse_server(vec![first_chunks]).await;
+
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_item_done", "instructions": "backend prompt" }
+            }),
+            json!({
+                "type": "conversation.handoff.requested",
+                "handoff_id": "handoff_item_done",
+                "item_id": "item_item_done",
+                "input_transcript": "delegate now",
+                "messages": [{ "role": "user", "text": "delegate now" }]
+            }),
+        ],
+        vec![json!({
+            "type": "conversation.item.done",
+            "item": { "id": "item_item_done" }
+        })],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build_with_streaming_server(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) if session_id == "sess_item_done" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::HandoffRequested(handoff),
+        }) if handoff.handoff_id == "handoff_item_done" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let first_append = realtime_server.wait_for_request(0, 1).await;
+    assert_eq!(
+        first_append.body_json()["type"].as_str(),
+        Some("conversation.handoff.append")
+    );
+    assert_eq!(
+        first_append.body_json()["handoff_id"].as_str(),
+        Some("handoff_item_done")
+    );
+    assert_eq!(
+        first_append.body_json()["output_text"].as_str(),
+        Some("assistant message 1")
+    );
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::ConversationItemDone { item_id },
+        }) if item_id == "item_item_done" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let _ = gate_second_message_tx.send(());
+
+    let second_append = realtime_server.wait_for_request(0, 2).await;
+    assert_eq!(
+        second_append.body_json()["type"].as_str(),
+        Some("conversation.handoff.append")
+    );
+    assert_eq!(
+        second_append.body_json()["handoff_id"].as_str(),
+        Some("handoff_item_done")
+    );
+    assert_eq!(
+        second_append.body_json()["output_text"].as_str(),
+        Some("assistant message 2")
+    );
+
+    let completion = completions
+        .into_iter()
+        .next()
+        .expect("missing delegated turn completion");
+    completion
+        .await
+        .expect("delegated turn request did not complete");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    realtime_server.shutdown().await;
+    api_server.shutdown().await;
+    Ok(())
+}
+
 fn sse_event(event: Value) -> String {
     responses::sse(vec![event])
 }
