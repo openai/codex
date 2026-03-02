@@ -338,6 +338,9 @@ impl MessageProcessor {
 
                     session.initialized = true;
                     outbound_initialized.store(true, Ordering::Release);
+                    self.codex_message_processor
+                        .connection_initialized(connection_id)
+                        .await;
                     return;
                 }
             }

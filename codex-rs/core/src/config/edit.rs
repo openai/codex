@@ -8,6 +8,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::task;
@@ -73,6 +74,27 @@ pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
         segments: vec!["tui".to_string(), "status_line".to_string()],
         value: TomlItem::Value(array.into()),
     }
+}
+
+pub fn model_availability_nux_count_edits(shown_count: &HashMap<String, u32>) -> Vec<ConfigEdit> {
+    let mut shown_count_entries: Vec<_> = shown_count.iter().collect();
+    shown_count_entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+
+    let mut edits = vec![ConfigEdit::ClearPath {
+        segments: vec!["tui".to_string(), "model_availability_nux".to_string()],
+    }];
+    for (model_slug, count) in shown_count_entries {
+        edits.push(ConfigEdit::SetPath {
+            segments: vec![
+                "tui".to_string(),
+                "model_availability_nux".to_string(),
+                model_slug.clone(),
+            ],
+            value: value(i64::from(*count)),
+        });
+    }
+
+    edits
 }
 
 // TODO(jif) move to a dedicated file
@@ -799,6 +821,12 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_model_availability_nux_count(mut self, shown_count: &HashMap<String, u32>) -> Self {
+        self.edits
+            .extend(model_availability_nux_count_edits(shown_count));
+        self
+    }
+
     pub fn replace_mcp_servers(mut self, servers: &BTreeMap<String, McpServerConfig>) -> Self {
         self.edits
             .push(ConfigEdit::ReplaceMcpServers(servers.clone()));
@@ -961,6 +989,25 @@ model_reasoning_effort = "high"
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents, "enabled = true\n");
+    }
+
+    #[test]
+    fn set_model_availability_nux_count_writes_shown_count() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        let shown_count = HashMap::from([("gpt-foo".to_string(), 4)]);
+
+        ConfigEditsBuilder::new(codex_home)
+            .set_model_availability_nux_count(&shown_count)
+            .apply_blocking()
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[tui.model_availability_nux]
+gpt-foo = 4
+"#;
+        assert_eq!(contents, expected);
     }
 
     #[test]

@@ -9,10 +9,14 @@ use codex_core::compact::SUMMARY_PREFIX;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ConversationStartParams;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
@@ -22,12 +26,15 @@ use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
+use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use wiremock::ResponseTemplate;
 
 fn approx_token_count(text: &str) -> i64 {
@@ -66,6 +73,104 @@ fn format_labeled_requests_snapshot(
         sections,
         &context_snapshot_options(),
     )
+}
+
+fn compacted_summary_only_output(summary: &str) -> Vec<ResponseItem> {
+    vec![ResponseItem::Compaction {
+        encrypted_content: summary_with_prefix(summary),
+    }]
+}
+
+fn remote_realtime_test_codex_builder(
+    realtime_server: &responses::WebSocketTestServer,
+) -> TestCodexBuilder {
+    let realtime_base_url = realtime_server.uri().to_string();
+    test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        })
+}
+
+async fn start_remote_realtime_server() -> responses::WebSocketTestServer {
+    start_websocket_server(vec![vec![
+        vec![json!({
+            "type": "session.created",
+            "session": { "id": "sess_remote_compact" }
+        })],
+        // Keep the websocket open after startup so routed transcript items during the test do not
+        // exhaust the scripted responses and mark realtime inactive before the assertions run.
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    ]])
+    .await
+}
+
+async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<()> {
+    codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    wait_for_event_match(codex, |msg| match msg {
+        EventMsg::RealtimeConversationStarted(started) => Some(Ok(started.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+
+    wait_for_event_match(codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionCreated { session_id },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+
+    Ok(())
+}
+
+async fn close_realtime_conversation(codex: &codex_core::CodexThread) -> Result<()> {
+    codex.submit(Op::RealtimeConversationClose).await?;
+    wait_for_event_match(codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+    Ok(())
+}
+
+fn assert_request_contains_realtime_start(request: &responses::ResponsesRequest) {
+    let body = request.body_json().to_string();
+    assert!(
+        body.contains("<realtime_conversation>"),
+        "expected request to restate realtime instructions"
+    );
+    assert!(
+        !body.contains("Reason: inactive"),
+        "expected request to use realtime start instructions"
+    );
+}
+
+fn assert_request_contains_realtime_end(request: &responses::ResponsesRequest) {
+    let body = request.body_json().to_string();
+    assert!(
+        body.contains("<realtime_conversation>"),
+        "expected request to restate realtime instructions"
+    );
+    assert!(
+        body.contains("Reason: inactive"),
+        "expected request to use realtime end instructions"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1302,6 +1407,470 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
         "compaction item should be present after compaction"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_start() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let realtime_server = start_remote_realtime_server().await;
+    let mut builder = remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
+        config.model_auto_compact_token_limit = Some(200);
+    });
+    let test = builder.build(&server).await?;
+
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+                responses::ev_completed_with_tokens("r1", 500),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_SECOND_REPLY"),
+                responses::ev_completed_with_tokens("r2", 80),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_json_once(
+        &server,
+        serde_json::json!({
+            "output": compacted_summary_only_output(
+                "REMOTE_PRETURN_REALTIME_STILL_ACTIVE_SUMMARY"
+            )
+        }),
+    )
+    .await;
+
+    start_realtime_conversation(test.codex.as_ref()).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let compact_request = compact_mock.single_request();
+    let post_compact_request = &requests[1];
+    assert_request_contains_realtime_start(post_compact_request);
+
+    insta::assert_snapshot!(
+        "remote_pre_turn_compaction_restates_realtime_start_shapes",
+        format_labeled_requests_snapshot(
+            "Remote pre-turn auto-compaction while realtime remains active: compaction clears the reference baseline, so the follow-up request restates realtime-start instructions.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                (
+                    "Remote Post-Compaction History Layout",
+                    post_compact_request
+                ),
+            ]
+        )
+    );
+
+    close_realtime_conversation(test.codex.as_ref()).await?;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_end() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let realtime_server = start_remote_realtime_server().await;
+    let mut builder = remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
+        config.model_auto_compact_token_limit = Some(200);
+    });
+    let test = builder.build(&server).await?;
+
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+                responses::ev_completed_with_tokens("r1", 500),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_SECOND_REPLY"),
+                responses::ev_completed_with_tokens("r2", 80),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_json_once(
+        &server,
+        serde_json::json!({
+            "output": compacted_summary_only_output(
+                "REMOTE_PRETURN_REALTIME_CLOSED_SUMMARY"
+            )
+        }),
+    )
+    .await;
+
+    start_realtime_conversation(test.codex.as_ref()).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    close_realtime_conversation(test.codex.as_ref()).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let compact_request = compact_mock.single_request();
+    let post_compact_request = &requests[1];
+    assert_request_contains_realtime_end(post_compact_request);
+
+    insta::assert_snapshot!(
+        "remote_pre_turn_compaction_restates_realtime_end_shapes",
+        format_labeled_requests_snapshot(
+            "Remote pre-turn auto-compaction after realtime was closed between turns: the follow-up request emits realtime-end instructions from previous-turn settings even though compaction cleared the reference baseline.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                (
+                    "Remote Post-Compaction History Layout",
+                    post_compact_request
+                ),
+            ]
+        )
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_manual_compact_restates_realtime_start() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let realtime_server = start_remote_realtime_server().await;
+    let mut builder = remote_realtime_test_codex_builder(&realtime_server);
+    let test = builder.build(&server).await?;
+
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+                responses::ev_completed_with_tokens("r1", 60),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_SECOND_REPLY"),
+                responses::ev_completed_with_tokens("r2", 80),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_json_once(
+        &server,
+        serde_json::json!({
+            "output": compacted_summary_only_output(
+                "REMOTE_MANUAL_REALTIME_STILL_ACTIVE_SUMMARY"
+            )
+        }),
+    )
+    .await;
+
+    start_realtime_conversation(test.codex.as_ref()).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let compact_request = compact_mock.single_request();
+    let post_compact_request = &requests[1];
+    assert_request_contains_realtime_start(post_compact_request);
+
+    insta::assert_snapshot!(
+        "remote_manual_compact_restates_realtime_start_shapes",
+        format_labeled_requests_snapshot(
+            "Remote manual /compact while realtime remains active: the next regular turn restates realtime-start instructions after compaction clears the baseline.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                (
+                    "Remote Post-Compaction History Layout",
+                    post_compact_request
+                ),
+            ]
+        )
+    );
+
+    close_realtime_conversation(test.codex.as_ref()).await?;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_mid_turn_compaction_does_not_restate_realtime_end()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let realtime_server = start_remote_realtime_server().await;
+    let mut builder = remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
+        config.model_auto_compact_token_limit = Some(200);
+    });
+    let test = builder.build(&server).await?;
+
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("setup", "REMOTE_SETUP_REPLY"),
+                responses::ev_completed_with_tokens("setup-response", 60),
+            ]),
+            responses::sse(vec![
+                responses::ev_function_call("call-remote-mid-turn", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed_with_tokens("r1", 500),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_MID_TURN_FINAL_REPLY"),
+                responses::ev_completed_with_tokens("r2", 80),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_json_once(
+        &server,
+        serde_json::json!({
+            "output": compacted_summary_only_output(
+                "REMOTE_MID_TURN_REALTIME_CLOSED_SUMMARY"
+            )
+        }),
+    )
+    .await;
+
+    start_realtime_conversation(test.codex.as_ref()).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "SETUP_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    close_realtime_conversation(test.codex.as_ref()).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3, "expected three model requests");
+
+    let second_turn_request = &requests[1];
+    let compact_request = compact_mock.single_request();
+    let post_compact_request = &requests[2];
+    assert_request_contains_realtime_end(second_turn_request);
+    assert!(
+        !post_compact_request
+            .body_json()
+            .to_string()
+            .contains("<realtime_conversation>"),
+        "did not expect post-compaction history to restate realtime instructions once the current turn had already established an inactive baseline"
+    );
+
+    insta::assert_snapshot!(
+        "remote_mid_turn_compaction_does_not_restate_realtime_end_shapes",
+        format_labeled_requests_snapshot(
+            "Remote mid-turn continuation compaction after realtime was closed before the turn: the initial second-turn request emits realtime-end instructions, but the continuation request does not restate them after compaction because the current turn already established the inactive baseline.",
+            &[
+                ("Second Turn Initial Request", second_turn_request),
+                ("Remote Compaction Request", &compact_request),
+                (
+                    "Remote Post-Compaction History Layout",
+                    post_compact_request
+                ),
+            ]
+        )
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_compact_resume_restates_realtime_end() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let realtime_server = start_remote_realtime_server().await;
+    let mut builder = remote_realtime_test_codex_builder(&realtime_server);
+    let initial = builder.build(&server).await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+                responses::ev_completed_with_tokens("r1", 60),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_AFTER_RESUME_REPLY"),
+                responses::ev_completed_with_tokens("r2", 80),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_json_once(
+        &server,
+        serde_json::json!({
+            "output": compacted_summary_only_output(
+                "REMOTE_RESUME_REALTIME_CLOSED_SUMMARY"
+            )
+        }),
+    )
+    .await;
+
+    start_realtime_conversation(initial.codex.as_ref()).await?;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    close_realtime_conversation(initial.codex.as_ref()).await?;
+
+    initial.codex.submit(Op::Compact).await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    initial.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&initial.codex, |ev| {
+        matches!(ev, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let mut resume_builder =
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let compact_request = compact_mock.single_request();
+    let after_resume_request = &requests[1];
+    assert_request_contains_realtime_end(after_resume_request);
+
+    insta::assert_snapshot!(
+        "remote_compact_resume_restates_realtime_end_shapes",
+        format_labeled_requests_snapshot(
+            "After remote manual /compact and resume, the first resumed turn rebuilds history from the compaction item and restates realtime-end instructions from reconstructed previous-turn settings.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                ("Remote Post-Resume History Layout", after_resume_request),
+            ]
+        )
+    );
+
+    realtime_server.shutdown().await;
     Ok(())
 }
 

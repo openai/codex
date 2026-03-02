@@ -30,6 +30,7 @@ pub struct ThreadConfigSnapshot {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     pub cwd: PathBuf,
+    pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,

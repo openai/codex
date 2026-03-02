@@ -2517,6 +2517,8 @@ pub struct Thread {
     pub id: String,
     /// Usually the first user message in the thread, if available.
     pub preview: String,
+    /// Whether the thread is ephemeral and should not be materialized on disk.
+    pub ephemeral: bool,
     /// Model provider used for this thread (for example, 'openai').
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
@@ -2555,6 +2557,7 @@ pub struct Thread {
 #[ts(export_to = "v2/")]
 pub struct AccountUpdatedNotification {
     pub auth_mode: Option<AuthMode>,
+    pub plan_type: Option<PlanType>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

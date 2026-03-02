@@ -7319,6 +7319,16 @@
                 "type": "null"
               }
             ]
+          },
+          "planType": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PlanType"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "AccountUpdatedNotification",
@@ -12498,6 +12508,10 @@
             "description": "Working directory captured for the thread.",
             "type": "string"
           },
+          "ephemeral": {
+            "description": "Whether the thread is ephemeral and should not be materialized on disk.",
+            "type": "boolean"
+          },
           "gitInfo": {
             "anyOf": [
               {
@@ -12567,6 +12581,7 @@
           "cliVersion",
           "createdAt",
           "cwd",
+          "ephemeral",
           "id",
           "modelProvider",
           "preview",

@@ -26,7 +26,7 @@ pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 16;
 pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
-pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 1_024;
+pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
@@ -371,6 +371,8 @@ pub struct FeedbackConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct MemoriesToml {
+    /// When `true`, web searches and MCP tool calls mark the thread `memory_mode` as `"polluted"`.
+    pub no_memories_if_mcp_or_web_search: Option<bool>,
     /// When `false`, newly created threads are stored with `memory_mode = "disabled"` in the state DB.
     pub generate_memories: Option<bool>,
     /// When `false`, skip injecting memory usage instructions into developer prompts.
@@ -394,6 +396,7 @@ pub struct MemoriesToml {
 /// Effective memories settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoriesConfig {
+    pub no_memories_if_mcp_or_web_search: bool,
     pub generate_memories: bool,
     pub use_memories: bool,
     pub max_raw_memories_for_global: usize,
@@ -408,6 +411,7 @@ pub struct MemoriesConfig {
 impl Default for MemoriesConfig {
     fn default() -> Self {
         Self {
+            no_memories_if_mcp_or_web_search: false,
             generate_memories: true,
             use_memories: true,
             max_raw_memories_for_global: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
@@ -425,6 +429,9 @@ impl From<MemoriesToml> for MemoriesConfig {
     fn from(toml: MemoriesToml) -> Self {
         let defaults = Self::default();
         Self {
+            no_memories_if_mcp_or_web_search: toml
+                .no_memories_if_mcp_or_web_search
+                .unwrap_or(defaults.no_memories_if_mcp_or_web_search),
             generate_memories: toml.generate_memories.unwrap_or(defaults.generate_memories),
             use_memories: toml.use_memories.unwrap_or(defaults.use_memories),
             max_raw_memories_for_global: toml
@@ -667,6 +674,14 @@ impl fmt::Display for NotificationMethod {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelAvailabilityNuxConfig {
+    /// Number of times a startup availability NUX has been shown per model slug.
+    #[serde(default, flatten)]
+    pub shown_count: HashMap<String, u32>,
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -716,6 +731,10 @@ pub struct Tui {
     /// Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.
     #[serde(default)]
     pub theme: Option<String>,
+
+    /// Startup tooltip availability NUX state persisted by the TUI.
+    #[serde(default)]
+    pub model_availability_nux: ModelAvailabilityNuxConfig,
 }
 
 const fn default_true() -> bool {
@@ -752,6 +771,14 @@ impl Notice {
 #[schemars(deny_unknown_fields)]
 pub struct SkillConfig {
     pub path: AbsolutePathBuf,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PluginConfig {
+    pub path: AbsolutePathBuf,
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
 

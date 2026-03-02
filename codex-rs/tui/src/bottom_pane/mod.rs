@@ -812,6 +812,11 @@ impl BottomPane {
         self.is_task_running
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_active_view(&self) -> bool {
+        !self.view_stack.is_empty()
+    }
+
     /// Return true when the pane is in the regular composer state without any
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
@@ -1115,6 +1120,8 @@ mod tests {
 
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
+            thread_id: codex_protocol::ThreadId::new(),
+            thread_label: None,
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,

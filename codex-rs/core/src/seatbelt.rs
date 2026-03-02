@@ -582,6 +582,57 @@ mod tests {
     }
 
     #[test]
+    fn bundle_id_automation_keeps_lsopen_denied() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).expect("create cwd");
+
+        let args = create_seatbelt_command_args_with_extensions(
+            vec![
+                "/usr/bin/python3".to_string(),
+                "-c".to_string(),
+                r#"import ctypes
+import os
+import sys
+lib = ctypes.CDLL("/usr/lib/libsandbox.1.dylib")
+lib.sandbox_check.restype = ctypes.c_int
+allowed = lib.sandbox_check(os.getpid(), b"lsopen", 0) == 0
+sys.exit(0 if allowed else 13)
+"#
+                .to_string(),
+            ],
+            &SandboxPolicy::new_read_only_policy(),
+            cwd.as_path(),
+            false,
+            None,
+            Some(&MacOsSeatbeltProfileExtensions {
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                    "com.apple.Notes".to_string(),
+                ]),
+                ..Default::default()
+            }),
+        );
+
+        let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+            .args(&args)
+            .current_dir(&cwd)
+            .output()
+            .expect("execute seatbelt command");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted") {
+            return;
+        }
+
+        assert_eq!(
+            Some(13),
+            output.status.code(),
+            "lsopen should remain denied even with bundle-scoped automation\nstdout: {}\nstderr: {stderr}",
+            String::from_utf8_lossy(&output.stdout),
+        );
+    }
+
+    #[test]
     fn seatbelt_args_without_extension_profile_keep_legacy_preferences_read_access() {
         let cwd = std::env::temp_dir();
         let args = create_seatbelt_command_args(

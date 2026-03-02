@@ -367,6 +367,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     server.shutdown().await;
     Ok(())
 }
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Result<()> {
     skip_if_no_network!(Ok(()));

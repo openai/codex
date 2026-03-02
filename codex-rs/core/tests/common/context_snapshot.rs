@@ -214,11 +214,14 @@ pub fn format_labeled_items_snapshot(
 fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String {
     match options.render_mode {
         ContextSnapshotRenderMode::RedactedText => {
-            canonicalize_snapshot_text(text).replace('\n', "\\n")
+            normalize_snapshot_line_endings(&canonicalize_snapshot_text(text)).replace('\n', "\\n")
         }
-        ContextSnapshotRenderMode::FullText => text.replace('\n', "\\n"),
+        ContextSnapshotRenderMode::FullText => {
+            normalize_snapshot_line_endings(text).replace('\n', "\\n")
+        }
         ContextSnapshotRenderMode::KindWithTextPrefix { max_chars } => {
-            let normalized = canonicalize_snapshot_text(text).replace('\n', "\\n");
+            let normalized = normalize_snapshot_line_endings(&canonicalize_snapshot_text(text))
+                .replace('\n', "\\n");
             if normalized.chars().count() <= max_chars {
                 normalized
             } else {
@@ -228,6 +231,10 @@ fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String 
         }
         ContextSnapshotRenderMode::KindOnly => unreachable!(),
     }
+}
+
+fn normalize_snapshot_line_endings(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 fn canonicalize_snapshot_text(text: &str) -> String {
@@ -309,6 +316,25 @@ mod tests {
     }
 
     #[test]
+    fn full_text_mode_normalizes_crlf_line_endings() {
+        let items = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "line one\r\n\r\nline two"
+            }]
+        })];
+
+        let rendered = format_response_items_snapshot(
+            &items,
+            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::FullText),
+        );
+
+        assert_eq!(rendered, r"00:message/user:line one\n\nline two");
+    }
+
+    #[test]
     fn redacted_text_mode_keeps_canonical_placeholders() {
         let items = vec![json!({
             "type": "message",
@@ -346,6 +372,29 @@ mod tests {
         assert_eq!(
             rendered,
             "00:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>:subagents=2>"
+        );
+    }
+
+    #[test]
+    fn kind_with_text_prefix_mode_normalizes_crlf_line_endings() {
+        let items = vec![json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": "<realtime_conversation>\r\nRealtime conversation started.\r\n\r\nYou are..."
+            }]
+        })];
+
+        let rendered = format_response_items_snapshot(
+            &items,
+            &ContextSnapshotOptions::default()
+                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
+        );
+
+        assert_eq!(
+            rendered,
+            r"00:message/developer:<realtime_conversation>\nRealtime conversation started.\n\nYou a..."
         );
     }
 

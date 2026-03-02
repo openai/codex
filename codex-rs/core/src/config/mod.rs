@@ -9,12 +9,14 @@ use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::MemoriesConfig;
 use crate::config::types::MemoriesToml;
+use crate::config::types::ModelAvailabilityNuxConfig;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
+use crate::config::types::PluginConfig;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
@@ -275,6 +277,9 @@ pub struct Config {
 
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
+
+    /// Persisted startup availability NUX state for model tooltips.
+    pub model_availability_nux: ModelAvailabilityNuxConfig,
 
     /// Start the TUI in the specified collaboration mode (plan/default).
 
@@ -1206,6 +1211,10 @@ pub struct ConfigToml {
 
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
+
+    /// User-level plugin config entries keyed by plugin name.
+    #[serde(default)]
+    pub plugins: HashMap<String, PluginConfig>,
 
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
@@ -2213,6 +2222,11 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            model_availability_nux: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.model_availability_nux.clone())
+                .unwrap_or_default(),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()
@@ -2401,6 +2415,7 @@ mod tests {
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::MemoriesConfig;
     use crate::config::types::MemoriesToml;
+    use crate::config::types::ModelAvailabilityNuxConfig;
     use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
@@ -2490,6 +2505,7 @@ persistence = "none"
 
         let memories = r#"
 [memories]
+no_memories_if_mcp_or_web_search = true
 generate_memories = false
 use_memories = false
 max_raw_memories_for_global = 512
@@ -2504,6 +2520,7 @@ phase_2_model = "gpt-5"
             toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
         assert_eq!(
             Some(MemoriesToml {
+                no_memories_if_mcp_or_web_search: Some(true),
                 generate_memories: Some(false),
                 use_memories: Some(false),
                 max_raw_memories_for_global: Some(512),
@@ -2526,6 +2543,7 @@ phase_2_model = "gpt-5"
         assert_eq!(
             config.memories,
             MemoriesConfig {
+                no_memories_if_mcp_or_web_search: true,
                 generate_memories: false,
                 use_memories: false,
                 max_raw_memories_for_global: 512,
@@ -2536,6 +2554,51 @@ phase_2_model = "gpt-5"
                 phase_1_model: Some("gpt-5-mini".to_string()),
                 phase_2_model: Some("gpt-5".to_string()),
             }
+        );
+    }
+
+    #[test]
+    fn config_toml_deserializes_model_availability_nux() {
+        let toml = r#"
+[tui.model_availability_nux]
+"gpt-foo" = 2
+"gpt-bar" = 4
+"#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for TUI NUX");
+
+        assert_eq!(
+            cfg.tui.expect("tui config should deserialize"),
+            Tui {
+                notifications: Notifications::default(),
+                notification_method: NotificationMethod::default(),
+                animations: true,
+                show_tooltips: true,
+                alternate_screen: AltScreenMode::default(),
+                status_line: None,
+                theme: None,
+                model_availability_nux: ModelAvailabilityNuxConfig {
+                    shown_count: HashMap::from([
+                        ("gpt-bar".to_string(), 4),
+                        ("gpt-foo".to_string(), 2),
+                    ]),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_config_defaults_model_availability_nux() {
+        let cfg = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            tempdir().expect("tempdir").path().to_path_buf(),
+        )
+        .expect("load config");
+
+        assert_eq!(
+            cfg.model_availability_nux,
+            ModelAvailabilityNuxConfig::default()
         );
     }
 
@@ -2673,6 +2736,7 @@ theme = "dracula"
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
                 theme: None,
+                model_availability_nux: ModelAvailabilityNuxConfig::default(),
             }
         );
     }
@@ -4884,6 +4948,7 @@ model_verbosity = "high"
                 tui_notification_method: Default::default(),
                 animations: true,
                 show_tooltips: true,
+                model_availability_nux: ModelAvailabilityNuxConfig::default(),
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
@@ -5011,6 +5076,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
@@ -5136,6 +5202,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
@@ -5247,6 +5314,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
@@ -5861,12 +5929,12 @@ mcp_oauth_callback_url = "https://example.com/callback"
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .cloud_requirements(CloudRequirementsLoader::new(async {
-                Some(crate::config_loader::ConfigRequirementsToml {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
                     allowed_sandbox_modes: Some(vec![
                         crate::config_loader::SandboxModeRequirement::ReadOnly,
                     ]),
                     ..Default::default()
-                })
+                }))
             }))
             .build()
             .await?;
@@ -5902,9 +5970,9 @@ mcp_oauth_callback_url = "https://example.com/callback"
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(codex_home.path().to_path_buf()))
-            .cloud_requirements(CloudRequirementsLoader::new(
-                async move { Some(requirements) },
-            ))
+            .cloud_requirements(CloudRequirementsLoader::new(async move {
+                Ok(Some(requirements))
+            }))
             .build()
             .await?;
         assert_eq!(
@@ -5928,12 +5996,12 @@ mcp_oauth_callback_url = "https://example.com/callback"
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(codex_home.path().to_path_buf()))
             .cloud_requirements(CloudRequirementsLoader::new(async {
-                Some(crate::config_loader::ConfigRequirementsToml {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
                     allowed_web_search_modes: Some(vec![
                         crate::config_loader::WebSearchModeRequirement::Cached,
                     ]),
                     ..Default::default()
-                })
+                }))
             }))
             .build()
             .await?;
@@ -5969,10 +6037,10 @@ trust_level = "untrusted"
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(workspace.path().to_path_buf()))
             .cloud_requirements(CloudRequirementsLoader::new(async {
-                Some(crate::config_loader::ConfigRequirementsToml {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
                     allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                     ..Default::default()
-                })
+                }))
             }))
             .build()
             .await?;
@@ -5998,10 +6066,10 @@ trust_level = "untrusted"
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(codex_home.path().to_path_buf()))
             .cloud_requirements(CloudRequirementsLoader::new(async {
-                Some(crate::config_loader::ConfigRequirementsToml {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
                     allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                     ..Default::default()
-                })
+                }))
             }))
             .build()
             .await?;

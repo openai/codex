@@ -1,10 +1,10 @@
-use crate::config::Config;
 use crate::config::Permissions;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::default_project_root_markers;
 use crate::config_loader::merge_toml_values;
 use crate::config_loader::project_root_markers_from_config;
+use crate::plugins::plugin_namespace_for_skill_path;
 use crate::skills::model::SkillDependencies;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillInterface;
@@ -32,10 +32,15 @@ use std::path::PathBuf;
 use toml::Value as TomlValue;
 use tracing::error;
 
+#[cfg(test)]
+use crate::config::Config;
+
 #[derive(Debug, Deserialize)]
 struct SkillFrontmatter {
-    name: String,
-    description: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
     #[serde(default)]
     metadata: SkillFrontmatterMetadata,
 }
@@ -146,20 +151,6 @@ impl fmt::Display for SkillParseError {
 
 impl Error for SkillParseError {}
 
-pub fn load_skills(config: &Config) -> SkillLoadOutcome {
-    load_skills_with_home_dir(config, home_dir().as_deref())
-}
-
-fn load_skills_with_home_dir(config: &Config, home_dir: Option<&Path>) -> SkillLoadOutcome {
-    let mut roots = skill_roots_from_layer_stack_inner(&config.config_layer_stack, home_dir);
-    roots.extend(repo_agents_skill_roots(
-        &config.config_layer_stack,
-        &config.cwd,
-    ));
-    dedupe_skill_roots_by_path(&mut roots);
-    load_skills_from_roots(roots)
-}
-
 pub(crate) struct SkillRoot {
     pub(crate) path: PathBuf,
     pub(crate) scope: SkillScope,
@@ -197,6 +188,35 @@ where
     });
 
     outcome
+}
+
+pub(crate) fn skill_roots(
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &Path,
+    plugin_skill_roots: Vec<PathBuf>,
+) -> Vec<SkillRoot> {
+    skill_roots_with_home_dir(
+        config_layer_stack,
+        cwd,
+        home_dir().as_deref(),
+        plugin_skill_roots,
+    )
+}
+
+fn skill_roots_with_home_dir(
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &Path,
+    home_dir: Option<&Path>,
+    plugin_skill_roots: Vec<PathBuf>,
+) -> Vec<SkillRoot> {
+    let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir);
+    roots.extend(plugin_skill_roots.into_iter().map(|path| SkillRoot {
+        path,
+        scope: SkillScope::User,
+    }));
+    roots.extend(repo_agents_skill_roots(config_layer_stack, cwd));
+    dedupe_skill_roots_by_path(&mut roots);
+    roots
 }
 
 fn skill_roots_from_layer_stack_inner(
@@ -258,34 +278,6 @@ fn skill_roots_from_layer_stack_inner(
     }
 
     roots
-}
-
-#[cfg(test)]
-fn skill_roots(config: &Config) -> Vec<SkillRoot> {
-    skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd)
-}
-
-#[cfg(test)]
-pub(crate) fn skill_roots_from_layer_stack(
-    config_layer_stack: &ConfigLayerStack,
-    home_dir: Option<&Path>,
-) -> Vec<SkillRoot> {
-    skill_roots_from_layer_stack_inner(config_layer_stack, home_dir)
-}
-
-pub(crate) fn skill_roots_from_layer_stack_with_agents(
-    config_layer_stack: &ConfigLayerStack,
-    cwd: &Path,
-) -> Vec<SkillRoot> {
-    let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir().as_deref());
-    roots.extend(repo_agents_skill_roots(config_layer_stack, cwd));
-    dedupe_skill_roots_by_path(&mut roots);
-    roots
-}
-
-fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
-    let mut seen: HashSet<PathBuf> = HashSet::new();
-    roots.retain(|root| seen.insert(root.path.clone()));
 }
 
 fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) -> Vec<SkillRoot> {
@@ -359,6 +351,11 @@ fn dirs_between_project_root_and_cwd(cwd: &Path, project_root: &Path) -> Vec<Pat
         .collect::<Vec<_>>();
     dirs.reverse();
     dirs
+}
+
+fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    roots.retain(|root| seen.insert(root.path.clone()));
 }
 
 fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
@@ -508,8 +505,18 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
     let parsed: SkillFrontmatter =
         serde_yaml::from_str(&frontmatter).map_err(SkillParseError::InvalidYaml)?;
 
-    let name = sanitize_single_line(&parsed.name);
-    let description = sanitize_single_line(&parsed.description);
+    let base_name = parsed
+        .name
+        .as_deref()
+        .map(sanitize_single_line)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default_skill_name(path));
+    let name = namespaced_skill_name(path, &base_name);
+    let description = parsed
+        .description
+        .as_deref()
+        .map(sanitize_single_line)
+        .unwrap_or_default();
     let short_description = parsed
         .metadata
         .short_description
@@ -548,6 +555,21 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         path_to_skills_md: resolved_path,
         scope,
     })
+}
+
+fn default_skill_name(path: &Path) -> String {
+    path.parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .map(sanitize_single_line)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "skill".to_string())
+}
+
+fn namespaced_skill_name(path: &Path, base_name: &str) -> String {
+    plugin_namespace_for_skill_path(path)
+        .map(|namespace| format!("{namespace}:{base_name}"))
+        .unwrap_or_else(|| base_name.to_string())
 }
 
 fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
@@ -828,6 +850,13 @@ fn extract_frontmatter(contents: &str) -> Option<String> {
 
     Some(frontmatter_lines.join("\n"))
 }
+#[cfg(test)]
+pub(crate) fn skill_roots_from_layer_stack(
+    config_layer_stack: &ConfigLayerStack,
+    home_dir: Option<&Path>,
+) -> Vec<SkillRoot> {
+    skill_roots_with_home_dir(config_layer_stack, Path::new("."), home_dir, Vec::new())
+}
 
 #[cfg(test)]
 mod tests {
@@ -897,7 +926,12 @@ mod tests {
 
     fn load_skills_for_test(config: &Config) -> SkillLoadOutcome {
         // Keep unit tests hermetic by never scanning the real `$HOME/.agents/skills`.
-        super::load_skills_with_home_dir(config, None)
+        super::load_skills_from_roots(super::skill_roots_with_home_dir(
+            &config.config_layer_stack,
+            &config.cwd,
+            None,
+            Vec::new(),
+        ))
     }
 
     fn mark_as_git_repo(dir: &Path) {
@@ -1101,6 +1135,15 @@ mod tests {
             "---\nname: {name}\ndescription: |-\n  {indented_description}\n---\n\n# Body\n"
         );
         let path = skill_dir.join(SKILLS_FILENAME);
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    fn write_raw_skill_at(root: &Path, dir: &str, frontmatter: &str) -> PathBuf {
+        let skill_dir = root.join(dir);
+        fs::create_dir_all(&skill_dir).unwrap();
+        let path = skill_dir.join(SKILLS_FILENAME);
+        let content = format!("---\n{frontmatter}\n---\n\n# Body\n");
         fs::write(&path, content).unwrap();
         path
     }
@@ -2058,6 +2101,83 @@ permissions:
     }
 
     #[tokio::test]
+    async fn falls_back_to_directory_name_when_skill_name_is_missing() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_raw_skill_at(
+            &codex_home.path().join("skills"),
+            "directory-derived",
+            "description: fallback name",
+        );
+        let cfg = make_config(&codex_home).await;
+
+        let outcome = load_skills_for_test(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "directory-derived".to_string(),
+                description: "fallback name".to_string(),
+                short_description: None,
+                interface: None,
+                dependencies: None,
+                policy: None,
+                permission_profile: None,
+                permissions: None,
+                path_to_skills_md: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn namespaces_plugin_skills_using_plugin_name() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let plugin_root = root.path().join("plugins/sample");
+        let skill_path = write_raw_skill_at(
+            &plugin_root.join("skills"),
+            "sample-search",
+            "description: search sample data",
+        );
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"sample"}"#,
+        )
+        .unwrap();
+
+        let outcome = load_skills_from_roots([SkillRoot {
+            path: plugin_root.join("skills"),
+            scope: SkillScope::User,
+        }]);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "sample:sample-search".to_string(),
+                description: "search sample data".to_string(),
+                short_description: None,
+                interface: None,
+                dependencies: None,
+                policy: None,
+                permission_profile: None,
+                permissions: None,
+                path_to_skills_md: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
     async fn loads_short_description_from_metadata() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let skill_dir = codex_home.path().join("skills/demo");
@@ -2659,10 +2779,11 @@ permissions:
         let codex_home = tempfile::tempdir().expect("tempdir");
         let cfg = make_config(&codex_home).await;
 
-        let scopes: Vec<SkillScope> = skill_roots(&cfg)
-            .into_iter()
-            .map(|root| root.scope)
-            .collect();
+        let scopes: Vec<SkillScope> =
+            super::skill_roots(&cfg.config_layer_stack, &cfg.cwd, Vec::new())
+                .into_iter()
+                .map(|root| root.scope)
+                .collect();
         let mut expected = vec![SkillScope::User, SkillScope::System];
         if home_dir().is_some() {
             expected.insert(1, SkillScope::User);
