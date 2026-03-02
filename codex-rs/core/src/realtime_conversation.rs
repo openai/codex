@@ -50,7 +50,6 @@ pub(crate) struct RealtimeConversationManager {
 
 #[derive(Debug)]
 struct HandoffOutput {
-    handoff_id: String,
     output_text: String,
 }
 
@@ -79,10 +78,7 @@ impl RealtimeHandoffState {
         };
 
         self.output_tx
-            .send(HandoffOutput {
-                handoff_id,
-                output_text,
-            })
+            .send(HandoffOutput { output_text })
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         Ok(())
@@ -503,11 +499,11 @@ fn spawn_realtime_input_task(
                 handoff_output = handoff_output_rx.recv() => {
                     match handoff_output {
                         Ok(handoff_output) => {
+                            let Some(handoff_id) = handoff_state.active_handoff_id().await else {
+                                continue;
+                            };
                             if let Err(err) = writer
-                                .send_conversation_handoff_append(
-                                    handoff_output.handoff_id,
-                                    handoff_output.output_text,
-                                )
+                                .send_conversation_handoff_append(handoff_id, handoff_output.output_text)
                                 .await
                             {
                                 let mapped_error = map_api_error(err);
