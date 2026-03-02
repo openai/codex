@@ -473,6 +473,18 @@ async fn http_plain_proxy(
     };
     let host = normalize_host(&authority.host.to_string());
     let port = authority.port;
+    if let Err(reason) = validate_absolute_form_host_header(&req, &host, port) {
+        let client = client.as_deref().unwrap_or_default();
+        let host_header = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("<missing>");
+        warn!(
+            "request rejected due to mismatched Host header (client={client}, target={host}:{port}, host_header={host_header}, reason={reason})"
+        );
+        return Ok(text_response(StatusCode::BAD_REQUEST, reason));
+    }
     let enabled = match app_state
         .enabled()
         .await
@@ -649,6 +661,83 @@ fn request_network_attempt_id(req: &Request) -> Option<String> {
     // Some HTTP stacks normalize proxy credentials into `authorization`; accept both.
     attempt_id_from_proxy_authorization(req.headers().get("proxy-authorization"))
         .or_else(|| attempt_id_from_proxy_authorization(req.headers().get("authorization")))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct HostHeaderAuthority {
+    host: String,
+    port: Option<u16>,
+}
+
+fn validate_absolute_form_host_header(
+    req: &Request,
+    authority_host: &str,
+    authority_port: u16,
+) -> Result<(), &'static str> {
+    if req.uri().scheme_str().is_none() {
+        return Ok(());
+    }
+
+    let Some(host_header) = req.headers().get(header::HOST) else {
+        return Ok(());
+    };
+
+    let parsed = parse_host_header_authority(host_header).ok_or("invalid Host header")?;
+    if parsed.host != authority_host {
+        return Err("Host header does not match request target");
+    }
+
+    if let Some(host_port) = parsed.port {
+        if host_port != authority_port {
+            return Err("Host header does not match request target");
+        }
+        return Ok(());
+    }
+
+    let target_port_was_explicit = req.uri().port_u16().is_some();
+    let default_port = req.uri().scheme_str().and_then(default_port_for_scheme);
+    if target_port_was_explicit && default_port != Some(authority_port) {
+        return Err("Host header does not match request target");
+    }
+
+    Ok(())
+}
+
+fn parse_host_header_authority(value: &HeaderValue) -> Option<HostHeaderAuthority> {
+    let raw = value.to_str().ok()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let host = normalize_host(raw);
+    if host.is_empty() {
+        return None;
+    }
+
+    let port = if raw.starts_with('[') {
+        let end = raw.find(']')?;
+        let remainder = &raw[end + 1..];
+        if remainder.is_empty() {
+            None
+        } else {
+            Some(remainder.strip_prefix(':')?.parse::<u16>().ok()?)
+        }
+    } else if raw.bytes().filter(|byte| *byte == b':').count() == 1 {
+        let (_, port) = raw.rsplit_once(':')?;
+        Some(port.parse::<u16>().ok()?)
+    } else {
+        None
+    };
+
+    Some(HostHeaderAuthority { host, port })
+}
+
+fn default_port_for_scheme(scheme: &str) -> Option<u16> {
+    match scheme {
+        "http" | "ws" => Some(80),
+        "https" | "wss" => Some(443),
+        _ => None,
+    }
 }
 
 fn remove_hop_by_hop_request_headers(headers: &mut HeaderMap) {
@@ -873,6 +962,26 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn http_plain_proxy_rejects_mismatched_host_header_for_absolute_form() {
+        let policy = NetworkProxySettings {
+            allowed_domains: vec!["raw.githubusercontent.com".to_string()],
+            ..Default::default()
+        };
+        let state = Arc::new(network_proxy_state_for_policy(policy));
+
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://raw.githubusercontent.com/")
+            .header("host", "api.github.com")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let response = http_plain_proxy(None, req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
     #[test]
     fn request_network_attempt_id_reads_proxy_authorization_header() {
         let encoded = STANDARD.encode("codex-net-attempt-attempt-1:");
@@ -900,6 +1009,51 @@ mod tests {
         assert_eq!(
             request_network_attempt_id(&req),
             Some("attempt-2".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_absolute_form_host_header_allows_matching_default_port() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/")
+            .header("host", "example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            validate_absolute_form_host_header(&req, "example.com", 80),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validate_absolute_form_host_header_rejects_mismatched_host() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://raw.githubusercontent.com/")
+            .header("host", "api.github.com")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            validate_absolute_form_host_header(&req, "raw.githubusercontent.com", 80),
+            Err("Host header does not match request target")
+        );
+    }
+
+    #[test]
+    fn validate_absolute_form_host_header_rejects_missing_non_default_port() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com:8080/")
+            .header("host", "example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            validate_absolute_form_host_header(&req, "example.com", 8080),
+            Err("Host header does not match request target")
         );
     }
 
