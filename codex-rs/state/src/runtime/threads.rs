@@ -220,6 +220,35 @@ FROM threads
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn update_thread_git_info(
+        &self,
+        thread_id: ThreadId,
+        git_sha: Option<&str>,
+        git_branch: Option<&str>,
+        git_origin_url: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            r#"
+UPDATE threads
+SET
+    git_sha = CASE WHEN ? THEN ? ELSE git_sha END,
+    git_branch = CASE WHEN ? THEN ? ELSE git_branch END,
+    git_origin_url = CASE WHEN ? THEN ? ELSE git_origin_url END
+WHERE id = ?
+            "#,
+        )
+        .bind(git_sha.is_some())
+        .bind(git_sha)
+        .bind(git_branch.is_some())
+        .bind(git_branch)
+        .bind(git_origin_url.is_some())
+        .bind(git_origin_url)
+        .bind(thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn upsert_thread_with_creation_memory_mode(
         &self,
         metadata: &crate::ThreadMetadata,
@@ -653,5 +682,64 @@ mod tests {
             .await
             .expect("memory mode should load");
         assert_eq!(memory_mode.as_deref(), Some("polluted"));
+    }
+
+    #[tokio::test]
+    async fn update_thread_git_info_preserves_newer_non_git_metadata() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000789").expect("valid thread id");
+        let metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("initial upsert should succeed");
+
+        let updated_at = datetime_to_epoch_seconds(
+            DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
+        );
+        sqlx::query(
+            "UPDATE threads SET updated_at = ?, tokens_used = ?, first_user_message = ? WHERE id = ?",
+        )
+        .bind(updated_at)
+        .bind(123_i64)
+        .bind("newer preview")
+        .bind(thread_id.to_string())
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("concurrent metadata write should succeed");
+
+        let updated = runtime
+            .update_thread_git_info(
+                thread_id,
+                Some("abc123"),
+                Some("feature/branch"),
+                Some("git@example.com:openai/codex.git"),
+            )
+            .await
+            .expect("git info update should succeed");
+        assert!(updated, "git info update should touch the thread row");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.tokens_used, 123);
+        assert_eq!(
+            persisted.first_user_message.as_deref(),
+            Some("newer preview")
+        );
+        assert_eq!(datetime_to_epoch_seconds(persisted.updated_at), updated_at);
+        assert_eq!(persisted.git_sha.as_deref(), Some("abc123"));
+        assert_eq!(persisted.git_branch.as_deref(), Some("feature/branch"));
+        assert_eq!(
+            persisted.git_origin_url.as_deref(),
+            Some("git@example.com:openai/codex.git")
+        );
     }
 }

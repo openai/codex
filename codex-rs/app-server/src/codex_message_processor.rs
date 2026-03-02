@@ -141,10 +141,10 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
-use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
+use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -2478,7 +2478,7 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let mut metadata = match state_db_ctx.get_thread(thread_uuid).await {
+        match state_db_ctx.get_thread(thread_uuid).await {
             Ok(Some(metadata)) => metadata,
             Ok(None) => {
                 if let Some(thread) = loaded_thread.as_ref() {
@@ -2630,47 +2630,75 @@ impl CodexMessageProcessor {
             }
         };
 
-        if let Some(sha) = sha {
-            let sha = sha.trim().to_string();
-            if sha.is_empty() {
-                self.send_invalid_request_error(
-                    request_id,
-                    "gitInfo.sha must not be empty".to_string(),
-                )
-                .await;
-                return;
+        let git_sha = match sha {
+            Some(sha) => {
+                let sha = sha.trim().to_string();
+                if sha.is_empty() {
+                    self.send_invalid_request_error(
+                        request_id,
+                        "gitInfo.sha must not be empty".to_string(),
+                    )
+                    .await;
+                    return;
+                }
+                Some(sha)
             }
-            metadata.git_sha = Some(sha);
-        }
-        if let Some(branch) = branch {
-            let branch = branch.trim().to_string();
-            if branch.is_empty() {
-                self.send_invalid_request_error(
-                    request_id,
-                    "gitInfo.branch must not be empty".to_string(),
-                )
-                .await;
-                return;
+            None => None,
+        };
+        let git_branch = match branch {
+            Some(branch) => {
+                let branch = branch.trim().to_string();
+                if branch.is_empty() {
+                    self.send_invalid_request_error(
+                        request_id,
+                        "gitInfo.branch must not be empty".to_string(),
+                    )
+                    .await;
+                    return;
+                }
+                Some(branch)
             }
-            metadata.git_branch = Some(branch);
-        }
-        if let Some(origin_url) = origin_url {
-            let origin_url = origin_url.trim().to_string();
-            if origin_url.is_empty() {
-                self.send_invalid_request_error(
-                    request_id,
-                    "gitInfo.originUrl must not be empty".to_string(),
-                )
-                .await;
-                return;
+            None => None,
+        };
+        let git_origin_url = match origin_url {
+            Some(origin_url) => {
+                let origin_url = origin_url.trim().to_string();
+                if origin_url.is_empty() {
+                    self.send_invalid_request_error(
+                        request_id,
+                        "gitInfo.originUrl must not be empty".to_string(),
+                    )
+                    .await;
+                    return;
+                }
+                Some(origin_url)
             }
-            metadata.git_origin_url = Some(origin_url);
-        }
+            None => None,
+        };
 
-        if let Err(err) = state_db_ctx.upsert_thread(&metadata).await {
+        let updated = match state_db_ctx
+            .update_thread_git_info(
+                thread_uuid,
+                git_sha.as_deref(),
+                git_branch.as_deref(),
+                git_origin_url.as_deref(),
+            )
+            .await
+        {
+            Ok(updated) => updated,
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to update thread metadata for {thread_uuid}: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+        if !updated {
             self.send_internal_error(
                 request_id,
-                format!("failed to update thread metadata for {thread_uuid}: {err}"),
+                format!("thread metadata disappeared before update completed: {thread_uuid}"),
             )
             .await;
             return;
