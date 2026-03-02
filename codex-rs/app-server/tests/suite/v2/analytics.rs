@@ -30,7 +30,7 @@ async fn app_server_default_analytics_disabled_without_flag() -> Result<()> {
     let provider = codex_core::otel_init::build_provider(
         &config,
         SERVICE_VERSION,
-        Some("codex_app_server"),
+        Some("codex-app-server"),
         false,
     )
     .map_err(|err| anyhow::anyhow!(err.to_string()))?;
@@ -55,7 +55,7 @@ async fn app_server_default_analytics_enabled_with_flag() -> Result<()> {
     let provider = codex_core::otel_init::build_provider(
         &config,
         SERVICE_VERSION,
-        Some("codex_app_server"),
+        Some("codex-app-server"),
         true,
     )
     .map_err(|err| anyhow::anyhow!(err.to_string()))?;
