@@ -1114,6 +1114,9 @@ mod tests {
         let manager = thread_manager();
         session.services.agent_control = manager.agent_control();
         let mut config = (*turn.config).clone();
+        let provider = built_in_model_providers()["ollama"].clone();
+        config.model_provider_id = "ollama".to_string();
+        config.model_provider = provider.clone();
         config
             .permissions
             .approval_policy
@@ -1122,6 +1125,7 @@ mod tests {
         turn.approval_policy
             .set(AskForApproval::OnRequest)
             .expect("approval policy should be set");
+        turn.provider = provider;
         turn.config = Arc::new(config);
 
         let invocation = invocation(
@@ -1160,6 +1164,7 @@ mod tests {
             .config_snapshot()
             .await;
         assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
+        assert_eq!(snapshot.model_provider_id, "ollama");
     }
 
     #[tokio::test]

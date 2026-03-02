@@ -86,6 +86,8 @@ pub(crate) async fn apply_role_to_config(
         merged_config,
         ConfigOverrides {
             cwd: Some(config.cwd.clone()),
+            model_provider: Some(config.model_provider_id.clone()),
+            config_profile: config.active_profile.clone(),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
             js_repl_node_path: config.js_repl_node_path.clone(),
@@ -225,6 +227,7 @@ Rules:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CONFIG_TOML_FILE;
     use crate::config::ConfigBuilder;
     use crate::config_loader::ConfigLayerStackOrdering;
     use crate::plugins::PluginsManager;
@@ -380,6 +383,52 @@ mod tests {
             config.main_execve_wrapper_exe,
             Some(PathBuf::from("/tmp/codex-execve-wrapper"))
         );
+    }
+
+    #[tokio::test]
+    async fn apply_role_preserves_active_profile_and_model_provider() {
+        let home = TempDir::new().expect("create temp dir");
+        tokio::fs::write(
+            home.path().join(CONFIG_TOML_FILE),
+            r#"
+[model_providers.test-provider]
+name = "Test Provider"
+base_url = "https://example.com/v1"
+env_key = "TEST_PROVIDER_API_KEY"
+wire_api = "responses"
+
+[profiles.test-profile]
+model_provider = "test-provider"
+"#,
+        )
+        .await
+        .expect("write config.toml");
+        let mut config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                config_profile: Some("test-profile".to_string()),
+                ..Default::default()
+            })
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .build()
+            .await
+            .expect("load config");
+        let role_path = write_role_config(&home, "empty-role.toml", "").await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+            },
+        );
+
+        apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect("custom role should apply");
+
+        assert_eq!(config.active_profile.as_deref(), Some("test-profile"));
+        assert_eq!(config.model_provider_id, "test-provider");
+        assert_eq!(config.model_provider.name, "Test Provider");
     }
 
     #[tokio::test]
