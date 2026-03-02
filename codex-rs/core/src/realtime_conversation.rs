@@ -521,13 +521,10 @@ fn spawn_realtime_input_task(
                 event = events.next_event() => {
                     match event {
                         Ok(Some(event)) => {
-                            match &event {
-                                RealtimeEvent::HandoffRequested(handoff) => {
-                                    handoff_state
-                                        .set_active_handoff(handoff.handoff_id.clone())
-                                        .await;
-                                }
-                                _ => {}
+                            if let RealtimeEvent::HandoffRequested(handoff) = &event {
+                                handoff_state
+                                    .set_active_handoff(handoff.handoff_id.clone())
+                                    .await;
                             }
                             let should_stop = matches!(&event, RealtimeEvent::Error(_));
                             if events_tx.send(event).await.is_err() {
