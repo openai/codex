@@ -1,3 +1,11 @@
+//! Applies agent-role configuration layers on top of an existing session config.
+//!
+//! Roles are selected at spawn time and are loaded with the same config machinery as
+//! `config.toml`. This module resolves built-in and user-defined role files, inserts the role as a
+//! high-precedence layer, and preserves the caller's current profile/provider unless the role
+//! explicitly takes ownership of model selection. It does not decide when to spawn a sub-agent or
+//! which role to use; the multi-agent tool handler owns that orchestration.
+
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
@@ -13,10 +21,18 @@ use std::path::Path;
 use std::sync::LazyLock;
 use toml::Value as TomlValue;
 
+/// The role name used when a caller omits `agent_type`.
 pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
-/// Applies a role config layer to a mutable config and preserves unspecified keys.
+/// Applies a named role layer to `config` while preserving caller-owned model selection.
+///
+/// The role layer is inserted at session-flag precedence so it can override persisted config, but
+/// the caller's current `profile` and `model_provider` remain sticky runtime choices unless the
+/// role explicitly sets `profile`, explicitly sets `model_provider`, or rewrites the active
+/// profile's `model_provider` in place. Rebuilding the config without those overrides would make a
+/// spawned agent silently fall back to the default provider, which is the bug this preservation
+/// logic avoids.
 pub(crate) async fn apply_role_to_config(
     config: &mut Config,
     role_name: Option<&str>,
@@ -74,6 +90,8 @@ pub(crate) async fn apply_role_to_config(
                 .map(|profile| profile.contains_key("model_provider"))
         })
         .unwrap_or(false);
+    // A role that does not explicitly take ownership of model selection should inherit the
+    // caller's current profile/provider choices across the config reload.
     let preserve_current_profile = !role_selects_provider && !role_selects_profile;
     let preserve_current_provider =
         preserve_current_profile && !role_updates_active_profile_provider;
