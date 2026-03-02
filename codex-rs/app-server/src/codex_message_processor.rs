@@ -141,6 +141,7 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -2341,6 +2342,14 @@ impl CodexMessageProcessor {
 
     async fn thread_set_name(&self, request_id: ConnectionRequestId, params: ThreadSetNameParams) {
         let ThreadSetNameParams { thread_id, name } = params;
+        let thread_id = match ThreadId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
         let Some(name) = codex_core::util::normalize_thread_name(&name) else {
             self.send_invalid_request_error(
                 request_id,
@@ -2350,15 +2359,43 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let (_, thread) = match self.load_thread(&thread_id).await {
-            Ok(v) => v,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            if let Err(err) = thread.submit(Op::SetThreadName { name }).await {
+                self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
+                    .await;
                 return;
             }
-        };
 
-        if let Err(err) = thread.submit(Op::SetThreadName { name }).await {
+            self.outgoing
+                .send_response(request_id, ThreadSetNameResponse {})
+                .await;
+            return;
+        }
+
+        let thread_exists =
+            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
+            {
+                Ok(Some(_)) => true,
+                Ok(None) => false,
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate thread id {thread_id}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+        if !thread_exists {
+            self.send_invalid_request_error(request_id, format!("thread not found: {thread_id}"))
+                .await;
+            return;
+        }
+
+        if let Err(err) =
+            codex_core::append_thread_name(&self.config.codex_home, thread_id, &name).await
+        {
             self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
                 .await;
             return;
@@ -2366,6 +2403,13 @@ impl CodexMessageProcessor {
 
         self.outgoing
             .send_response(request_id, ThreadSetNameResponse {})
+            .await;
+        let notification = ThreadNameUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            thread_name: Some(name),
+        };
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
             .await;
     }
 
