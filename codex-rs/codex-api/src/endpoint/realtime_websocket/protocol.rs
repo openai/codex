@@ -139,6 +139,13 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
             .get("item")
             .cloned()
             .map(RealtimeEvent::ConversationItemAdded),
+        "conversation.item.done" => parsed
+            .get("item")
+            .and_then(Value::as_object)
+            .and_then(|item| item.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .map(|item_id| RealtimeEvent::ConversationItemDone { item_id }),
         "conversation.handoff.requested" => {
             let handoff_id = parsed
                 .get("handoff_id")

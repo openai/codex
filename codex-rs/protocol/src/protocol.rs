@@ -128,6 +128,9 @@ pub enum RealtimeEvent {
     },
     AudioOut(RealtimeAudioFrame),
     ConversationItemAdded(Value),
+    ConversationItemDone {
+        item_id: String,
+    },
     HandoffRequested(RealtimeHandoffRequested),
     Error(String),
 }

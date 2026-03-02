@@ -188,6 +188,7 @@ impl ChatWidget {
             }
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
             RealtimeEvent::ConversationItemAdded(_item) => {}
+            RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}
             RealtimeEvent::Error(message) => {
                 self.add_error_message(format!("Realtime voice error: {message}"));

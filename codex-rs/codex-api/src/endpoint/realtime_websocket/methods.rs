@@ -545,8 +545,8 @@ fn normalize_realtime_path(url: &mut Url) {
         return;
     }
 
-    if path == "/v1" {
-        url.set_path("/v1/realtime");
+    if path.ends_with("/v1") {
+        url.set_path(&format!("{path}/realtime"));
         return;
     }
 
@@ -620,6 +620,21 @@ mod tests {
             Some(RealtimeEvent::ConversationItemAdded(
                 json!({"type": "message", "seq": 7})
             ))
+        );
+    }
+
+    #[test]
+    fn parse_conversation_item_done_event() {
+        let payload = json!({
+            "type": "conversation.item.done",
+            "item": {"id": "item_123", "type": "message"}
+        })
+        .to_string();
+        assert_eq!(
+            parse_realtime_event(payload.as_str()),
+            Some(RealtimeEvent::ConversationItemDone {
+                item_id: "item_123".to_string(),
+            })
         );
     }
 
@@ -711,6 +726,17 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "wss://api.openai.com/v1/realtime?intent=quicksilver&model=snapshot"
+        );
+    }
+
+    #[test]
+    fn websocket_url_from_nested_v1_base_appends_realtime_path() {
+        let url =
+            websocket_url_from_api_url("https://example.com/openai/v1", None, Some("snapshot"))
+                .expect("build ws url");
+        assert_eq!(
+            url.as_str(),
+            "wss://example.com/openai/v1/realtime?intent=quicksilver&model=snapshot"
         );
     }
 

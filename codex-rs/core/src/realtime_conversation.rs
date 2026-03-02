@@ -53,17 +53,23 @@ struct HandoffOutput {
     output_text: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ActiveHandoff {
+    handoff_id: String,
+    item_id: String,
+}
+
 #[derive(Clone, Debug)]
 struct RealtimeHandoffState {
     output_tx: Sender<HandoffOutput>,
-    active_handoff_id: Arc<Mutex<Option<String>>>,
+    active_handoff: Arc<Mutex<Option<ActiveHandoff>>>,
 }
 
 impl RealtimeHandoffState {
     fn new(output_tx: Sender<HandoffOutput>) -> Self {
         Self {
             output_tx,
-            active_handoff_id: Arc::new(Mutex::new(None)),
+            active_handoff: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -83,7 +89,28 @@ impl RealtimeHandoffState {
     }
 
     async fn active_handoff_id(&self) -> Option<String> {
-        self.active_handoff_id.lock().await.clone()
+        self.active_handoff
+            .lock()
+            .await
+            .as_ref()
+            .map(|handoff| handoff.handoff_id.clone())
+    }
+
+    async fn set_active_handoff(&self, handoff_id: String, item_id: String) {
+        *self.active_handoff.lock().await = Some(ActiveHandoff {
+            handoff_id,
+            item_id,
+        });
+    }
+
+    async fn clear_if_done_item(&self, item_id: &str) {
+        let mut active_handoff = self.active_handoff.lock().await;
+        if active_handoff
+            .as_ref()
+            .is_some_and(|handoff| handoff.item_id == item_id)
+        {
+            *active_handoff = None;
+        }
     }
 }
 
@@ -485,9 +512,19 @@ fn spawn_realtime_input_task(
                 event = events.next_event() => {
                     match event {
                         Ok(Some(event)) => {
-                            if let RealtimeEvent::HandoffRequested(handoff) = &event {
-                                *handoff_state.active_handoff_id.lock().await =
-                                    Some(handoff.handoff_id.clone());
+                            match &event {
+                                RealtimeEvent::HandoffRequested(handoff) => {
+                                    handoff_state
+                                        .set_active_handoff(
+                                            handoff.handoff_id.clone(),
+                                            handoff.item_id.clone(),
+                                        )
+                                        .await;
+                                }
+                                RealtimeEvent::ConversationItemDone { item_id } => {
+                                    handoff_state.clear_if_done_item(item_id).await;
+                                }
+                                _ => {}
                             }
                             let should_stop = matches!(&event, RealtimeEvent::Error(_));
                             if events_tx.send(event).await.is_err() {
@@ -555,7 +592,9 @@ async fn send_conversation_error(
 
 #[cfg(test)]
 mod tests {
+    use super::RealtimeHandoffState;
     use super::realtime_text_from_handoff_request;
+    use async_channel::bounded;
     use codex_protocol::protocol::RealtimeHandoffMessage;
     use codex_protocol::protocol::RealtimeHandoffRequested;
     use pretty_assertions::assert_eq;
@@ -586,5 +625,44 @@ mod tests {
             messages: vec![],
         };
         assert_eq!(realtime_text_from_handoff_request(&handoff), None);
+    }
+
+    #[tokio::test]
+    async fn clears_active_handoff_when_done_item_matches() {
+        let (tx, _rx) = bounded(1);
+        let state = RealtimeHandoffState::new(tx);
+
+        state
+            .set_active_handoff("handoff_1".to_string(), "item_1".to_string())
+            .await;
+        state.clear_if_done_item("item_2").await;
+        assert_eq!(
+            state.active_handoff_id().await,
+            Some("handoff_1".to_string())
+        );
+
+        state.clear_if_done_item("item_1").await;
+        assert_eq!(state.active_handoff_id().await, None);
+    }
+
+    #[tokio::test]
+    async fn sends_handoff_output_to_active_handoff_only() {
+        let (tx, rx) = bounded(1);
+        let state = RealtimeHandoffState::new(tx);
+
+        state
+            .send_output("ignored".to_string())
+            .await
+            .expect("send");
+        assert!(rx.is_empty());
+
+        state
+            .set_active_handoff("handoff_1".to_string(), "item_1".to_string())
+            .await;
+        state.send_output("result".to_string()).await.expect("send");
+
+        let output = rx.recv().await.expect("recv");
+        assert_eq!(output.handoff_id, "handoff_1");
+        assert_eq!(output.output_text, "result");
     }
 }

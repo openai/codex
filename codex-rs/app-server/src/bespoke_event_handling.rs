@@ -255,6 +255,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             ))
                             .await;
                     }
+                    RealtimeEvent::ConversationItemDone { .. } => {}
                     RealtimeEvent::HandoffRequested(handoff) => {
                         let notification = ThreadRealtimeItemAddedNotification {
                             thread_id: conversation_id.to_string(),
