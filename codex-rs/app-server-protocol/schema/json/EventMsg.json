@@ -4285,6 +4285,27 @@
         {
           "additionalProperties": false,
           "properties": {
+            "ConversationItemDone": {
+              "properties": {
+                "item_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "item_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ConversationItemDone"
+          ],
+          "title": "ConversationItemDoneRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "HandoffRequested": {
               "$ref": "#/definitions/RealtimeHandoffRequested"
             }
