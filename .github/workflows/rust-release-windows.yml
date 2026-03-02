@@ -150,13 +150,13 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download prebuilt Windows primary binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: windows-binaries-${{ matrix.target }}-primary
           path: codex-rs/target/${{ matrix.target }}/release
 
       - name: Download prebuilt Windows helper binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: windows-binaries-${{ matrix.target }}-helpers
           path: codex-rs/target/${{ matrix.target }}/release
