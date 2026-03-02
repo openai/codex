@@ -92,11 +92,13 @@ pub struct FileSearchOptions {
     pub exclude: Vec<String>,
     pub threads: NonZero<usize>,
     pub compute_indices: bool,
-    /// Toggle gitignore processing in the walker.
+    /// Toggle ignore-file processing in the walker.
     ///
-    /// With this enabled, ignore rules are still scoped by
-    /// `WalkBuilder::require_git(true)`, so `.gitignore` files are honored only
-    /// when the traversed path is inside a git repository.
+    /// When enabled, `.gitignore` files are scoped by
+    /// `WalkBuilder::require_git(true)`, so they are honored only when the
+    /// traversed path is inside a git repository. When disabled, the walker
+    /// turns off `.gitignore`, git-global/exclude rules, `.ignore`, and
+    /// parent-directory ignore scanning.
     pub respect_gitignore: bool,
 }
 
@@ -627,7 +629,6 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::fs;
-    use std::process::Command as StdCommand;
     use std::sync::Arc;
     use std::sync::Condvar;
     use std::sync::Mutex;
@@ -1002,7 +1003,7 @@ mod tests {
         fs::write(parent.join(".gitignore"), "*\n!.gitignore\n").unwrap();
         fs::write(
             repo.join(".gitignore"),
-            ".vscode/*\n!.vscode/\n!.vscode/settings.json\n",
+            ".vscode/*\n!.vscode/\n!.vscode/settings.json\n!package.json\n",
         )
         .unwrap();
         fs::write(repo.join("package.json"), "{ \"name\": \"demo\" }\n").unwrap();
@@ -1059,7 +1060,7 @@ mod tests {
         fs::write(parent.join(".gitignore"), "*\n!.gitignore\n").unwrap();
         fs::write(
             repo.join(".gitignore"),
-            ".vscode/*\n!.vscode/\n!.vscode/settings.json\n",
+            ".vscode/*\n!.vscode/\n!.vscode/settings.json\n!package.json\n",
         )
         .unwrap();
         fs::write(repo.join("package.json"), "{ \"name\": \"demo\" }\n").unwrap();
@@ -1070,13 +1071,7 @@ mod tests {
         )
         .unwrap();
 
-        let init_status = StdCommand::new("git")
-            .arg("init")
-            .arg("-q")
-            .current_dir(&repo)
-            .status()
-            .unwrap();
-        assert!(init_status.success());
+        fs::create_dir_all(repo.join(".git")).unwrap();
 
         let package_results = run(
             "package",
