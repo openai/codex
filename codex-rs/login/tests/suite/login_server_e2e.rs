@@ -199,6 +199,32 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
 }
 
 #[tokio::test]
+async fn shutdown_before_waiter_starts_still_cancels_login_server() -> Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().to_path_buf();
+
+    let opts = ServerOptions {
+        codex_home,
+        cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        client_id: codex_login::CLIENT_ID.to_string(),
+        issuer: "http://127.0.0.1:1".to_string(),
+        port: 0,
+        open_browser: false,
+        force_state: Some("state-cancel-before-waiter".to_string()),
+        forced_chatgpt_workspace_id: None,
+    };
+    let server = run_login_server(opts)?;
+    let cancel_handle = server.cancel_handle();
+    cancel_handle.shutdown();
+
+    let result = tokio::time::timeout(Duration::from_secs(1), server.block_until_done()).await?;
+    let err = result.expect_err("login server should report cancellation");
+    assert_eq!(err.to_string(), "Login was not completed");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
