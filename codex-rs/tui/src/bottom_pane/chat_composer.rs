@@ -4108,10 +4108,12 @@ impl ChatComposer {
                     !footer_props.is_task_running && self.collaboration_mode_indicator.is_some();
                 let show_shortcuts_hint = match footer_props.mode {
                     FooterMode::ComposerEmpty => !self.is_in_paste_burst(),
+                    FooterMode::ComposerHasDraft => {
+                        !footer_props.is_task_running && !self.is_in_paste_burst()
+                    }
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ShortcutOverlay
-                    | FooterMode::EscHint
-                    | FooterMode::ComposerHasDraft => false,
+                    | FooterMode::EscHint => false,
                 };
                 let show_queue_hint = match footer_props.mode {
                     FooterMode::ComposerHasDraft => footer_props.is_task_running,
@@ -4141,10 +4143,7 @@ impl ChatComposer {
                     .as_ref()
                     .map(|line| line.clone().dim());
                 let status_line_candidate = footer_props.status_line_enabled
-                    && matches!(
-                        footer_props.mode,
-                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-                    );
+                    && matches!(footer_props.mode, FooterMode::ComposerEmpty);
                 let mut truncated_status_line = if status_line_candidate {
                     status_line.as_ref().map(|line| {
                         truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)

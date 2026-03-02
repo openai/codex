@@ -172,10 +172,10 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
 pub(crate) fn footer_height(props: &FooterProps) -> u16 {
     let show_shortcuts_hint = match props.mode {
         FooterMode::ComposerEmpty => true,
-        FooterMode::QuitShortcutReminder
-        | FooterMode::ShortcutOverlay
-        | FooterMode::EscHint
-        | FooterMode::ComposerHasDraft => false,
+        FooterMode::ComposerHasDraft => !props.is_task_running,
+        FooterMode::QuitShortcutReminder | FooterMode::ShortcutOverlay | FooterMode::EscHint => {
+            false
+        }
     };
     let show_queue_hint = match props.mode {
         FooterMode::ComposerHasDraft => props.is_task_running,
@@ -562,13 +562,12 @@ fn footer_from_props_lines(
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) -> Vec<Line<'static>> {
-    // If status line content is present, show it for base modes.
+    // If status line content is present, show it for the empty-composer state.
+    // Draft states prefer action hints (`?` or `Tab`) over the passive status
+    // line so the footer remains useful while composing.
     if props.status_line_enabled
         && let Some(status_line) = &props.status_line_value
-        && matches!(
-            props.mode,
-            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-        )
+        && matches!(props.mode, FooterMode::ComposerEmpty)
     {
         return vec![status_line.clone().dim()];
     }
@@ -601,6 +600,8 @@ fn footer_from_props_lines(
             let state = LeftSideState {
                 hint: if show_queue_hint {
                     SummaryHintKind::QueueMessage
+                } else if show_shortcuts_hint {
+                    SummaryHintKind::Shortcuts
                 } else {
                     SummaryHintKind::None
                 },
@@ -1013,10 +1014,10 @@ mod tests {
                 let show_cycle_hint = !props.is_task_running;
                 let show_shortcuts_hint = match props.mode {
                     FooterMode::ComposerEmpty => true,
+                    FooterMode::ComposerHasDraft => !props.is_task_running,
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ShortcutOverlay
-                    | FooterMode::EscHint
-                    | FooterMode::ComposerHasDraft => false,
+                    | FooterMode::EscHint => false,
                 };
                 let show_queue_hint = match props.mode {
                     FooterMode::ComposerHasDraft => props.is_task_running,
@@ -1025,13 +1026,15 @@ mod tests {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let left_mode_indicator = if props.status_line_enabled {
+                let status_line_active =
+                    props.status_line_enabled && matches!(props.mode, FooterMode::ComposerEmpty);
+                let left_mode_indicator = if status_line_active {
                     None
                 } else {
                     collaboration_mode_indicator
                 };
                 let available_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
-                let mut truncated_status_line = if props.status_line_enabled
+                let mut truncated_status_line = if status_line_active
                     && matches!(
                         props.mode,
                         FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
@@ -1044,7 +1047,7 @@ mod tests {
                 } else {
                     None
                 };
-                let mut left_width = if props.status_line_enabled {
+                let mut left_width = if status_line_active {
                     truncated_status_line
                         .as_ref()
                         .map(|line| line.width() as u16)
@@ -1058,7 +1061,7 @@ mod tests {
                         show_queue_hint,
                     )
                 };
-                let right_line = if props.status_line_enabled {
+                let right_line = if status_line_active {
                     let full = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint);
                     let compact = mode_indicator_line(collaboration_mode_indicator, false);
                     let full_width = full.as_ref().map(|line| line.width() as u16).unwrap_or(0);
@@ -1077,7 +1080,7 @@ mod tests {
                     .as_ref()
                     .map(|line| line.width() as u16)
                     .unwrap_or(0);
-                if props.status_line_enabled
+                if status_line_active
                     && let Some(max_left) = max_left_width_for_right(area, right_width)
                     && left_width > max_left
                     && let Some(line) = props
@@ -1107,7 +1110,7 @@ mod tests {
                     );
                     match summary_left {
                         SummaryLeft::Default => {
-                            if props.status_line_enabled {
+                            if status_line_active {
                                 if let Some(line) = truncated_status_line.clone() {
                                     render_footer_line(area, f.buffer_mut(), line);
                                 }
@@ -1335,6 +1338,23 @@ mod tests {
         );
 
         snapshot_footer(
+            "footer_composer_has_draft_shortcuts_hint_enabled",
+            FooterProps {
+                mode: FooterMode::ComposerHasDraft,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                collaboration_modes_enabled: false,
+                is_wsl: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+                context_window_percent: None,
+                context_window_used_tokens: None,
+                status_line_value: None,
+                status_line_enabled: false,
+            },
+        );
+
+        snapshot_footer(
             "footer_composer_has_draft_queue_hint_enabled",
             FooterProps {
                 mode: FooterMode::ComposerHasDraft,
@@ -1415,6 +1435,22 @@ mod tests {
         };
 
         snapshot_footer("footer_status_line_overrides_shortcuts", props);
+
+        let props = FooterProps {
+            mode: FooterMode::ComposerHasDraft,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: true,
+            collaboration_modes_enabled: false,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+            status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_enabled: true,
+        };
+
+        snapshot_footer("footer_status_line_yields_to_queue_hint", props);
 
         let props = FooterProps {
             mode: FooterMode::ComposerEmpty,
