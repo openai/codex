@@ -688,6 +688,8 @@ pub(crate) struct ChatWidget {
     terminal_title_invalid_items_warned: Arc<AtomicBool>,
     // Last terminal title emitted, to avoid writing duplicate OSC updates.
     last_terminal_title: Option<String>,
+    // Clears the terminal title on drop unless the widget is being intentionally replaced.
+    clear_terminal_title_on_drop: bool,
     // Original terminal-title config captured when opening the setup UI so live preview can be
     // rolled back on cancel.
     terminal_title_setup_original_items: Option<Option<Vec<String>>>,
@@ -1162,6 +1164,16 @@ impl ChatWidget {
         }
 
         Ok(())
+    }
+
+    /// Prevents drop-time terminal-title cleanup when this widget is being replaced.
+    pub(crate) fn skip_terminal_title_cleanup_on_drop(&mut self) {
+        self.clear_terminal_title_on_drop = false;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clears_terminal_title_on_drop(&self) -> bool {
+        self.clear_terminal_title_on_drop
     }
 
     fn refresh_terminal_title_from_selections(&mut self, selections: &StatusSurfaceSelections) {
@@ -3159,6 +3171,7 @@ impl ChatWidget {
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             last_terminal_title: None,
+            clear_terminal_title_on_drop: true,
             terminal_title_setup_original_items: None,
             status_line_project_root_name_cache: None,
             status_line_branch: None,
@@ -3347,6 +3360,7 @@ impl ChatWidget {
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             last_terminal_title: None,
+            clear_terminal_title_on_drop: true,
             terminal_title_setup_original_items: None,
             status_line_project_root_name_cache: None,
             status_line_branch: None,
@@ -3523,6 +3537,7 @@ impl ChatWidget {
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             last_terminal_title: None,
+            clear_terminal_title_on_drop: true,
             terminal_title_setup_original_items: None,
             status_line_project_root_name_cache: None,
             status_line_branch: None,
@@ -8402,7 +8417,9 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
-        if let Err(err) = self.clear_managed_terminal_title() {
+        if self.clear_terminal_title_on_drop
+            && let Err(err) = self.clear_managed_terminal_title()
+        {
             tracing::debug!(error = %err, "failed to clear terminal title on drop");
         }
         self.stop_rate_limit_poller();

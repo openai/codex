@@ -1326,7 +1326,7 @@ impl App {
             let (tx, _rx) = unbounded_channel();
             tx
         };
-        self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
+        self.replace_chat_widget(ChatWidget::new_with_op_sender(init, codex_op_tx));
 
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot);
@@ -1365,6 +1365,13 @@ impl App {
         self.chat_widget.set_pending_thread_approvals(Vec::new());
     }
 
+    fn replace_chat_widget(&mut self, chat_widget: ChatWidget) {
+        // The replacement widget applies its own title before assignment.
+        // Disarm cleanup on the old widget so its Drop impl does not clear that new title.
+        self.chat_widget.skip_terminal_title_cleanup_on_drop();
+        self.chat_widget = chat_widget;
+    }
+
     async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
@@ -1396,7 +1403,7 @@ impl App {
             terminal_title_invalid_items_warned: self.terminal_title_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         };
-        self.chat_widget = ChatWidget::new(init, self.server.clone());
+        self.replace_chat_widget(ChatWidget::new(init, self.server.clone()));
         self.reset_thread_event_state();
         if let Some(summary) = summary {
             let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
@@ -1993,11 +2000,11 @@ impl App {
                                     tui,
                                     self.config.clone(),
                                 );
-                                self.chat_widget = ChatWidget::new_from_existing(
+                                self.replace_chat_widget(ChatWidget::new_from_existing(
                                     init,
                                     resumed.thread,
                                     resumed.session_configured,
-                                );
+                                ));
                                 self.reset_thread_event_state();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
@@ -2053,11 +2060,11 @@ impl App {
                                     tui,
                                     self.config.clone(),
                                 );
-                                self.chat_widget = ChatWidget::new_from_existing(
+                                self.replace_chat_widget(ChatWidget::new_from_existing(
                                     init,
                                     forked.thread,
                                     forked.session_configured,
-                                );
+                                ));
                                 self.reset_thread_event_state();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
@@ -5403,6 +5410,18 @@ mod tests {
         assert_eq!(app.pending_shutdown_exit_thread_id, Some(thread_id));
         assert!(matches!(control, AppRunControl::Continue));
         assert_eq!(op_rx.try_recv(), Ok(Op::Shutdown));
+    }
+
+    #[tokio::test]
+    async fn replace_chat_widget_keeps_drop_cleanup_armed_on_new_widget() {
+        let mut app = make_test_app().await;
+        let (replacement, _app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+
+        assert!(app.chat_widget.clears_terminal_title_on_drop());
+
+        app.replace_chat_widget(replacement);
+
+        assert!(app.chat_widget.clears_terminal_title_on_drop());
     }
 
     #[tokio::test]

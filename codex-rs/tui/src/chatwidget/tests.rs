@@ -1735,6 +1735,7 @@ async fn make_chatwidget_manual(
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         last_terminal_title: None,
+        clear_terminal_title_on_drop: true,
         terminal_title_setup_original_items: None,
         status_line_project_root_name_cache: None,
         status_line_branch: None,
@@ -8251,6 +8252,17 @@ fn terminal_title_part_truncation_preserves_grapheme_clusters() {
     let value = "ab👩‍💻cdefg".to_string();
     let truncated = ChatWidget::truncate_terminal_title_part(value, 7);
     assert_eq!(truncated, "ab👩‍💻c...");
+}
+
+#[tokio::test]
+async fn skip_terminal_title_cleanup_on_drop_disarms_drop_cleanup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    assert!(chat.clears_terminal_title_on_drop());
+
+    chat.skip_terminal_title_cleanup_on_drop();
+
+    assert!(!chat.clears_terminal_title_on_drop());
 }
 
 #[tokio::test]
