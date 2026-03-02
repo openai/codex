@@ -12,6 +12,7 @@ use crate::slash_command::built_in_slash_commands;
 pub(crate) fn builtins_for_input(
     collaboration_modes_enabled: bool,
     connectors_enabled: bool,
+    fast_command_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
@@ -25,6 +26,7 @@ pub(crate) fn builtins_for_input(
                 || !matches!(*cmd, SlashCommand::Collab | SlashCommand::Plan)
         })
         .filter(|(_, cmd)| connectors_enabled || *cmd != SlashCommand::Apps)
+        .filter(|(_, cmd)| fast_command_enabled || *cmd != SlashCommand::Fast)
         .filter(|(_, cmd)| personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
         .filter(|(_, cmd)| audio_device_selection_enabled || *cmd != SlashCommand::Settings)
@@ -36,6 +38,7 @@ pub(crate) fn find_builtin_command(
     name: &str,
     collaboration_modes_enabled: bool,
     connectors_enabled: bool,
+    fast_command_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
@@ -44,6 +47,7 @@ pub(crate) fn find_builtin_command(
     builtins_for_input(
         collaboration_modes_enabled,
         connectors_enabled,
+        fast_command_enabled,
         personality_command_enabled,
         realtime_conversation_enabled,
         audio_device_selection_enabled,
@@ -59,6 +63,7 @@ pub(crate) fn has_builtin_prefix(
     name: &str,
     collaboration_modes_enabled: bool,
     connectors_enabled: bool,
+    fast_command_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
@@ -67,6 +72,7 @@ pub(crate) fn has_builtin_prefix(
     builtins_for_input(
         collaboration_modes_enabled,
         connectors_enabled,
+        fast_command_enabled,
         personality_command_enabled,
         realtime_conversation_enabled,
         audio_device_selection_enabled,
@@ -83,22 +89,30 @@ mod tests {
 
     #[test]
     fn debug_command_still_resolves_for_dispatch() {
-        let cmd = find_builtin_command("debug-config", true, true, true, false, false, false);
+        let cmd = find_builtin_command("debug-config", true, true, true, true, false, false, false);
         assert_eq!(cmd, Some(SlashCommand::DebugConfig));
     }
 
     #[test]
     fn clear_command_resolves_for_dispatch() {
         assert_eq!(
-            find_builtin_command("clear", true, true, true, false, false, false),
+            find_builtin_command("clear", true, true, true, true, false, false, false),
             Some(SlashCommand::Clear)
+        );
+    }
+
+    #[test]
+    fn fast_command_is_hidden_when_disabled() {
+        assert_eq!(
+            find_builtin_command("fast", true, true, false, true, false, false, false),
+            None
         );
     }
 
     #[test]
     fn realtime_command_is_hidden_when_realtime_is_disabled() {
         assert_eq!(
-            find_builtin_command("realtime", true, true, true, false, true, false),
+            find_builtin_command("realtime", true, true, true, true, false, true, false),
             None
         );
     }
@@ -106,7 +120,7 @@ mod tests {
     #[test]
     fn settings_command_is_hidden_when_realtime_is_disabled() {
         assert_eq!(
-            find_builtin_command("settings", true, true, true, false, false, false),
+            find_builtin_command("settings", true, true, true, true, false, false, false),
             None
         );
     }
@@ -114,7 +128,7 @@ mod tests {
     #[test]
     fn settings_command_is_hidden_when_audio_device_selection_is_disabled() {
         assert_eq!(
-            find_builtin_command("settings", true, true, true, true, false, false),
+            find_builtin_command("settings", true, true, true, true, true, false, false),
             None
         );
     }

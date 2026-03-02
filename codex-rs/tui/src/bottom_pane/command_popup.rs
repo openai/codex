@@ -38,6 +38,7 @@ pub(crate) struct CommandPopup {
 pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) connectors_enabled: bool,
+    pub(crate) fast_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
@@ -50,6 +51,7 @@ impl CommandPopup {
         let builtins: Vec<(&'static str, SlashCommand)> = slash_commands::builtins_for_input(
             flags.collaboration_modes_enabled,
             flags.connectors_enabled,
+            flags.fast_command_enabled,
             flags.personality_command_enabled,
             flags.realtime_conversation_enabled,
             flags.audio_device_selection_enabled,
@@ -498,6 +500,7 @@ mod tests {
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
+                fast_command_enabled: false,
                 personality_command_enabled: true,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
@@ -519,6 +522,7 @@ mod tests {
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
+                fast_command_enabled: false,
                 personality_command_enabled: true,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
@@ -540,6 +544,7 @@ mod tests {
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
+                fast_command_enabled: false,
                 personality_command_enabled: false,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
@@ -569,6 +574,7 @@ mod tests {
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
+                fast_command_enabled: false,
                 personality_command_enabled: true,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
@@ -590,6 +596,7 @@ mod tests {
             CommandPopupFlags {
                 collaboration_modes_enabled: false,
                 connectors_enabled: false,
+                fast_command_enabled: false,
                 personality_command_enabled: true,
                 realtime_conversation_enabled: true,
                 audio_device_selection_enabled: false,

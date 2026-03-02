@@ -6496,6 +6496,7 @@ async fn disabled_slash_command_while_task_running_snapshot() {
 #[tokio::test]
 async fn fast_slash_command_updates_and_persists_local_service_tier() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::FastMode, true);
 
     chat.dispatch_command(SlashCommand::Fast);
 

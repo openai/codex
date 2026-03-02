@@ -1149,6 +1149,7 @@ impl ChatWidget {
             None,
         );
         self.refresh_model_display();
+        self.sync_fast_command_enabled();
         self.sync_personality_command_enabled();
         let startup_tooltip_override = self.startup_tooltip_override.take();
         let session_info_cell = history_cell::new_session_info(
@@ -2918,6 +2919,7 @@ impl ChatWidget {
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(true);
+        widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
         widget
             .bottom_pane
@@ -3097,6 +3099,7 @@ impl ChatWidget {
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(true);
+        widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
         widget
             .bottom_pane
@@ -3265,6 +3268,7 @@ impl ChatWidget {
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(true);
+        widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
         widget
             .bottom_pane
@@ -6767,6 +6771,9 @@ impl ChatWidget {
                 self.reset_realtime_conversation_state();
             }
         }
+        if feature == Feature::FastMode {
+            self.sync_fast_command_enabled();
+        }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
@@ -6854,6 +6861,10 @@ impl ChatWidget {
         self.config.service_tier = service_tier;
     }
 
+    fn fast_mode_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::FastMode)
+    }
+
     pub(crate) fn set_realtime_audio_device(
         &mut self,
         kind: RealtimeAudioDeviceKind,
@@ -6927,6 +6938,11 @@ impl ChatWidget {
     fn current_realtime_audio_selection_label(&self, kind: RealtimeAudioDeviceKind) -> String {
         self.current_realtime_audio_device_name(kind)
             .unwrap_or_else(|| "System default".to_string())
+    }
+
+    fn sync_fast_command_enabled(&mut self) {
+        self.bottom_pane
+            .set_fast_command_enabled(self.fast_mode_enabled());
     }
 
     fn sync_personality_command_enabled(&mut self) {
