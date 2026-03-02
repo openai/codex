@@ -502,6 +502,23 @@ impl ModelClient {
     }
 }
 
+impl ModelClientSession {
+    /// Reuse the startup-prewarmed websocket connection when the first real turn changes service
+    /// tier, but invalidate request-level reuse state so the next request becomes a fresh
+    /// `response.create`.
+    ///
+    /// This keeps the handshake win from prewarm without leaking stale warmup request state into
+    /// the first user turn.
+    pub fn reset_prewarm_for_service_tier(&mut self, service_tier: ServiceTier) {
+        if self.service_tier == service_tier {
+            return;
+        }
+        self.service_tier = service_tier;
+        self.websocket_session.last_request = None;
+        self.websocket_session.last_response_rx = None;
+    }
+}
+
 impl Drop for ModelClientSession {
     fn drop(&mut self) {
         let websocket_session = std::mem::take(&mut self.websocket_session);

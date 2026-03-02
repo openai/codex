@@ -4894,6 +4894,7 @@ pub(crate) async fn run_turn(
             .model_client
             .new_session_with_service_tier(turn_context.config.service_tier)
     });
+    client_session.reset_prewarm_for_service_tier(turn_context.config.service_tier);
 
     loop {
         // Note that pending_input would be something like a message the user
