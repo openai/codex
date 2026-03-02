@@ -5,6 +5,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
@@ -81,6 +82,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     mcp.initialize().await?;
+    login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
         .send_thread_start_request(ThreadStartParams::default())
@@ -228,6 +230,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     mcp.initialize().await?;
+    login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
         .send_thread_start_request(ThreadStartParams::default())
@@ -344,6 +347,22 @@ async fn read_notification<T: DeserializeOwned>(mcp: &mut McpProcess, method: &s
         .params
         .context("expected notification params to be present")?;
     Ok(serde_json::from_value(params)?)
+}
+
+async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
+    let request_id = mcp
+        .send_login_api_key_request(LoginApiKeyParams {
+            api_key: api_key.to_string(),
+        })
+        .await?;
+
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    Ok(())
 }
 
 fn create_config_toml(
