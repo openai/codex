@@ -15,7 +15,9 @@ jobs:
     permissions:
       contents: read
     outputs:
-      codex_output: ${{ steps.select-final.outputs.codex_output }}
+      issues_json: ${{ steps.normalize-all.outputs.issues_json }}
+      reason: ${{ steps.normalize-all.outputs.reason }}
+      has_matches: ${{ steps.normalize-all.outputs.has_matches }}
     steps:
       - uses: actions/checkout@v6
 
@@ -158,9 +160,58 @@ jobs:
             echo "has_matches=$has_matches"
           } >> "$GITHUB_OUTPUT"
 
+  gather-open-duplicates:
+    name: Identify potential duplicates (open issues fallback)
+    needs: gather-duplicates
+    if: ${{ needs.gather-duplicates.result == 'success' && needs.gather-duplicates.outputs.has_matches != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      issues_json: ${{ steps.normalize-open.outputs.issues_json }}
+      reason: ${{ steps.normalize-open.outputs.reason }}
+      has_matches: ${{ steps.normalize-open.outputs.has_matches }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Prepare Codex inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -eo pipefail
+
+          CURRENT_ISSUE_FILE=codex-current-issue.json
+          EXISTING_OPEN_FILE=codex-existing-issues-open.json
+
+          gh issue list --repo "$REPO" \
+            --json number,title,body,createdAt,updatedAt,state,labels \
+            --limit 1000 \
+            --state open \
+            --search "sort:created-desc" \
+            | jq '[.[] | {
+                number,
+                title,
+                body: ((.body // "")[0:4000]),
+                createdAt,
+                updatedAt,
+                state,
+                labels: ((.labels // []) | map(.name))
+              }]' \
+            > "$EXISTING_OPEN_FILE"
+
+          gh issue view "$ISSUE_NUMBER" \
+            --repo "$REPO" \
+            --json number,title,body \
+            | jq '{number, title, body: ((.body // "")[0:4000])}' \
+            > "$CURRENT_ISSUE_FILE"
+
+          echo "Prepared fallback duplicate detection input files."
+          echo "open_issue_count=$(jq 'length' "$EXISTING_OPEN_FILE")"
+
       - id: codex-open
         name: Find duplicates (pass 2, open issues)
-        if: ${{ steps.normalize-all.outputs.has_matches != 'true' }}
         uses: openai/codex-action@main
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
@@ -200,7 +251,6 @@ jobs:
 
       - id: normalize-open
         name: Normalize pass 2 output
-        if: ${{ steps.normalize-all.outputs.has_matches != 'true' }}
         env:
           CODEX_OUTPUT: ${{ steps.codex-open.outputs.final-message }}
           CURRENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
@@ -243,15 +293,27 @@ jobs:
             echo "has_matches=$has_matches"
           } >> "$GITHUB_OUTPUT"
 
+  select-final:
+    name: Select final duplicate set
+    needs:
+      - gather-duplicates
+      - gather-open-duplicates
+    if: ${{ always() && needs.gather-duplicates.result == 'success' && (needs.gather-open-duplicates.result == 'success' || needs.gather-open-duplicates.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      codex_output: ${{ steps.select-final.outputs.codex_output }}
+    steps:
       - id: select-final
         name: Select final duplicate set
         env:
-          PASS1_ISSUES: ${{ steps.normalize-all.outputs.issues_json }}
-          PASS1_REASON: ${{ steps.normalize-all.outputs.reason }}
-          PASS2_ISSUES: ${{ steps.normalize-open.outputs.issues_json }}
-          PASS2_REASON: ${{ steps.normalize-open.outputs.reason }}
-          PASS1_HAS_MATCHES: ${{ steps.normalize-all.outputs.has_matches }}
-          PASS2_HAS_MATCHES: ${{ steps.normalize-open.outputs.has_matches }}
+          PASS1_ISSUES: ${{ needs.gather-duplicates.outputs.issues_json }}
+          PASS1_REASON: ${{ needs.gather-duplicates.outputs.reason }}
+          PASS2_ISSUES: ${{ needs.gather-open-duplicates.outputs.issues_json }}
+          PASS2_REASON: ${{ needs.gather-open-duplicates.outputs.reason }}
+          PASS1_HAS_MATCHES: ${{ needs.gather-duplicates.outputs.has_matches }}
+          PASS2_HAS_MATCHES: ${{ needs.gather-open-duplicates.outputs.has_matches }}
         run: |
           set -eo pipefail
 
@@ -289,8 +351,8 @@ jobs:
 
   comment-on-issue:
     name: Comment with potential duplicates
-    needs: gather-duplicates
-    if: ${{ needs.gather-duplicates.result != 'skipped' }}
+    needs: select-final
+    if: ${{ needs.select-final.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -299,7 +361,7 @@ jobs:
       - name: Comment on issue
         uses: actions/github-script@v8
         env:
-          CODEX_OUTPUT: ${{ needs.gather-duplicates.outputs.codex_output }}
+          CODEX_OUTPUT: ${{ needs.select-final.outputs.codex_output }}
         with:
           github-token: ${{ github.token }}
           script: |
