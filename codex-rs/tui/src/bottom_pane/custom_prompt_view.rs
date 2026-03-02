@@ -22,7 +22,8 @@ use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
 /// Callback invoked when the user submits a custom prompt.
-pub(crate) type PromptSubmitted = Box<dyn Fn(String) + Send + Sync>;
+pub(crate) type PromptSubmitted = Box<dyn Fn(String) -> Result<(), String> + Send + Sync>;
+pub(crate) type PromptCancelled = Option<Box<dyn Fn() + Send + Sync>>;
 
 /// Minimal multi-line text input view to collect custom review instructions.
 pub(crate) struct CustomPromptView {
@@ -30,10 +31,12 @@ pub(crate) struct CustomPromptView {
     placeholder: String,
     context_label: Option<String>,
     on_submit: PromptSubmitted,
+    on_cancel: PromptCancelled,
 
     // UI state
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
+    error_message: Option<String>,
     complete: bool,
 }
 
@@ -43,14 +46,17 @@ impl CustomPromptView {
         placeholder: String,
         context_label: Option<String>,
         on_submit: PromptSubmitted,
+        on_cancel: PromptCancelled,
     ) -> Self {
         Self {
             title,
             placeholder,
             context_label,
             on_submit,
+            on_cancel,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
+            error_message: None,
             complete: false,
         }
     }
@@ -71,23 +77,30 @@ impl BottomPaneView for CustomPromptView {
             } => {
                 let text = self.textarea.text().trim().to_string();
                 if !text.is_empty() {
-                    (self.on_submit)(text);
-                    self.complete = true;
+                    match (self.on_submit)(text) {
+                        Ok(()) => self.complete = true,
+                        Err(err) => self.error_message = Some(err),
+                    }
                 }
             }
             KeyEvent {
                 code: KeyCode::Enter,
                 ..
             } => {
+                self.error_message = None;
                 self.textarea.input(key_event);
             }
             other => {
+                self.error_message = None;
                 self.textarea.input(other);
             }
         }
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
+        if let Some(on_cancel) = &self.on_cancel {
+            on_cancel();
+        }
         self.complete = true;
         CancellationEvent::Handled
     }
@@ -100,6 +113,7 @@ impl BottomPaneView for CustomPromptView {
         if pasted.is_empty() {
             return false;
         }
+        self.error_message = None;
         self.textarea.insert_str(&pasted);
         true
     }
@@ -107,7 +121,11 @@ impl BottomPaneView for CustomPromptView {
 
 impl Renderable for CustomPromptView {
     fn desired_height(&self, width: u16) -> u16 {
-        let extra_top: u16 = if self.context_label.is_some() { 1 } else { 0 };
+        let extra_top: u16 = if self.context_label.is_some() || self.error_message.is_some() {
+            1
+        } else {
+            0
+        };
         1u16 + extra_top + self.input_height(width) + 3u16
     }
 
@@ -130,7 +148,17 @@ impl Renderable for CustomPromptView {
 
         // Optional context line
         let mut input_y = area.y.saturating_add(1);
-        if let Some(context_label) = &self.context_label {
+        if let Some(error_message) = &self.error_message {
+            let context_area = Rect {
+                x: area.x,
+                y: input_y,
+                width: area.width,
+                height: 1,
+            };
+            let spans: Vec<Span<'static>> = vec![gutter(), error_message.clone().red()];
+            Paragraph::new(Line::from(spans)).render(context_area, buf);
+            input_y = input_y.saturating_add(1);
+        } else if let Some(context_label) = &self.context_label {
             let context_area = Rect {
                 x: area.x,
                 y: input_y,
@@ -221,7 +249,11 @@ impl Renderable for CustomPromptView {
         if text_area_height == 0 {
             return None;
         }
-        let extra_offset: u16 = if self.context_label.is_some() { 1 } else { 0 };
+        let extra_offset: u16 = if self.error_message.is_some() || self.context_label.is_some() {
+            1
+        } else {
+            0
+        };
         let top_line_count = 1u16 + extra_offset;
         let textarea_rect = Rect {
             x: area.x.saturating_add(2),
@@ -244,4 +276,71 @@ impl CustomPromptView {
 
 fn gutter() -> Span<'static> {
     "▌ ".cyan()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn custom_prompt_cursor_uses_error_row_offset() {
+        let mut view = CustomPromptView::new(
+            "Set max fix attempts".to_string(),
+            "Type a positive integer and press Enter".to_string(),
+            None,
+            Box::new(|value: String| match value.parse::<u32>() {
+                Ok(value) if value > 0 => Ok(()),
+                Ok(_) | Err(_) => Err("Enter a positive integer.".to_string()),
+            }),
+            None,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let prompt_area = Rect::new(0, 0, 80, view.desired_height(80));
+        let (_x, y) = view
+            .cursor_pos(prompt_area)
+            .expect("cursor should be positioned when popup is active");
+        assert_eq!(y, 3);
+    }
+
+    #[test]
+    fn custom_prompt_cursor_uses_context_row_offset() {
+        let mut view = CustomPromptView::new(
+            "Custom prompt".to_string(),
+            "Type your input".to_string(),
+            Some("Optional context".to_string()),
+            Box::new(|_| Ok(())),
+            None,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        let prompt_area = Rect::new(0, 0, 80, view.desired_height(80));
+        let (_x, y) = view
+            .cursor_pos(prompt_area)
+            .expect("cursor should be positioned when popup is active");
+        assert_eq!(y, 3);
+    }
+
+    #[test]
+    fn custom_prompt_cursor_uses_basic_row_offset() {
+        let mut view = CustomPromptView::new(
+            "Custom prompt".to_string(),
+            "Type your input".to_string(),
+            None,
+            Box::new(|_| Ok(())),
+            None,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        let prompt_area = Rect::new(0, 0, 80, view.desired_height(80));
+        let (_x, y) = view
+            .cursor_pos(prompt_area)
+            .expect("cursor should be positioned when popup is active");
+        assert_eq!(y, 2);
+    }
 }

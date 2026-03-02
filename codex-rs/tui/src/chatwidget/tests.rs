@@ -29,6 +29,7 @@ use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::ModelsManager;
+use codex_core::review_format::render_review_output_text;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
 use codex_otel::OtelManager;
@@ -78,6 +79,10 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::ReviewCodeLocation;
+use codex_protocol::protocol::ReviewFinding;
+use codex_protocol::protocol::ReviewLineRange;
+use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionSource;
@@ -1714,6 +1719,9 @@ async fn make_chatwidget_manual(
         quit_shortcut_expires_at: None,
         quit_shortcut_key: None,
         is_review_mode: false,
+        review_selector_mode: ReviewSelectorMode::SingleReview,
+        pending_review_loop_draft: None,
+        review_loop_state: None,
         pre_review_token_info: None,
         needs_final_message_separator: false,
         had_work_activity: false,
@@ -1761,6 +1769,53 @@ fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
             !matches!(op, Op::UserTurn { .. }),
             "unexpected submit op: {op:?}"
         );
+    }
+}
+
+fn next_review_request(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> ReviewRequest {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::Review { review_request }) => return review_request,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected a review op but queue was empty"),
+            Err(TryRecvError::Disconnected) => panic!("expected review op but channel closed"),
+        }
+    }
+}
+
+fn assert_no_review_or_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
+    while let Ok(op) = op_rx.try_recv() {
+        assert!(
+            !matches!(op, Op::Review { .. } | Op::UserTurn { .. }),
+            "unexpected follow-up op: {op:?}"
+        );
+    }
+}
+
+fn sample_review_output() -> ReviewOutputEvent {
+    ReviewOutputEvent {
+        findings: vec![ReviewFinding {
+            title: "Missing regression coverage".to_string(),
+            body: "The loop retries review passes but never verifies that the related tests still pass after applying fixes.".to_string(),
+            confidence_score: 0.93,
+            priority: 1,
+            code_location: ReviewCodeLocation {
+                absolute_file_path: PathBuf::from("/tmp/review-loop.rs"),
+                line_range: ReviewLineRange { start: 42, end: 42 },
+            },
+        }],
+        overall_correctness: "incorrect".to_string(),
+        overall_explanation: "The change needs follow-up before it is ready.".to_string(),
+        overall_confidence_score: 0.91,
+    }
+}
+
+fn no_findings_review_output() -> ReviewOutputEvent {
+    ReviewOutputEvent {
+        findings: Vec::new(),
+        overall_correctness: "correct".to_string(),
+        overall_explanation: "No additional issues found.".to_string(),
+        overall_confidence_score: 0.97,
     }
 }
 
@@ -5356,6 +5411,577 @@ async fn review_branch_picker_escape_navigates_back_then_dismisses() {
         chat.is_normal_backtrack_mode(),
         "expected to be back in normal composer mode"
     );
+}
+
+#[tokio::test]
+async fn slash_review_loop_is_blocked_when_feature_disabled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.dispatch_command(SlashCommand::ReviewLoop);
+
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Ask Codex to do anything"),
+        "expected normal composer prompt after blocked review-loop command, got {header:?}"
+    );
+    assert!(chat.review_loop_state.is_none());
+}
+
+#[tokio::test]
+async fn slash_review_loop_opens_review_selector() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::ReviewLoop, true);
+
+    chat.dispatch_command(SlashCommand::ReviewLoop);
+
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Select a review preset"),
+        "expected review selector header: {header:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_review_loop_inline_args_are_preserved_for_selected_target() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::ReviewLoop, true);
+
+    chat.bottom_pane.set_composer_text(
+        "/review-loop focus on migration safety".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::ReviewLoopTargetSelected {
+            target: ReviewTarget::UncommittedChanges,
+            inline_instructions,
+        }) => {
+            assert_eq!(
+                inline_instructions,
+                Some("focus on migration safety".to_string())
+            );
+        }
+        other => panic!("expected ReviewLoopTargetSelected, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn review_loop_custom_selection_uses_inline_prompt_without_extra_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::ReviewLoop, true);
+
+    chat.bottom_pane.set_composer_text(
+        "/review-loop inspect transaction boundaries".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::ReviewLoopTargetSelected {
+            target: ReviewTarget::Custom { instructions },
+            inline_instructions,
+        }) => {
+            assert_eq!(instructions, "inspect transaction boundaries");
+            assert_eq!(
+                inline_instructions,
+                Some("inspect transaction boundaries".to_string())
+            );
+        }
+        other => panic!("expected ReviewLoopTargetSelected, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn review_loop_cap_chooser_unlimited_emits_start_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_review_loop_target_selected(ReviewTarget::UncommittedChanges, None);
+    assert_snapshot!("review_loop_settings_popup", render_bottom_popup(&chat, 70));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::StartReviewLoop { max_fix_attempts }) => {
+            assert_eq!(max_fix_attempts, None);
+        }
+        other => panic!("expected StartReviewLoop, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn review_loop_cap_prompt_accepts_positive_integer() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_review_loop_target_selected(ReviewTarget::UncommittedChanges, None);
+    chat.open_review_loop_cap_prompt();
+    chat.handle_paste("3".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::StartReviewLoop { max_fix_attempts }) => {
+            assert_eq!(max_fix_attempts, Some(3));
+        }
+        other => panic!("expected StartReviewLoop, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn review_loop_cap_prompt_rejects_invalid_value() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_review_loop_target_selected(ReviewTarget::UncommittedChanges, None);
+    chat.open_review_loop_cap_prompt();
+    chat.handle_paste("0".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no app event for invalid cap"
+    );
+    assert_snapshot!(
+        "review_loop_cap_prompt_invalid",
+        render_bottom_popup(&chat, 70)
+    );
+}
+
+#[tokio::test]
+async fn review_loop_stops_immediately_when_first_review_has_no_findings() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.on_review_loop_target_selected(ReviewTarget::UncommittedChanges, None);
+    chat.start_review_loop(None);
+
+    assert_eq!(
+        next_review_request(&mut op_rx),
+        ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }
+    );
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(no_findings_review_output()),
+    });
+    chat.on_task_complete(None, false);
+
+    assert!(chat.review_loop_state.is_none());
+    assert_no_review_or_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn review_loop_findings_trigger_fix_turn_with_required_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let review_output = sample_review_output();
+
+    chat.on_review_loop_target_selected(ReviewTarget::UncommittedChanges, None);
+    chat.start_review_loop(None);
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(review_output.clone()),
+    });
+    chat.on_task_complete(None, false);
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: format!(
+                "Please implement fixes for these findings and rerun the relevant test suites to ensure they are passing.\n\n{}",
+                render_review_output_text(&review_output)
+            ),
+            text_elements: Vec::new(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn review_loop_findings_trigger_fix_turn_with_default_mode_in_plan() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("plan collaboration mode should be available");
+    chat.set_collaboration_mask(plan_mask);
+    let review_output = sample_review_output();
+
+    chat.on_review_loop_target_selected(ReviewTarget::UncommittedChanges, None);
+    chat.start_review_loop(None);
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(review_output),
+    });
+    chat.on_task_complete(None, false);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    ..
+                }),
+            ..
+        } => {}
+        other => panic!("expected fix turn in default mode, got {other:?}"),
+    }
+
+    assert_eq!(chat.active_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn review_loop_commit_targets_append_commit_requirement_to_fix_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let review_output = sample_review_output();
+
+    chat.on_review_loop_target_selected(
+        ReviewTarget::BaseBranch {
+            branch: "main".to_string(),
+        },
+        None,
+    );
+    chat.start_review_loop(None);
+    let generation = chat
+        .review_loop_state
+        .as_ref()
+        .expect("loop state")
+        .generation;
+    chat.on_review_loop_initial_head_resolved(generation, Some("head-1".to_string()));
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(review_output),
+    });
+    chat.on_task_complete(None, false);
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    let UserInput::Text {
+        text,
+        text_elements,
+    } = &items[0]
+    else {
+        panic!("expected text item in fix prompt");
+    };
+    assert_eq!(text_elements, &Vec::new());
+    assert!(
+        text.contains("Before finishing, commit the fixes in a new git commit so the next review pass includes them."),
+        "expected commit reminder in fix prompt: {text:?}"
+    );
+}
+
+#[tokio::test]
+async fn review_loop_commit_follow_up_review_uses_cumulative_stack_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let review_output = sample_review_output();
+
+    chat.on_review_loop_target_selected(
+        ReviewTarget::Commit {
+            sha: "abc1234".to_string(),
+            title: Some("Add review loop".to_string()),
+        },
+        Some("Focus on migration safety.".to_string()),
+    );
+    chat.start_review_loop(None);
+    let generation = chat
+        .review_loop_state
+        .as_ref()
+        .expect("loop state")
+        .generation;
+    chat.on_review_loop_initial_head_resolved(generation, Some("head-1".to_string()));
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(review_output),
+    });
+    chat.on_task_complete(None, false);
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.on_task_complete(None, false);
+    chat.on_review_loop_commit_validation_resolved(
+        generation,
+        Some("head-2".to_string()),
+        Some(false),
+    );
+
+    let expected_prompt = codex_core::review_prompts::commit_follow_up_review_prompt(
+        "abc1234",
+        Some("Add review loop"),
+        Some("Focus on migration safety."),
+    );
+    assert_eq!(
+        next_review_request(&mut op_rx),
+        ReviewRequest {
+            target: ReviewTarget::Custom {
+                instructions: expected_prompt,
+            },
+            user_facing_hint: Some("stack since commit abc1234: Add review loop".to_string()),
+        }
+    );
+}
+
+#[tokio::test]
+async fn review_loop_stops_when_fix_attempt_cap_is_reached() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let review_output = sample_review_output();
+
+    chat.on_review_loop_target_selected(ReviewTarget::UncommittedChanges, None);
+    chat.start_review_loop(Some(1));
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(review_output.clone()),
+    });
+    chat.on_task_complete(None, false);
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.on_task_complete(None, false);
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(review_output),
+    });
+    chat.on_task_complete(None, false);
+
+    assert!(chat.review_loop_state.is_none());
+    assert_no_review_or_submit_op(&mut op_rx);
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .find(|rendered| rendered.contains("Review loop stopped after reaching the limit"))
+        .expect("expected cap reached message");
+    assert_snapshot!("review_loop_cap_reached_info", rendered);
+}
+
+#[tokio::test]
+async fn review_loop_queued_messages_wait_until_loop_completes() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let review_output = sample_review_output();
+
+    chat.on_review_loop_target_selected(ReviewTarget::UncommittedChanges, None);
+    chat.start_review_loop(None);
+    let _ = next_review_request(&mut op_rx);
+
+    chat.queue_user_message("after the loop".to_string().into());
+    assert_eq!(chat.queued_user_messages.len(), 1);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(review_output),
+    });
+    chat.on_task_complete(None, false);
+    let fix_items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected fix Op::UserTurn, got {other:?}"),
+    };
+    assert_ne!(
+        fix_items,
+        vec![UserInput::Text {
+            text: "after the loop".to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+    assert_eq!(chat.queued_user_messages.len(), 1);
+
+    chat.on_task_complete(None, false);
+    let _ = next_review_request(&mut op_rx);
+    assert_eq!(chat.queued_user_messages.len(), 1);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(no_findings_review_output()),
+    });
+    chat.on_task_complete(None, false);
+
+    let queued_items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected queued Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        queued_items,
+        vec![UserInput::Text {
+            text: "after the loop".to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+    assert!(chat.queued_user_messages.is_empty());
+}
+
+#[tokio::test]
+async fn review_loop_commit_validation_failure_stops_with_error() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let review_output = sample_review_output();
+
+    chat.on_review_loop_target_selected(
+        ReviewTarget::BaseBranch {
+            branch: "main".to_string(),
+        },
+        None,
+    );
+    chat.start_review_loop(None);
+    let generation = chat
+        .review_loop_state
+        .as_ref()
+        .expect("loop state")
+        .generation;
+    chat.on_review_loop_initial_head_resolved(generation, Some("head-1".to_string()));
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(review_output),
+    });
+    chat.on_task_complete(None, false);
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.on_task_complete(None, false);
+    chat.on_review_loop_commit_validation_resolved(
+        generation,
+        Some("head-1".to_string()),
+        Some(true),
+    );
+
+    assert!(chat.review_loop_state.is_none());
+    assert_no_review_or_submit_op(&mut op_rx);
+    let rendered = drain_insert_history(&mut rx)
+        .last()
+        .map(|lines| lines_to_single_string(lines))
+        .expect("expected commit validation error");
+    assert_snapshot!("review_loop_commit_validation_failure", rendered);
+}
+
+#[tokio::test]
+async fn review_loop_commit_validation_stops_when_fix_is_dirty_with_new_commit() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let review_output = sample_review_output();
+
+    chat.on_review_loop_target_selected(
+        ReviewTarget::BaseBranch {
+            branch: "main".to_string(),
+        },
+        None,
+    );
+    chat.start_review_loop(None);
+    let generation = chat
+        .review_loop_state
+        .as_ref()
+        .expect("loop state")
+        .generation;
+    chat.on_review_loop_initial_head_resolved(generation, Some("head-1".to_string()));
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(review_output),
+    });
+    chat.on_task_complete(None, false);
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.on_task_complete(None, false);
+    chat.on_review_loop_commit_validation_resolved(
+        generation,
+        Some("head-2".to_string()),
+        Some(true),
+    );
+
+    assert!(chat.review_loop_state.is_none());
+    assert_no_review_or_submit_op(&mut op_rx);
+    let rendered = drain_insert_history(&mut rx)
+        .last()
+        .map(|lines| lines_to_single_string(lines))
+        .expect("expected commit validation failure");
+    assert!(rendered.contains("created a new commit but left uncommitted changes."));
+}
+
+#[tokio::test]
+async fn review_loop_state_survives_stream_error_during_fix_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let review_output = sample_review_output();
+
+    chat.on_review_loop_target_selected(ReviewTarget::UncommittedChanges, None);
+    chat.start_review_loop(None);
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(review_output),
+    });
+    chat.on_task_complete(None, false);
+    let _ = next_submit_op(&mut op_rx);
+
+    let state = chat.review_loop_state.as_ref().expect("loop state");
+    assert_eq!(state.stage, ReviewLoopStage::Fixing);
+
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 1/5".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: Some("Idle timeout waiting for SSE".to_string()),
+        }),
+    });
+
+    let state = chat.review_loop_state.as_ref().expect("loop state");
+    assert_eq!(state.stage, ReviewLoopStage::Fixing);
+
+    chat.on_task_complete(None, false);
+    let _ = next_review_request(&mut op_rx);
+}
+
+#[tokio::test]
+async fn review_loop_ignores_stale_commit_validation_callbacks() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let review_output = sample_review_output();
+
+    chat.on_review_loop_target_selected(
+        ReviewTarget::BaseBranch {
+            branch: "main".to_string(),
+        },
+        None,
+    );
+    chat.start_review_loop(None);
+    let generation = chat
+        .review_loop_state
+        .as_ref()
+        .expect("loop state")
+        .generation;
+    chat.on_review_loop_initial_head_resolved(generation, Some("head-1".to_string()));
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(review_output),
+    });
+    chat.on_task_complete(None, false);
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.on_task_complete(None, false);
+    chat.on_review_loop_commit_validation_resolved(
+        generation.wrapping_add(1),
+        Some("head-2".to_string()),
+        Some(false),
+    );
+
+    let state = chat.review_loop_state.as_ref().expect("loop state");
+    assert_eq!(state.stage, ReviewLoopStage::AwaitingCommitValidation);
+    assert_eq!(state.baseline_head_sha.as_deref(), Some("head-1"));
 }
 
 fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {

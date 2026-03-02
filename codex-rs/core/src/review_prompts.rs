@@ -18,6 +18,8 @@ const BASE_BRANCH_PROMPT: &str = "Review the code changes against the base branc
 const COMMIT_PROMPT_WITH_TITLE: &str = "Review the code changes introduced by commit {sha} (\"{title}\"). Provide prioritized, actionable findings.";
 const COMMIT_PROMPT: &str =
     "Review the code changes introduced by commit {sha}. Provide prioritized, actionable findings.";
+const COMMIT_FOLLOW_UP_PROMPT_WITH_TITLE: &str = "Review the cumulative code changes from {sha}^ through HEAD, rooted at commit {sha} (\"{title}\"). Run `git diff {sha}^ HEAD` to inspect the updated stack. Provide prioritized, actionable findings.";
+const COMMIT_FOLLOW_UP_PROMPT: &str = "Review the cumulative code changes from {sha}^ through HEAD, rooted at commit {sha}. Run `git diff {sha}^ HEAD` to inspect the updated stack. Provide prioritized, actionable findings.";
 
 pub fn resolve_review_request(
     request: ReviewRequest,
@@ -67,6 +69,46 @@ pub fn review_prompt(target: &ReviewTarget, cwd: &Path) -> anyhow::Result<String
     }
 }
 
+pub fn review_prompt_with_additional_instructions(
+    target: &ReviewTarget,
+    cwd: &Path,
+    additional_instructions: Option<&str>,
+) -> anyhow::Result<String> {
+    let prompt = review_prompt(target, cwd)?;
+    Ok(append_additional_review_instructions(
+        prompt,
+        additional_instructions,
+    ))
+}
+
+pub fn commit_follow_up_review_prompt(
+    sha: &str,
+    title: Option<&str>,
+    additional_instructions: Option<&str>,
+) -> String {
+    let prompt = if let Some(title) = title {
+        COMMIT_FOLLOW_UP_PROMPT_WITH_TITLE
+            .replace("{sha}", sha)
+            .replace("{title}", title)
+    } else {
+        COMMIT_FOLLOW_UP_PROMPT.replace("{sha}", sha)
+    };
+    append_additional_review_instructions(prompt, additional_instructions)
+}
+
+fn append_additional_review_instructions(
+    prompt: String,
+    additional_instructions: Option<&str>,
+) -> String {
+    let Some(additional_instructions) = additional_instructions.map(str::trim) else {
+        return prompt;
+    };
+    if additional_instructions.is_empty() {
+        return prompt;
+    }
+    format!("{prompt}\n\nAdditional review instructions:\n{additional_instructions}")
+}
+
 pub fn user_facing_hint(target: &ReviewTarget) -> String {
     match target {
         ReviewTarget::UncommittedChanges => "current changes".to_string(),
@@ -89,5 +131,45 @@ impl From<ResolvedReviewRequest> for ReviewRequest {
             target: resolved.target,
             user_facing_hint: Some(resolved.user_facing_hint),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn review_prompt_with_additional_instructions_appends_header() {
+        let cwd = Path::new("/tmp");
+        let prompt = review_prompt_with_additional_instructions(
+            &ReviewTarget::UncommittedChanges,
+            cwd,
+            Some("Focus on migration safety."),
+        )
+        .expect("prompt");
+        assert_eq!(
+            prompt,
+            "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.\n\nAdditional review instructions:\nFocus on migration safety."
+        );
+    }
+
+    #[test]
+    fn commit_follow_up_review_prompt_references_cumulative_stack() {
+        let prompt =
+            commit_follow_up_review_prompt("abc1234", Some("Add review loop"), Some("Find bugs."));
+        assert_eq!(
+            prompt,
+            "Review the cumulative code changes from abc1234^ through HEAD, rooted at commit abc1234 (\"Add review loop\"). Run `git diff abc1234^ HEAD` to inspect the updated stack. Provide prioritized, actionable findings.\n\nAdditional review instructions:\nFind bugs."
+        );
+    }
+
+    #[test]
+    fn commit_follow_up_review_prompt_omits_empty_additional_instructions() {
+        let prompt = commit_follow_up_review_prompt("abc1234", None, Some("   "));
+        assert_eq!(
+            prompt,
+            "Review the cumulative code changes from abc1234^ through HEAD, rooted at commit abc1234. Run `git diff abc1234^ HEAD` to inspect the updated stack. Provide prioritized, actionable findings."
+        );
     }
 }

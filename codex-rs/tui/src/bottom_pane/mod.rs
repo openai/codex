@@ -294,6 +294,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_review_loop_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_review_loop_command_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
         self.composer.set_realtime_conversation_enabled(enabled);
         self.request_redraw();

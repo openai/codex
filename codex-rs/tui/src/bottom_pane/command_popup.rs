@@ -41,23 +41,26 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
+    pub(crate) review_loop_command_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
 }
 
 impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>, flags: CommandPopupFlags) -> Self {
         // Keep built-in availability in sync with the composer.
-        let builtins: Vec<(&'static str, SlashCommand)> = slash_commands::builtins_for_input(
-            flags.collaboration_modes_enabled,
-            flags.connectors_enabled,
-            flags.personality_command_enabled,
-            flags.realtime_conversation_enabled,
-            flags.audio_device_selection_enabled,
-            flags.windows_degraded_sandbox_active,
-        )
-        .into_iter()
-        .filter(|(name, _)| !name.starts_with("debug"))
-        .collect();
+        let builtins: Vec<(&'static str, SlashCommand)> =
+            slash_commands::builtins_for_input(slash_commands::SlashCommandFilters {
+                collaboration_modes_enabled: flags.collaboration_modes_enabled,
+                connectors_enabled: flags.connectors_enabled,
+                personality_command_enabled: flags.personality_command_enabled,
+                realtime_conversation_enabled: flags.realtime_conversation_enabled,
+                audio_device_selection_enabled: flags.audio_device_selection_enabled,
+                review_loop_command_enabled: flags.review_loop_command_enabled,
+                allow_elevate_sandbox: !flags.windows_degraded_sandbox_active,
+            })
+            .into_iter()
+            .filter(|(name, _)| !name.starts_with("debug"))
+            .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
         prompts.retain(|p| !exclude.contains(&p.name));
@@ -501,6 +504,7 @@ mod tests {
                 personality_command_enabled: true,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -522,6 +526,7 @@ mod tests {
                 personality_command_enabled: true,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -543,6 +548,7 @@ mod tests {
                 personality_command_enabled: false,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -572,6 +578,7 @@ mod tests {
                 personality_command_enabled: true,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -593,6 +600,7 @@ mod tests {
                 personality_command_enabled: true,
                 realtime_conversation_enabled: true,
                 audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -629,5 +637,59 @@ mod tests {
             !cmds.iter().any(|name| name.starts_with("debug")),
             "expected no /debug* command in popup menu, got {cmds:?}"
         );
+    }
+
+    #[test]
+    fn review_loop_command_hidden_when_disabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                personality_command_enabled: true,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/review".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert!(
+            !cmds.contains(&"review-loop"),
+            "expected '/review-loop' to be hidden when feature is disabled, got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn review_loop_command_visible_when_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                personality_command_enabled: true,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
+                review_loop_command_enabled: true,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/review-loop".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "review-loop"),
+            other => {
+                panic!("expected review-loop to be selected for exact match, got {other:?}")
+            }
+        }
     }
 }

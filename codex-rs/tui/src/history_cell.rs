@@ -1093,6 +1093,11 @@ pub(crate) fn new_session_info(
                 "/review".into(),
                 " - review any changes and find issues".dim(),
             ]),
+            Line::from(vec![
+                "  ".into(),
+                "/review-loop".into(),
+                " - run review/fix/review until clean".dim(),
+            ]),
         ];
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));

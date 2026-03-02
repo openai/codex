@@ -16,6 +16,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::ReviewTarget;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -406,6 +407,41 @@ pub(crate) enum AppEvent {
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
+
+    /// Re-open the review-loop selector, preserving any inline instructions.
+    OpenReviewLoopSelector {
+        inline_instructions: Option<String>,
+    },
+
+    /// Continue the review-loop flow after a target is selected.
+    ReviewLoopTargetSelected {
+        target: ReviewTarget,
+        inline_instructions: Option<String>,
+    },
+
+    /// Open the review-loop cap chooser.
+    OpenReviewLoopCapChooser,
+
+    /// Open the review-loop numeric cap prompt.
+    OpenReviewLoopCapPrompt,
+
+    /// Start the configured review loop with the chosen max fix attempts.
+    StartReviewLoop {
+        max_fix_attempts: Option<u32>,
+    },
+
+    /// Async result for the initial HEAD lookup needed by commit-aware review loops.
+    ReviewLoopInitialHeadResolved {
+        generation: u64,
+        head_sha: Option<String>,
+    },
+
+    /// Async result for post-fix commit validation in commit-aware review loops.
+    ReviewLoopCommitValidationResolved {
+        generation: u64,
+        head_sha: Option<String>,
+        has_changes: Option<bool>,
+    },
 
     /// Submit a user message with an explicit collaboration mask.
     SubmitUserMessageWithMode {

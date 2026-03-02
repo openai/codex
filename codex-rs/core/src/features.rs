@@ -143,6 +143,8 @@ pub enum Feature {
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
+    /// Enable `/review-loop` command.
+    ReviewLoop,
     /// Enable personality selection in the TUI.
     Personality,
     /// Enable voice transcription in the TUI composer.
@@ -659,6 +661,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "personality",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ReviewLoop,
+        key: "review_loop",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::VoiceTranscription,

@@ -3062,6 +3062,45 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::OpenReviewLoopSelector {
+                inline_instructions,
+            } => {
+                self.chat_widget.open_review_loop_popup(inline_instructions);
+            }
+            AppEvent::ReviewLoopTargetSelected {
+                target,
+                inline_instructions,
+            } => {
+                self.chat_widget
+                    .on_review_loop_target_selected(target, inline_instructions);
+            }
+            AppEvent::OpenReviewLoopCapChooser => {
+                self.chat_widget.open_review_loop_cap_chooser();
+            }
+            AppEvent::OpenReviewLoopCapPrompt => {
+                self.chat_widget.open_review_loop_cap_prompt();
+            }
+            AppEvent::StartReviewLoop { max_fix_attempts } => {
+                self.chat_widget.start_review_loop(max_fix_attempts);
+            }
+            AppEvent::ReviewLoopInitialHeadResolved {
+                generation,
+                head_sha,
+            } => {
+                self.chat_widget
+                    .on_review_loop_initial_head_resolved(generation, head_sha);
+            }
+            AppEvent::ReviewLoopCommitValidationResolved {
+                generation,
+                head_sha,
+                has_changes,
+            } => {
+                self.chat_widget.on_review_loop_commit_validation_resolved(
+                    generation,
+                    head_sha,
+                    has_changes,
+                );
+            }
             AppEvent::SubmitUserMessageWithMode {
                 text,
                 collaboration_mode,
