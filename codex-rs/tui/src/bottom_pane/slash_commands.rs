@@ -30,23 +30,14 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         })
         .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)
         .filter(|(_, cmd)| flags.fast_command_enabled || *cmd != SlashCommand::Fast)
-        .filter(|(_, cmd)| {
-            flags.personality_command_enabled || *cmd != SlashCommand::Personality
-        })
-        .filter(|(_, cmd)| {
-            flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime
-        })
-        .filter(|(_, cmd)| {
-            flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings
-        })
+        .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
+        .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
+        .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
         .collect()
 }
 
 /// Find a single built-in command by exact name, after applying the gating rules.
-pub(crate) fn find_builtin_command(
-    name: &str,
-    flags: BuiltinCommandFlags,
-) -> Option<SlashCommand> {
+pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Option<SlashCommand> {
     builtins_for_input(flags)
         .into_iter()
         .find(|(command_name, _)| *command_name == name)
@@ -95,20 +86,14 @@ mod tests {
     fn fast_command_is_hidden_when_disabled() {
         let mut flags = all_enabled_flags();
         flags.fast_command_enabled = false;
-        assert_eq!(
-            find_builtin_command("fast", flags),
-            None
-        );
+        assert_eq!(find_builtin_command("fast", flags), None);
     }
 
     #[test]
     fn realtime_command_is_hidden_when_realtime_is_disabled() {
         let mut flags = all_enabled_flags();
         flags.realtime_conversation_enabled = false;
-        assert_eq!(
-            find_builtin_command("realtime", flags),
-            None
-        );
+        assert_eq!(find_builtin_command("realtime", flags), None);
     }
 
     #[test]
@@ -116,19 +101,13 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.realtime_conversation_enabled = false;
         flags.audio_device_selection_enabled = false;
-        assert_eq!(
-            find_builtin_command("settings", flags),
-            None
-        );
+        assert_eq!(find_builtin_command("settings", flags), None);
     }
 
     #[test]
     fn settings_command_is_hidden_when_audio_device_selection_is_disabled() {
         let mut flags = all_enabled_flags();
         flags.audio_device_selection_enabled = false;
-        assert_eq!(
-            find_builtin_command("settings", flags),
-            None
-        );
+        assert_eq!(find_builtin_command("settings", flags), None);
     }
 }
