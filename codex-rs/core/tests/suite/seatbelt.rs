@@ -78,6 +78,7 @@ async fn if_parent_of_repo_is_writable_then_dot_git_folder_is_writable() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![test_scenario.repo_parent.as_path().try_into().unwrap()],
         read_only_access: Default::default(),
+        deny_read_paths: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -105,6 +106,7 @@ async fn if_git_repo_is_writable_root_then_dot_git_folder_is_read_only() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![test_scenario.repo_root.as_path().try_into().unwrap()],
         read_only_access: Default::default(),
+        deny_read_paths: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,

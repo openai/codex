@@ -947,12 +947,16 @@ pub enum SandboxPolicy {
     ReadOnly {
         #[serde(default)]
         access: ReadOnlyAccess,
+        #[serde(default)]
+        deny_read_paths: Vec<AbsolutePathBuf>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ExternalSandbox {
         #[serde(default)]
         network_access: NetworkAccess,
+        #[serde(default)]
+        deny_read_paths: Vec<AbsolutePathBuf>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -961,6 +965,8 @@ pub enum SandboxPolicy {
         writable_roots: Vec<AbsolutePathBuf>,
         #[serde(default)]
         read_only_access: ReadOnlyAccess,
+        #[serde(default)]
+        deny_read_paths: Vec<AbsolutePathBuf>,
         #[serde(default)]
         network_access: bool,
         #[serde(default)]
@@ -976,28 +982,34 @@ impl SandboxPolicy {
             SandboxPolicy::DangerFullAccess => {
                 codex_protocol::protocol::SandboxPolicy::DangerFullAccess
             }
-            SandboxPolicy::ReadOnly { access } => {
-                codex_protocol::protocol::SandboxPolicy::ReadOnly {
-                    access: access.to_core(),
-                }
-            }
-            SandboxPolicy::ExternalSandbox { network_access } => {
-                codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
-                    network_access: match network_access {
-                        NetworkAccess::Restricted => CoreNetworkAccess::Restricted,
-                        NetworkAccess::Enabled => CoreNetworkAccess::Enabled,
-                    },
-                }
-            }
+            SandboxPolicy::ReadOnly {
+                access,
+                deny_read_paths,
+            } => codex_protocol::protocol::SandboxPolicy::ReadOnly {
+                access: access.to_core(),
+                deny_read_paths: deny_read_paths.clone(),
+            },
+            SandboxPolicy::ExternalSandbox {
+                network_access,
+                deny_read_paths,
+            } => codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
+                network_access: match network_access {
+                    NetworkAccess::Restricted => CoreNetworkAccess::Restricted,
+                    NetworkAccess::Enabled => CoreNetworkAccess::Enabled,
+                },
+                deny_read_paths: deny_read_paths.clone(),
+            },
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 read_only_access,
+                deny_read_paths,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: writable_roots.clone(),
                 read_only_access: read_only_access.to_core(),
+                deny_read_paths: deny_read_paths.clone(),
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
@@ -1012,28 +1024,34 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
             codex_protocol::protocol::SandboxPolicy::DangerFullAccess => {
                 SandboxPolicy::DangerFullAccess
             }
-            codex_protocol::protocol::SandboxPolicy::ReadOnly { access } => {
-                SandboxPolicy::ReadOnly {
-                    access: ReadOnlyAccess::from(access),
-                }
-            }
-            codex_protocol::protocol::SandboxPolicy::ExternalSandbox { network_access } => {
-                SandboxPolicy::ExternalSandbox {
-                    network_access: match network_access {
-                        CoreNetworkAccess::Restricted => NetworkAccess::Restricted,
-                        CoreNetworkAccess::Enabled => NetworkAccess::Enabled,
-                    },
-                }
-            }
+            codex_protocol::protocol::SandboxPolicy::ReadOnly {
+                access,
+                deny_read_paths,
+            } => SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::from(access),
+                deny_read_paths,
+            },
+            codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
+                network_access,
+                deny_read_paths,
+            } => SandboxPolicy::ExternalSandbox {
+                network_access: match network_access {
+                    CoreNetworkAccess::Restricted => NetworkAccess::Restricted,
+                    CoreNetworkAccess::Enabled => NetworkAccess::Enabled,
+                },
+                deny_read_paths,
+            },
             codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 read_only_access,
+                deny_read_paths,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 read_only_access: ReadOnlyAccess::from(read_only_access),
+                deny_read_paths,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
@@ -4217,6 +4235,7 @@ mod tests {
     fn sandbox_policy_round_trips_external_sandbox_network_access() {
         let v2_policy = SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Enabled,
+            deny_read_paths: vec![],
         };
 
         let core_policy = v2_policy.to_core();
@@ -4224,6 +4243,7 @@ mod tests {
             core_policy,
             codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
                 network_access: CoreNetworkAccess::Enabled,
+                deny_read_paths: vec![],
             }
         );
 
@@ -4239,6 +4259,7 @@ mod tests {
                 include_platform_defaults: false,
                 readable_roots: vec![readable_root.clone()],
             },
+            deny_read_paths: vec![],
         };
 
         let core_policy = v2_policy.to_core();
@@ -4249,6 +4270,7 @@ mod tests {
                     include_platform_defaults: false,
                     readable_roots: vec![readable_root],
                 },
+                deny_read_paths: vec![],
             }
         );
 
@@ -4265,6 +4287,7 @@ mod tests {
                 include_platform_defaults: false,
                 readable_roots: vec![readable_root.clone()],
             },
+            deny_read_paths: vec![],
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -4279,6 +4302,7 @@ mod tests {
                     include_platform_defaults: false,
                     readable_roots: vec![readable_root],
                 },
+                deny_read_paths: vec![],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -4299,6 +4323,7 @@ mod tests {
             policy,
             SandboxPolicy::ReadOnly {
                 access: ReadOnlyAccess::FullAccess,
+                deny_read_paths: vec![],
             }
         );
     }
@@ -4318,9 +4343,26 @@ mod tests {
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: ReadOnlyAccess::FullAccess,
+                deny_read_paths: vec![],
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
+            }
+        );
+    }
+
+    #[test]
+    fn sandbox_policy_deserializes_legacy_external_sandbox_without_deny_read_paths() {
+        let policy: SandboxPolicy = serde_json::from_value(json!({
+            "type": "externalSandbox",
+            "networkAccess": "enabled"
+        }))
+        .expect("external sandbox policy should deserialize");
+        assert_eq!(
+            policy,
+            SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled,
+                deny_read_paths: vec![],
             }
         );
     }

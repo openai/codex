@@ -12,11 +12,19 @@ export type SandboxPolicy = { "type": "danger-full-access" } | { "type": "read-o
 /**
  * Read access granted while running under this policy.
  */
-access?: ReadOnlyAccess, } | { "type": "external-sandbox", 
+access?: ReadOnlyAccess, 
+/**
+ * Paths that must not be readable, even when broad read access is otherwise allowed.
+ */
+deny_read_paths?: Array<AbsolutePathBuf>, } | { "type": "external-sandbox", 
 /**
  * Whether the external sandbox permits outbound network traffic.
  */
-network_access: NetworkAccess, } | { "type": "workspace-write", 
+network_access: NetworkAccess, 
+/**
+ * Paths that must not be readable, even when broad read access is otherwise allowed.
+ */
+deny_read_paths?: Array<AbsolutePathBuf>, } | { "type": "workspace-write", 
 /**
  * Additional folders (beyond cwd and possibly TMPDIR) that should be
  * writable from within the sandbox.
@@ -26,6 +34,10 @@ writable_roots?: Array<AbsolutePathBuf>,
  * Read access granted while running under this policy.
  */
 read_only_access?: ReadOnlyAccess, 
+/**
+ * Paths that must not be readable, even when broad read access is otherwise allowed.
+ */
+deny_read_paths?: Array<AbsolutePathBuf>, 
 /**
  * When set to `true`, outbound network access is allowed. `false` by
  * default.

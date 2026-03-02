@@ -4,6 +4,7 @@ use crate::shell::Shell;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -16,6 +17,7 @@ pub(crate) struct EnvironmentContext {
     pub current_date: Option<String>,
     pub timezone: Option<String>,
     pub network: Option<NetworkContext>,
+    pub deny_read_paths: Vec<AbsolutePathBuf>,
     pub subagents: Option<String>,
 }
 
@@ -32,6 +34,7 @@ impl EnvironmentContext {
         current_date: Option<String>,
         timezone: Option<String>,
         network: Option<NetworkContext>,
+        deny_read_paths: Vec<AbsolutePathBuf>,
         subagents: Option<String>,
     ) -> Self {
         Self {
@@ -40,6 +43,7 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
+            deny_read_paths,
             subagents,
         }
     }
@@ -53,6 +57,7 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
+            deny_read_paths,
             subagents,
             shell: _,
         } = other;
@@ -60,6 +65,7 @@ impl EnvironmentContext {
             && self.current_date == *current_date
             && self.timezone == *timezone
             && self.network == *network
+            && self.deny_read_paths == *deny_read_paths
             && self.subagents == *subagents
     }
 
@@ -70,6 +76,8 @@ impl EnvironmentContext {
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
         let after_network = Self::network_from_turn_context(after);
+        let before_deny_read_paths = before.sandbox_policy.denied_read_paths();
+        let after_deny_read_paths = after.sandbox_policy.denied_read_paths();
         let cwd = if before.cwd != after.cwd {
             Some(after.cwd.clone())
         } else {
@@ -82,7 +90,20 @@ impl EnvironmentContext {
         } else {
             before_network
         };
-        EnvironmentContext::new(cwd, shell.clone(), current_date, timezone, network, None)
+        let deny_read_paths = if before_deny_read_paths != after_deny_read_paths {
+            after_deny_read_paths
+        } else {
+            before_deny_read_paths
+        };
+        EnvironmentContext::new(
+            cwd,
+            shell.clone(),
+            current_date,
+            timezone,
+            network,
+            deny_read_paths,
+            None,
+        )
     }
 
     pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
@@ -92,6 +113,7 @@ impl EnvironmentContext {
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
+            turn_context.sandbox_policy.denied_read_paths(),
             None,
         )
     }
@@ -103,6 +125,7 @@ impl EnvironmentContext {
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
+            turn_context_item.sandbox_policy.denied_read_paths(),
             None,
         )
     }
@@ -183,6 +206,13 @@ impl EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
+        if !self.deny_read_paths.is_empty() {
+            lines.push("  <deny_read_paths>".to_string());
+            for path in &self.deny_read_paths {
+                lines.push(format!("    <path>{}</path>", path.to_string_lossy()));
+            }
+            lines.push("  </deny_read_paths>".to_string());
+        }
         if let Some(subagents) = self.subagents {
             lines.push("  <subagents>".to_string());
             lines.extend(subagents.lines().map(|line| format!("    {line}")));
@@ -203,6 +233,7 @@ mod tests {
     use crate::shell::ShellType;
 
     use super::*;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use core_test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
@@ -214,6 +245,10 @@ mod tests {
         }
     }
 
+    fn deny_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(path).expect("deny path should be absolute")
+    }
+
     #[test]
     fn serialize_workspace_write_environment_context() {
         let cwd = test_path_buf("/repo");
@@ -223,6 +258,7 @@ mod tests {
             Some("2026-02-26".to_string()),
             Some("America/Los_Angeles".to_string()),
             None,
+            Vec::new(),
             None,
         );
 
@@ -251,6 +287,7 @@ mod tests {
             Some("2026-02-26".to_string()),
             Some("America/Los_Angeles".to_string()),
             Some(network),
+            Vec::new(),
             None,
         );
 
@@ -280,6 +317,7 @@ mod tests {
             Some("2026-02-26".to_string()),
             Some("America/Los_Angeles".to_string()),
             None,
+            Vec::new(),
             None,
         );
 
@@ -300,6 +338,7 @@ mod tests {
             Some("2026-02-26".to_string()),
             Some("America/Los_Angeles".to_string()),
             None,
+            Vec::new(),
             None,
         );
 
@@ -320,6 +359,7 @@ mod tests {
             Some("2026-02-26".to_string()),
             Some("America/Los_Angeles".to_string()),
             None,
+            Vec::new(),
             None,
         );
 
@@ -340,6 +380,7 @@ mod tests {
             Some("2026-02-26".to_string()),
             Some("America/Los_Angeles".to_string()),
             None,
+            Vec::new(),
             None,
         );
 
@@ -360,6 +401,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
             None,
         );
         let context2 = EnvironmentContext::new(
@@ -368,6 +410,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
             None,
         );
         assert!(context1.equals_except_shell(&context2));
@@ -381,6 +424,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
             None,
         );
         let context2 = EnvironmentContext::new(
@@ -389,10 +433,41 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
             None,
         );
 
         assert!(context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn serialize_environment_context_with_deny_read_paths() {
+        let denied = vec![deny_path("/repo/.gitconfig"), deny_path("/repo/.ssh")];
+        let context = EnvironmentContext::new(
+            Some(test_path_buf("/repo")),
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+            denied,
+            None,
+        );
+
+        let expected = format!(
+            r#"<environment_context>
+  <cwd>{}</cwd>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+  <deny_read_paths>
+    <path>/repo/.gitconfig</path>
+    <path>/repo/.ssh</path>
+  </deny_read_paths>
+</environment_context>"#,
+            test_path_buf("/repo").display()
+        );
+
+        assert_eq!(context.serialize_to_xml(), expected);
     }
 
     #[test]
@@ -403,6 +478,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
             None,
         );
         let context2 = EnvironmentContext::new(
@@ -411,6 +487,31 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
+            None,
+        );
+
+        assert!(!context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn equals_except_shell_compares_deny_read_paths() {
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            None,
+            None,
+            vec![deny_path("/repo/.gitconfig")],
+            None,
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            None,
+            None,
+            vec![deny_path("/repo/.ssh")],
             None,
         );
 
@@ -429,6 +530,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
             None,
         );
         let context2 = EnvironmentContext::new(
@@ -441,6 +543,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
             None,
         );
 
@@ -455,6 +558,7 @@ mod tests {
             Some("2026-02-26".to_string()),
             Some("America/Los_Angeles".to_string()),
             None,
+            Vec::new(),
             Some("- agent-1: atlas\n- agent-2".to_string()),
         );
 

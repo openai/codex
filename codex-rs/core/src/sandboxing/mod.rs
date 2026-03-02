@@ -209,6 +209,7 @@ fn sandbox_policy_with_additional_permissions(
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
+            deny_read_paths,
         } => {
             let mut merged_writes = writable_roots.clone();
             merged_writes.extend(extra_writes);
@@ -221,12 +222,17 @@ fn sandbox_policy_with_additional_permissions(
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
+                deny_read_paths: deny_read_paths.clone(),
             }
         }
-        SandboxPolicy::ReadOnly { access } => {
+        SandboxPolicy::ReadOnly {
+            access,
+            deny_read_paths,
+        } => {
             if extra_writes.is_empty() {
                 SandboxPolicy::ReadOnly {
                     access: merge_read_only_access_with_additional_reads(access, extra_reads),
+                    deny_read_paths: deny_read_paths.clone(),
                 }
             } else {
                 // todo(dylan) - for now, this grants more access than the request. We should restrict this,
@@ -241,6 +247,7 @@ fn sandbox_policy_with_additional_permissions(
                     network_access: false,
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
+                    deny_read_paths: deny_read_paths.clone(),
                 }
             }
         }
@@ -264,6 +271,7 @@ impl SandboxManager {
         windows_sandbox_level: WindowsSandboxLevel,
         has_managed_network_requirements: bool,
     ) -> SandboxType {
+        let enforce_deny_read = policy.has_denied_read_paths() && !cfg!(target_os = "windows");
         match pref {
             SandboxablePreference::Forbid => SandboxType::None,
             SandboxablePreference::Require => {
@@ -276,7 +284,7 @@ impl SandboxManager {
             }
             SandboxablePreference::Auto => match policy {
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-                    if has_managed_network_requirements {
+                    if has_managed_network_requirements || enforce_deny_read {
                         crate::safety::get_platform_sandbox(
                             windows_sandbox_level != WindowsSandboxLevel::Disabled,
                         )
@@ -439,6 +447,34 @@ mod tests {
             SandboxablePreference::Auto,
             WindowsSandboxLevel::Disabled,
             true,
+        );
+        assert_eq!(sandbox, expected);
+    }
+
+    #[test]
+    fn external_sandbox_with_deny_read_uses_platform_sandbox() {
+        let manager = SandboxManager::new();
+        let denied_path = if cfg!(windows) {
+            r"C:\secret"
+        } else {
+            "/tmp/secret"
+        };
+        let expected = if cfg!(target_os = "windows") {
+            SandboxType::None
+        } else {
+            crate::safety::get_platform_sandbox(false).unwrap_or(SandboxType::None)
+        };
+        let sandbox = manager.select_initial(
+            &SandboxPolicy::ExternalSandbox {
+                network_access: codex_protocol::protocol::NetworkAccess::Enabled,
+                deny_read_paths: vec![
+                    codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(denied_path)
+                        .expect("absolute path"),
+                ],
+            },
+            SandboxablePreference::Auto,
+            WindowsSandboxLevel::Disabled,
+            false,
         );
         assert_eq!(sandbox, expected);
     }

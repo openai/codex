@@ -11782,6 +11782,13 @@
                   "type": "fullAccess"
                 }
               },
+              "denyReadPaths": {
+                "default": [],
+                "items": {
+                  "$ref": "#/definitions/v2/AbsolutePathBuf"
+                },
+                "type": "array"
+              },
               "type": {
                 "enum": [
                   "readOnly"
@@ -11798,6 +11805,13 @@
           },
           {
             "properties": {
+              "denyReadPaths": {
+                "default": [],
+                "items": {
+                  "$ref": "#/definitions/v2/AbsolutePathBuf"
+                },
+                "type": "array"
+              },
               "networkAccess": {
                 "allOf": [
                   {
@@ -11822,6 +11836,13 @@
           },
           {
             "properties": {
+              "denyReadPaths": {
+                "default": [],
+                "items": {
+                  "$ref": "#/definitions/v2/AbsolutePathBuf"
+                },
+                "type": "array"
+              },
               "excludeSlashTmp": {
                 "default": false,
                 "type": "boolean"

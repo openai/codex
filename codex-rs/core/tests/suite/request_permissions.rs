@@ -183,6 +183,7 @@ fn workspace_write_excluding_tmp() -> SandboxPolicy {
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
+        deny_read_paths: vec![],
     }
 }
 

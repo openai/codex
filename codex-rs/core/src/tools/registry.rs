@@ -307,11 +307,15 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &str) -> Stri
 }
 
 fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
+    if policy.behaves_like_danger_full_access() {
+        return "danger-full-access";
+    }
+
     match policy {
         SandboxPolicy::ReadOnly { .. } => "read-only",
         SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
-        SandboxPolicy::DangerFullAccess => "danger-full-access",
         SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
+        SandboxPolicy::DangerFullAccess => "danger-full-access",
     }
 }
 

@@ -1461,6 +1461,7 @@ permissions:
                                 .expect("absolute data path")
                             ],
                         },
+                        deny_read_paths: vec![],
                         network_access: true,
                         exclude_tmpdir_env_var: false,
                         exclude_slash_tmp: false,

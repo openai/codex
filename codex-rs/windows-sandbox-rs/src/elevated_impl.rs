@@ -474,6 +474,7 @@ mod windows_impl {
         fn workspace_policy(network_access: bool) -> SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: Vec::new(),
+                deny_read_paths: Vec::new(),
                 read_only_access: Default::default(),
                 network_access,
                 exclude_tmpdir_env_var: false,

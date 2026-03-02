@@ -39,6 +39,7 @@ use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
+use crate::filesystem_deny_read::expand_deny_read_patterns;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -1462,6 +1463,7 @@ impl ConfigToml {
                 }) => SandboxPolicy::WorkspaceWrite {
                     writable_roots: writable_roots.clone(),
                     read_only_access: ReadOnlyAccess::FullAccess,
+                    deny_read_paths: vec![],
                     network_access: *network_access,
                     exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                     exclude_slash_tmp: *exclude_slash_tmp,
@@ -1620,9 +1622,7 @@ pub(crate) fn resolve_web_search_mode_for_turn(
 ) -> WebSearchMode {
     let preferred = web_search_mode.value();
 
-    if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
-        && preferred != WebSearchMode::Disabled
-    {
+    if sandbox_policy.behaves_like_danger_full_access() && preferred != WebSearchMode::Disabled {
         for mode in [
             WebSearchMode::Live,
             WebSearchMode::Cached,
@@ -2035,6 +2035,7 @@ impl Config {
             exec_policy: _,
             enforce_residency,
             network: network_requirements,
+            filesystem: filesystem_requirements,
         } = requirements;
 
         apply_requirement_constrained_value(
@@ -2043,6 +2044,42 @@ impl Config {
             &mut constrained_approval_policy,
             &mut startup_warnings,
         )?;
+        if let Some(Sourced {
+            value: filesystem_requirements,
+            source: filesystem_requirements_source,
+        }) = filesystem_requirements
+            && !filesystem_requirements.deny_read.is_empty()
+        {
+            let deny_read_paths = expand_deny_read_patterns(&filesystem_requirements.deny_read);
+            let requirement_source = filesystem_requirements_source.clone();
+            constrained_sandbox_policy
+                .value
+                .add_validator(move |policy| match policy {
+                    SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => Ok(()),
+                    SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "sandbox_mode",
+                            candidate: policy.to_string(),
+                            allowed: "[read-only, workspace-write]".to_string(),
+                            requirement_source: requirement_source.clone(),
+                        })
+                    }
+                })
+                .map_err(std::io::Error::from)?;
+            constrained_sandbox_policy
+                .value
+                .add_normalizer(move |mut policy| {
+                    policy.append_deny_read_paths(&deny_read_paths);
+                    policy
+                })
+                .map_err(std::io::Error::from)?;
+
+            if cfg!(target_os = "windows") {
+                startup_warnings.push(format!(
+                    "managed filesystem deny_read from {filesystem_requirements_source} is only enforced for direct file tools on Windows; shell subprocess reads are not sandboxed"
+                ));
+            }
+        }
         apply_requirement_constrained_value(
             "sandbox_mode",
             sandbox_policy,
@@ -2813,6 +2850,7 @@ exclude_slash_tmp = true
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![writable_root.clone()],
                     read_only_access: ReadOnlyAccess::FullAccess,
+                    deny_read_paths: vec![],
                     network_access: false,
                     exclude_tmpdir_env_var: true,
                     exclude_slash_tmp: true,
@@ -2855,6 +2893,7 @@ trust_level = "trusted"
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![writable_root],
                     read_only_access: ReadOnlyAccess::FullAccess,
+                    deny_read_paths: vec![],
                     network_access: false,
                     exclude_tmpdir_env_var: true,
                     exclude_slash_tmp: true,
@@ -5361,6 +5400,7 @@ model_verbosity = "high"
             rules: None,
             enforce_residency: None,
             network: None,
+            permissions: None,
         };
         let requirement_source = crate::config_loader::RequirementSource::Unknown;
         let requirement_source_for_error = requirement_source.clone();
@@ -5965,6 +6005,7 @@ mcp_oauth_callback_url = "https://example.com/callback"
             rules: None,
             enforce_residency: None,
             network: None,
+            permissions: None,
         };
 
         let config = ConfigBuilder::default()
@@ -5979,6 +6020,264 @@ mcp_oauth_callback_url = "https://example.com/callback"
             *config.permissions.sandbox_policy.get(),
             SandboxPolicy::new_read_only_policy()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn requirements_filesystem_deny_read_is_applied_to_effective_sandbox_policy()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let denied_path = codex_home.path().join("sensitive").join("secret.txt");
+        let denied_path =
+            AbsolutePathBuf::try_from(denied_path).expect("deny_read test path should be absolute");
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new({
+                let denied_path = denied_path.clone();
+                async move {
+                    Ok(Some(
+                        toml::from_str::<crate::config_loader::ConfigRequirementsToml>(&format!(
+                            r#"
+                                [permissions.filesystem]
+                                deny_read = [{:?}]
+                            "#,
+                            denied_path.as_path().display().to_string()
+                        ))
+                        .expect("parse requirements toml"),
+                    ))
+                }
+            }))
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.permissions.sandbox_policy.get().denied_read_paths(),
+            vec![denied_path]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn requirements_filesystem_deny_read_glob_expands_to_matching_paths()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let sensitive_dir = codex_home.path().join("sensitive");
+        let nested_dir = sensitive_dir.join("nested");
+        std::fs::create_dir_all(&nested_dir)?;
+        let top_match = sensitive_dir.join("top.txt");
+        let nested_match = nested_dir.join("deep.txt");
+        let ignored = sensitive_dir.join("top.log");
+        std::fs::write(&top_match, "top")?;
+        std::fs::write(&nested_match, "deep")?;
+        std::fs::write(&ignored, "ignored")?;
+
+        let glob_pattern = format!("{}/sensitive/**/*.txt", codex_home.path().display());
+        let top_match = AbsolutePathBuf::try_from(top_match).expect("absolute path");
+        let nested_match = AbsolutePathBuf::try_from(nested_match).expect("absolute path");
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async move {
+                Ok(Some(
+                    toml::from_str::<crate::config_loader::ConfigRequirementsToml>(&format!(
+                        r#"
+                                [permissions.filesystem]
+                                deny_read = [{glob_pattern:?}]
+                            "#
+                    ))
+                    .expect("parse requirements toml"),
+                ))
+            }))
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.permissions.sandbox_policy.get().denied_read_paths(),
+            vec![top_match, nested_match]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn requirements_filesystem_deny_read_persists_when_sandbox_mode_changes()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let denied_path = codex_home.path().join("sensitive").join("secret.txt");
+        let denied_path =
+            AbsolutePathBuf::try_from(denied_path).expect("deny_read test path should be absolute");
+
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new({
+                let denied_path = denied_path.clone();
+                async move {
+                    Ok(Some(
+                        toml::from_str::<crate::config_loader::ConfigRequirementsToml>(&format!(
+                            r#"
+                                [permissions.filesystem]
+                                deny_read = [{:?}]
+                            "#,
+                            denied_path.as_path().display().to_string()
+                        ))
+                        .expect("parse requirements toml"),
+                    ))
+                }
+            }))
+            .build()
+            .await?;
+
+        config
+            .permissions
+            .sandbox_policy
+            .set(SandboxPolicy::new_workspace_write_policy())
+            .map_err(std::io::Error::from)?;
+
+        assert_eq!(
+            config.permissions.sandbox_policy.get().denied_read_paths(),
+            vec![denied_path]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn requirements_filesystem_deny_read_rejects_unsupported_sandbox_mode_changes()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let denied_path = codex_home.path().join("sensitive").join("secret.txt");
+
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new({
+                let denied_path = denied_path.clone();
+                async move {
+                    Ok(Some(
+                        toml::from_str::<crate::config_loader::ConfigRequirementsToml>(&format!(
+                            r#"
+                                [permissions.filesystem]
+                                deny_read = [{:?}]
+                            "#,
+                            denied_path.as_path().display().to_string()
+                        ))
+                        .expect("parse requirements toml"),
+                    ))
+                }
+            }))
+            .build()
+            .await?;
+
+        let err = config
+            .permissions
+            .sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect_err("danger-full-access should be rejected");
+
+        assert!(err.to_string().contains("sandbox_mode"));
+        assert!(err.to_string().contains("read-only, workspace-write"));
+
+        let err = config
+            .permissions
+            .sandbox_policy
+            .set(SandboxPolicy::ExternalSandbox {
+                network_access: crate::protocol::NetworkAccess::Enabled,
+                deny_read_paths: vec![],
+            })
+            .expect_err("external-sandbox should be rejected");
+
+        assert!(err.to_string().contains("sandbox_mode"));
+        assert!(err.to_string().contains("read-only, workspace-write"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_sandbox_mode_falls_back_when_deny_read_rejects_full_access()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"sandbox_mode = "danger-full-access"
+"#,
+        )?;
+
+        let denied_path =
+            AbsolutePathBuf::try_from(codex_home.path().join("sensitive").join("secret.txt"))
+                .expect("deny_read test path should be absolute");
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new({
+                let denied_path = denied_path.clone();
+                async move {
+                    Ok(Some(
+                        toml::from_str::<crate::config_loader::ConfigRequirementsToml>(&format!(
+                            r#"
+                                [permissions.filesystem]
+                                deny_read = [{:?}]
+                            "#,
+                            denied_path.as_path().display().to_string()
+                        ))
+                        .expect("parse requirements toml"),
+                    ))
+                }
+            }))
+            .build()
+            .await?;
+
+        let policy = config.permissions.sandbox_policy.get();
+
+        assert!(matches!(
+            policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+        ));
+        assert_eq!(policy.denied_read_paths(), vec![denied_path]);
+        assert!(
+            config.startup_warnings.iter().any(
+                |warning| warning.contains("Configured value for `sandbox_mode` is disallowed")
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn normalized_external_sandbox_preserves_danger_full_access_web_search_order()
+    -> anyhow::Result<()> {
+        let web_search_mode = Constrained::new(WebSearchMode::Cached, |mode| {
+            if matches!(mode, WebSearchMode::Live | WebSearchMode::Cached) {
+                Ok(())
+            } else {
+                Err(ConstraintError::InvalidValue {
+                    field_name: "web_search_mode",
+                    candidate: mode.to_string(),
+                    allowed: "[live, cached]".to_string(),
+                    requirement_source: RequirementSource::Unknown,
+                })
+            }
+        })?;
+        let denied_path = if cfg!(windows) {
+            r"C:\deny-read"
+        } else {
+            "/tmp/deny-read"
+        };
+        let sandbox_policy = SandboxPolicy::ExternalSandbox {
+            network_access: crate::protocol::NetworkAccess::Enabled,
+            deny_read_paths: vec![
+                AbsolutePathBuf::try_from(denied_path).expect("absolute deny_read path"),
+            ],
+        };
+
+        assert_eq!(
+            resolve_web_search_mode_for_turn(&web_search_mode, &sandbox_policy),
+            WebSearchMode::Live
+        );
+
         Ok(())
     }
 

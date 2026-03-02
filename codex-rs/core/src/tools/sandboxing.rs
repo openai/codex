@@ -364,6 +364,7 @@ mod tests {
                 AskForApproval::OnRequest,
                 &SandboxPolicy::ExternalSandbox {
                     network_access: NetworkAccess::Restricted,
+                    deny_read_paths: vec![],
                 },
             ),
             ExecApprovalRequirement::Skip {

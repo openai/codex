@@ -202,6 +202,7 @@ fn shell_request_escalation_execution_is_explicit() {
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
+        deny_read_paths: vec![],
     };
     let macos_seatbelt_profile_extensions = MacOsSeatbeltProfileExtensions {
         macos_preferences: MacOsPreferencesPermission::ReadWrite,

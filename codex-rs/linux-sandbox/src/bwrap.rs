@@ -91,16 +91,32 @@ pub(crate) fn create_bwrap_command_args(
 ) -> Result<Vec<String>> {
     if sandbox_policy.has_full_disk_write_access() {
         return if options.network_mode == BwrapNetworkMode::FullAccess {
-            Ok(command)
+            if sandbox_policy.has_denied_read_paths() {
+                Ok(create_bwrap_flags_full_filesystem(
+                    command,
+                    sandbox_policy,
+                    options,
+                ))
+            } else {
+                Ok(command)
+            }
         } else {
-            Ok(create_bwrap_flags_full_filesystem(command, options))
+            Ok(create_bwrap_flags_full_filesystem(
+                command,
+                sandbox_policy,
+                options,
+            ))
         };
     }
 
     create_bwrap_flags(command, sandbox_policy, cwd, options)
 }
 
-fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> Vec<String> {
+fn create_bwrap_flags_full_filesystem(
+    command: Vec<String>,
+    sandbox_policy: &SandboxPolicy,
+    options: BwrapOptions,
+) -> Vec<String> {
     let mut args = vec![
         "--new-session".to_string(),
         "--die-with-parent".to_string(),
@@ -116,6 +132,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         args.push("--proc".to_string());
         args.push("/proc".to_string());
     }
+    apply_deny_read_overlays(args.as_mut(), sandbox_policy, true, &BTreeSet::new(), &[]);
     args.push("--".to_string());
     args.extend(command);
     args
@@ -161,6 +178,8 @@ fn create_bwrap_flags(
 fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<Vec<String>> {
     let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
     ensure_mount_targets_exist(&writable_roots)?;
+    let mut deny_overlay_full_read = sandbox_policy.has_full_disk_read_access();
+    let mut deny_overlay_readable_roots = BTreeSet::new();
 
     let mut args = if sandbox_policy.has_full_disk_read_access() {
         // Read-only root, then mount a minimal device tree.
@@ -202,6 +221,7 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
         // A restricted policy can still explicitly request `/`, which is
         // semantically equivalent to broad read access.
         if readable_roots.iter().any(|root| root == Path::new("/")) {
+            deny_overlay_full_read = true;
             args = vec![
                 "--ro-bind".to_string(),
                 "/".to_string(),
@@ -210,6 +230,7 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
                 "/dev".to_string(),
             ];
         } else {
+            deny_overlay_readable_roots = readable_roots.clone();
             for root in readable_roots {
                 if !root.exists() {
                     continue;
@@ -265,6 +286,14 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
         }
     }
 
+    apply_deny_read_overlays(
+        &mut args,
+        sandbox_policy,
+        deny_overlay_full_read,
+        &deny_overlay_readable_roots,
+        &writable_roots,
+    );
+
     Ok(args)
 }
 
@@ -277,6 +306,64 @@ fn collect_read_only_subpaths(writable_roots: &[WritableRoot]) -> Vec<PathBuf> {
         }
     }
     subpaths.into_iter().collect()
+}
+
+fn apply_deny_read_overlays(
+    args: &mut Vec<String>,
+    sandbox_policy: &SandboxPolicy,
+    full_read_access: bool,
+    readable_roots: &BTreeSet<PathBuf>,
+    writable_roots: &[WritableRoot],
+) {
+    let deny_read_paths: BTreeSet<PathBuf> = sandbox_policy
+        .denied_read_paths()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+
+    let writable_roots: Vec<PathBuf> = writable_roots
+        .iter()
+        .map(|root| root.root.as_path().to_path_buf())
+        .collect();
+
+    let mut applied_paths: Vec<PathBuf> = Vec::new();
+    for denied_path in deny_read_paths {
+        if applied_paths
+            .iter()
+            .any(|applied| denied_path.starts_with(applied))
+        {
+            continue;
+        }
+
+        if !full_read_access {
+            let overlaps_visible_mounts = readable_roots
+                .iter()
+                .any(|root| denied_path.starts_with(root) || root.starts_with(&denied_path))
+                || writable_roots
+                    .iter()
+                    .any(|root| denied_path.starts_with(root) || root.starts_with(&denied_path));
+            if !overlaps_visible_mounts {
+                continue;
+            }
+        }
+
+        // Default missing paths to a file-style mask so the deny rule still
+        // blocks the exact path if it appears later during the sandbox run.
+        let is_dir = std::fs::metadata(&denied_path)
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false);
+
+        if is_dir {
+            args.push("--tmpfs".to_string());
+            args.push(path_to_string(&denied_path));
+            applied_paths.push(denied_path);
+        } else {
+            args.push("--ro-bind".to_string());
+            args.push("/dev/null".to_string());
+            args.push(path_to_string(&denied_path));
+            applied_paths.push(denied_path);
+        }
+    }
 }
 
 /// Validate that writable roots exist before constructing mounts.
@@ -380,6 +467,7 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::NetworkAccess;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -401,6 +489,39 @@ mod tests {
         .expect("create bwrap args");
 
         assert_eq!(args, command);
+    }
+
+    #[test]
+    fn full_disk_write_with_deny_read_keeps_bwrap_and_masks_paths() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let denied_file = temp_dir.path().join("secret.txt");
+        std::fs::write(&denied_file, "secret").expect("write denied file");
+        let command = vec!["/bin/true".to_string()];
+        let args = create_bwrap_command_args(
+            command.clone(),
+            &SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled,
+                deny_read_paths: vec![
+                    AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute path"),
+                ],
+            },
+            Path::new("/"),
+            BwrapOptions {
+                mount_proc: true,
+                network_mode: BwrapNetworkMode::FullAccess,
+            },
+        )
+        .expect("create bwrap args");
+
+        assert_ne!(args, command);
+        assert!(args.windows(3).any(|window| {
+            window
+                == [
+                    "--ro-bind".to_string(),
+                    "/dev/null".to_string(),
+                    denied_file.to_string_lossy().to_string(),
+                ]
+        }));
     }
 
     #[test]
@@ -440,6 +561,7 @@ mod tests {
         let sandbox_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
             read_only_access: Default::default(),
+            deny_read_paths: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -478,6 +600,7 @@ mod tests {
                         .expect("absolute readable root"),
                 ],
             },
+            deny_read_paths: vec![],
         };
 
         let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
@@ -503,6 +626,7 @@ mod tests {
                 include_platform_defaults: true,
                 readable_roots: Vec::new(),
             },
+            deny_read_paths: vec![],
         };
 
         // `ReadOnlyAccess::Restricted` always includes `cwd` as a readable
@@ -518,5 +642,130 @@ mod tests {
                     .any(|window| window == ["--ro-bind", "/usr", "/usr"])
             );
         }
+    }
+
+    #[test]
+    fn deny_read_overlays_mask_existing_files_and_directories() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let denied_dir = temp_dir.path().join("private_dir");
+        let denied_file = temp_dir.path().join("secret.txt");
+        std::fs::create_dir(&denied_dir).expect("create denied dir");
+        std::fs::write(&denied_file, "secret").expect("create denied file");
+
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            deny_read_paths: vec![
+                AbsolutePathBuf::try_from(denied_dir.as_path()).expect("absolute dir"),
+                AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute file"),
+            ],
+        };
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let denied_dir_str = path_to_string(&denied_dir);
+        let denied_file_str = path_to_string(&denied_file);
+
+        assert!(
+            args.windows(2)
+                .any(|window| { window == ["--tmpfs", denied_dir_str.as_str()] })
+        );
+        assert!(
+            args.windows(3)
+                .any(|window| { window == ["--ro-bind", "/dev/null", denied_file_str.as_str()] })
+        );
+    }
+
+    #[test]
+    fn restricted_read_only_applies_deny_overlay_inside_mounted_readable_root() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let readable_root = temp_dir.path().join("readable");
+        let denied_file = readable_root.join("secret.txt");
+        std::fs::create_dir(&readable_root).expect("create readable root");
+        std::fs::write(&denied_file, "secret").expect("create denied file");
+
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![
+                    AbsolutePathBuf::try_from(readable_root.as_path())
+                        .expect("absolute readable root"),
+                ],
+            },
+            deny_read_paths: vec![
+                AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute denied file"),
+            ],
+        };
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let readable_root_str = path_to_string(&readable_root);
+        let denied_file_str = path_to_string(&denied_file);
+        let readable_mount_index = args
+            .windows(3)
+            .position(|window| {
+                window
+                    == [
+                        "--ro-bind",
+                        readable_root_str.as_str(),
+                        readable_root_str.as_str(),
+                    ]
+            })
+            .expect("readable root ro-bind");
+        let deny_overlay_index = args
+            .windows(3)
+            .position(|window| window == ["--ro-bind", "/dev/null", denied_file_str.as_str()])
+            .expect("deny overlay ro-bind");
+
+        assert!(deny_overlay_index > readable_mount_index);
+    }
+
+    #[test]
+    fn deny_read_parent_directory_skips_redundant_child_overlay() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let denied_dir = temp_dir.path().join("private");
+        let denied_file = denied_dir.join("secret.txt");
+        std::fs::create_dir(&denied_dir).expect("create denied dir");
+        std::fs::write(&denied_file, "secret").expect("create denied file");
+
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            deny_read_paths: vec![
+                AbsolutePathBuf::try_from(denied_dir.as_path()).expect("absolute dir"),
+                AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute file"),
+            ],
+        };
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let denied_dir_str = path_to_string(&denied_dir);
+        let denied_file_str = path_to_string(&denied_file);
+
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--tmpfs", denied_dir_str.as_str()])
+        );
+        assert!(
+            !args
+                .windows(3)
+                .any(|window| window == ["--ro-bind", "/dev/null", denied_file_str.as_str()])
+        );
+    }
+
+    #[test]
+    fn deny_read_overlays_mask_missing_paths() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let denied_file = temp_dir.path().join("secret.txt");
+
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            deny_read_paths: vec![
+                AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute file"),
+            ],
+        };
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let denied_file_str = path_to_string(&denied_file);
+
+        assert!(
+            args.windows(3)
+                .any(|window| window == ["--ro-bind", "/dev/null", denied_file_str.as_str()])
+        );
     }
 }

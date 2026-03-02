@@ -576,6 +576,9 @@ pub enum SandboxPolicy {
             skip_serializing_if = "ReadOnlyAccess::has_full_disk_read_access"
         )]
         access: ReadOnlyAccess,
+        /// Paths that must not be readable, even when broad read access is otherwise allowed.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        deny_read_paths: Vec<AbsolutePathBuf>,
     },
 
     /// Indicates the process is already in an external sandbox. Allows full
@@ -585,6 +588,9 @@ pub enum SandboxPolicy {
         /// Whether the external sandbox permits outbound network traffic.
         #[serde(default)]
         network_access: NetworkAccess,
+        /// Paths that must not be readable, even when broad read access is otherwise allowed.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        deny_read_paths: Vec<AbsolutePathBuf>,
     },
 
     /// Same as `ReadOnly` but additionally grants write access to the current
@@ -602,6 +608,10 @@ pub enum SandboxPolicy {
             skip_serializing_if = "ReadOnlyAccess::has_full_disk_read_access"
         )]
         read_only_access: ReadOnlyAccess,
+
+        /// Paths that must not be readable, even when broad read access is otherwise allowed.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        deny_read_paths: Vec<AbsolutePathBuf>,
 
         /// When set to `true`, outbound network access is allowed. `false` by
         /// default.
@@ -665,6 +675,7 @@ impl SandboxPolicy {
     pub fn new_read_only_policy() -> Self {
         SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
+            deny_read_paths: vec![],
         }
     }
 
@@ -675,6 +686,7 @@ impl SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             read_only_access: ReadOnlyAccess::FullAccess,
+            deny_read_paths: vec![],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -685,7 +697,7 @@ impl SandboxPolicy {
         match self {
             SandboxPolicy::DangerFullAccess => true,
             SandboxPolicy::ExternalSandbox { .. } => true,
-            SandboxPolicy::ReadOnly { access } => access.has_full_disk_read_access(),
+            SandboxPolicy::ReadOnly { access, .. } => access.has_full_disk_read_access(),
             SandboxPolicy::WorkspaceWrite {
                 read_only_access, ..
             } => read_only_access.has_full_disk_read_access(),
@@ -704,9 +716,22 @@ impl SandboxPolicy {
     pub fn has_full_network_access(&self) -> bool {
         match self {
             SandboxPolicy::DangerFullAccess => true,
-            SandboxPolicy::ExternalSandbox { network_access } => network_access.is_enabled(),
+            SandboxPolicy::ExternalSandbox { network_access, .. } => network_access.is_enabled(),
             SandboxPolicy::ReadOnly { .. } => false,
             SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
+        }
+    }
+
+    /// Returns true when the policy should behave like `danger-full-access`
+    /// for user-facing mode semantics while still honoring managed `deny_read`.
+    pub fn behaves_like_danger_full_access(&self) -> bool {
+        match self {
+            SandboxPolicy::DangerFullAccess => true,
+            SandboxPolicy::ExternalSandbox {
+                network_access,
+                deny_read_paths,
+            } => network_access.is_enabled() && !deny_read_paths.is_empty(),
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => false,
         }
     }
 
@@ -716,12 +741,65 @@ impl SandboxPolicy {
             return false;
         }
         match self {
-            SandboxPolicy::ReadOnly { access } => access.include_platform_defaults(),
+            SandboxPolicy::ReadOnly { access, .. } => access.include_platform_defaults(),
             SandboxPolicy::WorkspaceWrite {
                 read_only_access, ..
             } => read_only_access.include_platform_defaults(),
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => false,
         }
+    }
+
+    pub fn denied_read_paths(&self) -> Vec<AbsolutePathBuf> {
+        match self {
+            SandboxPolicy::ReadOnly {
+                deny_read_paths, ..
+            }
+            | SandboxPolicy::ExternalSandbox {
+                deny_read_paths, ..
+            }
+            | SandboxPolicy::WorkspaceWrite {
+                deny_read_paths, ..
+            } => deny_read_paths.clone(),
+            SandboxPolicy::DangerFullAccess => Vec::new(),
+        }
+    }
+
+    pub fn has_denied_read_paths(&self) -> bool {
+        match self {
+            SandboxPolicy::ReadOnly {
+                deny_read_paths, ..
+            }
+            | SandboxPolicy::ExternalSandbox {
+                deny_read_paths, ..
+            }
+            | SandboxPolicy::WorkspaceWrite {
+                deny_read_paths, ..
+            } => !deny_read_paths.is_empty(),
+            SandboxPolicy::DangerFullAccess => false,
+        }
+    }
+
+    pub fn append_deny_read_paths(&mut self, new_paths: &[AbsolutePathBuf]) {
+        if new_paths.is_empty() {
+            return;
+        }
+
+        let target_paths = match self {
+            SandboxPolicy::ReadOnly {
+                deny_read_paths, ..
+            }
+            | SandboxPolicy::ExternalSandbox {
+                deny_read_paths, ..
+            }
+            | SandboxPolicy::WorkspaceWrite {
+                deny_read_paths, ..
+            } => deny_read_paths,
+            SandboxPolicy::DangerFullAccess => return,
+        };
+
+        target_paths.extend(new_paths.iter().cloned());
+        let mut seen = HashSet::new();
+        target_paths.retain(|path| seen.insert(path.to_path_buf()));
     }
 
     /// Returns the list of readable roots (tailored to the current working
@@ -732,7 +810,7 @@ impl SandboxPolicy {
     pub fn get_readable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
         let mut roots = match self {
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
-            SandboxPolicy::ReadOnly { access } => access.get_readable_roots_with_cwd(cwd),
+            SandboxPolicy::ReadOnly { access, .. } => access.get_readable_roots_with_cwd(cwd),
             SandboxPolicy::WorkspaceWrite {
                 read_only_access, ..
             } => {
@@ -764,6 +842,7 @@ impl SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 network_access: _,
+                deny_read_paths: _,
             } => {
                 // Start from explicitly configured writable roots.
                 let mut roots: Vec<AbsolutePathBuf> = writable_roots.clone();
@@ -3067,15 +3146,48 @@ mod tests {
     fn external_sandbox_reports_full_access_flags() {
         let restricted = SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Restricted,
+            deny_read_paths: vec![],
         };
         assert!(restricted.has_full_disk_write_access());
         assert!(!restricted.has_full_network_access());
 
         let enabled = SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Enabled,
+            deny_read_paths: vec![],
         };
         assert!(enabled.has_full_disk_write_access());
         assert!(enabled.has_full_network_access());
+    }
+
+    #[test]
+    fn append_deny_read_paths_ignores_danger_full_access() {
+        let denied_path = if cfg!(windows) {
+            AbsolutePathBuf::try_from(r"C:\sensitive\secret.txt").expect("absolute path")
+        } else {
+            AbsolutePathBuf::try_from("/tmp/secret.txt").expect("absolute path")
+        };
+        let mut policy = SandboxPolicy::DangerFullAccess;
+
+        policy.append_deny_read_paths(std::slice::from_ref(&denied_path));
+
+        assert_eq!(policy, SandboxPolicy::DangerFullAccess);
+    }
+
+    #[test]
+    fn external_sandbox_deserializes_without_deny_read_paths() {
+        let policy: SandboxPolicy = serde_json::from_value(json!({
+            "type": "external-sandbox",
+            "network_access": "enabled",
+        }))
+        .expect("external sandbox should deserialize");
+
+        assert_eq!(
+            policy,
+            SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled,
+                deny_read_paths: vec![],
+            }
+        );
     }
 
     #[test]
@@ -3111,6 +3223,7 @@ mod tests {
                 include_platform_defaults: false,
                 readable_roots: vec![],
             },
+            deny_read_paths: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
