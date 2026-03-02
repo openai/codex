@@ -129,11 +129,11 @@ pub(crate) enum CancellationEvent {
     NotHandled,
 }
 
+use crate::bottom_pane::prompt_args::parse_slash_name;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
-use crate::bottom_pane::prompt_args::parse_slash_name;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
@@ -410,6 +410,7 @@ impl BottomPane {
             // send an interrupt even while the composer has focus.
             // When a popup is active, prefer dismissing it over interrupting the task.
             if key_event.code == KeyCode::Esc
+                && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                 && self.is_task_running
                 && !is_agent_command
                 && !self.composer.popup_active()
@@ -1636,6 +1637,54 @@ mod tests {
             );
         }
         assert_eq!(pane.composer_text(), "/agent ");
+    }
+
+    #[test]
+    fn esc_release_after_dismissing_agent_picker_does_not_interrupt_task() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.show_selection_view(SelectionViewParams {
+            title: Some("Agents".to_string()),
+            items: vec![SelectionItem {
+                name: "Main".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        pane.handle_key_event(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Press,
+        ));
+        pane.handle_key_event(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        ));
+
+        while let Ok(ev) = rx.try_recv() {
+            assert!(
+                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
+                "expected Esc release after dismissing agent picker to not interrupt"
+            );
+        }
+        assert!(
+            pane.no_modal_or_popup_active(),
+            "expected Esc press to dismiss the agent picker"
+        );
     }
 
     #[test]
