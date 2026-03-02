@@ -143,7 +143,7 @@ impl PsuedoCon {
         };
         ensure!(
             result == S_OK,
-            "failed to create psuedo console: HRESULT {result}"
+            "failed to create pseudo console: HRESULT {result}"
         );
         Ok(Self { con })
     }
