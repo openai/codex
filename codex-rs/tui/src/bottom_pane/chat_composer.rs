@@ -148,6 +148,7 @@ use super::chat_composer_history::HistoryEntry;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
+use super::slash_commands::BuiltinCommandFlags;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
@@ -425,6 +426,18 @@ enum ActivePopup {
 const FOOTER_SPACING_HEIGHT: u16 = 0;
 
 impl ChatComposer {
+    fn builtin_command_flags(&self) -> BuiltinCommandFlags {
+        BuiltinCommandFlags {
+            collaboration_modes_enabled: self.collaboration_modes_enabled,
+            connectors_enabled: self.connectors_enabled,
+            fast_command_enabled: self.fast_command_enabled,
+            personality_command_enabled: self.personality_command_enabled,
+            realtime_conversation_enabled: self.realtime_conversation_enabled,
+            audio_device_selection_enabled: self.audio_device_selection_enabled,
+            allow_elevate_sandbox: self.windows_degraded_sandbox_active,
+        }
+    }
+
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,
@@ -2263,17 +2276,9 @@ impl ChatComposer {
         {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
-                let is_builtin = slash_commands::find_builtin_command(
-                    name,
-                    self.collaboration_modes_enabled,
-                    self.connectors_enabled,
-                    self.fast_command_enabled,
-                    self.personality_command_enabled,
-                    self.realtime_conversation_enabled,
-                    self.audio_device_selection_enabled,
-                    self.windows_degraded_sandbox_active,
-                )
-                .is_some();
+                let is_builtin =
+                    slash_commands::find_builtin_command(name, self.builtin_command_flags())
+                        .is_some();
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                 let is_known_prompt = name
                     .strip_prefix(&prompt_prefix)
@@ -2481,16 +2486,8 @@ impl ChatComposer {
         let first_line = self.textarea.text().lines().next().unwrap_or("");
         if let Some((name, rest, _rest_offset)) = parse_slash_name(first_line)
             && rest.is_empty()
-            && let Some(cmd) = slash_commands::find_builtin_command(
-                name,
-                self.collaboration_modes_enabled,
-                self.connectors_enabled,
-                self.fast_command_enabled,
-                self.personality_command_enabled,
-                self.realtime_conversation_enabled,
-                self.audio_device_selection_enabled,
-                self.windows_degraded_sandbox_active,
-            )
+            && let Some(cmd) =
+                slash_commands::find_builtin_command(name, self.builtin_command_flags())
         {
             if self.reject_slash_command_if_unavailable(cmd) {
                 return Some(InputResult::None);
@@ -2518,16 +2515,7 @@ impl ChatComposer {
             return None;
         }
 
-        let cmd = slash_commands::find_builtin_command(
-            name,
-            self.collaboration_modes_enabled,
-            self.connectors_enabled,
-            self.fast_command_enabled,
-            self.personality_command_enabled,
-            self.realtime_conversation_enabled,
-            self.audio_device_selection_enabled,
-            self.windows_degraded_sandbox_active,
-        )?;
+        let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags())?;
 
         if !cmd.supports_inline_args() {
             return None;
@@ -3339,17 +3327,8 @@ impl ChatComposer {
     }
 
     fn is_known_slash_name(&self, name: &str) -> bool {
-        let is_builtin = slash_commands::find_builtin_command(
-            name,
-            self.collaboration_modes_enabled,
-            self.connectors_enabled,
-            self.fast_command_enabled,
-            self.personality_command_enabled,
-            self.realtime_conversation_enabled,
-            self.audio_device_selection_enabled,
-            self.windows_degraded_sandbox_active,
-        )
-        .is_some();
+        let is_builtin =
+            slash_commands::find_builtin_command(name, self.builtin_command_flags()).is_some();
         if is_builtin {
             return true;
         }
@@ -3403,16 +3382,7 @@ impl ChatComposer {
             return rest_after_name.is_empty();
         }
 
-        if slash_commands::has_builtin_prefix(
-            name,
-            self.collaboration_modes_enabled,
-            self.connectors_enabled,
-            self.fast_command_enabled,
-            self.personality_command_enabled,
-            self.realtime_conversation_enabled,
-            self.audio_device_selection_enabled,
-            self.windows_degraded_sandbox_active,
-        ) {
+        if slash_commands::has_builtin_prefix(name, self.builtin_command_flags()) {
             return true;
         }
 
