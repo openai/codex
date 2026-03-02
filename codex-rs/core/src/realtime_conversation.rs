@@ -570,6 +570,7 @@ async fn send_conversation_error(
 
 #[cfg(test)]
 mod tests {
+    use super::HandoffOutput;
     use super::RealtimeHandoffState;
     use super::realtime_text_from_handoff_request;
     use async_channel::bounded;
