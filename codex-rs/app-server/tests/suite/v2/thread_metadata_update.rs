@@ -1,6 +1,8 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_fake_rollout;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use app_test_support::rollout_path;
 use app_test_support::to_response;
 use codex_app_server_protocol::GitInfo;
 use codex_app_server_protocol::JSONRPCError;
@@ -11,12 +13,18 @@ use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_core::state_db::reconcile_rollout;
+use codex_protocol::ThreadId;
+use codex_state::StateRuntime;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::Path;
+use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -158,6 +166,146 @@ async fn thread_metadata_update_rejects_empty_git_info_patch() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_metadata_update_repairs_missing_sqlite_row_for_stored_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let _state_db = init_state_db(codex_home.path()).await?;
+
+    let preview = "Stored thread preview";
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        preview,
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread_id.clone(),
+            git_info: Some(ThreadMetadataGitInfoUpdateParams {
+                sha: None,
+                branch: Some("feature/stored-thread".to_string()),
+                origin_url: None,
+            }),
+        })
+        .await?;
+    let update_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+    let ThreadMetadataUpdateResponse { thread: updated } =
+        to_response::<ThreadMetadataUpdateResponse>(update_resp)?;
+
+    assert_eq!(updated.id, thread_id);
+    assert_eq!(updated.preview, preview);
+    assert_eq!(updated.created_at, 1736078400);
+    assert_eq!(
+        updated.git_info,
+        Some(GitInfo {
+            sha: None,
+            branch: Some("feature/stored-thread".to_string()),
+            origin_url: None,
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_metadata_update_repairs_loaded_thread_without_resetting_summary() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let state_db = init_state_db(codex_home.path()).await?;
+
+    let preview = "Loaded thread preview";
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-06T08-30-00",
+        "2025-01-06T08:30:00Z",
+        preview,
+        Some("mock_provider"),
+        None,
+    )?;
+    let thread_uuid = ThreadId::from_string(&thread_id)?;
+    let rollout_path = rollout_path(codex_home.path(), "2025-01-06T08-30-00", &thread_id);
+    reconcile_rollout(
+        Some(&state_db),
+        rollout_path.as_path(),
+        "mock_provider",
+        None,
+        &[],
+        None,
+        None,
+    )
+    .await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let _: ThreadResumeResponse = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(state_db.delete_thread(thread_uuid).await?, 1);
+
+    let update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread_id.clone(),
+            git_info: Some(ThreadMetadataGitInfoUpdateParams {
+                sha: None,
+                branch: Some("feature/loaded-thread".to_string()),
+                origin_url: None,
+            }),
+        })
+        .await?;
+    let update_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+    let ThreadMetadataUpdateResponse { thread: updated } =
+        to_response::<ThreadMetadataUpdateResponse>(update_resp)?;
+
+    assert_eq!(updated.id, thread_id);
+    assert_eq!(updated.preview, preview);
+    assert_eq!(updated.created_at, 1736152200);
+    assert_eq!(
+        updated.git_info,
+        Some(GitInfo {
+            sha: None,
+            branch: Some("feature/loaded-thread".to_string()),
+            origin_url: None,
+        })
+    );
+
+    Ok(())
+}
+
+async fn init_state_db(codex_home: &Path) -> Result<Arc<StateRuntime>> {
+    let state_db =
+        StateRuntime::init(codex_home.to_path_buf(), "mock_provider".into(), None).await?;
+    state_db.mark_backfill_complete(None).await?;
+    Ok(state_db)
+}
+
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
@@ -169,6 +317,10 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
+suppress_unstable_features_warning = true
+
+[features]
+sqlite = true
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

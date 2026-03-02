@@ -240,6 +240,7 @@ use codex_core::skills::remote::export_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::get_state_db;
+use codex_core::state_db::reconcile_rollout;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
@@ -2480,47 +2481,144 @@ impl CodexMessageProcessor {
         let mut metadata = match state_db_ctx.get_thread(thread_uuid).await {
             Ok(Some(metadata)) => metadata,
             Ok(None) => {
-                let Some(thread) = loaded_thread else {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("thread not found: {thread_uuid}"),
+                if let Some(thread) = loaded_thread.as_ref() {
+                    let Some(rollout_path) = thread.rollout_path() else {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!(
+                                "ephemeral thread does not support metadata updates: {thread_uuid}"
+                            ),
+                        )
+                        .await;
+                        return;
+                    };
+
+                    if tokio::fs::try_exists(rollout_path.as_path())
+                        .await
+                        .unwrap_or(false)
+                    {
+                        reconcile_rollout(
+                            Some(&state_db_ctx),
+                            rollout_path.as_path(),
+                            self.config.model_provider_id.as_str(),
+                            None,
+                            &[],
+                            None,
+                            None,
+                        )
+                        .await;
+
+                        match state_db_ctx.get_thread(thread_uuid).await {
+                            Ok(Some(metadata)) => metadata,
+                            Ok(None) => {
+                                self.send_internal_error(
+                                    request_id,
+                                    format!(
+                                        "failed to create thread metadata from rollout for {thread_uuid}"
+                                    ),
+                                )
+                                .await;
+                                return;
+                            }
+                            Err(err) => {
+                                self.send_internal_error(
+                                    request_id,
+                                    format!(
+                                        "failed to load reconciled thread metadata for {thread_uuid}: {err}"
+                                    ),
+                                )
+                                .await;
+                                return;
+                            }
+                        }
+                    } else {
+                        let config_snapshot = thread.config_snapshot().await;
+                        let model_provider = config_snapshot.model_provider_id.clone();
+                        let mut builder = ThreadMetadataBuilder::new(
+                            thread_uuid,
+                            rollout_path,
+                            Utc::now(),
+                            config_snapshot.session_source.clone(),
+                        );
+                        builder.model_provider = Some(model_provider.clone());
+                        builder.cwd = config_snapshot.cwd.clone();
+                        builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
+                        builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
+                        builder.approval_mode = config_snapshot.approval_policy;
+                        let metadata = builder.build(model_provider.as_str());
+                        if let Err(err) = state_db_ctx.upsert_thread(&metadata).await {
+                            self.send_internal_error(
+                                request_id,
+                                format!(
+                                    "failed to create thread metadata for {thread_uuid}: {err}"
+                                ),
+                            )
+                            .await;
+                            return;
+                        }
+                        metadata
+                    }
+                } else {
+                    let rollout_path = match find_thread_path_by_id_str(
+                        &self.config.codex_home,
+                        &thread_uuid.to_string(),
+                    )
+                    .await
+                    {
+                        Ok(Some(path)) => path,
+                        Ok(None) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!("thread not found: {thread_uuid}"),
+                            )
+                            .await;
+                            return;
+                        }
+                        Err(err) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!("failed to locate thread id {thread_uuid}: {err}"),
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+
+                    reconcile_rollout(
+                        Some(&state_db_ctx),
+                        rollout_path.as_path(),
+                        self.config.model_provider_id.as_str(),
+                        None,
+                        &[],
+                        None,
+                        None,
                     )
                     .await;
-                    return;
-                };
-                let Some(rollout_path) = thread.rollout_path() else {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!(
-                            "ephemeral thread does not support metadata updates: {thread_uuid}"
-                        ),
-                    )
-                    .await;
-                    return;
-                };
-                let config_snapshot = thread.config_snapshot().await;
-                let model_provider = config_snapshot.model_provider_id.clone();
-                let mut builder = ThreadMetadataBuilder::new(
-                    thread_uuid,
-                    rollout_path,
-                    Utc::now(),
-                    config_snapshot.session_source.clone(),
-                );
-                builder.model_provider = Some(model_provider.clone());
-                builder.cwd = config_snapshot.cwd.clone();
-                builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
-                builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
-                builder.approval_mode = config_snapshot.approval_policy;
-                let metadata = builder.build(model_provider.as_str());
-                if let Err(err) = state_db_ctx.upsert_thread(&metadata).await {
-                    self.send_internal_error(
-                        request_id,
-                        format!("failed to create thread metadata for {thread_uuid}: {err}"),
-                    )
-                    .await;
-                    return;
+
+                    match state_db_ctx.get_thread(thread_uuid).await {
+                        Ok(Some(metadata)) => metadata,
+                        Ok(None) => {
+                            self.send_internal_error(
+                                request_id,
+                                format!(
+                                    "failed to create thread metadata from rollout for {thread_uuid}"
+                                ),
+                            )
+                            .await;
+                            return;
+                        }
+                        Err(err) => {
+                            self.send_internal_error(
+                                request_id,
+                                format!(
+                                    "failed to load reconciled thread metadata for {thread_uuid}: {err}"
+                                ),
+                            )
+                            .await;
+                            return;
+                        }
+                    }
                 }
-                metadata
             }
             Err(err) => {
                 self.send_internal_error(
