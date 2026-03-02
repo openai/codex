@@ -50,12 +50,18 @@ pub(crate) struct RealtimeConversationManager {
 
 #[derive(Clone, Debug)]
 struct RealtimeHandoffState {
-    output_tx: Sender<(String, String)>,
+    output_tx: Sender<HandoffOutput>,
     active_handoff: Arc<Mutex<Option<String>>>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct HandoffOutput {
+    handoff_id: String,
+    output_text: String,
+}
+
 impl RealtimeHandoffState {
-    fn new(output_tx: Sender<(String, String)>) -> Self {
+    fn new(output_tx: Sender<HandoffOutput>) -> Self {
         Self {
             output_tx,
             active_handoff: Arc::new(Mutex::new(None)),
@@ -68,7 +74,10 @@ impl RealtimeHandoffState {
         };
 
         self.output_tx
-            .send((handoff_id, output_text))
+            .send(HandoffOutput {
+                handoff_id,
+                output_text,
+            })
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         Ok(())
@@ -139,7 +148,7 @@ impl RealtimeConversationManager {
         let (user_text_tx, user_text_rx) =
             async_channel::bounded::<String>(USER_TEXT_IN_QUEUE_CAPACITY);
         let (handoff_output_tx, handoff_output_rx) =
-            async_channel::bounded::<(String, String)>(HANDOFF_OUT_QUEUE_CAPACITY);
+            async_channel::bounded::<HandoffOutput>(HANDOFF_OUT_QUEUE_CAPACITY);
         let (events_tx, events_rx) =
             async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
@@ -450,7 +459,7 @@ fn spawn_realtime_input_task(
     writer: RealtimeWebsocketWriter,
     events: RealtimeWebsocketEvents,
     user_text_rx: Receiver<String>,
-    handoff_output_rx: Receiver<(String, String)>,
+    handoff_output_rx: Receiver<HandoffOutput>,
     audio_rx: Receiver<RealtimeAudioFrame>,
     events_tx: Sender<RealtimeEvent>,
     handoff_state: RealtimeHandoffState,
@@ -472,7 +481,10 @@ fn spawn_realtime_input_task(
                 }
                 handoff_output = handoff_output_rx.recv() => {
                     match handoff_output {
-                        Ok((handoff_id, output_text)) => {
+                        Ok(HandoffOutput {
+                            handoff_id,
+                            output_text,
+                        }) => {
                             if let Err(err) = writer
                                 .send_conversation_handoff_append(handoff_id, output_text)
                                 .await
@@ -627,10 +639,22 @@ mod tests {
             .expect("send");
 
         let output_1 = rx.recv().await.expect("recv");
-        assert_eq!(output_1, ("handoff_1".to_string(), "result".to_string()));
+        assert_eq!(
+            output_1,
+            HandoffOutput {
+                handoff_id: "handoff_1".to_string(),
+                output_text: "result".to_string(),
+            }
+        );
 
         let output_2 = rx.recv().await.expect("recv");
-        assert_eq!(output_2, ("handoff_1".to_string(), "result 2".to_string()));
+        assert_eq!(
+            output_2,
+            HandoffOutput {
+                handoff_id: "handoff_1".to_string(),
+                output_text: "result 2".to_string(),
+            }
+        );
 
         *state.active_handoff.lock().await = None;
         state
