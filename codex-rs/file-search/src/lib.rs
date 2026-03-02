@@ -1028,7 +1028,7 @@ mod tests {
                 .any(|m| m.path.as_path() == Path::new("package.json"))
         );
 
-        let whitelist_results = run(
+        let nested_file_results = run(
             "settings",
             vec![repo],
             FileSearchOptions {
@@ -1042,7 +1042,7 @@ mod tests {
         )
         .expect("run ok");
         assert!(
-            whitelist_results
+            nested_file_results
                 .matches
                 .iter()
                 .any(|m| m.path.as_path() == Path::new(".vscode/settings.json"))
