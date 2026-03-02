@@ -2367,6 +2367,8 @@ impl Session {
         self.send_event_raw(event).await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
+        self.maybe_clear_realtime_handoff_for_event(&legacy_source)
+            .await;
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
@@ -2390,6 +2392,13 @@ impl Session {
         if let Err(err) = self.conversation.handoff_out(text).await {
             debug!("failed to mirror event text to realtime conversation: {err}");
         }
+    }
+
+    async fn maybe_clear_realtime_handoff_for_event(&self, msg: &EventMsg) {
+        if !matches!(msg, EventMsg::TurnComplete(_)) {
+            return;
+        }
+        self.conversation.clear_active_handoff().await;
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
