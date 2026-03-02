@@ -20,7 +20,7 @@ decision to the shell-escalation protocol over a shared file descriptor (specifi
 We carry a small patch to `execute_cmd.c` (see `patches/bash-exec-wrapper.patch`) that adds support for `EXEC_WRAPPER`. The original commit message is “add support for BASH_EXEC_WRAPPER” and the patch applies cleanly to `a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b` from https://github.com/bminor/bash. To rebuild manually:
 
 ```bash
-git clone https://github.com/bminor/bash
+git clone https://git.savannah.gnu.org/git/bash
 git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
 git apply /path/to/patches/bash-exec-wrapper.patch
 ./configure --without-bash-malloc

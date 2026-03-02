@@ -168,7 +168,7 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
     let mut initial_builder = test_codex().with_home(home.clone()).with_config(|config| {
         config.features.enable(Feature::Sqlite);
         config.features.enable(Feature::MemoryTool);
-        config.memories.max_raw_memories_for_global = 1;
+        config.memories.max_raw_memories_for_consolidation = 1;
         config.memories.no_memories_if_mcp_or_web_search = true;
     });
     let initial = initial_builder.build(&server).await?;
@@ -234,7 +234,7 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
     let mut resumed_builder = test_codex().with_home(home.clone()).with_config(|config| {
         config.features.enable(Feature::Sqlite);
         config.features.enable(Feature::MemoryTool);
-        config.memories.max_raw_memories_for_global = 1;
+        config.memories.max_raw_memories_for_consolidation = 1;
         config.memories.no_memories_if_mcp_or_web_search = true;
     });
     let resumed = resumed_builder
@@ -313,7 +313,7 @@ async fn build_test_codex(server: &wiremock::MockServer, home: Arc<TempDir>) -> 
     let mut builder = test_codex().with_home(home).with_config(|config| {
         config.features.enable(Feature::Sqlite);
         config.features.enable(Feature::MemoryTool);
-        config.memories.max_raw_memories_for_global = 1;
+        config.memories.max_raw_memories_for_consolidation = 1;
     });
     builder.build(server).await
 }

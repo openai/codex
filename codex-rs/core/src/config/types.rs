@@ -26,7 +26,7 @@ pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 16;
 pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
-pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 256;
+pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
@@ -378,7 +378,7 @@ pub struct MemoriesToml {
     /// When `false`, skip injecting memory usage instructions into developer prompts.
     pub use_memories: Option<bool>,
     /// Maximum number of recent raw memories retained for global consolidation.
-    pub max_raw_memories_for_global: Option<usize>,
+    pub max_raw_memories_for_consolidation: Option<usize>,
     /// Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.
     pub max_unused_days: Option<i64>,
     /// Maximum age of the threads used for memories.
@@ -388,9 +388,9 @@ pub struct MemoriesToml {
     /// Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.
     pub min_rollout_idle_hours: Option<i64>,
     /// Model used for thread summarisation.
-    pub phase_1_model: Option<String>,
+    pub extract_model: Option<String>,
     /// Model used for memory consolidation.
-    pub phase_2_model: Option<String>,
+    pub consolidation_model: Option<String>,
 }
 
 /// Effective memories settings after defaults are applied.
@@ -399,13 +399,13 @@ pub struct MemoriesConfig {
     pub no_memories_if_mcp_or_web_search: bool,
     pub generate_memories: bool,
     pub use_memories: bool,
-    pub max_raw_memories_for_global: usize,
+    pub max_raw_memories_for_consolidation: usize,
     pub max_unused_days: i64,
     pub max_rollout_age_days: i64,
     pub max_rollouts_per_startup: usize,
     pub min_rollout_idle_hours: i64,
-    pub phase_1_model: Option<String>,
-    pub phase_2_model: Option<String>,
+    pub extract_model: Option<String>,
+    pub consolidation_model: Option<String>,
 }
 
 impl Default for MemoriesConfig {
@@ -414,13 +414,13 @@ impl Default for MemoriesConfig {
             no_memories_if_mcp_or_web_search: false,
             generate_memories: true,
             use_memories: true,
-            max_raw_memories_for_global: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+            max_raw_memories_for_consolidation: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
             max_unused_days: DEFAULT_MEMORIES_MAX_UNUSED_DAYS,
             max_rollout_age_days: DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS,
             max_rollouts_per_startup: DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
             min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
-            phase_1_model: None,
-            phase_2_model: None,
+            extract_model: None,
+            consolidation_model: None,
         }
     }
 }
@@ -434,9 +434,9 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .unwrap_or(defaults.no_memories_if_mcp_or_web_search),
             generate_memories: toml.generate_memories.unwrap_or(defaults.generate_memories),
             use_memories: toml.use_memories.unwrap_or(defaults.use_memories),
-            max_raw_memories_for_global: toml
-                .max_raw_memories_for_global
-                .unwrap_or(defaults.max_raw_memories_for_global)
+            max_raw_memories_for_consolidation: toml
+                .max_raw_memories_for_consolidation
+                .unwrap_or(defaults.max_raw_memories_for_consolidation)
                 .min(4096),
             max_unused_days: toml
                 .max_unused_days
@@ -454,8 +454,8 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .min_rollout_idle_hours
                 .unwrap_or(defaults.min_rollout_idle_hours)
                 .clamp(1, 48),
-            phase_1_model: toml.phase_1_model,
-            phase_2_model: toml.phase_2_model,
+            extract_model: toml.extract_model,
+            consolidation_model: toml.consolidation_model,
         }
     }
 }

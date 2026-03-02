@@ -13,21 +13,21 @@ use crate::memories::rollout_summaries_dir;
 pub(super) async fn rebuild_raw_memories_file_from_memories(
     root: &Path,
     memories: &[Stage1Output],
-    max_raw_memories_for_global: usize,
+    max_raw_memories_for_consolidation: usize,
 ) -> std::io::Result<()> {
     ensure_layout(root).await?;
-    rebuild_raw_memories_file(root, memories, max_raw_memories_for_global).await
+    rebuild_raw_memories_file(root, memories, max_raw_memories_for_consolidation).await
 }
 
 /// Syncs canonical rollout summary files from DB-backed stage-1 output rows.
 pub(super) async fn sync_rollout_summaries_from_memories(
     root: &Path,
     memories: &[Stage1Output],
-    max_raw_memories_for_global: usize,
+    max_raw_memories_for_consolidation: usize,
 ) -> std::io::Result<()> {
     ensure_layout(root).await?;
 
-    let retained = retained_memories(memories, max_raw_memories_for_global);
+    let retained = retained_memories(memories, max_raw_memories_for_consolidation);
     let keep = retained
         .iter()
         .map(rollout_summary_file_stem)
@@ -62,9 +62,9 @@ pub(super) async fn sync_rollout_summaries_from_memories(
 async fn rebuild_raw_memories_file(
     root: &Path,
     memories: &[Stage1Output],
-    max_raw_memories_for_global: usize,
+    max_raw_memories_for_consolidation: usize,
 ) -> std::io::Result<()> {
-    let retained = retained_memories(memories, max_raw_memories_for_global);
+    let retained = retained_memories(memories, max_raw_memories_for_consolidation);
     let mut body = String::from("# Raw Memories\n\n");
 
     if retained.is_empty() {
@@ -155,9 +155,9 @@ async fn write_rollout_summary_for_thread(
 
 fn retained_memories(
     memories: &[Stage1Output],
-    max_raw_memories_for_global: usize,
+    max_raw_memories_for_consolidation: usize,
 ) -> &[Stage1Output] {
-    &memories[..memories.len().min(max_raw_memories_for_global)]
+    &memories[..memories.len().min(max_raw_memories_for_consolidation)]
 }
 
 fn raw_memories_format_error(err: std::fmt::Error) -> std::io::Error {

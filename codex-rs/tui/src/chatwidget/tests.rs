@@ -6017,6 +6017,35 @@ async fn experimental_popup_shows_js_repl_node_requirement() {
 }
 
 #[tokio::test]
+async fn multi_agent_enable_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_multi_agent_enable_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("multi_agent_enable_prompt", popup);
+}
+
+#[tokio::test]
+async fn multi_agent_enable_prompt_updates_feature_and_emits_notice() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_multi_agent_enable_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::Collab, true)]
+    );
+    let cell = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(120));
+    assert!(rendered.contains("Multi-agent will be enabled in the next session."));
+}
+
+#[tokio::test]
 async fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
     chat.thread_id = Some(ThreadId::new());

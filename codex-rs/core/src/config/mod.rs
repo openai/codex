@@ -2508,13 +2508,13 @@ persistence = "none"
 no_memories_if_mcp_or_web_search = true
 generate_memories = false
 use_memories = false
-max_raw_memories_for_global = 512
+max_raw_memories_for_consolidation = 512
 max_unused_days = 21
 max_rollout_age_days = 42
 max_rollouts_per_startup = 9
 min_rollout_idle_hours = 24
-phase_1_model = "gpt-5-mini"
-phase_2_model = "gpt-5"
+extract_model = "gpt-5-mini"
+consolidation_model = "gpt-5"
 "#;
         let memories_cfg =
             toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
@@ -2523,13 +2523,13 @@ phase_2_model = "gpt-5"
                 no_memories_if_mcp_or_web_search: Some(true),
                 generate_memories: Some(false),
                 use_memories: Some(false),
-                max_raw_memories_for_global: Some(512),
+                max_raw_memories_for_consolidation: Some(512),
                 max_unused_days: Some(21),
                 max_rollout_age_days: Some(42),
                 max_rollouts_per_startup: Some(9),
                 min_rollout_idle_hours: Some(24),
-                phase_1_model: Some("gpt-5-mini".to_string()),
-                phase_2_model: Some("gpt-5".to_string()),
+                extract_model: Some("gpt-5-mini".to_string()),
+                consolidation_model: Some("gpt-5".to_string()),
             }),
             memories_cfg.memories
         );
@@ -2546,13 +2546,13 @@ phase_2_model = "gpt-5"
                 no_memories_if_mcp_or_web_search: true,
                 generate_memories: false,
                 use_memories: false,
-                max_raw_memories_for_global: 512,
+                max_raw_memories_for_consolidation: 512,
                 max_unused_days: 21,
                 max_rollout_age_days: 42,
                 max_rollouts_per_startup: 9,
                 min_rollout_idle_hours: 24,
-                phase_1_model: Some("gpt-5-mini".to_string()),
-                phase_2_model: Some("gpt-5".to_string()),
+                extract_model: Some("gpt-5-mini".to_string()),
+                consolidation_model: Some("gpt-5".to_string()),
             }
         );
     }

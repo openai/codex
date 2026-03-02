@@ -4108,10 +4108,10 @@ impl ChatComposer {
                     !footer_props.is_task_running && self.collaboration_mode_indicator.is_some();
                 let show_shortcuts_hint = match footer_props.mode {
                     FooterMode::ComposerEmpty => !self.is_in_paste_burst(),
+                    FooterMode::ComposerHasDraft => false,
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ShortcutOverlay
-                    | FooterMode::EscHint
-                    | FooterMode::ComposerHasDraft => false,
+                    | FooterMode::EscHint => false,
                 };
                 let show_queue_hint = match footer_props.mode {
                     FooterMode::ComposerHasDraft => footer_props.is_task_running,
@@ -4141,10 +4141,13 @@ impl ChatComposer {
                     .as_ref()
                     .map(|line| line.clone().dim());
                 let status_line_candidate = footer_props.status_line_enabled
-                    && matches!(
-                        footer_props.mode,
-                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-                    );
+                    && match footer_props.mode {
+                        FooterMode::ComposerEmpty => true,
+                        FooterMode::ComposerHasDraft => !footer_props.is_task_running,
+                        FooterMode::QuitShortcutReminder
+                        | FooterMode::ShortcutOverlay
+                        | FooterMode::EscHint => false,
+                    };
                 let mut truncated_status_line = if status_line_candidate {
                     status_line.as_ref().map(|line| {
                         truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
@@ -4210,7 +4213,7 @@ impl ChatComposer {
                     can_show_left_with_context(hint_rect, left_width, right_width);
                 let has_override =
                     self.footer_flash_visible() || self.footer_hint_override.is_some();
-                let single_line_layout = if has_override {
+                let single_line_layout = if has_override || status_line_active {
                     None
                 } else {
                     match footer_props.mode {
