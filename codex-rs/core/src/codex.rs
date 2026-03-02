@@ -2382,10 +2382,12 @@ impl Session {
         let Some(text) = realtime_text_for_event(msg) else {
             return;
         };
-        if self.conversation.running_state().await.is_none() {
+        if self.conversation.running_state().await.is_none()
+            || self.conversation.active_handoff_id().await.is_none()
+        {
             return;
         }
-        if let Err(err) = self.conversation.text_in(text).await {
+        if let Err(err) = self.conversation.handoff_out(text).await {
             debug!("failed to mirror event text to realtime conversation: {err}");
         }
     }
