@@ -3609,7 +3609,7 @@ impl ChatWidget {
                 }
                 self.open_collaboration_modes_popup();
             }
-            SlashCommand::Agent => {
+            SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
             SlashCommand::Approvals => {

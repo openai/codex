@@ -616,11 +616,19 @@
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
       "properties": {
+        "consolidation_model": {
+          "description": "Model used for memory consolidation.",
+          "type": "string"
+        },
+        "extract_model": {
+          "description": "Model used for thread summarisation.",
+          "type": "string"
+        },
         "generate_memories": {
           "description": "When `false`, newly created threads are stored with `memory_mode = \"disabled\"` in the state DB.",
           "type": "boolean"
         },
-        "max_raw_memories_for_global": {
+        "max_raw_memories_for_consolidation": {
           "description": "Maximum number of recent raw memories retained for global consolidation.",
           "format": "uint",
           "minimum": 0.0,
@@ -650,14 +658,6 @@
         "no_memories_if_mcp_or_web_search": {
           "description": "When `true`, web searches and MCP tool calls mark the thread `memory_mode` as `\"polluted\"`.",
           "type": "boolean"
-        },
-        "phase_1_model": {
-          "description": "Model used for thread summarisation.",
-          "type": "string"
-        },
-        "phase_2_model": {
-          "description": "Model used for memory consolidation.",
-          "type": "string"
         },
         "use_memories": {
           "description": "When `false`, skip injecting memory usage instructions into developer prompts.",

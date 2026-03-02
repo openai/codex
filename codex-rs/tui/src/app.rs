@@ -1246,8 +1246,8 @@ impl App {
             .collect();
 
         self.chat_widget.show_selection_view(SelectionViewParams {
-            title: Some("Agents".to_string()),
-            subtitle: Some("Select a thread to focus".to_string()),
+            title: Some("Multi-agents".to_string()),
+            subtitle: Some("Select an agent to watch".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx,

@@ -20,6 +20,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
+use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -479,6 +480,7 @@ impl ThreadManagerState {
             self.session_source.clone(),
             false,
             None,
+            None,
         )
         .await
     }
@@ -490,6 +492,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -500,6 +503,7 @@ impl ThreadManagerState {
             Vec::new(),
             persist_extended_history,
             metrics_service_name,
+            inherited_shell_snapshot,
         )
         .await
     }
@@ -510,6 +514,7 @@ impl ThreadManagerState {
         rollout_path: PathBuf,
         agent_control: AgentControl,
         session_source: SessionSource,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         self.spawn_thread_with_source(
@@ -521,6 +526,7 @@ impl ThreadManagerState {
             Vec::new(),
             false,
             None,
+            inherited_shell_snapshot,
         )
         .await
     }
@@ -532,6 +538,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         persist_extended_history: bool,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -542,6 +549,7 @@ impl ThreadManagerState {
             Vec::new(),
             persist_extended_history,
             None,
+            inherited_shell_snapshot,
         )
         .await
     }
@@ -567,6 +575,7 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            None,
         )
         .await
     }
@@ -582,6 +591,7 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
         let watch_registration = self
             .file_watcher
@@ -602,6 +612,7 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            inherited_shell_snapshot,
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)
