@@ -60,6 +60,9 @@ pub(crate) async fn apply_role_to_config(
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
     let role_layer_toml = resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+    let role_selects_provider = role_layer_toml.get("model_provider").is_some();
+    let role_selects_profile = role_layer_toml.get("profile").is_some();
+    let preserve_current_provider_and_profile = !role_selects_provider && !role_selects_profile;
 
     let mut layers: Vec<ConfigLayerEntry> = config
         .config_layer_stack
@@ -86,8 +89,11 @@ pub(crate) async fn apply_role_to_config(
         merged_config,
         ConfigOverrides {
             cwd: Some(config.cwd.clone()),
-            model_provider: Some(config.model_provider_id.clone()),
-            config_profile: config.active_profile.clone(),
+            model_provider: preserve_current_provider_and_profile
+                .then(|| config.model_provider_id.clone()),
+            config_profile: preserve_current_provider_and_profile
+                .then(|| config.active_profile.clone())
+                .flatten(),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
             js_repl_node_path: config.js_repl_node_path.clone(),
@@ -429,6 +435,119 @@ model_provider = "test-provider"
         assert_eq!(config.active_profile.as_deref(), Some("test-profile"));
         assert_eq!(config.model_provider_id, "test-provider");
         assert_eq!(config.model_provider.name, "Test Provider");
+    }
+
+    #[tokio::test]
+    async fn apply_role_uses_role_profile_instead_of_current_profile() {
+        let home = TempDir::new().expect("create temp dir");
+        tokio::fs::write(
+            home.path().join(CONFIG_TOML_FILE),
+            r#"
+[model_providers.base-provider]
+name = "Base Provider"
+base_url = "https://base.example.com/v1"
+env_key = "BASE_PROVIDER_API_KEY"
+wire_api = "responses"
+
+[model_providers.role-provider]
+name = "Role Provider"
+base_url = "https://role.example.com/v1"
+env_key = "ROLE_PROVIDER_API_KEY"
+wire_api = "responses"
+
+[profiles.base-profile]
+model_provider = "base-provider"
+
+[profiles.role-profile]
+model_provider = "role-provider"
+"#,
+        )
+        .await
+        .expect("write config.toml");
+        let mut config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                config_profile: Some("base-profile".to_string()),
+                ..Default::default()
+            })
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .build()
+            .await
+            .expect("load config");
+        let role_path =
+            write_role_config(&home, "profile-role.toml", "profile = \"role-profile\"").await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+            },
+        );
+
+        apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect("custom role should apply");
+
+        assert_eq!(config.active_profile.as_deref(), Some("role-profile"));
+        assert_eq!(config.model_provider_id, "role-provider");
+        assert_eq!(config.model_provider.name, "Role Provider");
+    }
+
+    #[tokio::test]
+    async fn apply_role_uses_role_model_provider_instead_of_current_profile_provider() {
+        let home = TempDir::new().expect("create temp dir");
+        tokio::fs::write(
+            home.path().join(CONFIG_TOML_FILE),
+            r#"
+[model_providers.base-provider]
+name = "Base Provider"
+base_url = "https://base.example.com/v1"
+env_key = "BASE_PROVIDER_API_KEY"
+wire_api = "responses"
+
+[model_providers.role-provider]
+name = "Role Provider"
+base_url = "https://role.example.com/v1"
+env_key = "ROLE_PROVIDER_API_KEY"
+wire_api = "responses"
+
+[profiles.base-profile]
+model_provider = "base-provider"
+"#,
+        )
+        .await
+        .expect("write config.toml");
+        let mut config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                config_profile: Some("base-profile".to_string()),
+                ..Default::default()
+            })
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .build()
+            .await
+            .expect("load config");
+        let role_path = write_role_config(
+            &home,
+            "provider-role.toml",
+            "model_provider = \"role-provider\"",
+        )
+        .await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+            },
+        );
+
+        apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect("custom role should apply");
+
+        assert_eq!(config.active_profile, None);
+        assert_eq!(config.model_provider_id, "role-provider");
+        assert_eq!(config.model_provider.name, "Role Provider");
     }
 
     #[tokio::test]
