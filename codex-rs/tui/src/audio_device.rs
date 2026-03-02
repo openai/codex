@@ -3,40 +3,53 @@ use cpal::traits::DeviceTrait;
 use cpal::traits::HostTrait;
 use tracing::warn;
 
-use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_event::VoiceAudioDeviceKind;
 
 const PREFERRED_INPUT_SAMPLE_RATE: u32 = 24_000;
 const PREFERRED_INPUT_CHANNELS: u16 = 1;
 
-pub(crate) fn list_realtime_audio_device_names(
-    kind: RealtimeAudioDeviceKind,
-) -> Result<Vec<String>, String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VoiceAudioDevice {
+    pub(crate) id: String,
+    pub(crate) label: String,
+}
+
+pub(crate) fn list_voice_audio_devices(
+    kind: VoiceAudioDeviceKind,
+) -> Result<Vec<VoiceAudioDevice>, String> {
     let host = cpal::default_host();
-    let mut device_names = Vec::new();
-    for device in devices(&host, kind)? {
-        let Ok(name) = device
-            .description()
-            .map(|description| description.to_string())
-        else {
-            continue;
-        };
-        if !device_names.contains(&name) {
-            device_names.push(name);
-        }
-    }
-    Ok(device_names)
+    Ok(devices(&host, kind)?
+        .into_iter()
+        .filter_map(|device| {
+            let label = device.description().ok()?.to_string();
+            let id = device.id().ok()?.to_string();
+            Some(VoiceAudioDevice { id, label })
+        })
+        .collect())
 }
 
 pub(crate) fn select_configured_input_device_and_config(
     config: &Config,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
-    select_device_and_config(RealtimeAudioDeviceKind::Microphone, config)
+    select_device_and_config(
+        VoiceAudioDeviceKind::Microphone,
+        config.realtime_audio.microphone.as_deref(),
+    )
 }
 
 pub(crate) fn select_configured_output_device_and_config(
     config: &Config,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
-    select_device_and_config(RealtimeAudioDeviceKind::Speaker, config)
+    select_device_and_config(
+        VoiceAudioDeviceKind::Speaker,
+        config.realtime_audio.speaker.as_deref(),
+    )
+}
+
+pub(crate) fn select_input_device_and_config(
+    device_id: Option<&str>,
+) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
+    select_device_and_config(VoiceAudioDeviceKind::Microphone, device_id)
 }
 
 pub(crate) fn preferred_input_config(
@@ -69,84 +82,74 @@ pub(crate) fn preferred_input_config(
 }
 
 fn select_device_and_config(
-    kind: RealtimeAudioDeviceKind,
-    config: &Config,
+    kind: VoiceAudioDeviceKind,
+    configured_device_id: Option<&str>,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
     let host = cpal::default_host();
-    let configured_label = configured_label(kind, config);
-    let selected = configured_label
-        .and_then(|label| find_device_by_label(&host, kind, label))
+    let selected = configured_device_id
+        .and_then(|device_id| configured_device(&host, kind, device_id))
         .or_else(|| {
             let default_device = default_device(&host, kind);
-            if let Some(label) = configured_label && default_device.is_some() {
+            if let Some(device_id) = configured_device_id && default_device.is_some() {
                 warn!(
-                    "configured {} audio device `{label}` was unavailable; falling back to system default",
+                    "configured {} audio device `{device_id}` was unavailable; falling back to system default",
                     kind.noun()
                 );
             }
             default_device
         })
-        .ok_or_else(|| missing_device_error(kind, configured_label))?;
+        .ok_or_else(|| missing_device_error(kind, configured_device_id))?;
 
     let stream_config = match kind {
-        RealtimeAudioDeviceKind::Microphone => preferred_input_config(&selected)?,
-        RealtimeAudioDeviceKind::Speaker => default_config(&selected, kind)?,
+        VoiceAudioDeviceKind::Microphone => preferred_input_config(&selected)?,
+        VoiceAudioDeviceKind::Speaker => default_config(&selected, kind)?,
     };
     Ok((selected, stream_config))
 }
 
-fn configured_label(kind: RealtimeAudioDeviceKind, config: &Config) -> Option<&str> {
+fn configured_device(
+    host: &cpal::Host,
+    kind: VoiceAudioDeviceKind,
+    device_id: &str,
+) -> Option<cpal::Device> {
+    let parsed_id = device_id.parse().ok()?;
+    let device = host.device_by_id(&parsed_id)?;
+
     match kind {
-        RealtimeAudioDeviceKind::Microphone => config.realtime_audio.microphone.as_deref(),
-        RealtimeAudioDeviceKind::Speaker => config.realtime_audio.speaker.as_deref(),
+        VoiceAudioDeviceKind::Microphone => device.default_input_config().ok().map(|_| device),
+        VoiceAudioDeviceKind::Speaker => device.default_output_config().ok().map(|_| device),
     }
 }
 
-fn find_device_by_label(
-    host: &cpal::Host,
-    kind: RealtimeAudioDeviceKind,
-    label: &str,
-) -> Option<cpal::Device> {
-    let devices = devices(host, kind).ok()?;
-    devices.into_iter().find(|device| {
-        device
-            .description()
-            .ok()
-            .map(|description| description.to_string())
-            .as_deref()
-            == Some(label)
-    })
-}
-
-fn devices(host: &cpal::Host, kind: RealtimeAudioDeviceKind) -> Result<Vec<cpal::Device>, String> {
+fn devices(host: &cpal::Host, kind: VoiceAudioDeviceKind) -> Result<Vec<cpal::Device>, String> {
     match kind {
-        RealtimeAudioDeviceKind::Microphone => host
+        VoiceAudioDeviceKind::Microphone => host
             .input_devices()
             .map(|devices| devices.collect())
             .map_err(|err| format!("failed to enumerate input audio devices: {err}")),
-        RealtimeAudioDeviceKind::Speaker => host
+        VoiceAudioDeviceKind::Speaker => host
             .output_devices()
             .map(|devices| devices.collect())
             .map_err(|err| format!("failed to enumerate output audio devices: {err}")),
     }
 }
 
-fn default_device(host: &cpal::Host, kind: RealtimeAudioDeviceKind) -> Option<cpal::Device> {
+fn default_device(host: &cpal::Host, kind: VoiceAudioDeviceKind) -> Option<cpal::Device> {
     match kind {
-        RealtimeAudioDeviceKind::Microphone => host.default_input_device(),
-        RealtimeAudioDeviceKind::Speaker => host.default_output_device(),
+        VoiceAudioDeviceKind::Microphone => host.default_input_device(),
+        VoiceAudioDeviceKind::Speaker => host.default_output_device(),
     }
 }
 
 fn default_config(
     device: &cpal::Device,
-    kind: RealtimeAudioDeviceKind,
+    kind: VoiceAudioDeviceKind,
 ) -> Result<cpal::SupportedStreamConfig, String> {
     match kind {
-        RealtimeAudioDeviceKind::Microphone => device
+        VoiceAudioDeviceKind::Microphone => device
             .default_input_config()
             .map_err(|err| format!("failed to get default input config: {err}")),
-        RealtimeAudioDeviceKind::Speaker => device
+        VoiceAudioDeviceKind::Speaker => device
             .default_output_config()
             .map_err(|err| format!("failed to get default output config: {err}")),
     }
@@ -164,21 +167,19 @@ fn preferred_input_sample_rate(range: &cpal::SupportedStreamConfigRange) -> cpal
     }
 }
 
-fn missing_device_error(kind: RealtimeAudioDeviceKind, configured_label: Option<&str>) -> String {
-    match (kind, configured_label) {
-        (RealtimeAudioDeviceKind::Microphone, Some(label)) => {
+fn missing_device_error(kind: VoiceAudioDeviceKind, configured_device_id: Option<&str>) -> String {
+    match (kind, configured_device_id) {
+        (VoiceAudioDeviceKind::Microphone, Some(device_id)) => {
             format!(
-                "configured microphone `{label}` was unavailable and no default input audio device was found"
+                "configured microphone `{device_id}` was unavailable and no default input audio device was found"
             )
         }
-        (RealtimeAudioDeviceKind::Speaker, Some(label)) => {
+        (VoiceAudioDeviceKind::Speaker, Some(device_id)) => {
             format!(
-                "configured speaker `{label}` was unavailable and no default output audio device was found"
+                "configured speaker `{device_id}` was unavailable and no default output audio device was found"
             )
         }
-        (RealtimeAudioDeviceKind::Microphone, None) => {
-            "no input audio device available".to_string()
-        }
-        (RealtimeAudioDeviceKind::Speaker, None) => "no output audio device available".to_string(),
+        (VoiceAudioDeviceKind::Microphone, None) => "no input audio device available".to_string(),
+        (VoiceAudioDeviceKind::Speaker, None) => "no output audio device available".to_string(),
     }
 }

@@ -1,7 +1,7 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
-use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_event::VoiceAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -2228,8 +2228,8 @@ impl App {
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
             }
-            AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
-                self.chat_widget.open_realtime_audio_device_selection(kind);
+            AppEvent::OpenVoiceAudioDeviceSelection { kind } => {
+                self.chat_widget.open_voice_audio_device_selection(kind);
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -2656,37 +2656,38 @@ impl App {
                     }
                 }
             }
-            AppEvent::PersistRealtimeAudioDeviceSelection { kind, name } => {
+            AppEvent::PersistVoiceAudioDeviceSelection { kind, device_id } => {
                 let builder = match kind {
-                    RealtimeAudioDeviceKind::Microphone => {
+                    VoiceAudioDeviceKind::Microphone => {
                         ConfigEditsBuilder::new(&self.config.codex_home)
-                            .set_realtime_microphone(name.as_deref())
+                            .set_audio_microphone(device_id.as_deref())
                     }
-                    RealtimeAudioDeviceKind::Speaker => {
+                    VoiceAudioDeviceKind::Speaker => {
                         ConfigEditsBuilder::new(&self.config.codex_home)
-                            .set_realtime_speaker(name.as_deref())
+                            .set_audio_speaker(device_id.as_deref())
                     }
                 };
 
                 match builder.apply().await {
                     Ok(()) => {
                         match kind {
-                            RealtimeAudioDeviceKind::Microphone => {
-                                self.config.realtime_audio.microphone = name.clone();
+                            VoiceAudioDeviceKind::Microphone => {
+                                self.config.realtime_audio.microphone = device_id.clone();
                             }
-                            RealtimeAudioDeviceKind::Speaker => {
-                                self.config.realtime_audio.speaker = name.clone();
+                            VoiceAudioDeviceKind::Speaker => {
+                                self.config.realtime_audio.speaker = device_id.clone();
                             }
                         }
                         self.chat_widget
-                            .set_realtime_audio_device(kind, name.clone());
+                            .set_voice_audio_device(kind, device_id.clone());
 
                         if self.chat_widget.realtime_conversation_is_live() {
-                            self.chat_widget.open_realtime_audio_restart_prompt(kind);
+                            self.chat_widget.open_voice_audio_restart_prompt(kind);
                         } else {
-                            let selection = name.unwrap_or_else(|| "System default".to_string());
+                            let selection =
+                                device_id.unwrap_or_else(|| "System default".to_string());
                             self.chat_widget.add_info_message(
-                                format!("Realtime {} set to {selection}", kind.noun()),
+                                format!("Audio {} set to {selection}", kind.noun()),
                                 None,
                             );
                         }
@@ -2694,17 +2695,15 @@ impl App {
                     Err(err) => {
                         tracing::error!(
                             error = %err,
-                            "failed to persist realtime audio selection"
+                            "failed to persist audio device selection"
                         );
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save realtime {}: {err}",
-                            kind.noun()
-                        ));
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save {}: {err}", kind.noun()));
                     }
                 }
             }
-            AppEvent::RestartRealtimeAudioDevice { kind } => {
-                self.chat_widget.restart_realtime_audio_device(kind);
+            AppEvent::RestartVoiceAudioDevice { kind } => {
+                self.chat_widget.restart_voice_audio_device(kind);
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.runtime_approval_policy_override = Some(policy);
@@ -3099,15 +3098,13 @@ impl App {
                     ));
                 }
             },
-            #[cfg(not(target_os = "linux"))]
             AppEvent::TranscriptionComplete { id, text } => {
                 self.chat_widget.replace_transcription(&id, &text);
             }
-            #[cfg(not(target_os = "linux"))]
-            AppEvent::TranscriptionFailed { id, error: _ } => {
+            AppEvent::TranscriptionFailed { id, error } => {
+                tracing::error!("voice transcription failed: {error}");
                 self.chat_widget.remove_transcription_placeholder(&id);
             }
-            #[cfg(not(target_os = "linux"))]
             AppEvent::UpdateRecordingMeter { id, text } => {
                 // Update in place to preserve the element id for subsequent frames.
                 let updated = self.chat_widget.update_transcription_in_place(&id, &text);

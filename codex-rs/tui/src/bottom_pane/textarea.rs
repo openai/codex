@@ -894,7 +894,6 @@ impl TextArea {
         id
     }
 
-    #[cfg(not(target_os = "linux"))]
     pub fn insert_named_element(&mut self, text: &str, id: String) {
         let start = self.clamp_pos_for_insertion(self.cursor_pos);
         self.insert_str_at(start, text);

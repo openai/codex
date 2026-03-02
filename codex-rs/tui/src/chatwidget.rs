@@ -37,8 +37,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::app_event::RealtimeAudioDeviceKind;
-use crate::audio_device::list_realtime_audio_device_names;
+use crate::app_event::VoiceAudioDeviceKind;
+use crate::audio_device::VoiceAudioDevice;
+use crate::audio_device::list_voice_audio_devices;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::status::RateLimitWindowDisplay;
@@ -2905,6 +2906,9 @@ impl ChatWidget {
         );
         widget
             .bottom_pane
+            .set_audio_microphone(widget.config.realtime_audio.microphone.clone());
+        widget
+            .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
@@ -3084,6 +3088,9 @@ impl ChatWidget {
         );
         widget
             .bottom_pane
+            .set_audio_microphone(widget.config.realtime_audio.microphone.clone());
+        widget
+            .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
@@ -3250,6 +3257,9 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
+        widget
+            .bottom_pane
+            .set_audio_microphone(widget.config.realtime_audio.microphone.clone());
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
@@ -5315,17 +5325,17 @@ impl ChatWidget {
 
     pub(crate) fn open_realtime_audio_popup(&mut self) {
         let items = [
-            RealtimeAudioDeviceKind::Microphone,
-            RealtimeAudioDeviceKind::Speaker,
+            VoiceAudioDeviceKind::Microphone,
+            VoiceAudioDeviceKind::Speaker,
         ]
         .into_iter()
         .map(|kind| {
             let description = Some(format!(
                 "Current: {}",
-                self.current_realtime_audio_selection_label(kind)
+                self.current_voice_audio_selection_label(kind)
             ));
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::OpenRealtimeAudioDeviceSelection { kind });
+                tx.send(AppEvent::OpenVoiceAudioDeviceSelection { kind });
             })];
             SelectionItem {
                 name: kind.title().to_string(),
@@ -5346,45 +5356,43 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
-        match list_realtime_audio_device_names(kind) {
-            Ok(device_names) => {
-                self.open_realtime_audio_device_selection_with_names(kind, device_names);
+    pub(crate) fn open_voice_audio_device_selection(&mut self, kind: VoiceAudioDeviceKind) {
+        match list_voice_audio_devices(kind) {
+            Ok(devices) => {
+                self.open_voice_audio_device_selection_with_devices(kind, devices);
             }
             Err(err) => {
-                self.add_error_message(format!(
-                    "Failed to load realtime {} devices: {err}",
-                    kind.noun()
-                ));
+                self.add_error_message(format!("Failed to load {} devices: {err}", kind.noun()));
             }
         }
     }
 
-    fn open_realtime_audio_device_selection_with_names(
+    fn open_voice_audio_device_selection_with_devices(
         &mut self,
-        kind: RealtimeAudioDeviceKind,
-        device_names: Vec<String>,
+        kind: VoiceAudioDeviceKind,
+        devices: Vec<VoiceAudioDevice>,
     ) {
-        let current_selection = self.current_realtime_audio_device_name(kind);
+        let current_selection = self.current_voice_audio_device_id(kind);
         let current_available = current_selection
             .as_deref()
-            .is_some_and(|name| device_names.iter().any(|device_name| device_name == name));
+            .is_some_and(|device_id| devices.iter().any(|device| device.id == device_id));
         let mut items = vec![SelectionItem {
             name: "System default".to_string(),
             description: Some("Use your operating system default device.".to_string()),
             is_current: current_selection.is_none(),
             actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::PersistRealtimeAudioDeviceSelection { kind, name: None });
+                tx.send(AppEvent::PersistVoiceAudioDeviceSelection {
+                    kind,
+                    device_id: None,
+                });
             })],
             dismiss_on_select: true,
             ..Default::default()
         }];
 
-        if let Some(selection) = current_selection.as_deref()
-            && !current_available
-        {
+        if current_selection.is_some() && !current_available {
             items.push(SelectionItem {
-                name: format!("Unavailable: {selection}"),
+                name: "Unavailable device".to_string(),
                 description: Some("Configured device is not currently available.".to_string()),
                 is_current: true,
                 is_disabled: true,
@@ -5393,17 +5401,32 @@ impl ChatWidget {
             });
         }
 
-        items.extend(device_names.into_iter().map(|device_name| {
-            let persisted_name = device_name.clone();
+        let duplicate_counts =
+            devices
+                .iter()
+                .fold(HashMap::<String, usize>::new(), |mut counts, device| {
+                    *counts.entry(device.label.clone()).or_default() += 1;
+                    counts
+                });
+
+        items.extend(devices.into_iter().map(|device| {
+            let persisted_device_id = device.id.clone();
+            let description = (duplicate_counts
+                .get(&device.label)
+                .copied()
+                .unwrap_or_default()
+                > 1)
+            .then(|| format!("Device ID: {}", Self::compact_device_id(&device.id)));
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::PersistRealtimeAudioDeviceSelection {
+                tx.send(AppEvent::PersistVoiceAudioDeviceSelection {
                     kind,
-                    name: Some(persisted_name.clone()),
+                    device_id: Some(persisted_device_id.clone()),
                 });
             })];
             SelectionItem {
-                is_current: current_selection.as_deref() == Some(device_name.as_str()),
-                name: device_name,
+                is_current: current_selection.as_deref() == Some(device.id.as_str()),
+                name: device.label,
+                description,
                 actions,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -5412,9 +5435,15 @@ impl ChatWidget {
 
         let mut header = ColumnRenderable::new();
         header.push(Line::from(format!("Select {}", kind.title()).bold()));
-        header.push(Line::from(
-            "Saved devices apply to realtime voice only.".dim(),
-        ));
+        let subtitle = match kind {
+            VoiceAudioDeviceKind::Microphone => {
+                "Saved microphone applies to transcription and realtime voice.".dim()
+            }
+            VoiceAudioDeviceKind::Speaker => {
+                "Saved speaker applies to realtime voice output.".dim()
+            }
+        };
+        header.push(Line::from(subtitle));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
@@ -5424,9 +5453,9 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn open_realtime_audio_restart_prompt(&mut self, kind: RealtimeAudioDeviceKind) {
+    pub(crate) fn open_voice_audio_restart_prompt(&mut self, kind: VoiceAudioDeviceKind) {
         let restart_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::RestartRealtimeAudioDevice { kind });
+            tx.send(AppEvent::RestartVoiceAudioDevice { kind });
         })];
         let items = vec![
             SelectionItem {
@@ -6805,14 +6834,17 @@ impl ChatWidget {
         self.config.personality = Some(personality);
     }
 
-    pub(crate) fn set_realtime_audio_device(
+    pub(crate) fn set_voice_audio_device(
         &mut self,
-        kind: RealtimeAudioDeviceKind,
-        name: Option<String>,
+        kind: VoiceAudioDeviceKind,
+        device_id: Option<String>,
     ) {
         match kind {
-            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone = name,
-            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker = name,
+            VoiceAudioDeviceKind::Microphone => {
+                self.config.realtime_audio.microphone = device_id.clone();
+                self.bottom_pane.set_audio_microphone(device_id);
+            }
+            VoiceAudioDeviceKind::Speaker => self.config.realtime_audio.speaker = device_id,
         }
     }
 
@@ -6848,16 +6880,38 @@ impl ChatWidget {
         self.realtime_conversation.is_active()
     }
 
-    fn current_realtime_audio_device_name(&self, kind: RealtimeAudioDeviceKind) -> Option<String> {
+    fn current_voice_audio_device_id(&self, kind: VoiceAudioDeviceKind) -> Option<String> {
         match kind {
-            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone.clone(),
-            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker.clone(),
+            VoiceAudioDeviceKind::Microphone => self.config.realtime_audio.microphone.clone(),
+            VoiceAudioDeviceKind::Speaker => self.config.realtime_audio.speaker.clone(),
         }
     }
 
-    fn current_realtime_audio_selection_label(&self, kind: RealtimeAudioDeviceKind) -> String {
-        self.current_realtime_audio_device_name(kind)
-            .unwrap_or_else(|| "System default".to_string())
+    fn current_voice_audio_selection_label(&self, kind: VoiceAudioDeviceKind) -> String {
+        let Some(device_id) = self.current_voice_audio_device_id(kind) else {
+            return "System default".to_string();
+        };
+
+        list_voice_audio_devices(kind)
+            .ok()
+            .and_then(|devices| {
+                devices
+                    .into_iter()
+                    .find(|device| device.id == device_id)
+                    .map(|device| device.label)
+            })
+            .unwrap_or_else(|| "Unavailable device".to_string())
+    }
+
+    fn compact_device_id(device_id: &str) -> String {
+        const MAX_LEN: usize = 18;
+        if device_id.len() <= MAX_LEN {
+            return device_id.to_string();
+        }
+
+        let start = &device_id[..8];
+        let end = &device_id[device_id.len() - 8..];
+        format!("{start}...{end}")
     }
 
     fn sync_personality_command_enabled(&mut self) {

@@ -872,7 +872,7 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_realtime_microphone(mut self, microphone: Option<&str>) -> Self {
+    pub fn set_audio_microphone(mut self, microphone: Option<&str>) -> Self {
         let segments = vec!["audio".to_string(), "microphone".to_string()];
         match microphone {
             Some(microphone) => self.edits.push(ConfigEdit::SetPath {
@@ -884,7 +884,7 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_realtime_speaker(mut self, speaker: Option<&str>) -> Self {
+    pub fn set_audio_speaker(mut self, speaker: Option<&str>) -> Self {
         let segments = vec!["audio".to_string(), "speaker".to_string()];
         match speaker {
             Some(speaker) => self.edits.push(ConfigEdit::SetPath {
@@ -1893,8 +1893,8 @@ model_reasoning_effort = "high"
         let codex_home = tmp.path();
 
         ConfigEditsBuilder::new(codex_home)
-            .set_realtime_microphone(Some("USB Mic"))
-            .set_realtime_speaker(Some("Desk Speakers"))
+            .set_audio_microphone(Some("USB Mic"))
+            .set_audio_speaker(Some("Desk Speakers"))
             .apply_blocking()
             .expect("persist realtime audio");
 
@@ -1914,7 +1914,7 @@ model_reasoning_effort = "high"
         );
 
         ConfigEditsBuilder::new(codex_home)
-            .set_realtime_microphone(None)
+            .set_audio_microphone(None)
             .apply_blocking()
             .expect("clear realtime microphone");
 

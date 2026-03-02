@@ -268,17 +268,17 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn restart_realtime_audio_device(&mut self, kind: RealtimeAudioDeviceKind) {
+    pub(crate) fn restart_voice_audio_device(&mut self, kind: VoiceAudioDeviceKind) {
         if !self.realtime_conversation.is_active() {
             return;
         }
 
         match kind {
-            RealtimeAudioDeviceKind::Microphone => {
+            VoiceAudioDeviceKind::Microphone => {
                 self.stop_realtime_microphone();
                 self.start_realtime_local_audio();
             }
-            RealtimeAudioDeviceKind::Speaker => {
+            VoiceAudioDeviceKind::Speaker => {
                 self.stop_realtime_speaker();
                 match crate::voice::RealtimeAudioPlayer::start(&self.config) {
                     Ok(player) => {

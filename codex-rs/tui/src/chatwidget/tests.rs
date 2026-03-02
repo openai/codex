@@ -7,8 +7,9 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
-use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_event::VoiceAudioDeviceKind;
 use crate::app_event_sender::AppEventSender;
+use crate::audio_device::VoiceAudioDevice;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
@@ -6031,10 +6032,19 @@ async fn realtime_audio_selection_popup_narrow_snapshot() {
 #[tokio::test]
 async fn realtime_microphone_picker_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
-    chat.config.realtime_audio.microphone = Some("Studio Mic".to_string());
-    chat.open_realtime_audio_device_selection_with_names(
-        RealtimeAudioDeviceKind::Microphone,
-        vec!["Built-in Mic".to_string(), "USB Mic".to_string()],
+    chat.config.realtime_audio.microphone = Some("mic-unavailable".to_string());
+    chat.open_voice_audio_device_selection_with_devices(
+        VoiceAudioDeviceKind::Microphone,
+        vec![
+            VoiceAudioDevice {
+                id: "mic-1".to_string(),
+                label: "Built-in Mic".to_string(),
+            },
+            VoiceAudioDevice {
+                id: "mic-2".to_string(),
+                label: "USB Mic".to_string(),
+            },
+        ],
     );
 
     let popup = render_bottom_popup(&chat, 80);
@@ -6044,9 +6054,18 @@ async fn realtime_microphone_picker_popup_snapshot() {
 #[tokio::test]
 async fn realtime_audio_picker_emits_persist_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
-    chat.open_realtime_audio_device_selection_with_names(
-        RealtimeAudioDeviceKind::Speaker,
-        vec!["Desk Speakers".to_string(), "Headphones".to_string()],
+    chat.open_voice_audio_device_selection_with_devices(
+        VoiceAudioDeviceKind::Speaker,
+        vec![
+            VoiceAudioDevice {
+                id: "speaker-1".to_string(),
+                label: "Desk Speakers".to_string(),
+            },
+            VoiceAudioDevice {
+                id: "speaker-2".to_string(),
+                label: "Headphones".to_string(),
+            },
+        ],
     );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -6055,10 +6074,10 @@ async fn realtime_audio_picker_emits_persist_event() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::PersistRealtimeAudioDeviceSelection {
-            kind: RealtimeAudioDeviceKind::Speaker,
-            name: Some(name),
-        }) if name == "Headphones"
+        Ok(AppEvent::PersistVoiceAudioDeviceSelection {
+            kind: VoiceAudioDeviceKind::Speaker,
+            device_id: Some(device_id),
+        }) if device_id == "speaker-2"
     );
 }
 

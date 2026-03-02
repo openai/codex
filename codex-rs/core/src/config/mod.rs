@@ -1182,7 +1182,9 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
-    /// Machine-local realtime audio device preferences used by realtime voice.
+    /// Machine-local audio device preferences.
+    /// `audio.microphone` applies to transcription and realtime voice input.
+    /// `audio.speaker` applies to realtime voice output.
     #[serde(default)]
     pub audio: Option<RealtimeAudioToml>,
 
@@ -6132,8 +6134,8 @@ experimental_realtime_ws_backend_prompt = "prompt from config"
         let cfg: ConfigToml = toml::from_str(
             r#"
 [audio]
-microphone = "USB Mic"
-speaker = "Desk Speakers"
+microphone = "input-device-id"
+speaker = "output-device-id"
 "#,
         )
         .expect("TOML deserialization should succeed");
@@ -6142,8 +6144,11 @@ speaker = "Desk Speakers"
             .audio
             .as_ref()
             .expect("realtime audio config should be present");
-        assert_eq!(realtime_audio.microphone.as_deref(), Some("USB Mic"));
-        assert_eq!(realtime_audio.speaker.as_deref(), Some("Desk Speakers"));
+        assert_eq!(
+            realtime_audio.microphone.as_deref(),
+            Some("input-device-id")
+        );
+        assert_eq!(realtime_audio.speaker.as_deref(), Some("output-device-id"));
 
         let codex_home = TempDir::new()?;
         let config = Config::load_from_base_config_with_overrides(
@@ -6152,10 +6157,13 @@ speaker = "Desk Speakers"
             codex_home.path().to_path_buf(),
         )?;
 
-        assert_eq!(config.realtime_audio.microphone.as_deref(), Some("USB Mic"));
+        assert_eq!(
+            config.realtime_audio.microphone.as_deref(),
+            Some("input-device-id")
+        );
         assert_eq!(
             config.realtime_audio.speaker.as_deref(),
-            Some("Desk Speakers")
+            Some("output-device-id")
         );
         Ok(())
     }

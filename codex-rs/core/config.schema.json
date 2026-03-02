@@ -1588,7 +1588,7 @@
         }
       ],
       "default": null,
-      "description": "Machine-local realtime audio device preferences used by realtime voice."
+      "description": "Machine-local audio device preferences. `audio.microphone` applies to transcription and realtime voice input. `audio.speaker` applies to realtime voice output."
     },
     "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",

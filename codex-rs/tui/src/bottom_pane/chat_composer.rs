@@ -388,6 +388,7 @@ pub(crate) struct ChatComposer {
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
+    audio_microphone: Option<String>,
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
@@ -493,6 +494,7 @@ impl ChatComposer {
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
+            audio_microphone: None,
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
@@ -571,6 +573,10 @@ impl ChatComposer {
 
     pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
         self.audio_device_selection_enabled = enabled;
+    }
+
+    pub fn set_audio_microphone(&mut self, microphone: Option<String>) {
+        self.audio_microphone = microphone;
     }
 
     /// Compatibility shim for tests that still toggle the removed steer mode flag.
@@ -3813,7 +3819,7 @@ impl ChatComposer {
     /// Start voice capture and insert a placeholder element for the live meter.
     /// Returns true if recording began and UI should redraw; false on failure.
     fn start_recording_with_placeholder(&mut self) -> bool {
-        match crate::voice::VoiceCapture::start() {
+        match crate::voice::VoiceCapture::start(self.audio_microphone.as_deref()) {
             Ok(vc) => {
                 self.voice_state.voice = Some(vc);
                 if self.voice_state.key_release_supported {

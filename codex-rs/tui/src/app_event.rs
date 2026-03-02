@@ -30,12 +30,12 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RealtimeAudioDeviceKind {
+pub(crate) enum VoiceAudioDeviceKind {
     Microphone,
     Speaker,
 }
 
-impl RealtimeAudioDeviceKind {
+impl VoiceAudioDeviceKind {
     pub(crate) fn title(self) -> &'static str {
         match self {
             Self::Microphone => "Microphone",
@@ -198,19 +198,19 @@ pub(crate) enum AppEvent {
     },
 
     /// Open the device picker for a realtime microphone or speaker.
-    OpenRealtimeAudioDeviceSelection {
-        kind: RealtimeAudioDeviceKind,
+    OpenVoiceAudioDeviceSelection {
+        kind: VoiceAudioDeviceKind,
     },
 
-    /// Persist the selected realtime microphone or speaker to top-level config.
-    PersistRealtimeAudioDeviceSelection {
-        kind: RealtimeAudioDeviceKind,
-        name: Option<String>,
+    /// Persist the selected microphone or speaker device id to top-level config.
+    PersistVoiceAudioDeviceSelection {
+        kind: VoiceAudioDeviceKind,
+        device_id: Option<String>,
     },
 
-    /// Restart the selected realtime microphone or speaker locally.
-    RestartRealtimeAudioDevice {
-        kind: RealtimeAudioDeviceKind,
+    /// Restart the selected microphone or speaker locally.
+    RestartVoiceAudioDevice {
+        kind: VoiceAudioDeviceKind,
     },
 
     /// Open the reasoning selection popup after picking a model.

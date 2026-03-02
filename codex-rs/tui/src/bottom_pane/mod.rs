@@ -303,6 +303,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_audio_microphone(&mut self, microphone: Option<String>) {
+        self.composer.set_audio_microphone(microphone);
+        self.request_redraw();
+    }
+
     pub fn set_voice_transcription_enabled(&mut self, enabled: bool) {
         self.composer.set_voice_transcription_enabled(enabled);
         self.request_redraw();

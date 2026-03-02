@@ -11,7 +11,6 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use cpal::traits::DeviceTrait;
-use cpal::traits::HostTrait;
 use cpal::traits::StreamTrait;
 use hound::SampleFormat;
 use hound::WavSpec;
@@ -54,8 +53,8 @@ pub struct VoiceCapture {
 }
 
 impl VoiceCapture {
-    pub fn start() -> Result<Self, String> {
-        let (device, config) = select_default_input_device_and_config()?;
+    pub fn start(device_id: Option<&str>) -> Result<Self, String> {
+        let (device, config) = select_input_device_and_config(device_id)?;
 
         let sample_rate = config.sample_rate();
         let channels = config.channels();
@@ -266,14 +265,10 @@ pub fn transcribe_async(
 // Voice input helpers
 // -------------------------
 
-fn select_default_input_device_and_config()
--> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| "no input audio device available".to_string())?;
-    let config = crate::audio_device::preferred_input_config(&device)?;
-    Ok((device, config))
+fn select_input_device_and_config(
+    device_id: Option<&str>,
+) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
+    crate::audio_device::select_input_device_and_config(device_id)
 }
 
 fn select_realtime_input_device_and_config(
