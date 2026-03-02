@@ -73,7 +73,7 @@ impl RealtimeHandoffState {
     }
 
     async fn send_output(&self, output_text: String) -> CodexResult<()> {
-        let Some(handoff_id) = self.active_handoff_id().await else {
+        if self.active_handoff_id().await.is_none() {
             return Ok(());
         };
 
