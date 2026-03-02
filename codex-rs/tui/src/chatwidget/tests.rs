@@ -3141,6 +3141,30 @@ async fn empty_enter_during_task_does_not_queue() {
 }
 
 #[tokio::test]
+async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::PreventIdleSleep, true);
+
+    chat.restore_thread_input_state(Some(ThreadInputState {
+        composer: None,
+        queued_user_messages: VecDeque::new(),
+        current_collaboration_mode: chat.current_collaboration_mode.clone(),
+        active_collaboration_mask: chat.active_collaboration_mask.clone(),
+        agent_turn_running: true,
+    }));
+
+    assert!(chat.agent_turn_running);
+    assert!(chat.turn_sleep_inhibitor.is_turn_running());
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.restore_thread_input_state(None);
+
+    assert!(!chat.agent_turn_running);
+    assert!(!chat.turn_sleep_inhibitor.is_turn_running());
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.queued_message_edit_binding = crate::key_hint::alt(KeyCode::Up);

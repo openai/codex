@@ -1980,7 +1980,6 @@ impl ChatWidget {
             self.agent_turn_running = input_state.agent_turn_running;
             self.update_collaboration_mode_indicator();
             self.refresh_model_display();
-            self.update_task_running_state();
             if let Some(composer) = input_state.composer {
                 let local_image_paths = composer
                     .local_images
@@ -2009,7 +2008,6 @@ impl ChatWidget {
             self.queued_user_messages = input_state.queued_user_messages;
         } else {
             self.agent_turn_running = false;
-            self.update_task_running_state();
             self.set_remote_image_urls(Vec::new());
             self.bottom_pane.set_composer_text_with_mention_bindings(
                 String::new(),
@@ -2020,6 +2018,9 @@ impl ChatWidget {
             self.bottom_pane.set_composer_pending_pastes(Vec::new());
             self.queued_user_messages.clear();
         }
+        self.turn_sleep_inhibitor
+            .set_turn_running(self.agent_turn_running);
+        self.update_task_running_state();
         self.refresh_queued_user_messages();
         self.request_redraw();
     }
