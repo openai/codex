@@ -159,7 +159,7 @@ jobs:
           mkdir -p "$dest"
           cp bash "$dest/bash"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -201,7 +201,7 @@ jobs:
           mkdir -p "$dest"
           cp bash "$dest/bash"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -327,7 +327,7 @@ jobs:
           grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
           grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: shell-tool-mcp-zsh-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -405,7 +405,7 @@ jobs:
           grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
           grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: shell-tool-mcp-zsh-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -502,7 +502,7 @@ jobs:
           filename=$(PACK_INFO="$pack_info" node -e 'const data = JSON.parse(process.env.PACK_INFO); console.log(data[0].filename);')
           mv "dist/npm/${filename}" "dist/npm/codex-shell-tool-mcp-npm-${PACKAGE_VERSION}.tgz"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: codex-shell-tool-mcp-npm
           path: dist/npm/codex-shell-tool-mcp-npm-${{ env.PACKAGE_VERSION }}.tgz
