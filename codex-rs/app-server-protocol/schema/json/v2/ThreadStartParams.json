@@ -141,6 +141,12 @@
         }
       ]
     },
+    "requirementsToml": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "sandbox": {
       "anyOf": [
         {

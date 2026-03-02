@@ -880,6 +880,7 @@ personality = true
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
+                requirements_toml_file: None,
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
                 macos_managed_config_requirements_base64: None,
@@ -955,6 +956,7 @@ personality = true
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
+                requirements_toml_file: None,
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
                 macos_managed_config_requirements_base64: None,
@@ -1060,6 +1062,7 @@ personality = true
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
+                requirements_toml_file: None,
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
                 macos_managed_config_requirements_base64: None,
@@ -1109,6 +1112,7 @@ personality = true
             cli_overrides,
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
+                requirements_toml_file: None,
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
                 macos_managed_config_requirements_base64: None,
@@ -1167,6 +1171,7 @@ personality = true
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
+                requirements_toml_file: None,
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
                 macos_managed_config_requirements_base64: None,

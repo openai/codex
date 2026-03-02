@@ -10,6 +10,7 @@ export type ThreadOptions = {
   model?: string;
   sandboxMode?: SandboxMode;
   workingDirectory?: string;
+  requirementsToml?: string;
   skipGitRepoCheck?: boolean;
   modelReasoningEffort?: ModelReasoningEffort;
   networkAccessEnabled?: boolean;

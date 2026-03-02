@@ -12713,6 +12713,12 @@
               "null"
             ]
           },
+          "requirementsToml": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "sandbox": {
             "anyOf": [
               {
@@ -13696,6 +13702,12 @@
               }
             ]
           },
+          "requirementsToml": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "sandbox": {
             "anyOf": [
               {
@@ -13905,6 +13917,12 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "requirementsToml": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "sandbox": {

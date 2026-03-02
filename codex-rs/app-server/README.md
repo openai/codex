@@ -63,6 +63,7 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 - Initialize once per connection: Immediately after opening a transport connection, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request on that connection before this handshake gets rejected.
 - Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history.
   The returned `thread.ephemeral` flag tells you whether the session is intentionally in-memory only; when it is `true`, `thread.path` is `null`.
+  `requirementsToml` is available on `thread/start`, `thread/resume`, and `thread/fork` to apply a session-scoped requirements file without changing persisted config. When the same requirement field is present in both the session file and an earlier requirement layer, the session file wins for that thread.
 - Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, etc. This immediately returns the new turn object and triggers a `turn/started` notification.
 - Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
 - Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
@@ -175,6 +176,7 @@ Start a fresh thread when you need a new Codex conversation.
     // current config settings.
     "model": "gpt-5.1-codex",
     "cwd": "/Users/me/project",
+    "requirementsToml": "/Users/me/policies/session-requirements.toml",
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     "personality": "friendly",
@@ -207,12 +209,13 @@ Start a fresh thread when you need a new Codex conversation.
 
 Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality` or `requirementsToml`:
 
 ```json
 { "method": "thread/resume", "id": 11, "params": {
     "threadId": "thr_123",
-    "personality": "friendly"
+    "personality": "friendly",
+    "requirementsToml": "/Users/me/policies/session-requirements.toml"
 } }
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
 ```
@@ -220,7 +223,10 @@ To continue a stored session, call `thread/resume` with the `thread.id` you prev
 To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it:
 
 ```json
-{ "method": "thread/fork", "id": 12, "params": { "threadId": "thr_123" } }
+{ "method": "thread/fork", "id": 12, "params": {
+    "threadId": "thr_123",
+    "requirementsToml": "/Users/me/policies/session-requirements.toml"
+} }
 { "id": 12, "result": { "thread": { "id": "thr_456", … } } }
 { "method": "thread/started", "params": { "thread": { … } } }
 ```

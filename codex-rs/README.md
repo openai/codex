@@ -89,6 +89,16 @@ codex --sandbox danger-full-access
 
 The same setting can be persisted in `~/.codex/config.toml` via the top-level `sandbox_mode = "MODE"` key, e.g. `sandbox_mode = "workspace-write"`.
 
+### Session-scoped requirements
+
+To apply an additional `requirements.toml` file to just the current interactive session, pass:
+
+```shell
+codex --requirements-toml /path/to/requirements.toml
+```
+
+This only affects the current session and does not modify saved config.
+
 ## Code Organization
 
 This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:

@@ -1070,6 +1070,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if let Some(cwd) = subcommand_cli.cwd {
         interactive.cwd = Some(cwd);
     }
+    if let Some(requirements_toml) = subcommand_cli.requirements_toml {
+        interactive.requirements_toml = Some(requirements_toml);
+    }
     if subcommand_cli.web_search {
         interactive.web_search = true;
     }
@@ -1380,6 +1383,26 @@ mod tests {
     }
 
     #[test]
+    fn resume_subcommand_requirements_toml_overrides_root_value() {
+        let interactive = finalize_resume_from_args(
+            [
+                "codex",
+                "--requirements-toml",
+                "/tmp/root.toml",
+                "resume",
+                "--requirements-toml",
+                "/tmp/resume.toml",
+            ]
+            .as_ref(),
+        );
+
+        assert_eq!(
+            interactive.requirements_toml.as_deref(),
+            Some(std::path::Path::new("/tmp/resume.toml"))
+        );
+    }
+
+    #[test]
     fn resume_merges_dangerously_bypass_flag() {
         let interactive = finalize_resume_from_args(
             [
@@ -1427,6 +1450,26 @@ mod tests {
         let interactive = finalize_fork_from_args(["codex", "fork", "--all"].as_ref());
         assert!(interactive.fork_picker);
         assert!(interactive.fork_show_all);
+    }
+
+    #[test]
+    fn fork_subcommand_requirements_toml_overrides_root_value() {
+        let interactive = finalize_fork_from_args(
+            [
+                "codex",
+                "--requirements-toml",
+                "/tmp/root.toml",
+                "fork",
+                "--requirements-toml",
+                "/tmp/fork.toml",
+            ]
+            .as_ref(),
+        );
+
+        assert_eq!(
+            interactive.requirements_toml.as_deref(),
+            Some(std::path::Path::new("/tmp/fork.toml"))
+        );
     }
 
     #[test]

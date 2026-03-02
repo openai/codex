@@ -666,11 +666,26 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cwd: &AbsolutePathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
+    load_config_as_toml_with_cli_overrides_and_loader_overrides(
+        codex_home,
+        cwd,
+        cli_overrides,
+        LoaderOverrides::default(),
+    )
+    .await
+}
+
+pub async fn load_config_as_toml_with_cli_overrides_and_loader_overrides(
+    codex_home: &Path,
+    cwd: &AbsolutePathBuf,
+    cli_overrides: Vec<(String, TomlValue)>,
+    loader_overrides: LoaderOverrides,
+) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
         codex_home,
         Some(cwd.clone()),
         &cli_overrides,
-        LoaderOverrides::default(),
+        loader_overrides,
         CloudRequirementsLoader::default(),
     )
     .await?;
@@ -3488,6 +3503,7 @@ profile = "project"
 
         let overrides = LoaderOverrides {
             managed_config_path: Some(managed_path.clone()),
+            requirements_toml_file: None,
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
             macos_managed_config_requirements_base64: None,
@@ -3619,6 +3635,7 @@ profile = "project"
 
         let overrides = LoaderOverrides {
             managed_config_path: Some(managed_path),
+            requirements_toml_file: None,
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
             macos_managed_config_requirements_base64: None,

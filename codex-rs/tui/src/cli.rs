@@ -94,6 +94,10 @@ pub struct Cli {
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 
+    /// Load session-scoped requirements from the specified TOML file.
+    #[arg(long = "requirements-toml", value_name = "FILE", value_hint = ValueHint::FilePath)]
+    pub requirements_toml: Option<PathBuf>,
+
     /// Enable live web search. When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,

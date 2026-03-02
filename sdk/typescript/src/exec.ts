@@ -19,6 +19,8 @@ export type CodexExecArgs = {
   sandboxMode?: SandboxMode;
   // --cd
   workingDirectory?: string;
+  // --requirements-toml
+  requirementsToml?: string;
   // --add-dir
   additionalDirectories?: string[];
   // --skip-git-repo-check
@@ -88,6 +90,10 @@ export class CodexExec {
 
     if (args.workingDirectory) {
       commandArgs.push("--cd", args.workingDirectory);
+    }
+
+    if (args.requirementsToml) {
+      commandArgs.push("--requirements-toml", args.requirementsToml);
     }
 
     if (args.additionalDirectories?.length) {

@@ -1789,6 +1789,8 @@ pub struct ThreadStartParams {
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
     #[ts(optional = nullable)]
+    pub requirements_toml: Option<String>,
+    #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
@@ -1892,6 +1894,8 @@ pub struct ThreadResumeParams {
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
     #[ts(optional = nullable)]
+    pub requirements_toml: Option<String>,
+    #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
@@ -1951,6 +1955,8 @@ pub struct ThreadForkParams {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    #[ts(optional = nullable)]
+    pub requirements_toml: Option<String>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[ts(optional = nullable)]

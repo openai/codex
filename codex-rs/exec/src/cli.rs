@@ -63,6 +63,15 @@ pub struct Cli {
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 
+    /// Apply an additional requirements.toml file to this session only.
+    #[arg(
+        long = "requirements-toml",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        global = true
+    )]
+    pub requirements_toml: Option<PathBuf>,
+
     /// Allow running Codex outside a Git repository.
     #[arg(long = "skip-git-repo-check", global = true, default_value_t = false)]
     pub skip_git_repo_check: bool,
@@ -273,6 +282,8 @@ mod tests {
             "--json",
             "--model",
             "gpt-5.2-codex",
+            "--requirements-toml",
+            "/tmp/session-requirements.toml",
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--ephemeral",
@@ -280,6 +291,10 @@ mod tests {
         ]);
 
         assert!(cli.ephemeral);
+        assert_eq!(
+            cli.requirements_toml,
+            Some(PathBuf::from("/tmp/session-requirements.toml"))
+        );
         let Some(Command::Resume(args)) = cli.command else {
             panic!("expected resume command");
         };
@@ -300,6 +315,8 @@ mod tests {
             "codex-exec",
             "resume",
             "session-123",
+            "--requirements-toml",
+            "/tmp/resume-output-requirements.toml",
             "-o",
             "/tmp/resume-output.md",
             PROMPT,
@@ -308,6 +325,10 @@ mod tests {
         assert_eq!(
             cli.last_message_file,
             Some(PathBuf::from("/tmp/resume-output.md"))
+        );
+        assert_eq!(
+            cli.requirements_toml,
+            Some(PathBuf::from("/tmp/resume-output-requirements.toml"))
         );
         let Some(Command::Resume(args)) = cli.command else {
             panic!("expected resume command");

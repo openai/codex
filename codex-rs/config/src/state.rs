@@ -17,6 +17,7 @@ use toml::Value as TomlValue;
 #[derive(Debug, Default, Clone)]
 pub struct LoaderOverrides {
     pub managed_config_path: Option<PathBuf>,
+    pub requirements_toml_file: Option<PathBuf>,
     //TODO(gt): Add a macos_ prefix to this field and remove the target_os check.
     #[cfg(target_os = "macos")]
     pub managed_preferences_base64: Option<String>,

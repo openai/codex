@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -191,6 +192,42 @@ async fn thread_start_accepts_metrics_service_name() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_start_applies_requirements_toml_per_session() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_approval_policy(codex_home.path(), &server.uri(), "on-request")?;
+
+    let requirements_toml = codex_home.path().join("session-requirements.toml");
+    std::fs::write(
+        &requirements_toml,
+        "allowed_approval_policies = [\"never\"]\n",
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            requirements_toml: Some(requirements_toml.display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        approval_policy, ..
+    } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(approval_policy, AskForApproval::Never);
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -273,13 +310,21 @@ async fn thread_start_fails_when_required_mcp_server_fails_to_initialize() -> Re
 
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    create_config_toml_with_approval_policy(codex_home, server_uri, "never")
+}
+
+fn create_config_toml_with_approval_policy(
+    codex_home: &Path,
+    server_uri: &str,
+    approval_policy: &str,
+) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
         format!(
             r#"
 model = "mock-model"
-approval_policy = "never"
+approval_policy = "{approval_policy}"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"

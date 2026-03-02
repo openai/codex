@@ -76,14 +76,18 @@ pub(crate) async fn first_layer_config_error_from_entries(
         .await
 }
 
-/// To build up the set of admin-enforced constraints, we build up from multiple
-/// configuration layers in the following order, but a constraint defined in an
-/// earlier layer cannot be overridden by a later layer:
+/// To build up the set of baseline constraints, we merge the managed and
+/// system-provided requirement layers in the following order, but a constraint
+/// defined in an earlier layer cannot be overridden by a later one within this
+/// baseline stack:
 ///
 /// - cloud:    managed cloud requirements
 /// - admin:    managed preferences (*)
 /// - system    `/etc/codex/requirements.toml` (Unix) or
 ///   `%ProgramData%\OpenAI\Codex\requirements.toml` (Windows)
+///
+/// If a session-scoped `requirements.toml` file is provided via
+/// `LoaderOverrides`, we apply it afterward as a per-thread override layer.
 ///
 /// For backwards compatibility, we also load from
 /// `managed_config.toml` and map it to `requirements.toml`.
@@ -133,6 +137,10 @@ pub async fn load_config_layers_state(
     // Honor the system requirements.toml location.
     let requirements_toml_file = system_requirements_toml_file()?;
     load_requirements_toml(&mut config_requirements_toml, requirements_toml_file).await?;
+    if let Some(requirements_toml_file) = overrides.requirements_toml_file.as_ref() {
+        load_session_requirements_toml(&mut config_requirements_toml, requirements_toml_file)
+            .await?;
+    }
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
@@ -346,6 +354,46 @@ async fn load_requirements_toml(
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     requirements_toml_file: impl AsRef<Path>,
 ) -> io::Result<()> {
+    load_requirements_toml_with_source(
+        config_requirements_toml,
+        requirements_toml_file,
+        MissingRequirementsTomlBehavior::Ignore,
+        RequirementsMergeBehavior::FillUnset,
+    )
+    .await
+}
+
+async fn load_session_requirements_toml(
+    config_requirements_toml: &mut ConfigRequirementsWithSources,
+    requirements_toml_file: impl AsRef<Path>,
+) -> io::Result<()> {
+    load_requirements_toml_with_source(
+        config_requirements_toml,
+        requirements_toml_file,
+        MissingRequirementsTomlBehavior::Error,
+        RequirementsMergeBehavior::OverwriteExisting,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum MissingRequirementsTomlBehavior {
+    Ignore,
+    Error,
+}
+
+#[derive(Clone, Copy)]
+enum RequirementsMergeBehavior {
+    FillUnset,
+    OverwriteExisting,
+}
+
+async fn load_requirements_toml_with_source(
+    config_requirements_toml: &mut ConfigRequirementsWithSources,
+    requirements_toml_file: impl AsRef<Path>,
+    missing_behavior: MissingRequirementsTomlBehavior,
+    merge_behavior: RequirementsMergeBehavior,
+) -> io::Result<()> {
     let requirements_toml_file =
         AbsolutePathBuf::from_absolute_path(requirements_toml_file.as_ref())?;
     match tokio::fs::read_to_string(&requirements_toml_file).await {
@@ -360,15 +408,27 @@ async fn load_requirements_toml(
                         ),
                     )
                 })?;
-            config_requirements_toml.merge_unset_fields(
-                RequirementSource::SystemRequirementsToml {
-                    file: requirements_toml_file.clone(),
-                },
-                requirements_config,
-            );
+            let source = RequirementSource::SystemRequirementsToml {
+                file: requirements_toml_file.clone(),
+            };
+            match merge_behavior {
+                RequirementsMergeBehavior::FillUnset => {
+                    config_requirements_toml.merge_unset_fields(source, requirements_config);
+                }
+                RequirementsMergeBehavior::OverwriteExisting => {
+                    config_requirements_toml.merge_overwrite_fields(source, requirements_config);
+                }
+            }
         }
         Err(e) => {
-            if e.kind() != io::ErrorKind::NotFound {
+            if e.kind() == io::ErrorKind::NotFound
+                && matches!(missing_behavior, MissingRequirementsTomlBehavior::Ignore)
+            {
+                return Ok(());
+            }
+            if e.kind() != io::ErrorKind::NotFound
+                || matches!(missing_behavior, MissingRequirementsTomlBehavior::Error)
+            {
                 return Err(io::Error::new(
                     e.kind(),
                     format!(
@@ -379,7 +439,6 @@ async fn load_requirements_toml(
             }
         }
     }
-
     Ok(())
 }
 

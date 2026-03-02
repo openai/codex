@@ -174,6 +174,51 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_resume_applies_requirements_toml_per_session() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_approval_policy(codex_home.path(), &server.uri(), "on-request")?;
+
+    let requirements_toml = codex_home.path().join("session-requirements.toml");
+    std::fs::write(
+        &requirements_toml,
+        "allowed_approval_policies = [\"never\"]\n",
+    )?;
+
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Vec::new(),
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            requirements_toml: Some(requirements_toml.display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        approval_policy, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(approval_policy, AskForApproval::Never);
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -1361,13 +1406,21 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
 
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+    create_config_toml_with_approval_policy(codex_home, server_uri, "never")
+}
+
+fn create_config_toml_with_approval_policy(
+    codex_home: &std::path::Path,
+    server_uri: &str,
+    approval_policy: &str,
+) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
         format!(
             r#"
 model = "gpt-5.2-codex"
-approval_policy = "never"
+approval_policy = "{approval_policy}"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"

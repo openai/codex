@@ -410,6 +410,37 @@ describe("Codex", () => {
     }
   });
 
+  it("passes requirementsToml to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Requirements applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        requirementsToml: "/tmp/session-requirements.toml",
+      });
+      await thread.run("test requirements");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--requirements-toml", "/tmp/session-requirements.toml"]);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
   it("passes CodexOptions config overrides as TOML --config flags", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
@@ -770,6 +801,38 @@ describe("Codex", () => {
         /Not inside a trusted directory/,
       );
     } finally {
+      await close();
+    }
+  });
+
+  it("passes requirementsToml when resuming a thread", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Requirements applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.resumeThread("thread_123", {
+        requirementsToml: "/tmp/session-requirements.toml",
+      });
+      await thread.run("resume with requirements");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--requirements-toml", "/tmp/session-requirements.toml"]);
+      expectPair(commandArgs, ["resume", "thread_123"]);
+    } finally {
+      restore();
       await close();
     }
   });

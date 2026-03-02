@@ -26,9 +26,10 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::config::load_config_as_toml_with_cli_overrides_and_loader_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config_loader::ConfigLoadError;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::git_info::get_git_repo_root;
@@ -109,6 +110,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
         cwd,
+        requirements_toml,
         skip_git_repo_check,
         add_dir,
         ephemeral,
@@ -185,6 +187,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
         None => AbsolutePathBuf::current_dir()?,
     };
+    let loader_overrides = LoaderOverrides {
+        requirements_toml_file: requirements_toml.clone(),
+        ..Default::default()
+    };
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
@@ -197,10 +203,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     };
 
     #[allow(clippy::print_stderr)]
-    let config_toml = match load_config_as_toml_with_cli_overrides(
+    let config_toml = match load_config_as_toml_with_cli_overrides_and_loader_overrides(
         &codex_home,
         &config_cwd,
         cli_kv_overrides.clone(),
+        loader_overrides.clone(),
     )
     .await
     {
@@ -294,6 +301,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let config = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
+        .loader_overrides(loader_overrides)
         .cloud_requirements(cloud_requirements)
         .build()
         .await?;

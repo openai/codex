@@ -83,6 +83,7 @@ export class Thread {
       model: options?.model,
       sandboxMode: options?.sandboxMode,
       workingDirectory: options?.workingDirectory,
+      requirementsToml: options?.requirementsToml,
       skipGitRepoCheck: options?.skipGitRepoCheck,
       outputSchemaFile: schemaPath,
       modelReasoningEffort: options?.modelReasoningEffort,

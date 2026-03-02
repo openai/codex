@@ -21,7 +21,7 @@ export type ThreadForkParams = {threadId: string, /**
 path?: string | null, /**
  * Configuration overrides for the forked thread, if any.
  */
-model?: string | null, modelProvider?: string | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, /**
+model?: string | null, modelProvider?: string | null, requirementsToml?: string | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, /**
  * If true, persist additional rollout EventMsg variants required to
  * reconstruct a richer thread history on subsequent resume/fork/read.
  */

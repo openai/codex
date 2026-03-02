@@ -198,6 +198,7 @@ impl MessageProcessor {
             arg0_paths,
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
+            loader_overrides: loader_overrides.clone(),
             cloud_requirements: cloud_requirements.clone(),
             single_client_mode,
             feedback,

@@ -211,6 +211,7 @@ use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::CloudRequirementsLoader;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::error::CodexErr;
@@ -376,6 +377,7 @@ pub(crate) struct CodexMessageProcessor {
     config: Arc<Config>,
     single_client_mode: bool,
     cli_overrides: Vec<(String, TomlValue)>,
+    loader_overrides: LoaderOverrides,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
@@ -417,6 +419,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
+    pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) single_client_mode: bool,
     pub(crate) feedback: CodexFeedback,
@@ -462,6 +465,7 @@ impl CodexMessageProcessor {
             arg0_paths,
             config,
             cli_overrides,
+            loader_overrides,
             cloud_requirements,
             single_client_mode,
             feedback,
@@ -474,6 +478,7 @@ impl CodexMessageProcessor {
             config,
             single_client_mode,
             cli_overrides,
+            loader_overrides,
             cloud_requirements,
             active_login: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
@@ -489,6 +494,8 @@ impl CodexMessageProcessor {
         let cloud_requirements = self.current_cloud_requirements();
         let mut config = codex_core::config::ConfigBuilder::default()
             .cli_overrides(self.cli_overrides.clone())
+            .loader_overrides(self.loader_overrides.clone())
+            .fallback_cwd(Some(self.config.codex_home.clone()))
             .cloud_requirements(cloud_requirements)
             .build()
             .await
@@ -507,6 +514,12 @@ impl CodexMessageProcessor {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default()
+    }
+
+    fn loader_overrides_for_session(&self, requirements_toml: Option<String>) -> LoaderOverrides {
+        let mut loader_overrides = self.loader_overrides.clone();
+        loader_overrides.requirements_toml_file = requirements_toml.map(PathBuf::from);
+        loader_overrides
     }
 
     /// If a client sends `developer_instructions: null` during a mode switch,
@@ -1134,6 +1147,7 @@ impl CodexMessageProcessor {
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
                     let codex_home = self.config.codex_home.clone();
                     let cli_overrides = self.cli_overrides.clone();
+                    let loader_overrides = self.loader_overrides.clone();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
@@ -1167,10 +1181,12 @@ impl CodexMessageProcessor {
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
                                 chatgpt_base_url,
-                                codex_home,
+                                codex_home.clone(),
                             );
                             sync_default_client_residency_requirement(
                                 &cli_overrides,
+                                &codex_home,
+                                &loader_overrides,
                                 cloud_requirements.as_ref(),
                             )
                             .await;
@@ -1242,6 +1258,7 @@ impl CodexMessageProcessor {
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
                     let codex_home = self.config.codex_home.clone();
                     let cli_overrides = self.cli_overrides.clone();
+                    let loader_overrides = self.loader_overrides.clone();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
@@ -1275,10 +1292,12 @@ impl CodexMessageProcessor {
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
                                 chatgpt_base_url,
-                                codex_home,
+                                codex_home.clone(),
                             );
                             sync_default_client_residency_requirement(
                                 &cli_overrides,
+                                &codex_home,
+                                &loader_overrides,
                                 cloud_requirements.as_ref(),
                             )
                             .await;
@@ -1449,6 +1468,8 @@ impl CodexMessageProcessor {
         );
         sync_default_client_residency_requirement(
             &self.cli_overrides,
+            &self.config.codex_home,
+            &self.loader_overrides,
             self.cloud_requirements.as_ref(),
         )
         .await;
@@ -1939,6 +1960,7 @@ impl CodexMessageProcessor {
             model,
             model_provider,
             profile,
+            requirements_toml,
             cwd,
             approval_policy,
             sandbox: sandbox_mode,
@@ -1989,6 +2011,7 @@ impl CodexMessageProcessor {
             &self.cli_overrides,
             Some(request_overrides),
             typesafe_overrides,
+            self.loader_overrides_for_session(requirements_toml),
             &cloud_requirements,
         )
         .await
@@ -2047,6 +2070,7 @@ impl CodexMessageProcessor {
         let ThreadStartParams {
             model,
             model_provider,
+            requirements_toml,
             cwd,
             approval_policy,
             sandbox,
@@ -2073,6 +2097,7 @@ impl CodexMessageProcessor {
         );
         typesafe_overrides.ephemeral = ephemeral;
         let cli_overrides = self.cli_overrides.clone();
+        let loader_overrides = self.loader_overrides_for_session(requirements_toml);
         let cloud_requirements = self.current_cloud_requirements();
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
@@ -2088,6 +2113,7 @@ impl CodexMessageProcessor {
             Self::thread_start_task(
                 listener_task_context,
                 cli_overrides,
+                loader_overrides,
                 cloud_requirements,
                 request_id,
                 config,
@@ -2105,6 +2131,7 @@ impl CodexMessageProcessor {
     async fn thread_start_task(
         listener_task_context: ListenerTaskContext,
         cli_overrides: Vec<(String, TomlValue)>,
+        loader_overrides: LoaderOverrides,
         cloud_requirements: CloudRequirementsLoader,
         request_id: ConnectionRequestId,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
@@ -2118,6 +2145,7 @@ impl CodexMessageProcessor {
             &cli_overrides,
             config_overrides,
             typesafe_overrides,
+            loader_overrides,
             &cloud_requirements,
         )
         .await
@@ -3023,6 +3051,7 @@ impl CodexMessageProcessor {
             path,
             model,
             model_provider,
+            requirements_toml,
             cwd,
             approval_policy,
             sandbox,
@@ -3070,6 +3099,7 @@ impl CodexMessageProcessor {
             request_overrides,
             typesafe_overrides,
             history_cwd,
+            self.loader_overrides_for_session(requirements_toml),
             &cloud_requirements,
         )
         .await
@@ -3185,6 +3215,16 @@ impl CodexMessageProcessor {
                     request_id,
                     format!(
                         "cannot resume thread {existing_thread_id} with history while it is already running"
+                    ),
+                )
+                .await;
+                return true;
+            }
+            if params.requirements_toml.is_some() {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!(
+                        "cannot resume running thread {existing_thread_id} with requirementsToml while it is already running"
                     ),
                 )
                 .await;
@@ -3460,6 +3500,7 @@ impl CodexMessageProcessor {
             path,
             model,
             model_provider,
+            requirements_toml,
             cwd,
             approval_policy,
             sandbox,
@@ -3554,6 +3595,7 @@ impl CodexMessageProcessor {
             request_overrides,
             typesafe_overrides,
             history_cwd,
+            self.loader_overrides_for_session(requirements_toml),
             &cloud_requirements,
         )
         .await
@@ -4478,12 +4520,13 @@ impl CodexMessageProcessor {
         };
 
         let history_cwd = thread_history.session_cwd();
-        let (typesafe_overrides, request_overrides) = match overrides {
+        let (typesafe_overrides, request_overrides, loader_overrides) = match overrides {
             Some(overrides) => {
                 let NewConversationParams {
                     model,
                     model_provider,
                     profile,
+                    requirements_toml,
                     cwd,
                     approval_policy,
                     sandbox: sandbox_mode,
@@ -4529,7 +4572,11 @@ impl CodexMessageProcessor {
                     include_apply_patch_tool,
                     ..Default::default()
                 };
-                (typesafe_overrides, Some(request_overrides))
+                (
+                    typesafe_overrides,
+                    Some(request_overrides),
+                    self.loader_overrides_for_session(requirements_toml),
+                )
             }
             None => (
                 ConfigOverrides {
@@ -4538,6 +4585,7 @@ impl CodexMessageProcessor {
                     ..Default::default()
                 },
                 None,
+                self.loader_overrides.clone(),
             ),
         };
 
@@ -4547,6 +4595,7 @@ impl CodexMessageProcessor {
             request_overrides,
             typesafe_overrides,
             history_cwd,
+            loader_overrides,
             &cloud_requirements,
         )
         .await
@@ -4670,12 +4719,13 @@ impl CodexMessageProcessor {
             read_history_cwd_from_state_db(&self.config, source_thread_id, rollout_path.as_path())
                 .await;
 
-        let (typesafe_overrides, request_overrides) = match overrides {
+        let (typesafe_overrides, request_overrides, loader_overrides) = match overrides {
             Some(overrides) => {
                 let NewConversationParams {
                     model,
                     model_provider,
                     profile,
+                    requirements_toml,
                     cwd,
                     approval_policy,
                     sandbox: sandbox_mode,
@@ -4727,7 +4777,11 @@ impl CodexMessageProcessor {
                     ..Default::default()
                 };
 
-                (overrides, request_overrides)
+                (
+                    overrides,
+                    request_overrides,
+                    self.loader_overrides_for_session(requirements_toml),
+                )
             }
             None => (
                 ConfigOverrides {
@@ -4736,6 +4790,7 @@ impl CodexMessageProcessor {
                     ..Default::default()
                 },
                 None,
+                self.loader_overrides.clone(),
             ),
         };
 
@@ -4745,6 +4800,7 @@ impl CodexMessageProcessor {
             request_overrides,
             typesafe_overrides,
             history_cwd,
+            loader_overrides,
             &cloud_requirements,
         )
         .await
@@ -7426,6 +7482,8 @@ fn replace_cloud_requirements_loader(
 
 async fn sync_default_client_residency_requirement(
     cli_overrides: &[(String, TomlValue)],
+    codex_home: &Path,
+    loader_overrides: &LoaderOverrides,
     cloud_requirements: &RwLock<CloudRequirementsLoader>,
 ) {
     let loader = cloud_requirements
@@ -7434,6 +7492,8 @@ async fn sync_default_client_residency_requirement(
         .unwrap_or_default();
     match codex_core::config::ConfigBuilder::default()
         .cli_overrides(cli_overrides.to_vec())
+        .loader_overrides(loader_overrides.clone())
+        .fallback_cwd(Some(codex_home.to_path_buf()))
         .cloud_requirements(loader)
         .build()
         .await
@@ -7460,6 +7520,7 @@ async fn derive_config_from_params(
     cli_overrides: &[(String, TomlValue)],
     request_overrides: Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: ConfigOverrides,
+    loader_overrides: LoaderOverrides,
     cloud_requirements: &CloudRequirementsLoader,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
@@ -7476,6 +7537,7 @@ async fn derive_config_from_params(
     codex_core::config::ConfigBuilder::default()
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
+        .loader_overrides(loader_overrides)
         .cloud_requirements(cloud_requirements.clone())
         .build()
         .await
@@ -7486,6 +7548,7 @@ async fn derive_config_for_cwd(
     request_overrides: Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: ConfigOverrides,
     cwd: Option<PathBuf>,
+    loader_overrides: LoaderOverrides,
     cloud_requirements: &CloudRequirementsLoader,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
@@ -7502,6 +7565,7 @@ async fn derive_config_for_cwd(
     codex_core::config::ConfigBuilder::default()
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
+        .loader_overrides(loader_overrides)
         .fallback_cwd(cwd)
         .cloud_requirements(cloud_requirements.clone())
         .build()

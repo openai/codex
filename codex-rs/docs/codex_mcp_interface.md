@@ -58,6 +58,7 @@ Request `newConversation` params (subset):
 
 - `model`: string model id (e.g. "o3", "gpt-5.1", "gpt-5.1-codex")
 - `profile`: optional named profile
+- `requirementsToml`: optional path to a session-scoped `requirements.toml`
 - `cwd`: optional working directory
 - `approvalPolicy`: `untrusted` | `on-request` | `on-failure` (deprecated) | `never`
 - `sandbox`: `read-only` | `workspace-write` | `external-sandbox` (honors `networkAccess` restricted/enabled) | `danger-full-access`
@@ -164,7 +165,7 @@ For the complete request/response shapes and flow examples, see the [“Auth end
 ## Example: start and send a message
 
 ```json
-{ "jsonrpc": "2.0", "id": 1, "method": "newConversation", "params": { "model": "gpt-5.1", "approvalPolicy": "on-request" } }
+{ "jsonrpc": "2.0", "id": 1, "method": "newConversation", "params": { "model": "gpt-5.1", "approvalPolicy": "on-request", "requirementsToml": "/path/to/requirements.toml" } }
 ```
 
 Server responds:

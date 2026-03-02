@@ -273,18 +273,40 @@ pub struct ConfigRequirementsWithSources {
     pub network: Option<Sourced<NetworkRequirementsToml>>,
 }
 
+#[derive(Clone, Copy)]
+enum MergeBehavior {
+    FillUnset,
+    OverwriteExisting,
+}
+
 impl ConfigRequirementsWithSources {
     pub fn merge_unset_fields(&mut self, source: RequirementSource, other: ConfigRequirementsToml) {
-        // For every field in `other` that is `Some`, if the corresponding field
-        // in `self` is `None`, copy the value from `other` into `self`.
-        macro_rules! fill_missing_take {
+        self.merge_fields(source, other, MergeBehavior::FillUnset);
+    }
+
+    pub fn merge_overwrite_fields(
+        &mut self,
+        source: RequirementSource,
+        other: ConfigRequirementsToml,
+    ) {
+        self.merge_fields(source, other, MergeBehavior::OverwriteExisting);
+    }
+
+    fn merge_fields(
+        &mut self,
+        source: RequirementSource,
+        other: ConfigRequirementsToml,
+        merge_behavior: MergeBehavior,
+    ) {
+        macro_rules! merge_take {
             ($base:expr, $other:expr, $source:expr, { $($field:ident),+ $(,)? }) => {
                 // Destructure without `..` so adding fields to `ConfigRequirementsToml`
                 // forces this merge logic to be updated.
                 let ConfigRequirementsToml { $($field: _,)+ } = &$other;
 
                 $(
-                    if $base.$field.is_none()
+                    if (matches!(merge_behavior, MergeBehavior::OverwriteExisting)
+                        || $base.$field.is_none())
                         && let Some(value) = $other.$field.take()
                     {
                         $base.$field = Some(Sourced::new(value, $source.clone()));
@@ -294,7 +316,7 @@ impl ConfigRequirementsWithSources {
         }
 
         let mut other = other;
-        fill_missing_take!(
+        merge_take!(
             self,
             other,
             source,
@@ -720,6 +742,46 @@ mod tests {
                 allowed_approval_policies: Some(Sourced::new(
                     vec![AskForApproval::Never],
                     existing_source,
+                )),
+                allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
+                mcp_servers: None,
+                rules: None,
+                enforce_residency: None,
+                network: None,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_overwrite_fields_replaces_existing_values() -> Result<()> {
+        let existing_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let mut populated_target = ConfigRequirementsWithSources::default();
+        let populated_requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allowed_approval_policies = ["never"]
+            "#,
+        )?;
+        populated_target.merge_unset_fields(existing_source, populated_requirements);
+
+        let source: ConfigRequirementsToml = from_str(
+            r#"
+                allowed_approval_policies = ["on-request"]
+            "#,
+        )?;
+        let source_location = RequirementSource::MdmManagedPreferences {
+            domain: "com.codex".to_string(),
+            key: "allowed_approval_policies".to_string(),
+        };
+        populated_target.merge_overwrite_fields(source_location.clone(), source);
+
+        assert_eq!(
+            populated_target,
+            ConfigRequirementsWithSources {
+                allowed_approval_policies: Some(Sourced::new(
+                    vec![AskForApproval::OnRequest],
+                    source_location,
                 )),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,

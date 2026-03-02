@@ -116,6 +116,16 @@ const thread = codex.startThread({
 });
 ```
 
+### Session-scoped requirements
+
+Use `requirementsToml` to apply a `requirements.toml` file to a single SDK thread without modifying saved Codex config. When the same requirement field is present in both this file and an earlier requirement layer, the session file wins for that thread.
+
+```typescript
+const thread = codex.startThread({
+  requirementsToml: "/path/to/session-requirements.toml",
+});
+```
+
 ### Controlling the Codex CLI environment
 
 By default, the Codex CLI inherits the Node.js process environment. Provide the optional `env` parameter when instantiating the
