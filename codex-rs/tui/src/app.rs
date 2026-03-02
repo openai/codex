@@ -2527,6 +2527,7 @@ impl App {
                                         model: None,
                                         effort: None,
                                         summary: None,
+                                        service_tier: None,
                                         collaboration_mode: None,
                                         personality: None,
                                     },
@@ -2549,6 +2550,7 @@ impl App {
                                         model: None,
                                         effort: None,
                                         summary: None,
+                                        service_tier: None,
                                         collaboration_mode: None,
                                         personality: None,
                                     },
@@ -2854,6 +2856,7 @@ impl App {
                                 model: None,
                                 effort: None,
                                 summary: None,
+                                service_tier: None,
                                 collaboration_mode: None,
                                 personality: None,
                             }));
