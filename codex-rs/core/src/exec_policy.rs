@@ -13,6 +13,7 @@ use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
 use codex_execpolicy::Evaluation;
+use codex_execpolicy::MatchOptions;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
@@ -221,7 +222,14 @@ impl ExecPolicyManager {
                 used_complex_parsing,
             )
         };
-        let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
+        let match_options = MatchOptions {
+            resolve_host_executables: true,
+        };
+        let evaluation = exec_policy.check_multiple_with_options(
+            commands.iter(),
+            &exec_policy_fallback,
+            &match_options,
+        );
 
         let requested_amendment = derive_requested_execpolicy_amendment_from_prefix_rule(
             prefix_rule.as_ref(),
@@ -229,6 +237,7 @@ impl ExecPolicyManager {
             exec_policy.as_ref(),
             &commands,
             &exec_policy_fallback,
+            &match_options,
         );
 
         match evaluation.decision {
@@ -472,17 +481,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         return Ok(policy);
     };
 
-    let mut combined_rules = policy.rules().clone();
-    for (program, rules) in requirements_policy.as_ref().rules().iter_all() {
-        for rule in rules {
-            combined_rules.insert(program.clone(), rule.clone());
-        }
-    }
-
-    let mut combined_network_rules = policy.network_rules().to_vec();
-    combined_network_rules.extend(requirements_policy.as_ref().network_rules().iter().cloned());
-
-    Ok(Policy::from_parts(combined_rules, combined_network_rules))
+    Ok(policy.merge_overlay(requirements_policy.as_ref()))
 }
 
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].
@@ -640,6 +639,7 @@ fn derive_requested_execpolicy_amendment_from_prefix_rule(
     exec_policy: &Policy,
     commands: &[Vec<String>],
     exec_policy_fallback: &impl Fn(&[String]) -> Decision,
+    match_options: &MatchOptions,
 ) -> Option<ExecPolicyAmendment> {
     let prefix_rule = prefix_rule?;
     if prefix_rule.is_empty() {
@@ -666,6 +666,7 @@ fn derive_requested_execpolicy_amendment_from_prefix_rule(
         &amendment.command,
         commands,
         exec_policy_fallback,
+        match_options,
     ) {
         Some(amendment)
     } else {
@@ -678,6 +679,7 @@ fn prefix_rule_would_approve_all_commands(
     prefix_rule: &[String],
     commands: &[Vec<String>],
     exec_policy_fallback: &impl Fn(&[String]) -> Decision,
+    match_options: &MatchOptions,
 ) -> bool {
     let mut policy_with_prefix_rule = exec_policy.clone();
     if policy_with_prefix_rule
@@ -689,7 +691,7 @@ fn prefix_rule_would_approve_all_commands(
 
     commands.iter().all(|command| {
         policy_with_prefix_rule
-            .check(command, exec_policy_fallback)
+            .check_with_options(command, exec_policy_fallback, match_options)
             .decision
             == Decision::Allow
     })
@@ -827,6 +829,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::tempdir;
     use toml::Value as TomlValue;
@@ -844,6 +847,31 @@ mod tests {
             ConfigRequirementsToml::default(),
         )
         .expect("ConfigLayerStack")
+    }
+
+    fn host_absolute_path(segments: &[&str]) -> String {
+        let mut path = if cfg!(windows) {
+            PathBuf::from(r"C:\")
+        } else {
+            PathBuf::from("/")
+        };
+        for segment in segments {
+            path.push(segment);
+        }
+        path.to_string_lossy().into_owned()
+    }
+
+    fn host_program_path(name: &str) -> String {
+        let executable_name = if cfg!(windows) {
+            format!("{name}.exe")
+        } else {
+            name.to_string()
+        };
+        host_absolute_path(&["usr", "bin", &executable_name])
+    }
+
+    fn starlark_string(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
     }
 
     #[tokio::test]
@@ -949,6 +977,7 @@ mod tests {
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             },
@@ -988,6 +1017,59 @@ mod tests {
 
         assert!(allowed.is_empty());
         assert_eq!(denied, vec!["blocked.example.com".to_string()]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn preserves_host_executables_when_requirements_overlay_is_present() -> anyhow::Result<()>
+    {
+        let temp_dir = tempdir()?;
+        let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+        fs::create_dir_all(&policy_dir)?;
+        let git_path = host_absolute_path(&["usr", "bin", "git"]);
+        let git_path_literal = starlark_string(&git_path);
+        fs::write(
+            policy_dir.join("host.rules"),
+            format!(
+                r#"
+host_executable(name = "git", paths = ["{git_path_literal}"])
+"#
+            ),
+        )?;
+
+        let mut requirements_exec_policy = Policy::empty();
+        requirements_exec_policy.add_network_rule(
+            "blocked.example.com",
+            codex_execpolicy::NetworkRuleProtocol::Https,
+            Decision::Forbidden,
+            None,
+        )?;
+
+        let requirements = ConfigRequirements {
+            exec_policy: Some(codex_config::Sourced::new(
+                codex_config::RequirementsExecPolicy::new(requirements_exec_policy),
+                codex_config::RequirementSource::Unknown,
+            )),
+            ..ConfigRequirements::default()
+        };
+        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+        let layer = ConfigLayerEntry::new(
+            ConfigLayerSource::Project { dot_codex_folder },
+            TomlValue::Table(Default::default()),
+        );
+        let config_stack =
+            ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())?;
+
+        let policy = load_exec_policy(&config_stack).await?;
+
+        assert_eq!(
+            policy
+                .host_executables()
+                .get("git")
+                .expect("missing git host executable")
+                .as_ref(),
+            [AbsolutePathBuf::try_from(git_path)?]
+        );
         Ok(())
     }
 
@@ -1106,6 +1188,7 @@ mod tests {
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             },
@@ -1117,6 +1200,7 @@ mod tests {
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["ls".to_string()],
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 }],
             },
@@ -1331,6 +1415,115 @@ prefix_rule(
             ExecApprovalRequirement::NeedsApproval {
                 reason: Some("`rm` requires approval by policy".to_string()),
                 proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn absolute_path_exec_approval_requirement_matches_host_executable_rules() {
+        let git_path = host_program_path("git");
+        let git_path_literal = starlark_string(&git_path);
+        let policy_src = format!(
+            r#"
+host_executable(name = "git", paths = ["{git_path_literal}"])
+prefix_rule(pattern=["git"], decision="allow")
+"#
+        );
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", &policy_src)
+            .expect("parse policy");
+        let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+        let command = vec![git_path, "status".to_string()];
+
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn absolute_path_exec_approval_requirement_ignores_disallowed_host_executable_paths() {
+        let allowed_git_path = host_program_path("git");
+        let disallowed_git_path = host_absolute_path(&[
+            "opt",
+            "homebrew",
+            "bin",
+            if cfg!(windows) { "git.exe" } else { "git" },
+        ]);
+        let allowed_git_path_literal = starlark_string(&allowed_git_path);
+        let policy_src = format!(
+            r#"
+host_executable(name = "git", paths = ["{allowed_git_path_literal}"])
+prefix_rule(pattern=["git"], decision="prompt")
+"#
+        );
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", &policy_src)
+            .expect("parse policy");
+        let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+        let command = vec![disallowed_git_path, "status".to_string()];
+
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn requested_prefix_rule_can_approve_absolute_path_commands() {
+        let command = vec![
+            host_program_path("cargo"),
+            "install".to_string(),
+            "cargo-insta".to_string(),
+        ];
+        let manager = ExecPolicyManager::default();
+
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                    "cargo".to_string(),
+                    "install".to_string(),
+                ])),
             }
         );
     }
@@ -1889,6 +2082,7 @@ prefix_rule(
             &Policy::empty(),
             &commands,
             &|_: &[String]| Decision::Allow,
+            &MatchOptions::default(),
         )
     }
 
@@ -1983,6 +2177,7 @@ prefix_rule(
         let matched_rules_prompt = vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: vec!["cargo".to_string()],
             decision: Decision::Prompt,
+            resolved_program: None,
             justification: None,
         }];
         assert_eq!(
@@ -1996,6 +2191,7 @@ prefix_rule(
         let matched_rules_allow = vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: vec!["cargo".to_string()],
             decision: Decision::Allow,
+            resolved_program: None,
             justification: None,
         }];
         assert_eq!(
@@ -2009,6 +2205,7 @@ prefix_rule(
         let matched_rules_forbidden = vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: vec!["cargo".to_string()],
             decision: Decision::Forbidden,
+            resolved_program: None,
             justification: None,
         }];
         assert_eq!(

@@ -18,16 +18,15 @@ use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::instructions::SkillInstructions;
-use crate::instructions::UserInstructions;
-use crate::session_prefix::is_session_prefix;
-use crate::user_shell_command::is_user_shell_command_text;
+use crate::contextual_user_message::is_contextual_user_fragment;
 use crate::web_search::web_search_action_detail;
 
+pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
+    message.iter().any(is_contextual_user_fragment)
+}
+
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
-    if UserInstructions::is_user_instructions(message)
-        || SkillInstructions::is_skill_instructions(message)
-    {
+    if is_contextual_user_message_content(message) {
         return None;
     }
 
@@ -44,9 +43,6 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 {
                     continue;
                 }
-                if is_session_prefix(text) || is_user_shell_command_text(text) {
-                    return None;
-                }
                 content.push(UserInput::Text {
                     text: text.clone(),
                     // Model input content does not carry UI element ranges.
@@ -59,9 +55,6 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 });
             }
             ContentItem::OutputText { text } => {
-                if is_session_prefix(text) {
-                    return None;
-                }
                 warn!("Output text in user message: {}", text);
             }
         }
@@ -299,7 +292,7 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<user_instructions>test_text</user_instructions>".to_string(),
+                    text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
                 }],
                 end_turn: None,
             phase: None,
@@ -340,6 +333,22 @@ mod tests {
                 }],
                 end_turn: None,
             phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: "<environment_context>ctx</environment_context>".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text:
+                            "# AGENTS.md instructions for dir\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
+                                .to_string(),
+                    },
+                ],
+                end_turn: None,
+                phase: None,
             },
         ];
 

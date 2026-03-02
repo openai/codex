@@ -13,6 +13,7 @@ use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
@@ -542,7 +543,10 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         CommandExecutionApprovalDecision::Cancel,
     ];
     let mut target_decision_index = 0;
-    while target_decision_index < target_decisions.len() {
+    let first_file_str = first_file.to_string_lossy().into_owned();
+    let second_file_str = second_file.to_string_lossy().into_owned();
+    let parent_shell_hint = format!("&& {}", &first_file_str);
+    while target_decision_index < target_decisions.len() || !saw_parent_approval {
         let server_req = timeout(
             DEFAULT_READ_TIMEOUT,
             mcp.read_stream_until_request_message(),
@@ -558,16 +562,21 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             .command
             .as_deref()
             .expect("approval command should be present");
-        let is_target_subcommand = (approval_command.starts_with("/bin/rm ")
-            || approval_command.starts_with("/usr/bin/rm "))
-            && (approval_command.contains(&first_file.display().to_string())
-                || approval_command.contains(&second_file.display().to_string()));
+        let has_first_file = approval_command.contains(&first_file_str);
+        let has_second_file = approval_command.contains(&second_file_str);
+        let mentions_rm_binary =
+            approval_command.contains("/bin/rm ") || approval_command.contains("/usr/bin/rm ");
+        let has_rm_action = params.command_actions.as_ref().is_some_and(|actions| {
+            actions.iter().any(|action| match action {
+                CommandAction::Read { name, .. } => name == "rm",
+                CommandAction::Unknown { command } => command.contains("rm"),
+                _ => false,
+            })
+        });
+        let is_target_subcommand =
+            (has_first_file != has_second_file) && (has_rm_action || mentions_rm_binary);
+
         if is_target_subcommand {
-            assert!(
-                approval_command.contains(&first_file.display().to_string())
-                    || approval_command.contains(&second_file.display().to_string()),
-                "expected zsh subcommand approval for one of the rm commands, got: {approval_command}"
-            );
             approved_subcommand_ids.push(
                 params
                     .approval_id
@@ -577,7 +586,9 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             approved_subcommand_strings.push(approval_command.to_string());
         }
         let is_parent_approval = approval_command.contains(&zsh_path.display().to_string())
-            && approval_command.contains(&shell_command);
+            && (approval_command.contains(&shell_command)
+                || (has_first_file && has_second_file)
+                || approval_command.contains(&parent_shell_hint));
         let decision = if is_target_subcommand {
             let decision = target_decisions[target_decision_index].clone();
             target_decision_index += 1;

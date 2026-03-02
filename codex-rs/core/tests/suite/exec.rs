@@ -33,7 +33,6 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
 
     let params = ExecParams {
         command: cmd.iter().map(ToString::to_string).collect(),
-        original_command: cmd.iter().map(ToString::to_string).collect(),
         cwd: tmp.path().to_path_buf(),
         expiration: 1000.into(),
         env: HashMap::new(),

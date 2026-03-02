@@ -345,6 +345,58 @@
       ],
       "type": "string"
     },
+    "DynamicToolCallOutputContentItem": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "inputText"
+              ],
+              "title": "InputTextDynamicToolCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "InputTextDynamicToolCallOutputContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "imageUrl": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "inputImage"
+              ],
+              "title": "InputImageDynamicToolCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "imageUrl",
+            "type"
+          ],
+          "title": "InputImageDynamicToolCallOutputContentItem",
+          "type": "object"
+        }
+      ]
+    },
+    "DynamicToolCallStatus": {
+      "enum": [
+        "inProgress",
+        "completed",
+        "failed"
+      ],
+      "type": "string"
+    },
     "FileUpdateChange": {
       "properties": {
         "diff": {
@@ -830,6 +882,10 @@
           "description": "Working directory captured for the thread.",
           "type": "string"
         },
+        "ephemeral": {
+          "description": "Whether the thread is ephemeral and should not be materialized on disk.",
+          "type": "boolean"
+        },
         "gitInfo": {
           "anyOf": [
             {
@@ -899,6 +955,7 @@
         "cliVersion",
         "createdAt",
         "cwd",
+        "ephemeral",
         "id",
         "modelProvider",
         "preview",
@@ -1205,6 +1262,59 @@
             "type"
           ],
           "title": "McpToolCallThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": true,
+            "contentItems": {
+              "items": {
+                "$ref": "#/definitions/DynamicToolCallOutputContentItem"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "description": "The duration of the dynamic tool call in milliseconds.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/DynamicToolCallStatus"
+            },
+            "success": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "dynamicToolCall"
+              ],
+              "title": "DynamicToolCallThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "id",
+            "status",
+            "tool",
+            "type"
+          ],
+          "title": "DynamicToolCallThreadItem",
           "type": "object"
         },
         {

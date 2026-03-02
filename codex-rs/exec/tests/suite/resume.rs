@@ -278,6 +278,11 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
         .assert()
         .success();
 
+    // `resume --last` sorts by `updated_at`, which is second-granularity. Sleep so
+    // the upcoming `resume --last --all` write lands in a later second and becomes
+    // deterministically newest (instead of tying and falling back to UUID order).
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
     let marker_b2 = format!("resume-cwd-b-2-{}", Uuid::new_v4());
     let prompt_b2 = format!("echo {marker_b2}");
     test.cmd()
@@ -316,6 +321,9 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
 
     let resumed_path_cwd = find_session_file_containing_marker(&sessions_dir, &marker_a2)
         .expect("no resumed session file containing marker_a2");
+    // The `--all` resume above appends a new turn to `path_b` while running from `dir_a`, so the
+    // session's latest cwd now matches `dir_a`. A subsequent `resume --last` should therefore pick
+    // the newest matching session (`path_b`).
     assert_eq!(
         resumed_path_cwd, path_b,
         "resume --last should prefer sessions whose latest turn context matches the current cwd"

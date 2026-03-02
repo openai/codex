@@ -14,6 +14,7 @@ pub(crate) fn builtins_for_input(
     connectors_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
+    audio_device_selection_enabled: bool,
     allow_elevate_sandbox: bool,
 ) -> Vec<(&'static str, SlashCommand)> {
     built_in_slash_commands()
@@ -26,6 +27,7 @@ pub(crate) fn builtins_for_input(
         .filter(|(_, cmd)| connectors_enabled || *cmd != SlashCommand::Apps)
         .filter(|(_, cmd)| personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
+        .filter(|(_, cmd)| audio_device_selection_enabled || *cmd != SlashCommand::Settings)
         .collect()
 }
 
@@ -36,6 +38,7 @@ pub(crate) fn find_builtin_command(
     connectors_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
+    audio_device_selection_enabled: bool,
     allow_elevate_sandbox: bool,
 ) -> Option<SlashCommand> {
     builtins_for_input(
@@ -43,6 +46,7 @@ pub(crate) fn find_builtin_command(
         connectors_enabled,
         personality_command_enabled,
         realtime_conversation_enabled,
+        audio_device_selection_enabled,
         allow_elevate_sandbox,
     )
     .into_iter()
@@ -57,6 +61,7 @@ pub(crate) fn has_builtin_prefix(
     connectors_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
+    audio_device_selection_enabled: bool,
     allow_elevate_sandbox: bool,
 ) -> bool {
     builtins_for_input(
@@ -64,6 +69,7 @@ pub(crate) fn has_builtin_prefix(
         connectors_enabled,
         personality_command_enabled,
         realtime_conversation_enabled,
+        audio_device_selection_enabled,
         allow_elevate_sandbox,
     )
     .into_iter()
@@ -77,14 +83,14 @@ mod tests {
 
     #[test]
     fn debug_command_still_resolves_for_dispatch() {
-        let cmd = find_builtin_command("debug-config", true, true, true, false, false);
+        let cmd = find_builtin_command("debug-config", true, true, true, false, false, false);
         assert_eq!(cmd, Some(SlashCommand::DebugConfig));
     }
 
     #[test]
     fn clear_command_resolves_for_dispatch() {
         assert_eq!(
-            find_builtin_command("clear", true, true, true, false, false),
+            find_builtin_command("clear", true, true, true, false, false, false),
             Some(SlashCommand::Clear)
         );
     }
@@ -92,7 +98,23 @@ mod tests {
     #[test]
     fn realtime_command_is_hidden_when_realtime_is_disabled() {
         assert_eq!(
-            find_builtin_command("realtime", true, true, true, false, false),
+            find_builtin_command("realtime", true, true, true, false, true, false),
+            None
+        );
+    }
+
+    #[test]
+    fn settings_command_is_hidden_when_realtime_is_disabled() {
+        assert_eq!(
+            find_builtin_command("settings", true, true, true, false, false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn settings_command_is_hidden_when_audio_device_selection_is_disabled() {
+        assert_eq!(
+            find_builtin_command("settings", true, true, true, true, false, false),
             None
         );
     }

@@ -8,6 +8,7 @@ use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -22,6 +23,8 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
+use codex_app_server_protocol::ExternalAgentConfigDetectParams;
+use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -46,6 +49,7 @@ use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -84,7 +88,7 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
 
         let (request_id, rx) = self
             .outgoing
-            .send_request_with_id(ServerRequestPayload::ChatgptAuthTokensRefresh(params))
+            .send_request(ServerRequestPayload::ChatgptAuthTokensRefresh(params))
             .await;
 
         let result = match timeout(EXTERNAL_AUTH_REFRESH_TIMEOUT, rx).await {
@@ -126,6 +130,7 @@ pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_message_processor: CodexMessageProcessor,
     config_api: ConfigApi,
+    external_agent_config_api: ExternalAgentConfigApi,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
 }
@@ -135,6 +140,7 @@ pub(crate) struct ConnectionSessionState {
     pub(crate) initialized: bool,
     pub(crate) experimental_api_enabled: bool,
     pub(crate) opted_out_notification_methods: HashSet<String>,
+    pub(crate) app_server_client_name: Option<String>,
 }
 
 pub(crate) struct MessageProcessorArgs {
@@ -178,6 +184,11 @@ impl MessageProcessor {
             auth_manager.clone(),
             SessionSource::VSCode,
             config.model_catalog.clone(),
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+            },
         ));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
@@ -197,11 +208,13 @@ impl MessageProcessor {
             loader_overrides,
             cloud_requirements,
         );
+        let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
 
         Self {
             outgoing,
             codex_message_processor,
             config_api,
+            external_agent_config_api,
             config,
             config_warnings: Arc::new(config_warnings),
         }
@@ -317,6 +330,7 @@ impl MessageProcessor {
                     if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
                         *suffix = Some(user_agent_suffix);
                     }
+                    session.app_server_client_name = Some(name.clone());
 
                     let user_agent = get_codex_user_agent();
                     let response = InitializeResponse { user_agent };
@@ -324,6 +338,9 @@ impl MessageProcessor {
 
                     session.initialized = true;
                     outbound_initialized.store(true, Ordering::Release);
+                    self.codex_message_processor
+                        .connection_initialized(connection_id)
+                        .await;
                     return;
                 }
             }
@@ -355,6 +372,26 @@ impl MessageProcessor {
         match codex_request {
             ClientRequest::ConfigRead { request_id, params } => {
                 self.handle_config_read(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::ExternalAgentConfigDetect { request_id, params } => {
+                self.handle_external_agent_config_detect(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::ExternalAgentConfigImport { request_id, params } => {
+                self.handle_external_agent_config_import(
                     ConnectionRequestId {
                         connection_id,
                         request_id,
@@ -398,7 +435,7 @@ impl MessageProcessor {
                 // inline the full `CodexMessageProcessor::process_request` future, which
                 // can otherwise push worker-thread stack usage over the edge.
                 self.codex_message_processor
-                    .process_request(connection_id, other)
+                    .process_request(connection_id, other, session.app_server_client_name.clone())
                     .boxed()
                     .await;
             }
@@ -488,6 +525,28 @@ impl MessageProcessor {
 
     async fn handle_config_requirements_read(&self, request_id: ConnectionRequestId) {
         match self.config_api.config_requirements_read().await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_external_agent_config_detect(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ExternalAgentConfigDetectParams,
+    ) {
+        match self.external_agent_config_api.detect(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_external_agent_config_import(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ExternalAgentConfigImportParams,
+    ) {
+        match self.external_agent_config_api.import(params).await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }

@@ -27,9 +27,13 @@ use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use http::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tracing::debug;
 use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
@@ -45,6 +49,7 @@ struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
     text_tx: Sender<String>,
     task: JoinHandle<()>,
+    realtime_active: Arc<AtomicBool>,
 }
 
 #[allow(dead_code)]
@@ -57,7 +62,9 @@ impl RealtimeConversationManager {
 
     pub(crate) async fn running_state(&self) -> Option<()> {
         let state = self.state.lock().await;
-        state.as_ref().map(|_| ())
+        state
+            .as_ref()
+            .and_then(|state| state.realtime_active.load(Ordering::Relaxed).then_some(()))
     }
 
     pub(crate) async fn start(
@@ -66,12 +73,13 @@ impl RealtimeConversationManager {
         extra_headers: Option<HeaderMap>,
         prompt: String,
         session_id: Option<String>,
-    ) -> CodexResult<Receiver<RealtimeEvent>> {
+    ) -> CodexResult<(Receiver<RealtimeEvent>, Arc<AtomicBool>)> {
         let previous_state = {
             let mut guard = self.state.lock().await;
             guard.take()
         };
         if let Some(state) = previous_state {
+            state.realtime_active.store(false, Ordering::Relaxed);
             state.task.abort();
             let _ = state.task.await;
         }
@@ -95,6 +103,7 @@ impl RealtimeConversationManager {
         let (events_tx, events_rx) =
             async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
+        let realtime_active = Arc::new(AtomicBool::new(true));
         let task = spawn_realtime_input_task(writer, events, text_rx, audio_rx, events_tx);
 
         let mut guard = self.state.lock().await;
@@ -102,8 +111,9 @@ impl RealtimeConversationManager {
             audio_tx,
             text_tx,
             task,
+            realtime_active: Arc::clone(&realtime_active),
         });
-        Ok(events_rx)
+        Ok((events_rx, realtime_active))
     }
 
     pub(crate) async fn audio_in(&self, frame: RealtimeAudioFrame) -> CodexResult<()> {
@@ -156,6 +166,7 @@ impl RealtimeConversationManager {
         };
 
         if let Some(state) = state {
+            state.realtime_active.store(false, Ordering::Relaxed);
             state.task.abort();
             let _ = state.task.await;
         }
@@ -183,17 +194,21 @@ pub(crate) async fn handle_start(
     let requested_session_id = params
         .session_id
         .or_else(|| Some(sess.conversation_id.to_string()));
-    let events_rx = match sess
+    info!("starting realtime conversation");
+    let (events_rx, realtime_active) = match sess
         .conversation
         .start(api_provider, None, prompt, requested_session_id.clone())
         .await
     {
         Ok(events_rx) => events_rx,
         Err(err) => {
+            error!("failed to start realtime conversation: {err}");
             send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
             return Ok(());
         }
     };
+
+    info!("realtime conversation started");
 
     sess.send_event_raw(Event {
         id: sub_id.clone(),
@@ -210,6 +225,7 @@ pub(crate) async fn handle_start(
             msg,
         };
         while let Ok(event) = events_rx.recv().await {
+            debug!(conversation_id = %sess_clone.conversation_id, "received realtime conversation event");
             let maybe_routed_text = match &event {
                 RealtimeEvent::ConversationItemAdded(item) => {
                     realtime_text_from_conversation_item(item)
@@ -217,6 +233,7 @@ pub(crate) async fn handle_start(
                 _ => None,
             };
             if let Some(text) = maybe_routed_text {
+                debug!(text = %text, "[realtime-text] realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
                 sess_for_routed_text.route_realtime_text_input(text).await;
             }
@@ -228,7 +245,8 @@ pub(crate) async fn handle_start(
                 )))
                 .await;
         }
-        if let Some(()) = sess_clone.conversation.running_state().await {
+        if realtime_active.swap(false, Ordering::Relaxed) {
+            info!("realtime conversation transport closed");
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationClosed(
                     RealtimeConversationClosedEvent {
@@ -248,6 +266,7 @@ pub(crate) async fn handle_audio(
     params: ConversationAudioParams,
 ) {
     if let Err(err) = sess.conversation.audio_in(params.frame).await {
+        error!("failed to append realtime audio: {err}");
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
     }
 }
@@ -279,7 +298,10 @@ pub(crate) async fn handle_text(
     sub_id: String,
     params: ConversationTextParams,
 ) {
+    debug!(text = %params.text, "[realtime-text] appending realtime conversation text input");
+
     if let Err(err) = sess.conversation.text_in(params.text).await {
+        error!("failed to append realtime text: {err}");
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
     }
 }

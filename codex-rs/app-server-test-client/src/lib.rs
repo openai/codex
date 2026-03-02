@@ -57,9 +57,6 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::SkillApprovalDecision;
-use codex_app_server_protocol::SkillRequestApprovalParams;
-use codex_app_server_protocol::SkillRequestApprovalResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -191,6 +188,10 @@ enum CliCommand {
         /// Existing thread id to resume.
         thread_id: String,
     },
+    /// Initialize the app-server and dump all inbound messages until interrupted.
+    ///
+    /// This command does not auto-exit; stop it with SIGINT/SIGTERM/SIGKILL.
+    Watch,
     /// Start a V2 turn that elicits an ExecCommand approval.
     #[command(name = "trigger-cmd-approval")]
     TriggerCmdApproval {
@@ -293,6 +294,11 @@ pub fn run() -> Result<()> {
             ensure_dynamic_tools_unused(&dynamic_tools, "thread-resume")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
             thread_resume_follow(&endpoint, &config_overrides, thread_id)
+        }
+        CliCommand::Watch => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "watch")?;
+            let endpoint = resolve_endpoint(codex_bin, url)?;
+            watch(&endpoint, &config_overrides)
         }
         CliCommand::TriggerCmdApproval { user_message } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
@@ -701,6 +707,16 @@ fn thread_resume_follow(
     client.stream_notifications_forever()
 }
 
+fn watch(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
+    let mut client = CodexClient::connect(endpoint, config_overrides)?;
+
+    let initialize = client.initialize()?;
+    println!("< initialize response: {initialize:?}");
+    println!("< streaming inbound messages until process is terminated");
+
+    client.stream_notifications_forever()
+}
+
 fn trigger_cmd_approval(
     endpoint: &Endpoint,
     config_overrides: &[String],
@@ -916,6 +932,7 @@ fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u32) -> 
         source_kinds: None,
         archived: None,
         cwd: None,
+        search_term: None,
     })?;
     println!("< thread/list response: {response:?}");
 
@@ -1510,9 +1527,6 @@ impl CodexClient {
             ServerRequest::FileChangeRequestApproval { request_id, params } => {
                 self.approve_file_change_request(request_id, params)?;
             }
-            ServerRequest::SkillRequestApproval { request_id, params } => {
-                self.approve_skill_request(request_id, params)?;
-            }
             other => {
                 bail!("received unsupported server request: {other:?}");
             }
@@ -1539,6 +1553,7 @@ impl CodexClient {
             additional_permissions,
             proposed_execpolicy_amendment,
             proposed_network_policy_amendments,
+            available_decisions,
         } = params;
 
         println!(
@@ -1552,6 +1567,9 @@ impl CodexClient {
         }
         if let Some(network_approval_context) = network_approval_context.as_ref() {
             println!("< network approval context: {network_approval_context:?}");
+        }
+        if let Some(available_decisions) = available_decisions.as_ref() {
+            println!("< available decisions: {available_decisions:?}");
         }
         if let Some(command) = command.as_deref() {
             println!("< command: {command}");
@@ -1589,22 +1607,6 @@ impl CodexClient {
             "< commandExecution decision for approval #{} on item {item_id}: {:?}",
             self.command_approval_count, decision
         );
-        Ok(())
-    }
-
-    fn approve_skill_request(
-        &mut self,
-        request_id: RequestId,
-        params: SkillRequestApprovalParams,
-    ) -> Result<()> {
-        println!(
-            "\n< skill approval requested for item {}, skill {}",
-            params.item_id, params.skill_name
-        );
-        let response = SkillRequestApprovalResponse {
-            decision: SkillApprovalDecision::Approve,
-        };
-        self.send_server_request_response(request_id, &response)?;
         Ok(())
     }
 

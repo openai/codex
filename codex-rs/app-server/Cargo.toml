@@ -65,6 +65,7 @@ axum = { workspace = true, default-features = false, features = [
 base64 = { workspace = true }
 codex-execpolicy = { workspace = true }
 core_test_support = { workspace = true }
+codex-state = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }

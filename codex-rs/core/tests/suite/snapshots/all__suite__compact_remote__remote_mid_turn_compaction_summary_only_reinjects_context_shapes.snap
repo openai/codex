@@ -1,19 +1,21 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "format_labeled_requests_snapshot(\"Remote mid-turn compaction where compact output has only a compaction item: continuation layout reinjects context before that compaction item.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
+expression: "format_labeled_requests_snapshot(\"Remote mid-turn compaction where compact output has only a compaction item: continuation layout reinjects context before that compaction item.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &post_compact_turn_request),])"
 ---
 Scenario: Remote mid-turn compaction where compact output has only a compaction item: continuation layout reinjects context before that compaction item.
 
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:USER_ONE
-04:function_call/test_tool
-05:function_call_output:unsupported call: test_tool
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:USER_ONE
+03:function_call/test_tool
+04:function_call_output:unsupported call: test_tool
 
 ## Remote Post-Compaction History Layout
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:compaction:encrypted=true
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:compaction:encrypted=true

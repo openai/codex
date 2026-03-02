@@ -137,6 +137,45 @@ the decider can auto-allow network requests originating from that command.
 **Important:** Explicit deny rules still win. The decider only gets a chance to override
 `not_allowed` (allowlist misses), not `denied` or `not_allowed_local`.
 
+## OTEL Audit Events (embedded/managed)
+
+When `codex-network-proxy` is embedded in managed Codex runtime, policy decisions emit structured
+OTEL-compatible events with `target=codex_otel.network_proxy`.
+
+Event name:
+
+- `codex.network_proxy.policy_decision`
+  - emitted for each policy decision (`domain` and `non_domain`).
+  - `network.policy.scope = "domain"` for host-policy evaluations (`evaluate_host_policy`).
+  - `network.policy.scope = "non_domain"` for mode-guard/proxy-state checks (including unix-socket guard paths and unix-socket allow decisions).
+
+Common fields:
+
+- `event.name`
+- `event.timestamp` (RFC3339 UTC, millisecond precision)
+- optional metadata:
+  - `conversation.id`
+  - `app.version`
+  - `user.account_id`
+- policy/network:
+  - `network.policy.scope` (`domain` or `non_domain`)
+  - `network.policy.decision` (`allow`, `deny`, or `ask`)
+  - `network.policy.source` (`baseline_policy`, `mode_guard`, `proxy_state`, `decider`)
+  - `network.policy.reason`
+  - `network.transport.protocol`
+  - `server.address`
+  - `server.port`
+  - `http.request.method` (defaults to `"none"` when absent)
+  - `client.address` (defaults to `"unknown"` when absent)
+  - `network.policy.override` (`true` only when decider-allow overrides baseline `not_allowed`)
+
+Unix-socket block-path audits use sentinel endpoint values:
+
+- `server.address = "unix-socket"`
+- `server.port = 0`
+
+Audit events intentionally avoid logging full URL/path/query data.
+
 ## Admin API
 
 The admin API is a small HTTP server intended for debugging and runtime adjustments.

@@ -78,6 +78,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
     assert_eq!(thread.id, conversation_id);
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
+    assert!(!thread.ephemeral, "stored rollouts should not be ephemeral");
     assert!(thread.path.as_ref().expect("thread path").is_absolute());
     assert_eq!(thread.cwd, PathBuf::from("/"));
     assert_eq!(thread.cli_version, "0.0.0");
@@ -278,6 +279,11 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
         Some(new_name),
         "thread/read must serialize `thread.name` on the wire"
     );
+    assert_eq!(
+        thread_json.get("ephemeral").and_then(Value::as_bool),
+        Some(false),
+        "thread/read must serialize `thread.ephemeral` on the wire"
+    );
 
     // List should also surface the name.
     let list_id = mcp
@@ -289,6 +295,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
             source_kinds: None,
             archived: None,
             cwd: None,
+            search_term: None,
         })
         .await?;
     let list_resp: JSONRPCResponse = timeout(
@@ -315,6 +322,11 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
         listed_json.get("name").and_then(Value::as_str),
         Some(new_name),
         "thread/list must serialize `thread.name` on the wire"
+    );
+    assert_eq!(
+        listed_json.get("ephemeral").and_then(Value::as_bool),
+        Some(false),
+        "thread/list must serialize `thread.ephemeral` on the wire"
     );
 
     // Resume should also surface the name.
@@ -343,6 +355,11 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
         resumed_json.get("name").and_then(Value::as_str),
         Some(new_name),
         "thread/resume must serialize `thread.name` on the wire"
+    );
+    assert_eq!(
+        resumed_json.get("ephemeral").and_then(Value::as_bool),
+        Some(false),
+        "thread/resume must serialize `thread.ephemeral` on the wire"
     );
 
     Ok(())

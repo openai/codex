@@ -11,7 +11,7 @@
           "type": "string"
         },
         {
-          "description": "User approved the command and future identical commands should run without prompting.",
+          "description": "User approved the command and future prompts in the same session-scoped approval cache should run without prompting.",
           "enum": [
             "acceptForSession"
           ],

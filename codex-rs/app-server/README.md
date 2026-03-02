@@ -62,6 +62,7 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 
 - Initialize once per connection: Immediately after opening a transport connection, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request on that connection before this handshake gets rejected.
 - Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history.
+  The returned `thread.ephemeral` flag tells you whether the session is intentionally in-memory only; when it is `true`, `thread.path` is `null`.
 - Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, etc. This immediately returns the new turn object and triggers a `turn/started` notification.
 - Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
 - Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
@@ -122,11 +123,12 @@ Example with notification opt-out:
 - `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
-- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
+- `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
@@ -135,11 +137,15 @@ Example with notification opt-out:
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
+- `thread/realtime/start` — start a thread-scoped realtime session (experimental); returns `{}` and streams `thread/realtime/*` notifications.
+- `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
+- `thread/realtime/appendText` — append text input to the active realtime session (experimental); returns `{}`.
+- `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
-- `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options and optional `upgrade` model ids.
+- `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
-- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
+- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
 - `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
@@ -153,6 +159,8 @@ Example with notification opt-out:
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `config/read` — fetch the effective config on disk after resolving config layering.
+- `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome` and optional `cwds`; each detected item includes `cwd` (`null` for home).
+- `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home).
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), `enforceResidency`, and `network` constraints.
@@ -170,6 +178,7 @@ Start a fresh thread when you need a new Codex conversation.
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     "personality": "friendly",
+    "serviceName": "my_app_server_client", // optional metrics tag (`service_name`)
     // Experimental: requires opt-in
     "dynamicTools": [
         {
@@ -229,6 +238,7 @@ Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `per
 - `sourceKinds` — restrict results to specific sources; omit or pass `[]` for interactive sessions only (`cli`, `vscode`).
 - `archived` — when `true`, list archived threads only. When `false` or `null`, list non-archived threads (default).
 - `cwd` — restrict results to threads whose session cwd exactly matches this path.
+- `searchTerm` — restrict results to threads whose extracted title contains this substring (case-sensitive).
 - Responses include `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available.
 
 Example:
@@ -273,6 +283,26 @@ When `nextCursor` is `null`, you’ve reached the final page.
     "threadId": "thr_123",
     "status": { "type": "active", "activeFlags": [] }
 } }
+```
+
+### Example: Unsubscribe from a loaded thread
+
+`thread/unsubscribe` removes the current connection's subscription to a thread. The response status is one of:
+
+- `unsubscribed` when the connection was subscribed and is now removed.
+- `notSubscribed` when the connection was not subscribed to that thread.
+- `notLoaded` when the thread is not loaded.
+
+If this was the last subscriber, the server unloads the thread and emits `thread/closed` and a `thread/status/changed` transition to `notLoaded`.
+
+```json
+{ "method": "thread/unsubscribe", "id": 22, "params": { "threadId": "thr_123" } }
+{ "id": 22, "result": { "status": "unsubscribed" } }
+{ "method": "thread/status/changed", "params": {
+    "threadId": "thr_123",
+    "status": { "type": "notLoaded" }
+} }
+{ "method": "thread/closed", "params": { "threadId": "thr_123" } }
 ```
 
 ### Example: Read a thread
@@ -547,7 +577,9 @@ Notes:
 
 ## Events
 
-Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `turn/*`, and `item/*` notifications.
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `thread/closed`, `turn/*`, and `item/*` notifications.
+
+Thread realtime uses a separate thread-scoped notification surface. `thread/realtime/*` notifications are ephemeral transport events, not `ThreadItem`s, and are not returned by `thread/read`, `thread/resume`, or `thread/fork`.
 
 ### Notification opt-out
 
@@ -569,6 +601,18 @@ The fuzzy file search session API emits per-query notifications:
 
 - `fuzzyFileSearch/sessionUpdated` — `{ sessionId, query, files }` with the current matching files for the active query.
 - `fuzzyFileSearch/sessionCompleted` — `{ sessionId, query }` once indexing/matching for that query has completed.
+
+### Thread realtime events (experimental)
+
+The thread realtime API emits thread-scoped notifications for session lifecycle and streaming media:
+
+- `thread/realtime/started` — `{ threadId, sessionId }` once realtime starts for the thread (experimental).
+- `thread/realtime/itemAdded` — `{ threadId, item }` for non-audio realtime items (experimental). `item` is forwarded as raw JSON while the upstream websocket item schema remains unstable.
+- `thread/realtime/outputAudio/delta` — `{ threadId, audio }` for streamed output audio chunks (experimental). `audio` uses camelCase fields (`data`, `sampleRate`, `numChannels`, `samplesPerChannel`).
+- `thread/realtime/error` — `{ threadId, message }` when realtime encounters a transport or backend error (experimental).
+- `thread/realtime/closed` — `{ threadId, reason }` when the realtime transport closes (experimental).
+
+Because audio is intentionally separate from `ThreadItem`, clients can opt out of `thread/realtime/outputAudio/delta` independently with `optOutNotificationMethods`.
 
 ### Windows sandbox setup events
 
@@ -667,9 +711,10 @@ Certain actions (shell commands or modifying files) may require explicit user ap
 Order of messages:
 
 1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
-2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `approvalId` (for subcommand callbacks), and `reason`. For normal command approvals, it also includes `command`, `cwd`, and `commandActions` for friendly display. When `initialize.params.capabilities.experimentalApi = true`, it may also include experimental `additionalPermissions` describing requested per-command sandbox access. For network-only approvals, those command fields may be omitted and `networkApprovalContext` is provided instead. Optional persistence hints may also be included via `proposedExecpolicyAmendment` and `proposedNetworkPolicyAmendments`.
+2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `approvalId` (for subcommand callbacks), and `reason`. For normal command approvals, it also includes `command`, `cwd`, and `commandActions` for friendly display. When `initialize.params.capabilities.experimentalApi = true`, it may also include experimental `additionalPermissions` describing requested per-command sandbox access; any filesystem paths in that payload are absolute on the wire. For network-only approvals, those command fields may be omitted and `networkApprovalContext` is provided instead. Optional persistence hints may also be included via `proposedExecpolicyAmendment` and `proposedNetworkPolicyAmendments`. Clients can prefer `availableDecisions` when present to render the exact set of choices the server wants to expose, while still falling back to the older heuristics if it is omitted.
 3. Client response — for example `{ "decision": "accept" }`, `{ "decision": "acceptForSession" }`, `{ "decision": { "acceptWithExecpolicyAmendment": { "execpolicy_amendment": [...] } } }`, `{ "decision": { "applyNetworkPolicyAmendment": { "network_policy_amendment": { "host": "example.com", "action": "allow" } } } }`, `{ "decision": "decline" }`, or `{ "decision": "cancel" }`.
-4. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
+4. `serverRequest/resolved` — `{ threadId, requestId }` confirms the pending request has been resolved or cleared, including lifecycle cleanup on turn start/complete/interrupt.
+5. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
 
 ### File change approvals
 
@@ -678,9 +723,14 @@ Order of messages:
 1. `item/started` — emits a `fileChange` item with `changes` (diff chunk summaries) and `status: "inProgress"`. Show the proposed edits and paths to the user.
 2. `item/fileChange/requestApproval` (request) — includes `itemId`, `threadId`, `turnId`, and an optional `reason`.
 3. Client response — `{ "decision": "accept" }` or `{ "decision": "decline" }`.
-4. `item/completed` — returns the same `fileChange` item with `status` updated to `completed`, `failed`, or `declined` after the patch attempt. Rely on this to show success/failure and finalize the diff state in your UI.
+4. `serverRequest/resolved` — `{ threadId, requestId }` confirms the pending request has been resolved or cleared, including lifecycle cleanup on turn start/complete/interrupt.
+5. `item/completed` — returns the same `fileChange` item with `status` updated to `completed`, `failed`, or `declined` after the patch attempt. Rely on this to show success/failure and finalize the diff state in your UI.
 
 UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
+
+### request_user_input
+
+When the client responds to `item/tool/requestUserInput`, the server emits `serverRequest/resolved` with `{ threadId, requestId }`. If the pending request is cleared by turn start, turn completion, or turn interruption before the client answers, the server emits the same notification for that cleanup.
 
 ### Dynamic tool calls (experimental)
 
@@ -701,6 +751,13 @@ When a dynamic tool is invoked during a turn, the server sends an `item/tool/cal
   }
 }
 ```
+
+The server also emits item lifecycle notifications around the request:
+
+1. `item/started` with `item.type = "dynamicToolCall"`, `status = "inProgress"`, plus `tool` and `arguments`.
+2. `item/tool/call` request.
+3. Client response.
+4. `item/completed` with `item.type = "dynamicToolCall"`, final `status`, and the returned `contentItems`/`success`.
 
 The client must respond with content items. Use `inputText` for text and `inputImage` for image URLs/data URLs:
 
@@ -895,7 +952,7 @@ The JSON-RPC auth/account surface exposes request/response methods plus server-i
 
 ### Authentication modes
 
-Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`) and can be inferred from `account/read`.
+Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`), which also includes the current ChatGPT `planType` when available, and can be inferred from `account/read`.
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"`; Codex persists tokens to disk and refreshes them automatically.
@@ -907,7 +964,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated`.
-- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`).
+- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
@@ -951,7 +1008,7 @@ Field notes:
 3. Notifications:
    ```json
    { "method": "account/login/completed", "params": { "loginId": null, "success": true, "error": null } }
-   { "method": "account/updated", "params": { "authMode": "apikey" } }
+   { "method": "account/updated", "params": { "authMode": "apikey", "planType": null } }
    ```
 
 ### 3) Log in with ChatGPT (browser flow)
@@ -965,7 +1022,7 @@ Field notes:
 3. Wait for notifications:
    ```json
    { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": true, "error": null } }
-   { "method": "account/updated", "params": { "authMode": "chatgpt" } }
+   { "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "plus" } }
    ```
 
 ### 4) Cancel a ChatGPT login
@@ -980,7 +1037,7 @@ Field notes:
 ```json
 { "method": "account/logout", "id": 5 }
 { "id": 5, "result": {} }
-{ "method": "account/updated", "params": { "authMode": null } }
+{ "method": "account/updated", "params": { "authMode": null, "planType": null } }
 ```
 
 ### 6) Rate limits (ChatGPT)

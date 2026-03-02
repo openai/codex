@@ -150,6 +150,12 @@
           "type": "null"
         }
       ]
+    },
+    "serviceName": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "title": "ThreadStartParams",

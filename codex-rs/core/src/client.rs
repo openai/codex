@@ -315,7 +315,10 @@ impl ModelClient {
             instructions: &instructions,
         };
 
-        let extra_headers = self.build_subagent_headers();
+        let mut extra_headers = self.build_subagent_headers();
+        extra_headers.extend(build_conversation_headers(Some(
+            self.state.conversation_id.to_string(),
+        )));
         client
             .compact_input(&payload, extra_headers)
             .await
@@ -392,8 +395,8 @@ impl ModelClient {
     /// This combines provider capability and feature gating; both must be true for websocket paths
     /// to be eligible.
     ///
-    /// If websockets are only enabled via model preference (no explicit feature flag), default to
-    /// v1 behavior.
+    /// If websockets are only enabled via model preference (no explicit feature flag), prefer the
+    /// current v2 behavior.
     pub fn active_ws_version(&self, model_info: &ModelInfo) -> Option<ResponsesWebsocketVersion> {
         if !self.state.provider.supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
@@ -403,7 +406,7 @@ impl ModelClient {
 
         match self.state.responses_websocket_version {
             Some(version) => Some(version),
-            None if model_info.prefer_websockets => Some(ResponsesWebsocketVersion::V1),
+            None if model_info.prefer_websockets => Some(ResponsesWebsocketVersion::V2),
             None => None,
         }
     }

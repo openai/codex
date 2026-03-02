@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
@@ -92,6 +93,7 @@ pub(crate) use skills_toggle_view::SkillsToggleView;
 pub(crate) use status_line_setup::StatusLineItem;
 pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
+mod pending_thread_approvals;
 pub mod popup_consts;
 mod queued_user_messages;
 mod scroll_state;
@@ -127,6 +129,7 @@ pub(crate) enum CancellationEvent {
     NotHandled,
 }
 
+use crate::bottom_pane::prompt_args::parse_slash_name;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
@@ -171,6 +174,8 @@ pub(crate) struct BottomPane {
     unified_exec_footer: UnifiedExecFooter,
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
+    /// Inactive threads with pending approval requests.
+    pending_thread_approvals: PendingThreadApprovals,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
 }
@@ -219,6 +224,7 @@ impl BottomPane {
             status: None,
             unified_exec_footer: UnifiedExecFooter::new(),
             queued_user_messages: QueuedUserMessages::new(),
+            pending_thread_approvals: PendingThreadApprovals::new(),
             esc_backtrack_hint: false,
             animations_enabled,
             context_window_percent: None,
@@ -260,10 +266,6 @@ impl BottomPane {
         let _ = self.take_mention_bindings();
     }
 
-    pub fn set_steer_enabled(&mut self, enabled: bool) {
-        self.composer.set_steer_enabled(enabled);
-    }
-
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
         self.composer.set_collaboration_modes_enabled(enabled);
         self.request_redraw();
@@ -294,6 +296,11 @@ impl BottomPane {
 
     pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
         self.composer.set_realtime_conversation_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
+        self.composer.set_audio_device_selection_enabled(enabled);
         self.request_redraw();
     }
 
@@ -392,11 +399,20 @@ impl BottomPane {
             self.request_redraw();
             InputResult::None
         } else {
+            let is_agent_command = self
+                .composer_text()
+                .lines()
+                .next()
+                .and_then(parse_slash_name)
+                .is_some_and(|(name, _, _)| name == "agent");
+
             // If a task is running and a status line is visible, allow Esc to
             // send an interrupt even while the composer has focus.
             // When a popup is active, prefer dismissing it over interrupting the task.
             if key_event.code == KeyCode::Esc
+                && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                 && self.is_task_running
+                && !is_agent_command
                 && !self.composer.popup_active()
                 && let Some(status) = &self.status
             {
@@ -759,6 +775,18 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update the inactive-thread approval list shown above the composer.
+    pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {
+        if self.pending_thread_approvals.set_threads(threads) {
+            self.request_redraw();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_thread_approvals(&self) -> &[String] {
+        self.pending_thread_approvals.threads()
+    }
+
     /// Update the unified-exec process set and refresh whichever summary surface is active.
     ///
     /// The summary may be displayed inline in the status row or as a dedicated
@@ -792,6 +820,11 @@ impl BottomPane {
 
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_active_view(&self) -> bool {
+        !self.view_stack.is_empty()
     }
 
     /// Return true when the pane is in the regular composer state without any
@@ -980,14 +1013,20 @@ impl BottomPane {
             if self.status.is_none() && !self.unified_exec_footer.is_empty() {
                 flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
             }
+            let has_pending_thread_approvals = !self.pending_thread_approvals.is_empty();
             let has_queued_messages = !self.queued_user_messages.messages.is_empty();
             let has_status_or_footer =
                 self.status.is_some() || !self.unified_exec_footer.is_empty();
-            if has_queued_messages && has_status_or_footer {
+            let has_inline_previews = has_pending_thread_approvals || has_queued_messages;
+            if has_inline_previews && has_status_or_footer {
+                flex.push(0, RenderableItem::Owned("".into()));
+            }
+            flex.push(1, RenderableItem::Borrowed(&self.pending_thread_approvals));
+            if has_pending_thread_approvals && has_queued_messages {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
-            if !has_queued_messages && has_status_or_footer {
+            if !has_inline_previews && has_status_or_footer {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             let mut flex2 = FlexRenderable::new();
@@ -1091,12 +1130,16 @@ mod tests {
 
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
+            thread_id: codex_protocol::ThreadId::new(),
+            thread_label: None,
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,
+            available_decisions: vec![
+                codex_protocol::protocol::ReviewDecision::Approved,
+                codex_protocol::protocol::ReviewDecision::Abort,
+            ],
             network_approval_context: None,
-            proposed_execpolicy_amendment: None,
-            proposed_network_policy_amendments: None,
             additional_permissions: None,
         }
     }
@@ -1495,6 +1538,7 @@ mod tests {
                 interface: None,
                 dependencies: None,
                 policy: None,
+                permission_profile: None,
                 permissions: None,
                 path_to_skills_md: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
@@ -1557,6 +1601,90 @@ mod tests {
             );
         }
         assert_eq!(pane.composer_text(), "/");
+    }
+
+    #[test]
+    fn esc_with_agent_command_without_popup_does_not_interrupt_task() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+
+        // Repro: `/agent ` hides the popup (cursor past command name). Esc should
+        // keep editing command text instead of interrupting the running task.
+        pane.insert_str("/agent ");
+        assert!(
+            !pane.composer.popup_active(),
+            "expected command popup to be hidden after entering `/agent `"
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        while let Ok(ev) = rx.try_recv() {
+            assert!(
+                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
+                "expected Esc to not send Op::Interrupt while typing `/agent`"
+            );
+        }
+        assert_eq!(pane.composer_text(), "/agent ");
+    }
+
+    #[test]
+    fn esc_release_after_dismissing_agent_picker_does_not_interrupt_task() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.show_selection_view(SelectionViewParams {
+            title: Some("Agents".to_string()),
+            items: vec![SelectionItem {
+                name: "Main".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        pane.handle_key_event(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Press,
+        ));
+        pane.handle_key_event(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        ));
+
+        while let Ok(ev) = rx.try_recv() {
+            assert!(
+                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
+                "expected Esc release after dismissing agent picker to not interrupt"
+            );
+        }
+        assert!(
+            pane.no_modal_or_popup_active(),
+            "expected Esc press to dismiss the agent picker"
+        );
     }
 
     #[test]

@@ -6,7 +6,6 @@ mod macos;
 mod tests;
 
 use crate::config::ConfigToml;
-use crate::config::deserialize_config_toml_with_base;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use crate::git_info::resolve_root_git_project_for_trust;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -25,6 +24,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
+pub use codex_config::CloudRequirementsLoadError;
 pub use codex_config::CloudRequirementsLoader;
 pub use codex_config::ConfigError;
 pub use codex_config::ConfigLayerEntry;
@@ -116,7 +116,7 @@ pub async fn load_config_layers_state(
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
-    if let Some(requirements) = cloud_requirements.get().await {
+    if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
         config_requirements_toml
             .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
     }
@@ -575,6 +575,11 @@ struct ProjectTrustContext {
     user_config_file: AbsolutePathBuf,
 }
 
+#[derive(Deserialize)]
+struct ProjectTrustConfigToml {
+    projects: Option<std::collections::HashMap<String, crate::config::ProjectConfig>>,
+}
+
 struct ProjectTrustDecision {
     trust_level: Option<TrustLevel>,
     trust_key: String,
@@ -665,10 +670,16 @@ async fn project_trust_context(
     config_base_dir: &Path,
     user_config_file: &AbsolutePathBuf,
 ) -> io::Result<ProjectTrustContext> {
-    let config_toml = deserialize_config_toml_with_base(merged_config.clone(), config_base_dir)?;
+    let project_trust_config: ProjectTrustConfigToml = {
+        let _guard = AbsolutePathBufGuard::new(config_base_dir);
+        merged_config
+            .clone()
+            .try_into()
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?
+    };
 
     let project_root = find_project_root(cwd, project_root_markers).await?;
-    let projects = config_toml.projects.unwrap_or_default();
+    let projects = project_trust_config.projects.unwrap_or_default();
 
     let project_root_key = project_root.as_path().to_string_lossy().to_string();
     let repo_root = resolve_root_git_project_for_trust(cwd.as_path());

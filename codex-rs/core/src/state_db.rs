@@ -226,6 +226,7 @@ pub async fn list_threads_db(
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
     archived: bool,
+    search_term: Option<&str>,
 ) -> Option<codex_state::ThreadsPage> {
     let ctx = context?;
     if ctx.codex_home() != codex_home {
@@ -257,6 +258,7 @@ pub async fn list_threads_db(
             allowed_sources.as_slice(),
             model_providers.as_deref(),
             archived,
+            search_term,
         )
         .await
     {
@@ -335,6 +337,19 @@ pub async fn persist_dynamic_tools(
     }
 }
 
+pub async fn mark_thread_memory_mode_polluted(
+    context: Option<&codex_state::StateRuntime>,
+    thread_id: ThreadId,
+    stage: &str,
+) {
+    let Some(ctx) = context else {
+        return;
+    };
+    if let Err(err) = ctx.mark_thread_memory_mode_polluted(thread_id).await {
+        warn!("state db mark_thread_memory_mode_polluted failed during {stage}: {err}");
+    }
+}
+
 /// Reconcile rollout items into SQLite, falling back to scanning the rollout file.
 pub async fn reconcile_rollout(
     context: Option<&codex_state::StateRuntime>,
@@ -343,6 +358,7 @@ pub async fn reconcile_rollout(
     builder: Option<&ThreadMetadataBuilder>,
     items: &[RolloutItem],
     archived_only: Option<bool>,
+    new_thread_memory_mode: Option<&str>,
 ) {
     let Some(ctx) = context else {
         return;
@@ -355,6 +371,7 @@ pub async fn reconcile_rollout(
             builder,
             items,
             "reconcile_rollout",
+            new_thread_memory_mode,
         )
         .await;
         return;
@@ -371,6 +388,7 @@ pub async fn reconcile_rollout(
             }
         };
     let mut metadata = outcome.metadata;
+    let memory_mode = outcome.memory_mode.unwrap_or_else(|| "enabled".to_string());
     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
     match archived_only {
         Some(true) if metadata.archived_at.is_none() => {
@@ -384,6 +402,16 @@ pub async fn reconcile_rollout(
     if let Err(err) = ctx.upsert_thread(&metadata).await {
         warn!(
             "state db reconcile_rollout upsert failed {}: {err}",
+            rollout_path.display()
+        );
+        return;
+    }
+    if let Err(err) = ctx
+        .set_thread_memory_mode(metadata.id, memory_mode.as_str())
+        .await
+    {
+        warn!(
+            "state db reconcile_rollout memory_mode update failed {}: {err}",
             rollout_path.display()
         );
         return;
@@ -465,6 +493,7 @@ pub async fn read_repair_rollout_path(
         None,
         &[],
         archived_only,
+        None,
     )
     .await;
 }
@@ -477,6 +506,7 @@ pub async fn apply_rollout_items(
     builder: Option<&ThreadMetadataBuilder>,
     items: &[RolloutItem],
     stage: &str,
+    new_thread_memory_mode: Option<&str>,
 ) {
     let Some(ctx) = context else {
         return;
@@ -497,7 +527,10 @@ pub async fn apply_rollout_items(
     };
     builder.rollout_path = rollout_path.to_path_buf();
     builder.cwd = normalize_cwd_for_state_db(&builder.cwd);
-    if let Err(err) = ctx.apply_rollout_items(&builder, items, None).await {
+    if let Err(err) = ctx
+        .apply_rollout_items(&builder, items, None, new_thread_memory_mode)
+        .await
+    {
         warn!(
             "state db apply_rollout_items failed during {stage} for {}: {err}",
             rollout_path.display()

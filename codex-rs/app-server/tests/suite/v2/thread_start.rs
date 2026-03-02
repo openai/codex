@@ -62,6 +62,10 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         thread.created_at > 0,
         "created_at should be a positive UNIX timestamp"
     );
+    assert!(
+        !thread.ephemeral,
+        "new persistent threads should not be ephemeral"
+    );
     assert_eq!(thread.status, ThreadStatus::Idle);
     let thread_path = thread.path.clone().expect("thread path should be present");
     assert!(thread_path.is_absolute(), "thread path should be absolute");
@@ -80,6 +84,11 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         Some(&Value::Null),
         "new threads should serialize `name: null`"
     );
+    assert_eq!(
+        thread_json.get("ephemeral").and_then(Value::as_bool),
+        Some(false),
+        "new persistent threads should serialize `ephemeral: false`"
+    );
     assert_eq!(thread.name, None);
 
     // A corresponding thread/started notification should arrive.
@@ -97,6 +106,13 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         started_thread_json.get("name"),
         Some(&Value::Null),
         "thread/started should serialize `name: null` for new threads"
+    );
+    assert_eq!(
+        started_thread_json
+            .get("ephemeral")
+            .and_then(Value::as_bool),
+        Some(false),
+        "thread/started should serialize `ephemeral: false` for new persistent threads"
     );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
@@ -147,6 +163,34 @@ model_reasoning_effort = "high"
 }
 
 #[tokio::test]
+async fn thread_start_accepts_metrics_service_name() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            service_name: Some("my_app_server_client".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+    assert!(!thread.id.is_empty(), "thread id should not be empty");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -168,10 +212,24 @@ async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
     )
     .await??;
+    let resp_result = resp.result.clone();
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+    assert!(
+        thread.ephemeral,
+        "ephemeral threads should be marked explicitly"
+    );
     assert_eq!(
         thread.path, None,
         "ephemeral threads should not expose a path"
+    );
+    let thread_json = resp_result
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/start result.thread must be an object");
+    assert_eq!(
+        thread_json.get("ephemeral").and_then(Value::as_bool),
+        Some(true),
+        "ephemeral threads should serialize `ephemeral: true`"
     );
 
     Ok(())

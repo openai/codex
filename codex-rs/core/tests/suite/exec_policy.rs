@@ -4,7 +4,6 @@ use anyhow::Result;
 use codex_core::features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -55,7 +54,7 @@ async fn submit_user_turn(
             sandbox_policy,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode,
             personality: None,
         })
@@ -134,7 +133,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

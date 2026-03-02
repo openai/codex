@@ -8,6 +8,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::task;
@@ -73,6 +74,27 @@ pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
         segments: vec!["tui".to_string(), "status_line".to_string()],
         value: TomlItem::Value(array.into()),
     }
+}
+
+pub fn model_availability_nux_count_edits(shown_count: &HashMap<String, u32>) -> Vec<ConfigEdit> {
+    let mut shown_count_entries: Vec<_> = shown_count.iter().collect();
+    shown_count_entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+
+    let mut edits = vec![ConfigEdit::ClearPath {
+        segments: vec!["tui".to_string(), "model_availability_nux".to_string()],
+    }];
+    for (model_slug, count) in shown_count_entries {
+        edits.push(ConfigEdit::SetPath {
+            segments: vec![
+                "tui".to_string(),
+                "model_availability_nux".to_string(),
+                model_slug.clone(),
+            ],
+            value: value(i64::from(*count)),
+        });
+    }
+
+    edits
 }
 
 // TODO(jif) move to a dedicated file
@@ -194,6 +216,11 @@ mod document_helpers {
             && !scopes.is_empty()
         {
             entry["scopes"] = array_from_iter(scopes.iter().cloned());
+        }
+        if let Some(resource) = &config.oauth_resource
+            && !resource.is_empty()
+        {
+            entry["oauth_resource"] = value(resource.clone());
         }
 
         entry
@@ -794,6 +821,12 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_model_availability_nux_count(mut self, shown_count: &HashMap<String, u32>) -> Self {
+        self.edits
+            .extend(model_availability_nux_count_edits(shown_count));
+        self
+    }
+
     pub fn replace_mcp_servers(mut self, servers: &BTreeMap<String, McpServerConfig>) -> Self {
         self.edits
             .push(ConfigEdit::ReplaceMcpServers(servers.clone()));
@@ -836,6 +869,30 @@ impl ConfigEditsBuilder {
             segments,
             value: value(mode),
         });
+        self
+    }
+
+    pub fn set_realtime_microphone(mut self, microphone: Option<&str>) -> Self {
+        let segments = vec!["audio".to_string(), "microphone".to_string()];
+        match microphone {
+            Some(microphone) => self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(microphone),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath { segments }),
+        }
+        self
+    }
+
+    pub fn set_realtime_speaker(mut self, speaker: Option<&str>) -> Self {
+        let segments = vec!["audio".to_string(), "speaker".to_string()];
+        match speaker {
+            Some(speaker) => self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(speaker),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath { segments }),
+        }
         self
     }
 
@@ -932,6 +989,25 @@ model_reasoning_effort = "high"
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents, "enabled = true\n");
+    }
+
+    #[test]
+    fn set_model_availability_nux_count_writes_shown_count() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        let shown_count = HashMap::from([("gpt-foo".to_string(), 4)]);
+
+        ConfigEditsBuilder::new(codex_home)
+            .set_model_availability_nux_count(&shown_count)
+            .apply_blocking()
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[tui.model_availability_nux]
+gpt-foo = 4
+"#;
+        assert_eq!(contents, expected);
     }
 
     #[test]
@@ -1441,6 +1517,7 @@ gpt-5 = "gpt-5.1"
                 enabled_tools: Some(vec!["one".to_string(), "two".to_string()]),
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 
@@ -1465,6 +1542,7 @@ gpt-5 = "gpt-5.1"
                 enabled_tools: None,
                 disabled_tools: Some(vec!["forbidden".to_string()]),
                 scopes: None,
+                oauth_resource: Some("https://resource.example.com".to_string()),
             },
         );
 
@@ -1483,6 +1561,7 @@ bearer_token_env_var = \"TOKEN\"
 enabled = false
 startup_timeout_sec = 5.0
 disabled_tools = [\"forbidden\"]
+oauth_resource = \"https://resource.example.com\"
 
 [mcp_servers.http.http_headers]
 Z-Header = \"z\"
@@ -1532,6 +1611,7 @@ foo = { command = "cmd" }
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 
@@ -1578,6 +1658,7 @@ foo = { command = "cmd" } # keep me
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 
@@ -1623,6 +1704,7 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 
@@ -1669,6 +1751,7 @@ foo = { command = "cmd" }
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 
@@ -1802,6 +1885,50 @@ model_reasoning_effort = "high"
             .and_then(|tbl| tbl.get("hide_full_access_warning"))
             .and_then(toml::Value::as_bool);
         assert_eq!(notice, Some(true));
+    }
+
+    #[test]
+    fn blocking_builder_set_realtime_audio_persists_and_clears() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        ConfigEditsBuilder::new(codex_home)
+            .set_realtime_microphone(Some("USB Mic"))
+            .set_realtime_speaker(Some("Desk Speakers"))
+            .apply_blocking()
+            .expect("persist realtime audio");
+
+        let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let config: TomlValue = toml::from_str(&raw).expect("parse config");
+        let realtime_audio = config
+            .get("audio")
+            .and_then(TomlValue::as_table)
+            .expect("audio table should exist");
+        assert_eq!(
+            realtime_audio.get("microphone").and_then(TomlValue::as_str),
+            Some("USB Mic")
+        );
+        assert_eq!(
+            realtime_audio.get("speaker").and_then(TomlValue::as_str),
+            Some("Desk Speakers")
+        );
+
+        ConfigEditsBuilder::new(codex_home)
+            .set_realtime_microphone(None)
+            .apply_blocking()
+            .expect("clear realtime microphone");
+
+        let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let config: TomlValue = toml::from_str(&raw).expect("parse config");
+        let realtime_audio = config
+            .get("audio")
+            .and_then(TomlValue::as_table)
+            .expect("audio table should exist");
+        assert_eq!(realtime_audio.get("microphone"), None);
+        assert_eq!(
+            realtime_audio.get("speaker").and_then(TomlValue::as_str),
+            Some("Desk Speakers")
+        );
     }
 
     #[test]

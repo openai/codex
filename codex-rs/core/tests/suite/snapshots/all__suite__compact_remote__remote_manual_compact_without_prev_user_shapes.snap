@@ -6,11 +6,13 @@ Scenario: Remote manual /compact with no prior user turn still issues a compact 
 
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 
 ## Remote Post-Compaction History Layout
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:USER_ONE
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:USER_ONE

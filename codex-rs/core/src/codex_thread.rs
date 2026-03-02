@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
+use crate::config::ConstraintResult;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::file_watcher::WatchRegistration;
@@ -29,6 +30,7 @@ pub struct ThreadConfigSnapshot {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     pub cwd: PathBuf,
+    pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
@@ -65,6 +67,15 @@ impl CodexThread {
         expected_turn_id: Option<&str>,
     ) -> Result<String, SteerInputError> {
         self.codex.steer_input(input, expected_turn_id).await
+    }
+
+    pub async fn set_app_server_client_name(
+        &self,
+        app_server_client_name: Option<String>,
+    ) -> ConstraintResult<()> {
+        self.codex
+            .set_app_server_client_name(app_server_client_name)
+            .await
     }
 
     /// Use sparingly: this is intended to be removed soon.

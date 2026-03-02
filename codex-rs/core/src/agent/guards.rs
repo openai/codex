@@ -1,4 +1,3 @@
-use crate::config::DEFAULT_AGENT_MAX_SPAWN_DEPTH;
 use crate::error::CodexErr;
 use crate::error::Result;
 use codex_protocol::ThreadId;
@@ -43,10 +42,6 @@ pub(crate) fn next_thread_spawn_depth(session_source: &SessionSource) -> i32 {
     session_depth(session_source).saturating_add(1)
 }
 
-pub(crate) fn max_thread_spawn_depth(max_depth: Option<usize>) -> i32 {
-    let max_depth = max_depth.or(DEFAULT_AGENT_MAX_SPAWN_DEPTH).unwrap_or(1);
-    i32::try_from(max_depth).unwrap_or(i32::MAX)
-}
 pub(crate) fn exceeds_thread_spawn_depth_limit(depth: i32, max_depth: i32) -> bool {
     depth > max_depth
 }

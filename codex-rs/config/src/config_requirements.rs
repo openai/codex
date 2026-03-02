@@ -1147,6 +1147,7 @@ mod tests {
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["rm"]),
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             }

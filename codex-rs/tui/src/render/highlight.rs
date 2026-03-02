@@ -32,9 +32,11 @@ use std::sync::OnceLock;
 use std::sync::RwLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::FontStyle;
+use syntect::highlighting::Highlighter;
 use syntect::highlighting::Style as SyntectStyle;
 use syntect::highlighting::Theme;
 use syntect::highlighting::ThemeSet;
+use syntect::parsing::Scope;
 use syntect::parsing::SyntaxReference;
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
@@ -239,6 +241,50 @@ pub(crate) fn current_syntax_theme() -> Theme {
         Ok(theme) => theme.clone(),
         Err(poisoned) => poisoned.into_inner().clone(),
     }
+}
+
+/// Raw RGB background colors extracted from syntax theme diff/markup scopes.
+///
+/// These are theme-provided colors, not yet adapted for any particular color
+/// depth.  [`diff_render`](crate::diff_render) converts them to ratatui
+/// `Color` values via `color_from_rgb_for_level` after deciding whether to
+/// emit truecolor or quantized ANSI-256.
+///
+/// Both fields are `None` when the active theme defines no relevant scope
+/// backgrounds, in which case the diff renderer falls back to its hardcoded
+/// palette.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DiffScopeBackgroundRgbs {
+    pub inserted: Option<(u8, u8, u8)>,
+    pub deleted: Option<(u8, u8, u8)>,
+}
+
+/// Query the active syntax theme for diff-scope background colors.
+///
+/// Prefers `markup.inserted` / `markup.deleted` (the TextMate convention used
+/// by most VS Code themes) and falls back to `diff.inserted` / `diff.deleted`
+/// (used by some older `.tmTheme` files).
+pub(crate) fn diff_scope_background_rgbs() -> DiffScopeBackgroundRgbs {
+    let theme = current_syntax_theme();
+    diff_scope_background_rgbs_for_theme(&theme)
+}
+
+/// Pure extraction helper, separated from the global theme singleton so tests
+/// can pass arbitrary themes.
+fn diff_scope_background_rgbs_for_theme(theme: &Theme) -> DiffScopeBackgroundRgbs {
+    let highlighter = Highlighter::new(theme);
+    let inserted = scope_background_rgb(&highlighter, "markup.inserted")
+        .or_else(|| scope_background_rgb(&highlighter, "diff.inserted"));
+    let deleted = scope_background_rgb(&highlighter, "markup.deleted")
+        .or_else(|| scope_background_rgb(&highlighter, "diff.deleted"));
+    DiffScopeBackgroundRgbs { inserted, deleted }
+}
+
+/// Extract the background color for a single TextMate scope, if defined.
+fn scope_background_rgb(highlighter: &Highlighter<'_>, scope_name: &str) -> Option<(u8, u8, u8)> {
+    let scope = Scope::new(scope_name).ok()?;
+    let bg = highlighter.style_mod_for_stack(&[scope]).background?;
+    Some((bg.r, bg.g, bg.b))
 }
 
 /// Return the configured kebab-case theme name when it resolves; otherwise
@@ -551,6 +597,12 @@ pub(crate) fn highlight_code_to_styled_spans(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::str::FromStr;
+    use syntect::highlighting::Color as SyntectColor;
+    use syntect::highlighting::ScopeSelectors;
+    use syntect::highlighting::StyleModifier;
+    use syntect::highlighting::ThemeItem;
+    use syntect::highlighting::ThemeSettings;
 
     fn write_minimal_tmtheme(path: &Path) {
         // Minimal valid .tmTheme plist (enough for syntect to parse).
@@ -570,6 +622,43 @@ mod tests {
         .unwrap();
     }
 
+    fn write_tmtheme_with_diff_backgrounds(
+        path: &Path,
+        inserted_scope: &str,
+        inserted_background: &str,
+        deleted_scope: &str,
+        deleted_background: &str,
+    ) {
+        let contents = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>name</key><string>Custom Diff Theme</string>
+<key>settings</key><array>
+<dict>
+<key>settings</key><dict>
+<key>foreground</key><string>#FFFFFF</string>
+<key>background</key><string>#000000</string>
+</dict>
+</dict>
+<dict>
+<key>scope</key><string>{inserted_scope}</string>
+<key>settings</key><dict>
+<key>background</key><string>{inserted_background}</string>
+</dict>
+</dict>
+<dict>
+<key>scope</key><string>{deleted_scope}</string>
+<key>settings</key><dict>
+<key>background</key><string>{deleted_background}</string>
+</dict>
+</dict>
+</array>
+</dict></plist>"#
+        );
+        std::fs::write(path, contents).unwrap();
+    }
+
     /// Reconstruct plain text from highlighted Lines.
     fn reconstructed(lines: &[Line<'static>]) -> String {
         lines
@@ -582,6 +671,16 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn theme_item(scope: &str, background: Option<(u8, u8, u8)>) -> ThemeItem {
+        ThemeItem {
+            scope: ScopeSelectors::from_str(scope).expect("scope selector should parse"),
+            style: StyleModifier {
+                background: background.map(|(r, g, b)| SyntectColor { r, g, b, a: 255 }),
+                ..StyleModifier::default()
+            },
+        }
     }
 
     #[test]
@@ -846,6 +945,79 @@ mod tests {
                 "find_syntax({alias:?}) returned None — patched alias broken"
             );
         }
+    }
+
+    #[test]
+    fn diff_scope_backgrounds_prefer_markup_scope_then_diff_fallback() {
+        let theme = Theme {
+            settings: ThemeSettings::default(),
+            scopes: vec![
+                theme_item("markup.inserted", Some((10, 20, 30))),
+                theme_item("diff.deleted", Some((40, 50, 60))),
+            ],
+            ..Theme::default()
+        };
+        let rgbs = diff_scope_background_rgbs_for_theme(&theme);
+        assert_eq!(
+            rgbs,
+            DiffScopeBackgroundRgbs {
+                inserted: Some((10, 20, 30)),
+                deleted: Some((40, 50, 60)),
+            }
+        );
+    }
+
+    #[test]
+    fn diff_scope_backgrounds_return_none_when_no_background_scope_matches() {
+        let theme = Theme {
+            settings: ThemeSettings::default(),
+            scopes: vec![theme_item("constant.numeric", Some((1, 2, 3)))],
+            ..Theme::default()
+        };
+        let rgbs = diff_scope_background_rgbs_for_theme(&theme);
+        assert_eq!(
+            rgbs,
+            DiffScopeBackgroundRgbs {
+                inserted: None,
+                deleted: None,
+            }
+        );
+    }
+
+    #[test]
+    fn bundled_theme_can_provide_diff_scope_backgrounds() {
+        let theme =
+            resolve_theme_by_name("github", None).expect("expected built-in GitHub theme to load");
+        let rgbs = diff_scope_background_rgbs_for_theme(&theme);
+        assert!(
+            rgbs.inserted.is_some() && rgbs.deleted.is_some(),
+            "expected built-in theme to provide insert/delete backgrounds, got {rgbs:?}"
+        );
+    }
+
+    #[test]
+    fn custom_tmtheme_diff_scope_backgrounds_are_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let themes_dir = dir.path().join("themes");
+        std::fs::create_dir(&themes_dir).unwrap();
+        write_tmtheme_with_diff_backgrounds(
+            &themes_dir.join("custom-diff.tmTheme"),
+            "diff.inserted",
+            "#102030",
+            "markup.deleted",
+            "#405060",
+        );
+
+        let theme = resolve_theme_by_name("custom-diff", Some(dir.path()))
+            .expect("expected custom theme to resolve");
+        let rgbs = diff_scope_background_rgbs_for_theme(&theme);
+        assert_eq!(
+            rgbs,
+            DiffScopeBackgroundRgbs {
+                inserted: Some((16, 32, 48)),
+                deleted: Some((64, 80, 96)),
+            }
+        );
     }
 
     #[test]

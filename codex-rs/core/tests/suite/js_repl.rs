@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use codex_core::features::Feature;
+use codex_protocol::protocol::EventMsg;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
@@ -12,6 +13,12 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event_match;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use tempfile::tempdir;
 use wiremock::MockServer;
 
 fn custom_tool_output_text_and_success(
@@ -22,6 +29,45 @@ fn custom_tool_output_text_and_success(
         .custom_tool_call_output_content_and_success(call_id)
         .expect("custom tool output should be present");
     (output.unwrap_or_default(), success)
+}
+
+fn tool_names(body: &serde_json::Value) -> Vec<String> {
+    body["tools"]
+        .as_array()
+        .expect("tools array should be present")
+        .iter()
+        .map(|tool| {
+            tool.get("name")
+                .and_then(|value| value.as_str())
+                .or_else(|| tool.get("type").and_then(|value| value.as_str()))
+                .expect("tool should have a name or type")
+                .to_string()
+        })
+        .collect()
+}
+
+fn write_too_old_node_script(dir: &Path) -> Result<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        let path = dir.join("old-node.cmd");
+        fs::write(&path, "@echo off\r\necho v0.0.1\r\n")?;
+        Ok(path)
+    }
+
+    #[cfg(unix)]
+    {
+        let path = dir.join("old-node.sh");
+        fs::write(&path, "#!/bin/sh\necho v0.0.1\n")?;
+        let mut permissions = fs::metadata(&path)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions)?;
+        Ok(path)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        anyhow::bail!("unsupported platform for js_repl test fixture");
+    }
 }
 
 async fn run_js_repl_turn(
@@ -52,6 +98,64 @@ async fn run_js_repl_turn(
 
     test.submit_turn(prompt).await?;
     Ok(second_mock)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_is_not_advertised_when_startup_node_is_incompatible() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    if std::env::var_os("CODEX_JS_REPL_NODE_PATH").is_some() {
+        return Ok(());
+    }
+
+    let server = responses::start_mock_server().await;
+    let temp = tempdir()?;
+    let old_node = write_too_old_node_script(temp.path())?;
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.features.enable(Feature::JsRepl);
+        config.js_repl_node_path = Some(old_node);
+    });
+    let test = builder.build(&server).await?;
+    let warning = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Warning(ev) if ev.message.contains("Disabled `js_repl` for this session") => {
+            Some(ev.message.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert!(
+        warning.contains("Node runtime"),
+        "warning should explain the Node compatibility issue: {warning}"
+    );
+
+    let request_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("hello").await?;
+
+    let body = request_mock.single_request().body_json();
+    let tools = tool_names(&body);
+    assert!(
+        !tools.iter().any(|tool| tool == "js_repl"),
+        "js_repl should be omitted when startup validation fails: {tools:?}"
+    );
+    assert!(
+        !tools.iter().any(|tool| tool == "js_repl_reset"),
+        "js_repl_reset should be omitted when startup validation fails: {tools:?}"
+    );
+    let instructions = body["instructions"].as_str().unwrap_or_default();
+    assert!(
+        !instructions.contains("## JavaScript REPL (Node)"),
+        "startup instructions should not mention js_repl when it is disabled: {instructions}"
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

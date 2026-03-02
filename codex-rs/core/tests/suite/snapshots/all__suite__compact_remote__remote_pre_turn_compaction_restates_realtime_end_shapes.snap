@@ -1,0 +1,24 @@
+---
+source: core/tests/suite/compact_remote.rs
+expression: "format_labeled_requests_snapshot(\"Remote pre-turn auto-compaction after realtime was closed between turns: the follow-up request emits realtime-end instructions from previous-turn settings even though compaction cleared the reference baseline.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", post_compact_request),])"
+---
+Scenario: Remote pre-turn auto-compaction after realtime was closed between turns: the follow-up request emits realtime-end instructions from previous-turn settings even though compaction cleared the reference baseline.
+
+## Remote Compaction Request
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/developer:<realtime_conversation>\nRealtime conversation started.\n\nYou a...
+03:message/user:USER_ONE
+04:message/assistant:REMOTE_FIRST_REPLY
+
+## Remote Post-Compaction History Layout
+00:compaction:encrypted=true
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <realtime_conversation>\nRealtime conversation ended.\n\nYou are...
+02:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/user:USER_TWO

@@ -7,6 +7,8 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
@@ -23,7 +25,9 @@ use codex_core::config::ConstraintError;
 #[cfg(target_os = "windows")]
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::RequirementSource;
+use codex_core::features::FEATURES;
 use codex_core::features::Feature;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
@@ -749,8 +753,8 @@ async fn enter_with_only_remote_images_submits_user_turn() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
+    let (items, summary) = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, summary, .. } => (items, summary),
         other => panic!("expected Op::UserTurn, got {other:?}"),
     };
     assert_eq!(
@@ -759,6 +763,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
             image_url: remote_url.clone(),
         }]
     );
+    assert_eq!(summary, None);
     assert!(chat.remote_image_urls().is_empty());
 
     let mut user_cell = None;
@@ -930,6 +935,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             interface: None,
             dependencies: None,
             policy: None,
+            permission_profile: None,
             permissions: None,
             path_to_skills_md: repo_skill_path,
             scope: SkillScope::Repo,
@@ -941,6 +947,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             interface: None,
             dependencies: None,
             policy: None,
+            permission_profile: None,
             permissions: None,
             path_to_skills_md: user_skill_path.clone(),
             scope: SkillScope::User,
@@ -1574,6 +1581,7 @@ async fn helpers_are_available_and_do_not_panic() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model),
+        startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
@@ -1628,12 +1636,16 @@ async fn make_chatwidget_manual(
         animations_enabled: cfg.animations,
         skills: None,
     });
-    bottom.set_steer_enabled(true);
     bottom.set_collaboration_modes_enabled(true);
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
-    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone(), None));
+    let models_manager = Arc::new(ModelsManager::new(
+        codex_home,
+        auth_manager.clone(),
+        None,
+        CollaborationModesConfig::default(),
+    ));
     let reasoning_effort = None;
     let base_mode = CollaborationMode {
         mode: ModeKind::Default,
@@ -1694,6 +1706,7 @@ async fn make_chatwidget_manual(
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
+        startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
@@ -1759,6 +1772,7 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         None,
+        CollaborationModesConfig::default(),
     ));
 }
 
@@ -2781,6 +2795,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2830,6 +2845,7 @@ async fn exec_approval_uses_approval_id_when_present() {
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             additional_permissions: None,
+            available_decisions: None,
             parsed_cmd: vec![],
         }),
     });
@@ -2838,7 +2854,11 @@ async fn exec_approval_uses_approval_id_when_present() {
 
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
-        if let AppEvent::CodexOp(Op::ExecApproval { id, decision, .. }) = app_ev {
+        if let AppEvent::SubmitThreadOp {
+            op: Op::ExecApproval { id, decision, .. },
+            ..
+        } = app_ev
+        {
             assert_eq!(id, "approval-subcommand");
             assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
             found = true;
@@ -2866,6 +2886,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2920,6 +2941,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -3425,7 +3447,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
 }
 
 #[tokio::test]
-async fn steer_enter_queues_while_plan_stream_is_active() {
+async fn enter_queues_while_plan_stream_is_active() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
@@ -3549,7 +3571,7 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
 }
 
 #[tokio::test]
-async fn steer_enter_submits_when_plan_stream_is_not_active() {
+async fn enter_submits_when_plan_stream_is_not_active() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
@@ -4472,6 +4494,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
+        startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
@@ -4521,6 +4544,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
+        startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
@@ -5944,6 +5968,59 @@ async fn experimental_features_toggle_saves_on_exit() {
 }
 
 #[tokio::test]
+async fn experimental_popup_shows_js_repl_node_requirement() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let js_repl_description = FEATURES
+        .iter()
+        .find(|spec| spec.id == Feature::JsRepl)
+        .and_then(|spec| spec.stage.experimental_menu_description())
+        .expect("expected js_repl experimental description");
+    let node_requirement = js_repl_description
+        .split(". ")
+        .find(|sentence| sentence.starts_with("Requires Node >= v"))
+        .map(|sentence| sentence.trim_end_matches(" installed."))
+        .expect("expected js_repl description to mention the Node requirement");
+
+    chat.open_experimental_popup();
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains(node_requirement),
+        "expected js_repl feature description to mention the required Node version, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_enable_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_multi_agent_enable_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("multi_agent_enable_prompt", popup);
+}
+
+#[tokio::test]
+async fn multi_agent_enable_prompt_updates_feature_and_emits_notice() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_multi_agent_enable_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::Collab, true)]
+    );
+    let cell = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(120));
+    assert!(rendered.contains("Multi-agent will be enabled in the next session."));
+}
+
+#[tokio::test]
 async fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -5961,6 +6038,62 @@ async fn personality_selection_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("personality_selection_popup", popup);
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_audio_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.open_realtime_audio_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("realtime_audio_selection_popup", popup);
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_audio_selection_popup_narrow_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.open_realtime_audio_popup();
+
+    let popup = render_bottom_popup(&chat, 56);
+    assert_snapshot!("realtime_audio_selection_popup_narrow", popup);
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_microphone_picker_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.config.realtime_audio.microphone = Some("Studio Mic".to_string());
+    chat.open_realtime_audio_device_selection_with_names(
+        RealtimeAudioDeviceKind::Microphone,
+        vec!["Built-in Mic".to_string(), "USB Mic".to_string()],
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("realtime_microphone_picker_popup", popup);
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_audio_picker_emits_persist_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.open_realtime_audio_device_selection_with_names(
+        RealtimeAudioDeviceKind::Speaker,
+        vec!["Desk Speakers".to_string(), "Headphones".to_string()],
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistRealtimeAudioDeviceSelection {
+            kind: RealtimeAudioDeviceKind::Speaker,
+            name: Some(name),
+        }) if name == "Headphones"
+    );
 }
 
 #[tokio::test]
@@ -5981,6 +6114,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         is_default: false,
         upgrade: None,
         show_in_picker,
+        availability_nux: None,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };
@@ -6249,6 +6383,7 @@ async fn single_reasoning_option_skips_selection() {
         is_default: false,
         upgrade: None,
         show_in_picker: true,
+        availability_nux: None,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };
@@ -6715,6 +6850,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -6775,6 +6911,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -6822,6 +6959,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -7188,6 +7326,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -7531,10 +7670,14 @@ async fn apply_patch_approval_sends_op_with_call_id() {
     // Approve via key press 'y'
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
 
-    // Expect a CodexOp with PatchApproval carrying the call id.
+    // Expect a thread-scoped PatchApproval op carrying the call id.
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
-        if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
+        if let AppEvent::SubmitThreadOp {
+            op: Op::PatchApproval { id, decision },
+            ..
+        } = app_ev
+        {
             assert_eq!(id, "call-999");
             assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
             found = true;
@@ -7565,16 +7708,16 @@ async fn apply_patch_full_flow_integration_like() {
         }),
     });
 
-    // 2) User approves via 'y' and App receives a CodexOp
+    // 2) User approves via 'y' and App receives a thread-scoped op
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
     let mut maybe_op: Option<Op> = None;
     while let Ok(app_ev) = rx.try_recv() {
-        if let AppEvent::CodexOp(op) = app_ev {
+        if let AppEvent::SubmitThreadOp { op, .. } = app_ev {
             maybe_op = Some(op);
             break;
         }
     }
-    let op = maybe_op.expect("expected CodexOp after key press");
+    let op = maybe_op.expect("expected thread-scoped op after key press");
 
     // 3) App forwards to widget.submit_op, which pushes onto codex_op_tx
     chat.submit_op(op);

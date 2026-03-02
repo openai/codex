@@ -1,5 +1,4 @@
 use anyhow::Context;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -126,7 +125,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -208,7 +207,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

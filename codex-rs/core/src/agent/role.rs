@@ -187,19 +187,24 @@ Rules:
                         config_file: None,
                     }
                 ),
-                (
-                    "awaiter".to_string(),
-                    AgentRoleConfig {
-                        description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that might take some time.
-This includes, but not only:
-* testing
-* monitoring of a long running process
-* explicit ask to wait for something
-
-When YOU wait for the `awaiter` agent to be done, use the largest possible timeout."#.to_string()),
-                        config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
-                    }
-                )
+                // Awaiter is temp removed
+//                 (
+//                     "awaiter".to_string(),
+//                     AgentRoleConfig {
+//                         description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that will take some very long time.
+// This includes, but not only:
+// * testing
+// * monitoring of a long running process
+// * explicit ask to wait for something
+//
+// Rules:
+// - When an awaiter is running, you can work on something else. If you need to wait for its completion, use the largest possible timeout.
+// - Be patient with the `awaiter`.
+// - Do not use an awaiter for every compilation/test if it won't take time. Only use if for long running commands.
+// - Close the awaiter when you're done with it."#.to_string()),
+//                         config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
+//                     }
+//                 )
             ])
         });
         &CONFIG
@@ -222,9 +227,13 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::config_loader::ConfigLayerStackOrdering;
+    use crate::plugins::PluginsManager;
+    use crate::skills::SkillsManager;
     use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
+    use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     async fn test_config_with_cli_overrides(
@@ -463,6 +472,54 @@ writable_roots = ["./sandbox-root"]
 
         assert_eq!(config.model.as_deref(), Some("role-model"));
         assert_eq!(session_flags_layer_count(&config), before_layers + 1);
+    }
+
+    #[cfg_attr(windows, ignore)]
+    #[tokio::test]
+    async fn apply_role_skills_config_disables_skill_for_spawned_agent() {
+        let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+        let skill_dir = home.path().join("skills").join("demo");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        let skill_path = skill_dir.join("SKILL.md");
+        fs::write(
+            &skill_path,
+            "---\nname: demo-skill\ndescription: demo description\n---\n\n# Body\n",
+        )
+        .expect("write skill");
+        let role_path = write_role_config(
+            &home,
+            "skills-role.toml",
+            &format!(
+                r#"[[skills.config]]
+path = "{}"
+enabled = false
+"#,
+                skill_path.display()
+            ),
+        )
+        .await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+            },
+        );
+
+        apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect("custom role should apply");
+
+        let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
+        let skills_manager = SkillsManager::new(home.path().to_path_buf(), plugins_manager);
+        let outcome = skills_manager.skills_for_config(&config);
+        let skill = outcome
+            .skills
+            .iter()
+            .find(|skill| skill.name == "demo-skill")
+            .expect("demo skill should be discovered");
+
+        assert_eq!(outcome.is_skill_enabled(skill), false);
     }
 
     #[test]

@@ -29,9 +29,10 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::bottom_pane::popup_content_width;
 use crate::bottom_pane::side_by_side_layout_widths;
 use crate::diff_render::DiffLineType;
+use crate::diff_render::current_diff_render_style_context;
 use crate::diff_render::line_number_width;
-use crate::diff_render::push_wrapped_diff_line;
-use crate::diff_render::push_wrapped_diff_line_with_syntax;
+use crate::diff_render::push_wrapped_diff_line_with_style_context;
+use crate::diff_render::push_wrapped_diff_line_with_syntax_and_style_context;
 use crate::render::highlight;
 use crate::render::renderable::Renderable;
 use crate::status::format_directory_display;
@@ -200,27 +201,30 @@ fn render_preview(
 
     let mut y = area.y.saturating_add(top_pad);
     let render_width = area.width.saturating_sub(left_pad);
+    let style_context = current_diff_render_style_context();
     for (idx, row) in preview_rows.iter().enumerate() {
         if y >= area.y + area.height {
             break;
         }
         let diff_type = preview_diff_line_type(row.kind);
         let wrapped = if let Some(syn) = syntax_lines.as_ref().and_then(|sl| sl.get(idx)) {
-            push_wrapped_diff_line_with_syntax(
+            push_wrapped_diff_line_with_syntax_and_style_context(
                 row.line_no,
                 diff_type,
                 row.code,
                 render_width as usize,
                 ln_width,
                 syn,
+                style_context,
             )
         } else {
-            push_wrapped_diff_line(
+            push_wrapped_diff_line_with_style_context(
                 row.line_no,
                 diff_type,
                 row.code,
                 render_width as usize,
                 ln_width,
+                style_context,
             )
         };
         let first_line = wrapped.into_iter().next().unwrap_or_else(|| Line::from(""));
