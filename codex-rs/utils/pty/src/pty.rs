@@ -103,6 +103,7 @@ pub async fn spawn_process(
     }
 
     let mut child = pair.slave.spawn_command(command_builder)?;
+    let pid = child.process_id();
     #[cfg(unix)]
     // portable-pty establishes the spawned PTY child as a new session leader on
     // Unix, so PID == PGID and we can reuse the pipe backend's process-group
@@ -178,6 +179,7 @@ pub async fn spawn_process(
         writer_tx,
         output_tx,
         initial_output_rx,
+        pid,
         Box::new(PtyChildTerminator {
             killer,
             #[cfg(unix)]

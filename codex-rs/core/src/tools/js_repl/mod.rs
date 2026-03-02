@@ -2,15 +2,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fmt;
-#[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -19,16 +16,12 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use thiserror::Error;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::io::BufReader;
-use tokio::process::Child;
-use tokio::process::ChildStdin;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::trace;
@@ -57,9 +50,13 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
+use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::SandboxablePreference;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
+use crate::unified_exec::ManagedSplitProcess;
+use crate::unified_exec::UnifiedExecProcess;
 
 pub(crate) const JS_REPL_PRAGMA_PREFIX: &str = "// codex-js-repl:";
 const KERNEL_SOURCE: &str = include_str!("kernel.js");
@@ -182,9 +179,9 @@ pub struct JsExecPollResult {
 
 #[derive(Clone)]
 struct KernelState {
-    child: Arc<Mutex<Child>>,
+    process: Arc<UnifiedExecProcess>,
     recent_stderr: Arc<Mutex<VecDeque<String>>>,
-    stdin: Arc<Mutex<ChildStdin>>,
+    stdin: tokio::sync::mpsc::Sender<Vec<u8>>,
     pending_execs: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ExecResultMessage>>>>,
     exec_contexts: Arc<Mutex<HashMap<String, ExecContext>>>,
     shutdown: CancellationToken,
@@ -440,7 +437,6 @@ struct ExecCompletionEvent {
 enum KernelStreamEnd {
     Shutdown,
     StdoutEof,
-    StdoutReadError(String),
 }
 
 impl KernelStreamEnd {
@@ -448,15 +444,11 @@ impl KernelStreamEnd {
         match self {
             Self::Shutdown => "shutdown",
             Self::StdoutEof => "stdout_eof",
-            Self::StdoutReadError(_) => "stdout_read_error",
         }
     }
 
     fn error(&self) -> Option<&str> {
-        match self {
-            Self::StdoutReadError(err) => Some(err),
-            _ => None,
-        }
+        None
     }
 }
 
@@ -464,17 +456,6 @@ struct KernelDebugSnapshot {
     pid: Option<u32>,
     status: String,
     stderr_tail: String,
-}
-
-fn format_exit_status(status: std::process::ExitStatus) -> String {
-    if let Some(code) = status.code() {
-        return format!("code={code}");
-    }
-    #[cfg(unix)]
-    if let Some(signal) = status.signal() {
-        return format!("signal={signal}");
-    }
-    "unknown".to_string()
 }
 
 fn format_stderr_tail(lines: &VecDeque<String>) -> String {
@@ -1145,7 +1126,7 @@ impl JsReplManager {
         };
         if let Some(state) = state {
             state.shutdown.cancel();
-            Self::kill_kernel_child(&state.child, "reset").await;
+            Self::kill_kernel_child(&state.process, "reset").await;
         }
     }
 
@@ -1168,7 +1149,7 @@ impl JsReplManager {
             self.mark_exec_host_terminating(exec_id).await;
         }
         state.kernel.shutdown.cancel();
-        Self::kill_kernel_child(&state.kernel.child, kill_reason).await;
+        Self::kill_kernel_child(&state.kernel.process, kill_reason).await;
         if let Some(exec_id) = active_exec {
             self.exec_to_session.lock().await.remove(&exec_id);
             Self::cancel_exec_tool_calls_map(&self.exec_tool_calls, &exec_id).await;
@@ -1230,7 +1211,7 @@ impl JsReplManager {
             let mut kernel = self.kernel.lock().await;
             if kernel.is_none() {
                 let state = self
-                    .start_kernel(Arc::clone(&turn), Some(session.conversation_id), None)
+                    .start_kernel(Arc::clone(&session), Arc::clone(&turn), None)
                     .await
                     .map_err(JsReplExecuteError::RespondToModel)?;
                 *kernel = Some(state);
@@ -1245,10 +1226,10 @@ impl JsReplManager {
                 }
             };
             (
-                Arc::clone(&state.stdin),
+                state.stdin.clone(),
                 Arc::clone(&state.pending_execs),
                 Arc::clone(&state.exec_contexts),
-                Arc::clone(&state.child),
+                Arc::clone(&state.process),
                 Arc::clone(&state.recent_stderr),
             )
         };
@@ -1433,13 +1414,13 @@ impl JsReplManager {
         {
             if let Some(state) = pruned_idle_session {
                 state.kernel.shutdown.cancel();
-                Self::kill_kernel_child(&state.kernel.child, "poll_prune_idle_session").await;
+                Self::kill_kernel_child(&state.kernel.process, "poll_prune_idle_session").await;
             }
 
             let mut new_kernel = Some(
                 self.start_kernel(
+                    Arc::clone(&session),
                     Arc::clone(&turn),
-                    Some(session.conversation_id),
                     Some(session_id.clone()),
                 )
                 .await
@@ -1466,11 +1447,11 @@ impl JsReplManager {
             }
             if let Some(kernel) = stale_kernel {
                 kernel.shutdown.cancel();
-                Self::kill_kernel_child(&kernel.child, "poll_submit_session_race").await;
+                Self::kill_kernel_child(&kernel.process, "poll_submit_session_race").await;
             }
             if let Some(kernel) = capacity_kernel {
                 kernel.shutdown.cancel();
-                Self::kill_kernel_child(&kernel.child, "poll_submit_capacity_race").await;
+                Self::kill_kernel_child(&kernel.process, "poll_submit_capacity_race").await;
                 return Err(max_sessions_error());
             }
         }
@@ -1489,9 +1470,9 @@ impl JsReplManager {
             state.active_exec = Some(req_id.clone());
             state.last_used = Instant::now();
             (
-                Arc::clone(&state.kernel.stdin),
+                state.kernel.stdin.clone(),
                 Arc::clone(&state.kernel.exec_contexts),
-                Arc::clone(&state.kernel.child),
+                Arc::clone(&state.kernel.process),
                 Arc::clone(&state.kernel.recent_stderr),
             )
         };
@@ -1543,7 +1524,7 @@ impl JsReplManager {
             };
             if let Some(state) = removed_state {
                 state.kernel.shutdown.cancel();
-                Self::kill_kernel_child(&state.kernel.child, "poll_submit_write_failed").await;
+                Self::kill_kernel_child(&state.kernel.process, "poll_submit_write_failed").await;
             }
             let snapshot = Self::kernel_debug_snapshot(&child, &recent_stderr).await;
             let err_message = err.to_string();
@@ -1626,15 +1607,18 @@ impl JsReplManager {
     }
     async fn start_kernel(
         &self,
+        session: Arc<Session>,
         turn: Arc<TurnContext>,
-        thread_id: Option<ThreadId>,
         poll_session_id: Option<String>,
     ) -> Result<KernelState, String> {
         let node_path = resolve_compatible_node(self.node_path.as_deref()).await?;
 
         let kernel_path = self.kernel_script_path.clone();
 
-        let mut env = create_env(&turn.shell_environment_policy, thread_id);
+        let mut env = create_env(
+            &turn.shell_environment_policy,
+            Some(session.conversation_id),
+        );
         env.insert(
             "CODEX_JS_TMP_DIR".to_string(),
             self.tmp_dir.path().to_string_lossy().to_string(),
@@ -1664,68 +1648,27 @@ impl JsReplManager {
         };
 
         let sandbox = SandboxManager::new();
-        let has_managed_network_requirements = turn
-            .config
-            .config_layer_stack
-            .requirements_toml()
-            .network
-            .is_some();
-        let sandbox_type = sandbox.select_initial(
-            &turn.sandbox_policy,
+        let attempt = SandboxAttempt::initial_for_turn(
+            &sandbox,
+            turn.as_ref(),
             SandboxablePreference::Auto,
-            turn.windows_sandbox_level,
-            has_managed_network_requirements,
+            SandboxOverride::NoOverride,
         );
-        let exec_env = sandbox
-            .transform(crate::sandboxing::SandboxTransformRequest {
-                spec,
-                policy: &turn.sandbox_policy,
-                sandbox: sandbox_type,
-                enforce_managed_network: has_managed_network_requirements,
-                network: None,
-                sandbox_policy_cwd: &turn.cwd,
-                #[cfg(target_os = "macos")]
-                macos_seatbelt_profile_extensions: None,
-                codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_ref(),
-                use_linux_sandbox_bwrap: turn
-                    .features
-                    .enabled(crate::features::Feature::UseLinuxSandboxBwrap),
-                windows_sandbox_level: turn.windows_sandbox_level,
-            })
+        let exec_env = attempt
+            .env_for(spec, None)
             .map_err(|err| format!("failed to configure sandbox for js_repl: {err}"))?;
-
-        let mut cmd =
-            tokio::process::Command::new(exec_env.command.first().cloned().unwrap_or_default());
-        if exec_env.command.len() > 1 {
-            cmd.args(&exec_env.command[1..]);
-        }
-        #[cfg(unix)]
-        cmd.arg0(
-            exec_env
-                .arg0
-                .clone()
-                .unwrap_or_else(|| exec_env.command.first().cloned().unwrap_or_default()),
-        );
-        cmd.current_dir(&exec_env.cwd);
-        cmd.env_clear();
-        cmd.envs(exec_env.env);
-        cmd.stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
-
-        let mut child = cmd
-            .spawn()
+        let ManagedSplitProcess {
+            process,
+            stdin,
+            stdout_rx,
+            stderr_rx,
+        } = session
+            .services
+            .unified_exec_manager
+            .open_split_pipe_session_with_exec_env(&exec_env)
+            .await
             .map_err(|err| format!("failed to start Node runtime: {err}"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "js_repl kernel missing stdout".to_string())?;
-        let stderr = child.stderr.take();
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "js_repl kernel missing stdin".to_string())?;
+        let process = Arc::new(process);
 
         let shutdown = CancellationToken::new();
         let pending_execs: Arc<
@@ -1733,15 +1676,13 @@ impl JsReplManager {
         > = Arc::new(Mutex::new(HashMap::new()));
         let exec_contexts: Arc<Mutex<HashMap<String, ExecContext>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let stdin_arc = Arc::new(Mutex::new(stdin));
-        let child = Arc::new(Mutex::new(child));
         let recent_stderr = Arc::new(Mutex::new(VecDeque::with_capacity(
             JS_REPL_STDERR_TAIL_LINE_LIMIT,
         )));
 
         tokio::spawn(Self::read_stdout(
-            stdout,
-            Arc::clone(&child),
+            stdout_rx,
+            Arc::clone(&process),
             Arc::clone(&self.kernel),
             Arc::clone(&recent_stderr),
             Arc::clone(&pending_execs),
@@ -1750,24 +1691,20 @@ impl JsReplManager {
             Arc::clone(&self.exec_store),
             Arc::clone(&self.poll_sessions),
             Arc::clone(&self.exec_to_session),
-            Arc::clone(&stdin_arc),
+            stdin.clone(),
             poll_session_id,
             shutdown.clone(),
         ));
-        if let Some(stderr) = stderr {
-            tokio::spawn(Self::read_stderr(
-                stderr,
-                Arc::clone(&recent_stderr),
-                shutdown.clone(),
-            ));
-        } else {
-            warn!("js_repl kernel missing stderr");
-        }
+        tokio::spawn(Self::read_stderr(
+            stderr_rx,
+            Arc::clone(&recent_stderr),
+            shutdown.clone(),
+        ));
 
         Ok(KernelState {
-            child,
+            process,
             recent_stderr,
-            stdin: stdin_arc,
+            stdin,
             pending_execs,
             exec_contexts,
             shutdown,
@@ -1783,18 +1720,16 @@ impl JsReplManager {
     }
 
     async fn write_message(
-        stdin: &Arc<Mutex<ChildStdin>>,
+        stdin: &tokio::sync::mpsc::Sender<Vec<u8>>,
         msg: &HostToKernel,
     ) -> Result<(), FunctionCallError> {
         let encoded = serde_json::to_string(msg).map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to serialize kernel message: {err}"))
         })?;
-        let mut guard = stdin.lock().await;
-        guard.write_all(encoded.as_bytes()).await.map_err(|err| {
+        let mut bytes = encoded.into_bytes();
+        bytes.push(b'\n');
+        stdin.send(bytes).await.map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to write to kernel: {err}"))
-        })?;
-        guard.write_all(b"\n").await.map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to flush kernel message: {err}"))
         })?;
         Ok(())
     }
@@ -1805,18 +1740,17 @@ impl JsReplManager {
     }
 
     async fn kernel_debug_snapshot(
-        child: &Arc<Mutex<Child>>,
+        process: &Arc<UnifiedExecProcess>,
         recent_stderr: &Arc<Mutex<VecDeque<String>>>,
     ) -> KernelDebugSnapshot {
-        let (pid, status) = {
-            let mut guard = child.lock().await;
-            let pid = guard.id();
-            let status = match guard.try_wait() {
-                Ok(Some(status)) => format!("exited({})", format_exit_status(status)),
-                Ok(None) => "running".to_string(),
-                Err(err) => format!("unknown ({err})"),
-            };
-            (pid, status)
+        let pid = process.pid();
+        let status = if process.has_exited() {
+            match process.exit_code() {
+                Some(code) => format!("exited({code})"),
+                None => "exited(unknown)".to_string(),
+            }
+        } else {
+            "running".to_string()
         };
         let stderr_tail = {
             let tail = recent_stderr.lock().await;
@@ -1829,50 +1763,18 @@ impl JsReplManager {
         }
     }
 
-    async fn kill_kernel_child(child: &Arc<Mutex<Child>>, reason: &'static str) {
-        let mut guard = child.lock().await;
-        let pid = guard.id();
-        match guard.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) => {}
-            Err(err) => {
-                warn!(
-                    kernel_pid = ?pid,
-                    kill_reason = reason,
-                    error = %err,
-                    "failed to inspect js_repl kernel before kill"
-                );
-            }
-        }
-
-        if let Err(err) = guard.start_kill() {
-            warn!(
-                kernel_pid = ?pid,
-                kill_reason = reason,
-                error = %err,
-                "failed to send kill signal to js_repl kernel"
-            );
+    async fn kill_kernel_child(process: &Arc<UnifiedExecProcess>, reason: &'static str) {
+        if process.has_exited() {
             return;
         }
 
-        match tokio::time::timeout(Duration::from_secs(2), guard.wait()).await {
-            Ok(Ok(_status)) => {}
-            Ok(Err(err)) => {
-                warn!(
-                    kernel_pid = ?pid,
-                    kill_reason = reason,
-                    error = %err,
-                    "failed while waiting for js_repl kernel exit"
-                );
-            }
-            Err(_) => {
-                warn!(
-                    kernel_pid = ?pid,
-                    kill_reason = reason,
-                    "timed out waiting for js_repl kernel to exit after kill"
-                );
-            }
-        }
+        let pid = process.pid();
+        process.terminate();
+        warn!(
+            kernel_pid = ?pid,
+            kill_reason = reason,
+            "terminated js_repl kernel process"
+        );
     }
 
     fn truncate_id_list(ids: &[String]) -> Vec<String> {
@@ -1886,8 +1788,8 @@ impl JsReplManager {
 
     #[allow(clippy::too_many_arguments)]
     async fn read_stdout(
-        stdout: tokio::process::ChildStdout,
-        child: Arc<Mutex<Child>>,
+        mut stdout: broadcast::Receiver<Vec<u8>>,
+        process: Arc<UnifiedExecProcess>,
         manager_kernel: Arc<Mutex<Option<KernelState>>>,
         recent_stderr: Arc<Mutex<VecDeque<String>>>,
         pending_execs: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ExecResultMessage>>>>,
@@ -1896,19 +1798,41 @@ impl JsReplManager {
         exec_store: Arc<Mutex<HashMap<String, ExecBuffer>>>,
         poll_sessions: Arc<Mutex<HashMap<String, PollSessionState>>>,
         exec_to_session: Arc<Mutex<HashMap<String, String>>>,
-        stdin: Arc<Mutex<ChildStdin>>,
+        stdin: tokio::sync::mpsc::Sender<Vec<u8>>,
         poll_session_id: Option<String>,
         shutdown: CancellationToken,
     ) {
-        let mut reader = BufReader::new(stdout).lines();
-        let end_reason = loop {
-            let line = tokio::select! {
-                _ = shutdown.cancelled() => break KernelStreamEnd::Shutdown,
-                res = reader.next_line() => match res {
-                    Ok(Some(line)) => line,
-                    Ok(None) => break KernelStreamEnd::StdoutEof,
-                    Err(err) => break KernelStreamEnd::StdoutReadError(err.to_string()),
-                },
+        let mut pending_line = Vec::new();
+        let mut ready_lines = VecDeque::new();
+        let end_reason = 'outer: loop {
+            let line = if let Some(line) = ready_lines.pop_front() {
+                line
+            } else {
+                loop {
+                    let chunk = tokio::select! {
+                        _ = shutdown.cancelled() => break 'outer KernelStreamEnd::Shutdown,
+                        res = stdout.recv() => match res {
+                            Ok(chunk) => chunk,
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => {
+                                if let Some(line) = finish_broadcast_line(&mut pending_line) {
+                                    break line;
+                                }
+                                break 'outer KernelStreamEnd::StdoutEof;
+                            }
+                        },
+                    };
+                    pending_line.extend_from_slice(&chunk);
+                    let lines = drain_broadcast_lines(&mut pending_line);
+                    if lines.is_empty() {
+                        continue;
+                    }
+                    ready_lines.extend(lines);
+                    let Some(line) = ready_lines.pop_front() else {
+                        continue;
+                    };
+                    break line;
+                }
             };
 
             let parsed: Result<KernelToHost, _> = serde_json::from_str(&line);
@@ -2037,7 +1961,8 @@ impl JsReplManager {
                         });
                         if let Err(err) = JsReplManager::write_message(&stdin, &payload).await {
                             let snapshot =
-                                JsReplManager::kernel_debug_snapshot(&child, &recent_stderr).await;
+                                JsReplManager::kernel_debug_snapshot(&process, &recent_stderr)
+                                    .await;
                             warn!(
                                 exec_id = %exec_id,
                                 tool_call_id = %tool_call_id,
@@ -2050,7 +1975,7 @@ impl JsReplManager {
                         }
                         continue;
                     };
-                    let stdin_clone = Arc::clone(&stdin);
+                    let stdin_clone = stdin.clone();
                     let exec_contexts = Arc::clone(&exec_contexts);
                     let exec_tool_calls_for_task = Arc::clone(&exec_tool_calls);
                     let recent_stderr = Arc::clone(&recent_stderr);
@@ -2117,7 +2042,7 @@ impl JsReplManager {
         let unexpected_snapshot = if matches!(end_reason, KernelStreamEnd::Shutdown) {
             None
         } else {
-            Some(Self::kernel_debug_snapshot(&child, &recent_stderr).await)
+            Some(Self::kernel_debug_snapshot(&process, &recent_stderr).await)
         };
         let kernel_failure_message = unexpected_snapshot.as_ref().map(|snapshot| {
             with_model_kernel_failure_message(
@@ -2135,7 +2060,7 @@ impl JsReplManager {
             let mut kernel = manager_kernel.lock().await;
             let should_clear = kernel
                 .as_ref()
-                .is_some_and(|state| Arc::ptr_eq(&state.child, &child));
+                .is_some_and(|state| Arc::ptr_eq(&state.process, &process));
             if should_clear {
                 kernel.take();
             }
@@ -2156,7 +2081,7 @@ impl JsReplManager {
                 let mut sessions = poll_sessions.lock().await;
                 let should_remove = sessions
                     .get(poll_session_id)
-                    .is_some_and(|state| Arc::ptr_eq(&state.kernel.child, &child));
+                    .is_some_and(|state| Arc::ptr_eq(&state.kernel.process, &process));
                 if should_remove {
                     sessions.remove(poll_session_id)
                 } else {
@@ -2330,23 +2255,42 @@ impl JsReplManager {
     }
 
     async fn read_stderr(
-        stderr: tokio::process::ChildStderr,
+        mut stderr: broadcast::Receiver<Vec<u8>>,
         recent_stderr: Arc<Mutex<VecDeque<String>>>,
         shutdown: CancellationToken,
     ) {
-        let mut reader = BufReader::new(stderr).lines();
+        let mut pending_line = Vec::new();
+        let mut ready_lines = VecDeque::new();
 
         loop {
-            let line = tokio::select! {
-                _ = shutdown.cancelled() => break,
-                res = reader.next_line() => match res {
-                    Ok(Some(line)) => line,
-                    Ok(None) => break,
-                    Err(err) => {
-                        warn!("js_repl kernel stderr ended: {err}");
-                        break;
+            let line = if let Some(line) = ready_lines.pop_front() {
+                line
+            } else {
+                loop {
+                    let chunk = tokio::select! {
+                        _ = shutdown.cancelled() => return,
+                        res = stderr.recv() => match res {
+                            Ok(chunk) => chunk,
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => {
+                                if let Some(line) = finish_broadcast_line(&mut pending_line) {
+                                    break line;
+                                }
+                                return;
+                            }
+                        },
+                    };
+                    pending_line.extend_from_slice(&chunk);
+                    let lines = drain_broadcast_lines(&mut pending_line);
+                    if lines.is_empty() {
+                        continue;
                     }
-                },
+                    ready_lines.extend(lines);
+                    let Some(line) = ready_lines.pop_front() else {
+                        continue;
+                    };
+                    break line;
+                }
             };
             let trimmed = line.trim();
             if !trimmed.is_empty() {
@@ -2361,6 +2305,31 @@ impl JsReplManager {
             }
         }
     }
+}
+
+fn drain_broadcast_lines(buffer: &mut Vec<u8>) -> Vec<String> {
+    let mut lines = Vec::new();
+    loop {
+        let Some(pos) = buffer.iter().position(|byte| *byte == b'\n') else {
+            break;
+        };
+        let line = buffer.drain(..=pos).collect::<Vec<_>>();
+        lines.push(decode_broadcast_line(&line));
+    }
+    lines
+}
+
+fn finish_broadcast_line(buffer: &mut Vec<u8>) -> Option<String> {
+    if buffer.is_empty() {
+        None
+    } else {
+        Some(decode_broadcast_line(&std::mem::take(buffer)))
+    }
+}
+
+fn decode_broadcast_line(line: &[u8]) -> String {
+    let line = String::from_utf8_lossy(line);
+    line.trim_end_matches(['\n', '\r']).to_string()
 }
 
 fn response_content_items(
@@ -3235,10 +3204,10 @@ mod tests {
             )
             .await?;
 
-        let child = {
+        let process = {
             let guard = manager.kernel.lock().await;
             let state = guard.as_ref().expect("kernel should exist after warmup");
-            Arc::clone(&state.child)
+            Arc::clone(&state.process)
         };
 
         let result = manager
@@ -3258,12 +3227,8 @@ mod tests {
 
         assert_eq!(result, JsReplExecuteError::TimedOut);
 
-        let exit_state = {
-            let mut child = child.lock().await;
-            child.try_wait()?
-        };
         assert!(
-            exit_state.is_some(),
+            process.has_exited(),
             "timed out js_repl execution should kill previous kernel process"
         );
         Ok(())
@@ -3295,19 +3260,19 @@ mod tests {
             )
             .await?;
 
-        let child = {
+        let process = {
             let guard = manager.kernel.lock().await;
             let state = guard.as_ref().expect("kernel should exist after warmup");
-            Arc::clone(&state.child)
+            Arc::clone(&state.process)
         };
-        JsReplManager::kill_kernel_child(&child, "test_crash").await;
+        JsReplManager::kill_kernel_child(&process, "test_crash").await;
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 let cleared = {
                     let guard = manager.kernel.lock().await;
                     guard
                         .as_ref()
-                        .is_none_or(|state| !Arc::ptr_eq(&state.child, &child))
+                        .is_none_or(|state| !Arc::ptr_eq(&state.process, &process))
                 };
                 if cleared {
                     return;
@@ -3361,10 +3326,10 @@ mod tests {
             )
             .await?;
 
-        let child = {
+        let process = {
             let guard = manager.kernel.lock().await;
             let state = guard.as_ref().expect("kernel should exist after warmup");
-            Arc::clone(&state.child)
+            Arc::clone(&state.process)
         };
 
         let err = tokio::time::timeout(
@@ -3393,11 +3358,7 @@ mod tests {
 
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                let exited = {
-                    let mut child = child.lock().await;
-                    child.try_wait()?.is_some()
-                };
-                if exited {
+                if process.has_exited() {
                     return Ok::<(), anyhow::Error>(());
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -3412,7 +3373,7 @@ mod tests {
                     let guard = manager.kernel.lock().await;
                     guard
                         .as_ref()
-                        .is_none_or(|state| !Arc::ptr_eq(&state.child, &child))
+                        .is_none_or(|state| !Arc::ptr_eq(&state.process, &process))
                 };
                 if cleared {
                     return;
@@ -4227,7 +4188,7 @@ console.log(out.type);
         let turn = Arc::new(turn);
         let manager = turn.js_repl.manager().await?;
         let template_kernel = manager
-            .start_kernel(Arc::clone(&turn), Some(session.conversation_id), None)
+            .start_kernel(Arc::clone(&session), Arc::clone(&turn), None)
             .await
             .map_err(anyhow::Error::msg)?;
 

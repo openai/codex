@@ -5,7 +5,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
@@ -46,10 +48,17 @@ pub(crate) struct UnifiedExecProcess {
     sandbox_type: SandboxType,
 }
 
+pub(crate) struct ManagedSplitProcess {
+    pub(crate) process: UnifiedExecProcess,
+    pub(crate) stdin: mpsc::Sender<Vec<u8>>,
+    pub(crate) stdout_rx: broadcast::Receiver<Vec<u8>>,
+    pub(crate) stderr_rx: broadcast::Receiver<Vec<u8>>,
+}
+
 impl UnifiedExecProcess {
-    pub(super) fn new(
+    pub(crate) fn new(
         process_handle: ExecCommandSession,
-        initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+        initial_output_rx: broadcast::Receiver<Vec<u8>>,
         sandbox_type: SandboxType,
     ) -> Self {
         let output_buffer = Arc::new(Mutex::new(HeadTailBuffer::default()));
@@ -95,7 +104,7 @@ impl UnifiedExecProcess {
         }
     }
 
-    pub(super) fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
+    pub(crate) fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
         self.process_handle.writer_sender()
     }
 
@@ -113,7 +122,7 @@ impl UnifiedExecProcess {
         self.process_handle.output_receiver()
     }
 
-    pub(super) fn cancellation_token(&self) -> CancellationToken {
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
         self.cancellation_token.clone()
     }
 
@@ -121,20 +130,24 @@ impl UnifiedExecProcess {
         Arc::clone(&self.output_drained)
     }
 
-    pub(super) fn has_exited(&self) -> bool {
+    pub(crate) fn has_exited(&self) -> bool {
         self.process_handle.has_exited()
     }
 
-    pub(super) fn exit_code(&self) -> Option<i32> {
+    pub(crate) fn exit_code(&self) -> Option<i32> {
         self.process_handle.exit_code()
     }
 
-    pub(super) fn terminate(&self) {
+    pub(crate) fn terminate(&self) {
         self.output_closed.store(true, Ordering::Release);
         self.output_closed_notify.notify_waiters();
         self.process_handle.terminate();
         self.cancellation_token.cancel();
         self.output_task.abort();
+    }
+
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.process_handle.pid()
     }
 
     async fn snapshot_output(&self) -> Vec<Vec<u8>> {
@@ -200,8 +213,17 @@ impl UnifiedExecProcess {
         let SpawnedPty {
             session: process_handle,
             output_rx,
-            mut exit_rx,
+            exit_rx,
         } = spawned;
+        Self::from_process_parts(process_handle, output_rx, exit_rx, sandbox_type).await
+    }
+
+    pub(crate) async fn from_process_parts(
+        process_handle: ExecCommandSession,
+        output_rx: broadcast::Receiver<Vec<u8>>,
+        mut exit_rx: oneshot::Receiver<i32>,
+        sandbox_type: SandboxType,
+    ) -> Result<Self, UnifiedExecError> {
         let managed = Self::new(process_handle, output_rx, sandbox_type);
 
         let exit_ready = matches!(exit_rx.try_recv(), Ok(_) | Err(TryRecvError::Closed));
