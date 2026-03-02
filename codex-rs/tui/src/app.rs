@@ -3998,7 +3998,7 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Multi-agent will be enabled at the next session."));
+        assert!(rendered.contains("Multi-agent will be enabled in the next session."));
         Ok(())
     }
 
