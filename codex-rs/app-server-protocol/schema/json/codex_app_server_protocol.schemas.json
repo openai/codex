@@ -530,6 +530,30 @@
             },
             "method": {
               "enum": [
+                "thread/metadata/update"
+              ],
+              "title": "Thread/metadata/updateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadMetadataUpdateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/metadata/updateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unarchive"
               ],
               "title": "Thread/unarchiveRequestMethod",
@@ -13458,6 +13482,66 @@
           "data"
         ],
         "title": "ThreadLoadedListResponse",
+        "type": "object"
+      },
+      "ThreadMetadataGitInfoUpdateParams": {
+        "properties": {
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "originUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ThreadMetadataUpdateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "gitInfo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadMetadataGitInfoUpdateParams"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Patch the stored Git metadata for this thread. Only non-null fields are updated."
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadMetadataUpdateParams",
+        "type": "object"
+      },
+      "ThreadMetadataUpdateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "thread": {
+            "$ref": "#/definitions/v2/Thread"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "title": "ThreadMetadataUpdateResponse",
         "type": "object"
       },
       "ThreadNameUpdatedNotification": {

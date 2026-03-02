@@ -2041,6 +2041,35 @@ pub struct ThreadSetNameResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadMetadataUpdateParams {
+    pub thread_id: String,
+    /// Patch the stored Git metadata for this thread. Only non-null fields are updated.
+    #[ts(optional = nullable)]
+    pub git_info: Option<ThreadMetadataGitInfoUpdateParams>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMetadataGitInfoUpdateParams {
+    #[ts(optional = nullable)]
+    pub sha: Option<String>,
+    #[ts(optional = nullable)]
+    pub branch: Option<String>,
+    #[ts(optional = nullable)]
+    pub origin_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMetadataUpdateResponse {
+    pub thread: Thread,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadUnarchiveResponse {
     pub thread: Thread,
 }

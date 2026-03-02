@@ -142,6 +142,9 @@ use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
+use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
+use codex_app_server_protocol::ThreadMetadataUpdateResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -275,6 +278,7 @@ use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
+use codex_state::ThreadMetadataBuilder;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -630,6 +634,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadSetName { request_id, params } => {
                 self.thread_set_name(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadMetadataUpdate { request_id, params } => {
+                self.thread_metadata_update(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadUnarchive { request_id, params } => {
@@ -2410,6 +2418,188 @@ impl CodexMessageProcessor {
         };
         self.outgoing
             .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
+            .await;
+    }
+
+    async fn thread_metadata_update(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadMetadataUpdateParams,
+    ) {
+        let ThreadMetadataUpdateParams {
+            thread_id,
+            git_info,
+        } = params;
+
+        let thread_uuid = match ThreadId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        let Some(ThreadMetadataGitInfoUpdateParams {
+            sha,
+            branch,
+            origin_url,
+        }) = git_info
+        else {
+            self.send_invalid_request_error(
+                request_id,
+                "gitInfo must include at least one field".to_string(),
+            )
+            .await;
+            return;
+        };
+
+        if sha.is_none() && branch.is_none() && origin_url.is_none() {
+            self.send_invalid_request_error(
+                request_id,
+                "gitInfo must include at least one field".to_string(),
+            )
+            .await;
+            return;
+        }
+
+        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
+        let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
+        if state_db_ctx.is_none() {
+            state_db_ctx = get_state_db(&self.config, None).await;
+        }
+        let Some(state_db_ctx) = state_db_ctx else {
+            self.send_internal_error(
+                request_id,
+                format!("sqlite state db unavailable for thread {thread_uuid}"),
+            )
+            .await;
+            return;
+        };
+
+        let mut metadata = match state_db_ctx.get_thread(thread_uuid).await {
+            Ok(Some(metadata)) => metadata,
+            Ok(None) => {
+                let Some(thread) = loaded_thread else {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("thread not found: {thread_uuid}"),
+                    )
+                    .await;
+                    return;
+                };
+                let Some(rollout_path) = thread.rollout_path() else {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!(
+                            "ephemeral thread does not support metadata updates: {thread_uuid}"
+                        ),
+                    )
+                    .await;
+                    return;
+                };
+                let config_snapshot = thread.config_snapshot().await;
+                let model_provider = config_snapshot.model_provider_id.clone();
+                let mut builder = ThreadMetadataBuilder::new(
+                    thread_uuid,
+                    rollout_path,
+                    Utc::now(),
+                    config_snapshot.session_source.clone(),
+                );
+                builder.model_provider = Some(model_provider.clone());
+                builder.cwd = config_snapshot.cwd.clone();
+                builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
+                builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
+                builder.approval_mode = config_snapshot.approval_policy;
+                let metadata = builder.build(model_provider.as_str());
+                if let Err(err) = state_db_ctx.upsert_thread(&metadata).await {
+                    self.send_internal_error(
+                        request_id,
+                        format!("failed to create thread metadata for {thread_uuid}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+                metadata
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to load thread metadata for {thread_uuid}: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        if let Some(sha) = sha {
+            let sha = sha.trim().to_string();
+            if sha.is_empty() {
+                self.send_invalid_request_error(
+                    request_id,
+                    "gitInfo.sha must not be empty".to_string(),
+                )
+                .await;
+                return;
+            }
+            metadata.git_sha = Some(sha);
+        }
+        if let Some(branch) = branch {
+            let branch = branch.trim().to_string();
+            if branch.is_empty() {
+                self.send_invalid_request_error(
+                    request_id,
+                    "gitInfo.branch must not be empty".to_string(),
+                )
+                .await;
+                return;
+            }
+            metadata.git_branch = Some(branch);
+        }
+        if let Some(origin_url) = origin_url {
+            let origin_url = origin_url.trim().to_string();
+            if origin_url.is_empty() {
+                self.send_invalid_request_error(
+                    request_id,
+                    "gitInfo.originUrl must not be empty".to_string(),
+                )
+                .await;
+                return;
+            }
+            metadata.git_origin_url = Some(origin_url);
+        }
+
+        if let Err(err) = state_db_ctx.upsert_thread(&metadata).await {
+            self.send_internal_error(
+                request_id,
+                format!("failed to update thread metadata for {thread_uuid}: {err}"),
+            )
+            .await;
+            return;
+        }
+
+        let Some(summary) =
+            read_summary_from_state_db_context_by_thread_id(Some(&state_db_ctx), thread_uuid).await
+        else {
+            self.send_internal_error(
+                request_id,
+                format!("failed to reload updated thread metadata for {thread_uuid}"),
+            )
+            .await;
+            return;
+        };
+
+        let mut thread = summary_to_thread(summary);
+        self.attach_thread_name(thread_uuid, &mut thread).await;
+        thread.status = resolve_thread_status(
+            self.thread_watch_manager
+                .loaded_status_for_thread(&thread.id)
+                .await,
+            false,
+        );
+
+        self.outgoing
+            .send_response(request_id, ThreadMetadataUpdateResponse { thread })
             .await;
     }
 

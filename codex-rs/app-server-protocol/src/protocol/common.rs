@@ -211,6 +211,10 @@ client_request_definitions! {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
     },
+    ThreadMetadataUpdate => "thread/metadata/update" {
+        params: v2::ThreadMetadataUpdateParams,
+        response: v2::ThreadMetadataUpdateResponse,
+    },
     ThreadUnarchive => "thread/unarchive" {
         params: v2::ThreadUnarchiveParams,
         response: v2::ThreadUnarchiveResponse,

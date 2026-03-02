@@ -56,6 +56,7 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
@@ -432,6 +433,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/name/set", params).await
+    }
+
+    /// Send a `thread/metadata/update` JSON-RPC request.
+    pub async fn send_thread_metadata_update_request(
+        &mut self,
+        params: ThreadMetadataUpdateParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/metadata/update", params).await
     }
 
     /// Send a `thread/unsubscribe` JSON-RPC request.

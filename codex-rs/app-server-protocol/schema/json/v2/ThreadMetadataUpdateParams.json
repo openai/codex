@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadMetadataGitInfoUpdateParams": {
+      "properties": {
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "originUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "properties": {
+    "gitInfo": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadMetadataGitInfoUpdateParams"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Patch the stored Git metadata for this thread. Only non-null fields are updated."
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "threadId"
+  ],
+  "title": "ThreadMetadataUpdateParams",
+  "type": "object"
+}

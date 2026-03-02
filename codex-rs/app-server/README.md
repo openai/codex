@@ -126,6 +126,7 @@ Example with notification opt-out:
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
@@ -320,6 +321,23 @@ Use `thread/read` to fetch a stored thread by id without resuming it. Pass `incl
 { "method": "thread/read", "id": 23, "params": { "threadId": "thr_123", "includeTurns": true } }
 { "id": 23, "result": {
     "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [ ... ] }
+} }
+```
+
+### Example: Update stored thread metadata
+
+Use `thread/metadata/update` to patch sqlite-backed metadata for a thread without resuming it. Today this supports persisted `gitInfo`; only provided fields are updated.
+
+```json
+{ "method": "thread/metadata/update", "id": 24, "params": {
+    "threadId": "thr_123",
+    "gitInfo": { "branch": "feature/sidebar-pr" }
+} }
+{ "id": 24, "result": {
+    "thread": {
+        "id": "thr_123",
+        "gitInfo": { "sha": null, "branch": "feature/sidebar-pr", "originUrl": null }
+    }
 } }
 ```
 
