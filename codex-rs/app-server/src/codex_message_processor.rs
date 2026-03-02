@@ -5869,6 +5869,10 @@ impl CodexMessageProcessor {
                 let response = TurnStartResponse { turn: turn.clone() };
                 self.outgoing.send_response(request_id, response).await;
 
+                self.thread_watch_manager
+                    .note_turn_started(&params.thread_id)
+                    .await;
+
                 // Emit v2 turn/started notification.
                 let notif = TurnStartedNotification {
                     thread_id: params.thread_id,
@@ -6176,6 +6180,10 @@ impl CodexMessageProcessor {
         };
         self.outgoing
             .send_response(request_id.clone(), response)
+            .await;
+
+        self.thread_watch_manager
+            .note_turn_started(&parent_thread_id)
             .await;
 
         let notif = TurnStartedNotification {
