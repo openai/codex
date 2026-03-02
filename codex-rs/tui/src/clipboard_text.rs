@@ -20,8 +20,6 @@ use crate::clipboard_paste::is_probably_wsl;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClipboardCopyPath {
     Osc52,
-    #[cfg(target_os = "linux")]
-    WslClip,
     Native,
 }
 
@@ -30,56 +28,8 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
     match clipboard_copy_path(
         std::env::var_os("SSH_CONNECTION").as_deref(),
         std::env::var_os("SSH_TTY").as_deref(),
-        wsl_clipboard_supported(),
     ) {
         ClipboardCopyPath::Osc52 => copy_via_osc52(text),
-        #[cfg(target_os = "linux")]
-        ClipboardCopyPath::WslClip => {
-            let mut child = std::process::Command::new("powershell.exe")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .args([
-                    "-NoProfile",
-                    "-Command",
-                    "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'Stop'; $text = [Console]::In.ReadToEnd(); Set-Clipboard -Value $text",
-                ])
-                .spawn()
-                .map_err(|e| {
-                    format!("clipboard unavailable: failed to spawn powershell.exe: {e}")
-                })?;
-
-            child
-                .stdin
-                .take()
-                .ok_or_else(|| {
-                    "clipboard unavailable: failed to open powershell.exe stdin".to_string()
-                })?
-                .write_all(text.as_bytes())
-                .map_err(|e| {
-                    format!("clipboard unavailable: failed to write to powershell.exe: {e}")
-                })?;
-
-            let output = child.wait_with_output().map_err(|e| {
-                format!("clipboard unavailable: failed to wait for powershell.exe: {e}")
-            })?;
-
-            if output.status.success() {
-                Ok(())
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                if stderr.is_empty() {
-                    Err(format!(
-                        "clipboard unavailable: powershell.exe exited with status {}",
-                        output.status
-                    ))
-                } else {
-                    Err(format!(
-                        "clipboard unavailable: powershell.exe failed: {stderr}"
-                    ))
-                }
-            }
-        }
         ClipboardCopyPath::Native => {
             let native_result = arboard::Clipboard::new()
                 .map_err(|e| format!("clipboard unavailable: {e}"))
@@ -89,6 +39,72 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
                 });
 
             native_result.or_else(|native_err| {
+                #[cfg(target_os = "linux")]
+                let native_err = if is_probably_wsl() {
+                    let mut child = std::process::Command::new("powershell.exe")
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::piped())
+                        .args([
+                            "-NoProfile",
+                            "-Command",
+                            "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'Stop'; $text = [Console]::In.ReadToEnd(); Set-Clipboard -Value $text",
+                        ])
+                        .spawn()
+                        .map_err(|e| {
+                            format!("clipboard unavailable: failed to spawn powershell.exe: {e}")
+                        });
+
+                    match child.as_mut() {
+                        Ok(child) => {
+                            let stdin_result = child
+                                .stdin
+                                .take()
+                                .ok_or_else(|| {
+                                    "clipboard unavailable: failed to open powershell.exe stdin"
+                                        .to_string()
+                                })
+                                .and_then(|mut stdin| {
+                                    stdin.write_all(text.as_bytes()).map_err(|e| {
+                                        format!(
+                                            "clipboard unavailable: failed to write to powershell.exe: {e}"
+                                        )
+                                    })
+                                });
+
+                            match stdin_result.and_then(|()| {
+                                child.wait_with_output().map_err(|e| {
+                                    format!(
+                                        "clipboard unavailable: failed to wait for powershell.exe: {e}"
+                                    )
+                                })
+                            }) {
+                                Ok(output) if output.status.success() => return Ok(()),
+                                Ok(output) => {
+                                    let stderr =
+                                        String::from_utf8_lossy(&output.stderr).trim().to_string();
+                                    if stderr.is_empty() {
+                                        format!(
+                                            "{native_err}; WSL fallback failed: clipboard unavailable: powershell.exe exited with status {}",
+                                            output.status
+                                        )
+                                    } else {
+                                        format!(
+                                            "{native_err}; WSL fallback failed: clipboard unavailable: powershell.exe failed: {stderr}"
+                                        )
+                                    }
+                                }
+                                Err(wsl_err) => {
+                                    format!("{native_err}; WSL fallback failed: {wsl_err}")
+                                }
+                            }
+                        }
+                        Err(wsl_err) => format!("{native_err}; WSL fallback failed: {wsl_err}"),
+                    }
+                } else {
+                    native_err
+                };
+
                 if should_try_osc52_fallback(
                     stdout().is_terminal(),
                     std::env::var_os("DISPLAY").as_deref(),
@@ -140,26 +156,10 @@ fn copy_via_osc52(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(all(not(target_os = "android"), target_os = "linux"))]
+#[cfg(not(target_os = "android"))]
 fn clipboard_copy_path(
     ssh_connection: Option<&OsStr>,
     ssh_tty: Option<&OsStr>,
-    wsl_clipboard_supported: bool,
-) -> ClipboardCopyPath {
-    if is_ssh_session(ssh_connection, ssh_tty) {
-        ClipboardCopyPath::Osc52
-    } else if wsl_clipboard_supported {
-        ClipboardCopyPath::WslClip
-    } else {
-        ClipboardCopyPath::Native
-    }
-}
-
-#[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
-fn clipboard_copy_path(
-    ssh_connection: Option<&OsStr>,
-    ssh_tty: Option<&OsStr>,
-    _wsl_clipboard_supported: bool,
 ) -> ClipboardCopyPath {
     if is_ssh_session(ssh_connection, ssh_tty) {
         ClipboardCopyPath::Osc52
@@ -190,16 +190,6 @@ fn should_try_osc52_fallback(
             || (cfg!(target_os = "linux") && display.is_none() && wayland_display.is_none()))
 }
 
-#[cfg(all(not(target_os = "android"), target_os = "linux"))]
-fn wsl_clipboard_supported() -> bool {
-    is_probably_wsl()
-}
-
-#[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
-fn wsl_clipboard_supported() -> bool {
-    false
-}
-
 #[cfg(target_os = "android")]
 pub fn copy_text_to_clipboard(_text: &str) -> Result<(), String> {
     Err("clipboard text copy is unsupported on Android".into())
@@ -228,26 +218,14 @@ mod tests {
     #[test]
     fn prefers_osc52_over_wsl_clipboard() {
         assert_eq!(
-            clipboard_copy_path(Some(OsStr::new("1")), None, true),
+            clipboard_copy_path(Some(OsStr::new("1")), None),
             ClipboardCopyPath::Osc52
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn prefers_wsl_clipboard_when_not_over_ssh() {
-        assert_eq!(
-            clipboard_copy_path(None, None, true),
-            ClipboardCopyPath::WslClip
         );
     }
 
     #[test]
     fn defaults_to_native_clipboard_without_ssh_or_wsl() {
-        assert_eq!(
-            clipboard_copy_path(None, None, false),
-            ClipboardCopyPath::Native
-        );
+        assert_eq!(clipboard_copy_path(None, None), ClipboardCopyPath::Native);
     }
 
     #[test]
