@@ -1701,6 +1701,7 @@ async fn make_chatwidget_manual(
         current_status_header: String::from("Working"),
         retry_status_header: None,
         pending_status_indicator_restore: false,
+        suppress_queue_autosend: false,
         thread_id: None,
         thread_name: None,
         forked_from: None,

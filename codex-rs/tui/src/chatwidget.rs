@@ -600,6 +600,7 @@ pub(crate) struct ChatWidget {
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
+    suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
@@ -707,6 +708,7 @@ pub(crate) struct ActiveCellTranscriptKey {
     pub(crate) animation_tick: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserMessage {
     text: String,
     local_images: Vec<LocalImageAttachment>,
@@ -718,6 +720,36 @@ pub(crate) struct UserMessage {
     remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+struct ThreadComposerState {
+    text: String,
+    local_images: Vec<LocalImageAttachment>,
+    remote_image_urls: Vec<String>,
+    text_elements: Vec<TextElement>,
+    mention_bindings: Vec<MentionBinding>,
+    pending_pastes: Vec<(String, String)>,
+}
+
+impl ThreadComposerState {
+    fn has_content(&self) -> bool {
+        !self.text.is_empty()
+            || !self.local_images.is_empty()
+            || !self.remote_image_urls.is_empty()
+            || !self.text_elements.is_empty()
+            || !self.mention_bindings.is_empty()
+            || !self.pending_pastes.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ThreadInputState {
+    composer: Option<ThreadComposerState>,
+    queued_user_messages: VecDeque<UserMessage>,
+    current_collaboration_mode: CollaborationMode,
+    active_collaboration_mask: Option<CollaborationModeMask>,
+    agent_turn_running: bool,
 }
 
 impl From<String> for UserMessage {
@@ -1923,6 +1955,79 @@ impl ChatWidget {
         );
     }
 
+    pub(crate) fn capture_thread_input_state(&self) -> Option<ThreadInputState> {
+        let composer = ThreadComposerState {
+            text: self.bottom_pane.composer_text(),
+            text_elements: self.bottom_pane.composer_text_elements(),
+            local_images: self.bottom_pane.composer_local_images(),
+            remote_image_urls: self.bottom_pane.remote_image_urls(),
+            mention_bindings: self.bottom_pane.composer_mention_bindings(),
+            pending_pastes: self.bottom_pane.composer_pending_pastes(),
+        };
+        Some(ThreadInputState {
+            composer: composer.has_content().then_some(composer),
+            queued_user_messages: self.queued_user_messages.clone(),
+            current_collaboration_mode: self.current_collaboration_mode.clone(),
+            active_collaboration_mask: self.active_collaboration_mask.clone(),
+            agent_turn_running: self.agent_turn_running,
+        })
+    }
+
+    pub(crate) fn restore_thread_input_state(&mut self, input_state: Option<ThreadInputState>) {
+        if let Some(input_state) = input_state {
+            self.current_collaboration_mode = input_state.current_collaboration_mode;
+            self.active_collaboration_mask = input_state.active_collaboration_mask;
+            self.agent_turn_running = input_state.agent_turn_running;
+            self.update_collaboration_mode_indicator();
+            self.refresh_model_display();
+            self.update_task_running_state();
+            if let Some(composer) = input_state.composer {
+                let local_image_paths = composer
+                    .local_images
+                    .into_iter()
+                    .map(|img| img.path)
+                    .collect();
+                self.set_remote_image_urls(composer.remote_image_urls);
+                self.bottom_pane.set_composer_text_with_mention_bindings(
+                    composer.text,
+                    composer.text_elements,
+                    local_image_paths,
+                    composer.mention_bindings,
+                );
+                self.bottom_pane
+                    .set_composer_pending_pastes(composer.pending_pastes);
+            } else {
+                self.set_remote_image_urls(Vec::new());
+                self.bottom_pane.set_composer_text_with_mention_bindings(
+                    String::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                self.bottom_pane.set_composer_pending_pastes(Vec::new());
+            }
+            self.queued_user_messages = input_state.queued_user_messages;
+        } else {
+            self.agent_turn_running = false;
+            self.update_task_running_state();
+            self.set_remote_image_urls(Vec::new());
+            self.bottom_pane.set_composer_text_with_mention_bindings(
+                String::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            self.bottom_pane.set_composer_pending_pastes(Vec::new());
+            self.queued_user_messages.clear();
+        }
+        self.refresh_queued_user_messages();
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_queue_autosend_suppressed(&mut self, suppressed: bool) {
+        self.suppress_queue_autosend = suppressed;
+    }
+
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.saw_plan_update_this_turn = true;
         self.add_to_history(history_cell::new_plan_update(update));
@@ -2870,6 +2975,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -3049,6 +3155,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -3217,6 +3324,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -4666,7 +4774,10 @@ impl ChatWidget {
     }
 
     // If idle and there are queued inputs, submit exactly one to start the next turn.
-    fn maybe_send_next_queued_input(&mut self) {
+    pub(crate) fn maybe_send_next_queued_input(&mut self) {
+        if self.suppress_queue_autosend {
+            return;
+        }
         if self.bottom_pane.is_task_running() {
             return;
         }
@@ -7557,6 +7668,14 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn remote_image_urls(&self) -> Vec<String> {
         self.bottom_pane.remote_image_urls()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queued_user_message_texts(&self) -> Vec<String> {
+        self.queued_user_messages
+            .iter()
+            .map(|message| message.text.clone())
+            .collect()
     }
 
     #[cfg(test)]
