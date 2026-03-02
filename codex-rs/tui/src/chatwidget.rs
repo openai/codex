@@ -1027,7 +1027,7 @@ impl ChatWidget {
             .config
             .tui_terminal_title
             .as_ref()
-            .map_or(true, |items| items.iter().any(|item| item == "status"))
+            .is_none_or(|items| items.iter().any(|item| item == "status"))
         {
             self.refresh_terminal_title();
         }
