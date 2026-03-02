@@ -1389,6 +1389,10 @@ impl Session {
                 session_configuration.cwd.clone(),
                 &mut default_shell,
                 otel_manager.clone(),
+                !matches!(
+                    session_configuration.session_source,
+                    SessionSource::SubAgent(_)
+                ),
             )
         } else {
             let (tx, rx) = watch::channel(None);
@@ -1978,6 +1982,7 @@ impl Session {
         previous_cwd: &Path,
         next_cwd: &Path,
         codex_home: &Path,
+        session_source: &SessionSource,
     ) {
         if previous_cwd == next_cwd {
             return;
@@ -1994,6 +1999,7 @@ impl Session {
             self.services.user_shell.as_ref().clone(),
             self.services.shell_snapshot_tx.clone(),
             self.services.otel_manager.clone(),
+            !matches!(session_source, SessionSource::SubAgent(_)),
         );
     }
 
@@ -2008,10 +2014,16 @@ impl Session {
                 let previous_cwd = state.session_configuration.cwd.clone();
                 let next_cwd = updated.cwd.clone();
                 let codex_home = updated.codex_home.clone();
+                let session_source = updated.session_source.clone();
                 state.session_configuration = updated;
                 drop(state);
 
-                self.maybe_refresh_shell_snapshot_for_cwd(&previous_cwd, &next_cwd, &codex_home);
+                self.maybe_refresh_shell_snapshot_for_cwd(
+                    &previous_cwd,
+                    &next_cwd,
+                    &codex_home,
+                    &session_source,
+                );
 
                 Ok(())
             }
@@ -2057,6 +2069,7 @@ impl Session {
             &previous_cwd,
             &session_configuration.cwd,
             &codex_home,
+            &session_configuration.session_source,
         );
 
         Ok(self

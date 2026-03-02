@@ -41,6 +41,7 @@ impl ShellSnapshot {
         session_cwd: PathBuf,
         shell: &mut Shell,
         otel_manager: OtelManager,
+        run_cleanup: bool,
     ) -> watch::Sender<Option<Arc<ShellSnapshot>>> {
         let (shell_snapshot_tx, shell_snapshot_rx) = watch::channel(None);
         shell.shell_snapshot = shell_snapshot_rx;
@@ -52,6 +53,7 @@ impl ShellSnapshot {
             shell.clone(),
             shell_snapshot_tx.clone(),
             otel_manager,
+            run_cleanup,
         );
 
         shell_snapshot_tx
@@ -64,6 +66,7 @@ impl ShellSnapshot {
         shell: Shell,
         shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
         otel_manager: OtelManager,
+        run_cleanup: bool,
     ) {
         Self::spawn_snapshot_task(
             codex_home,
@@ -72,6 +75,7 @@ impl ShellSnapshot {
             shell,
             shell_snapshot_tx,
             otel_manager,
+            run_cleanup,
         );
     }
 
@@ -82,6 +86,7 @@ impl ShellSnapshot {
         snapshot_shell: Shell,
         shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
         otel_manager: OtelManager,
+        run_cleanup: bool,
     ) {
         let snapshot_span = info_span!("shell_snapshot", thread_id = %session_id);
         tokio::spawn(
@@ -92,6 +97,7 @@ impl ShellSnapshot {
                     session_id,
                     session_cwd.as_path(),
                     &snapshot_shell,
+                    run_cleanup,
                 )
                 .await
                 .map(Arc::new);
@@ -114,6 +120,7 @@ impl ShellSnapshot {
         session_id: ThreadId,
         session_cwd: &Path,
         shell: &Shell,
+        run_cleanup: bool,
     ) -> std::result::Result<Self, &'static str> {
         // File to store the snapshot
         let extension = match shell.shell_type {
@@ -131,14 +138,16 @@ impl ShellSnapshot {
             .join(SNAPSHOT_DIR)
             .join(format!("{session_id}.tmp-{nonce}"));
 
-        // Clean the (unlikely) leaked snapshot files.
-        let codex_home = codex_home.to_path_buf();
-        let cleanup_session_id = session_id;
-        tokio::spawn(async move {
-            if let Err(err) = cleanup_stale_snapshots(&codex_home, cleanup_session_id).await {
-                tracing::warn!("Failed to clean up shell snapshots: {err:?}");
-            }
-        });
+        if run_cleanup {
+            // Clean the (unlikely) leaked snapshot files.
+            let codex_home = codex_home.to_path_buf();
+            let cleanup_session_id = session_id;
+            tokio::spawn(async move {
+                if let Err(err) = cleanup_stale_snapshots(&codex_home, cleanup_session_id).await {
+                    tracing::warn!("Failed to clean up shell snapshots: {err:?}");
+                }
+            });
+        }
 
         // Make the new snapshot.
         let temp_path =
@@ -681,9 +690,10 @@ mod tests {
             shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
-        let snapshot = ShellSnapshot::try_new(dir.path(), ThreadId::new(), dir.path(), &shell)
-            .await
-            .expect("snapshot should be created");
+        let snapshot =
+            ShellSnapshot::try_new(dir.path(), ThreadId::new(), dir.path(), &shell, true)
+                .await
+                .expect("snapshot should be created");
         let path = snapshot.path.clone();
         assert!(path.exists());
         assert_eq!(snapshot.cwd, dir.path().to_path_buf());
