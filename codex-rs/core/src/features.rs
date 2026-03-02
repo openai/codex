@@ -665,11 +665,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::FastMode,
         key: "fast_mode",
-        stage: Stage::Experimental {
-            name: "Fast mode",
-            menu_description: "Enable the local Fast speed setting for supported models.",
-            announcement: "NEW: Fast mode is available in /experimental. Enable it, then start a new chat or restart Codex to use /fast.",
-        },
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
