@@ -4,6 +4,7 @@ use codex_core::config::types::Personality;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -205,6 +206,63 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             .any(|text| text.contains("<personality_spec>")),
         "did not expect personality update message when model changed in same turn"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn service_tier_change_is_applied_on_next_http_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+    )
+    .await;
+
+    let test = test_codex().build(&server).await?;
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            service_tier: Some(ServiceTier::Fast),
+        })
+        .await?;
+    test.submit_turn("fast turn").await?;
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            service_tier: Some(ServiceTier::Standard),
+        })
+        .await?;
+    test.submit_turn("standard turn").await?;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let first_body = requests[0].body_json();
+    let second_body = requests[1].body_json();
+
+    assert_eq!(first_body["service_tier"].as_str(), Some("priority"));
+    assert_eq!(second_body.get("service_tier"), None);
 
     Ok(())
 }
