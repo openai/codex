@@ -167,14 +167,15 @@ pub fn run_elevated_setup(
     codex_home: &Path,
 ) -> anyhow::Result<()> {
     codex_windows_sandbox::run_elevated_setup(
-        policy,
-        policy_cwd,
-        command_cwd,
-        env_map,
-        codex_home,
-        None,
-        None,
-        false,
+        codex_windows_sandbox::SandboxSetupRequest {
+            policy,
+            policy_cwd,
+            command_cwd,
+            env_map,
+            codex_home,
+            proxy_enforced: false,
+        },
+        codex_windows_sandbox::SetupRootOverrides::default(),
     )
 }
 

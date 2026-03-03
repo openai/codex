@@ -68,6 +68,21 @@ pub fn sandbox_users_path(codex_home: &Path) -> PathBuf {
     sandbox_secrets_dir(codex_home).join("sandbox_users.json")
 }
 
+pub struct SandboxSetupRequest<'a> {
+    pub policy: &'a SandboxPolicy,
+    pub policy_cwd: &'a Path,
+    pub command_cwd: &'a Path,
+    pub env_map: &'a HashMap<String, String>,
+    pub codex_home: &'a Path,
+    pub proxy_enforced: bool,
+}
+
+#[derive(Default)]
+pub struct SetupRootOverrides {
+    pub read_roots: Option<Vec<PathBuf>>,
+    pub write_roots: Option<Vec<PathBuf>>,
+}
+
 pub fn run_setup_refresh(
     policy: &SandboxPolicy,
     policy_cwd: &Path,
@@ -77,14 +92,15 @@ pub fn run_setup_refresh(
     proxy_enforced: bool,
 ) -> Result<()> {
     run_setup_refresh_inner(
-        policy,
-        policy_cwd,
-        command_cwd,
-        env_map,
-        codex_home,
-        None,
-        None,
-        proxy_enforced,
+        SandboxSetupRequest {
+            policy,
+            policy_cwd,
+            command_cwd,
+            env_map,
+            codex_home,
+            proxy_enforced,
+        },
+        SetupRootOverrides::default(),
     )
 }
 
@@ -100,51 +116,42 @@ pub fn run_setup_refresh_with_extra_read_roots(
     let mut read_roots = gather_read_roots(command_cwd, policy);
     read_roots.extend(extra_read_roots);
     run_setup_refresh_inner(
-        policy,
-        policy_cwd,
-        command_cwd,
-        env_map,
-        codex_home,
-        Some(read_roots),
-        Some(Vec::new()),
-        proxy_enforced,
+        SandboxSetupRequest {
+            policy,
+            policy_cwd,
+            command_cwd,
+            env_map,
+            codex_home,
+            proxy_enforced,
+        },
+        SetupRootOverrides {
+            read_roots: Some(read_roots),
+            write_roots: Some(Vec::new()),
+        },
     )
 }
 
 fn run_setup_refresh_inner(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
-    command_cwd: &Path,
-    env_map: &HashMap<String, String>,
-    codex_home: &Path,
-    read_roots_override: Option<Vec<PathBuf>>,
-    write_roots_override: Option<Vec<PathBuf>>,
-    proxy_enforced: bool,
+    request: SandboxSetupRequest<'_>,
+    overrides: SetupRootOverrides,
 ) -> Result<()> {
     // Skip in danger-full-access.
     if matches!(
-        policy,
+        request.policy,
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
     ) {
         return Ok(());
     }
-    let (read_roots, write_roots) = build_payload_roots(
-        policy,
-        policy_cwd,
-        command_cwd,
-        env_map,
-        codex_home,
-        read_roots_override,
-        write_roots_override,
-    );
-    let network_identity = SandboxNetworkIdentity::from_policy(policy, proxy_enforced);
-    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, network_identity);
+    let (read_roots, write_roots) = build_payload_roots(&request, overrides);
+    let network_identity =
+        SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
+    let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
         online_username: ONLINE_USERNAME.to_string(),
-        codex_home: codex_home.to_path_buf(),
-        command_cwd: command_cwd.to_path_buf(),
+        codex_home: request.codex_home.to_path_buf(),
+        command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
         write_roots,
         proxy_ports: offline_proxy_settings.proxy_ports,
@@ -158,7 +165,7 @@ fn run_setup_refresh_inner(
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
-    let cwd = std::env::current_dir().unwrap_or_else(|_| codex_home.to_path_buf());
+    let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
     log_note(
         &format!(
             "setup refresh: spawning {} (cwd={}, payload_len={})",
@@ -166,14 +173,14 @@ fn run_setup_refresh_inner(
             cwd.display(),
             b64.len()
         ),
-        Some(&sandbox_dir(codex_home)),
+        Some(&sandbox_dir(request.codex_home)),
     );
     let status = cmd
         .status()
         .map_err(|e| {
             log_note(
                 &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
-                Some(&sandbox_dir(codex_home)),
+                Some(&sandbox_dir(request.codex_home)),
             );
             e
         })
@@ -181,7 +188,7 @@ fn run_setup_refresh_inner(
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),
-            Some(&sandbox_dir(codex_home)),
+            Some(&sandbox_dir(request.codex_home)),
         );
         return Err(anyhow!("setup refresh failed with status {}", status));
     }
@@ -629,40 +636,27 @@ fn run_setup_exe(
 }
 
 pub fn run_elevated_setup(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
-    command_cwd: &Path,
-    env_map: &HashMap<String, String>,
-    codex_home: &Path,
-    read_roots_override: Option<Vec<PathBuf>>,
-    write_roots_override: Option<Vec<PathBuf>>,
-    proxy_enforced: bool,
+    request: SandboxSetupRequest<'_>,
+    overrides: SetupRootOverrides,
 ) -> Result<()> {
     // Ensure the shared sandbox directory exists before we send it to the elevated helper.
-    let sbx_dir = sandbox_dir(codex_home);
+    let sbx_dir = sandbox_dir(request.codex_home);
     std::fs::create_dir_all(&sbx_dir).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorSandboxDirCreateFailed,
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         )
     })?;
-    let (read_roots, write_roots) = build_payload_roots(
-        policy,
-        policy_cwd,
-        command_cwd,
-        env_map,
-        codex_home,
-        read_roots_override,
-        write_roots_override,
-    );
-    let network_identity = SandboxNetworkIdentity::from_policy(policy, proxy_enforced);
-    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, network_identity);
+    let (read_roots, write_roots) = build_payload_roots(&request, overrides);
+    let network_identity =
+        SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
+    let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
         online_username: ONLINE_USERNAME.to_string(),
-        codex_home: codex_home.to_path_buf(),
-        command_cwd: command_cwd.to_path_buf(),
+        codex_home: request.codex_home.to_path_buf(),
+        command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
         write_roots,
         proxy_ports: offline_proxy_settings.proxy_ports,
@@ -676,28 +670,28 @@ pub fn run_elevated_setup(
             format!("failed to determine elevation state: {err}"),
         )
     })?;
-    run_setup_exe(&payload, needs_elevation, codex_home)
+    run_setup_exe(&payload, needs_elevation, request.codex_home)
 }
 
 fn build_payload_roots(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
-    command_cwd: &Path,
-    env_map: &HashMap<String, String>,
-    codex_home: &Path,
-    read_roots_override: Option<Vec<PathBuf>>,
-    write_roots_override: Option<Vec<PathBuf>>,
+    request: &SandboxSetupRequest<'_>,
+    overrides: SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let write_roots = if let Some(roots) = write_roots_override {
+    let write_roots = if let Some(roots) = overrides.write_roots {
         canonical_existing(&roots)
     } else {
-        gather_write_roots(policy, policy_cwd, command_cwd, env_map)
+        gather_write_roots(
+            request.policy,
+            request.policy_cwd,
+            request.command_cwd,
+            request.env_map,
+        )
     };
-    let write_roots = filter_sensitive_write_roots(write_roots, codex_home);
-    let mut read_roots = if let Some(roots) = read_roots_override {
+    let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
+    let mut read_roots = if let Some(roots) = overrides.read_roots {
         canonical_existing(&roots)
     } else {
-        gather_read_roots(command_cwd, policy)
+        gather_read_roots(request.command_cwd, request.policy)
     };
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));

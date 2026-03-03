@@ -189,14 +189,18 @@ pub fn require_logon_sandbox_creds(
             crate::logging::log_note("sandbox setup required", Some(&sandbox_dir));
         }
         run_elevated_setup(
-            policy,
-            policy_cwd,
-            command_cwd,
-            env_map,
-            codex_home,
-            Some(needed_read.clone()),
-            Some(needed_write.clone()),
-            proxy_enforced,
+            crate::setup::SandboxSetupRequest {
+                policy,
+                policy_cwd,
+                command_cwd,
+                env_map,
+                codex_home,
+                proxy_enforced,
+            },
+            crate::setup::SetupRootOverrides {
+                read_roots: Some(needed_read.clone()),
+                write_roots: Some(needed_write.clone()),
+            },
         )?;
         identity = select_identity(network_identity, codex_home)?;
     }

@@ -59,6 +59,8 @@ pub use dpapi::unprotect as dpapi_unprotect;
 #[cfg(target_os = "windows")]
 pub use elevated_impl::run_windows_sandbox_capture as run_windows_sandbox_capture_elevated;
 #[cfg(target_os = "windows")]
+pub use elevated_impl::ElevatedSandboxCaptureRequest;
+#[cfg(target_os = "windows")]
 pub use hide_users::hide_current_user_profile_dir;
 #[cfg(target_os = "windows")]
 pub use hide_users::hide_newly_created_users;
@@ -88,6 +90,10 @@ pub use setup::run_setup_refresh_with_extra_read_roots;
 pub use setup::sandbox_dir;
 #[cfg(target_os = "windows")]
 pub use setup::sandbox_secrets_dir;
+#[cfg(target_os = "windows")]
+pub use setup::SandboxSetupRequest;
+#[cfg(target_os = "windows")]
+pub use setup::SetupRootOverrides;
 #[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
