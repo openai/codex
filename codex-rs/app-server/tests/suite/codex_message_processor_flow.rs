@@ -198,12 +198,8 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     }
     let (command_tokens, expected_command) = if cfg!(windows) {
         (
-            vec![
-                "pwsh".to_string(),
-                "-Command".to_string(),
-                "Write-Output 42".to_string(),
-            ],
-            "pwsh -Command 'Write-Output 42'".to_string(),
+            vec!["Write-Output".to_string(), "42".to_string()],
+            "Write-Output 42".to_string(),
         )
     } else {
         (
