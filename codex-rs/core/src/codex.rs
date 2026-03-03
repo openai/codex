@@ -5420,12 +5420,10 @@ async fn run_sampling_request(
             // transient reconnect messages. In debug builds, keep full visibility for diagnosis.
             let report_error = retries > 1
                 || cfg!(debug_assertions)
-                || sess
+                || !sess
                     .services
                     .model_client
-                    .active_ws_version(&turn_context.model_info)
-                    .is_none();
-
+                    .responses_websocket_enabled(&turn_context.model_info);
             if report_error {
                 // Surface retry information to any UI/front‑end so the
                 // user understands what is happening instead of staring

@@ -207,19 +207,11 @@ pub struct ResponseCreateWsRequest {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ResponseAppendWsRequest {
-    pub input: Vec<ResponseItem>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_metadata: Option<HashMap<String, String>>,
-}
-#[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum ResponsesWsRequest {
     #[serde(rename = "response.create")]
     ResponseCreate(ResponseCreateWsRequest),
-    #[serde(rename = "response.append")]
-    ResponseAppend(ResponseAppendWsRequest),
 }
 
 pub fn create_text_param_for_request(

@@ -19,7 +19,6 @@ pub use crate::common::MemorySummarizeInput;
 pub use crate::common::MemorySummarizeOutput;
 pub use crate::common::RawMemory;
 pub use crate::common::RawMemoryMetadata;
-pub use crate::common::ResponseAppendWsRequest;
 pub use crate::common::ResponseCreateWsRequest;
 pub use crate::common::ResponseEvent;
 pub use crate::common::ResponseStream;

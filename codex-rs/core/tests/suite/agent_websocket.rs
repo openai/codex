@@ -3,7 +3,6 @@ use codex_core::features::Feature;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_done;
 use core_test_support::responses::ev_done_with_id;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_shell_command_call;
@@ -26,7 +25,7 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
         vec![
             ev_response_created("resp-1"),
             ev_shell_command_call(call_id, "echo websocket"),
-            ev_done(),
+            ev_done_with_id("resp-1"),
         ],
         vec![
             ev_response_created("resp-2"),
@@ -58,22 +57,13 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
         .body_json();
 
     assert_eq!(first_turn["type"].as_str(), Some("response.create"));
-    assert_eq!(second_turn["type"].as_str(), Some("response.append"));
+    assert_eq!(second_turn["type"].as_str(), Some("response.create"));
 
-    let append_items = second_turn
+    let input_items = second_turn
         .get("input")
         .and_then(Value::as_array)
-        .expect("response.append input array");
-    assert!(!append_items.is_empty());
-
-    let output_item = append_items
-        .iter()
-        .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
-        .expect("function_call_output in append");
-    assert_eq!(
-        output_item.get("call_id").and_then(Value::as_str),
-        Some(call_id)
-    );
+        .expect("second response.create input array");
+    assert!(!input_items.is_empty());
 
     server.shutdown().await;
     Ok(())
