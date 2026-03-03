@@ -373,7 +373,15 @@ pub(crate) async fn handle_audio(
 }
 
 fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Option<String> {
-    (!handoff.input_transcript.is_empty()).then(|| handoff.input_transcript.clone())
+    let messages = handoff
+        .messages
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!messages.is_empty()).then_some(messages).or_else(|| {
+        (!handoff.input_transcript.is_empty()).then(|| handoff.input_transcript.clone())
+    })
 }
 
 fn realtime_api_key(
@@ -579,19 +587,39 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn extracts_text_from_handoff_request_input_transcript() {
+    fn extracts_text_from_handoff_request_messages() {
         let handoff = RealtimeHandoffRequested {
             handoff_id: "handoff_1".to_string(),
             item_id: "item_1".to_string(),
-            input_transcript: "hello".to_string(),
-            messages: vec![RealtimeHandoffMessage {
-                role: "user".to_string(),
-                text: "hello".to_string(),
-            }],
+            input_transcript: "ignored".to_string(),
+            messages: vec![
+                RealtimeHandoffMessage {
+                    role: "user".to_string(),
+                    text: "hello".to_string(),
+                },
+                RealtimeHandoffMessage {
+                    role: "assistant".to_string(),
+                    text: "hi there".to_string(),
+                },
+            ],
         };
         assert_eq!(
             realtime_text_from_handoff_request(&handoff),
-            Some("hello".to_string())
+            Some("hello\nhi there".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_text_from_handoff_request_input_transcript_if_messages_missing() {
+        let handoff = RealtimeHandoffRequested {
+            handoff_id: "handoff_1".to_string(),
+            item_id: "item_1".to_string(),
+            input_transcript: "ignored".to_string(),
+            messages: vec![],
+        };
+        assert_eq!(
+            realtime_text_from_handoff_request(&handoff),
+            Some("ignored".to_string())
         );
     }
 

@@ -403,94 +403,18 @@ client_request_definitions! {
     },
 
     /// DEPRECATED APIs below
-    NewConversation {
-        params: v1::NewConversationParams,
-        response: v1::NewConversationResponse,
-    },
     GetConversationSummary {
         params: v1::GetConversationSummaryParams,
         response: v1::GetConversationSummaryResponse,
-    },
-    /// List recorded Codex conversations (rollouts) with optional pagination and search.
-    ListConversations {
-        params: v1::ListConversationsParams,
-        response: v1::ListConversationsResponse,
-    },
-    /// Resume a recorded Codex conversation from a rollout file.
-    ResumeConversation {
-        params: v1::ResumeConversationParams,
-        response: v1::ResumeConversationResponse,
-    },
-    /// Fork a recorded Codex conversation into a new session.
-    ForkConversation {
-        params: v1::ForkConversationParams,
-        response: v1::ForkConversationResponse,
-    },
-    ArchiveConversation {
-        params: v1::ArchiveConversationParams,
-        response: v1::ArchiveConversationResponse,
-    },
-    SendUserMessage {
-        params: v1::SendUserMessageParams,
-        response: v1::SendUserMessageResponse,
-    },
-    SendUserTurn {
-        params: v1::SendUserTurnParams,
-        response: v1::SendUserTurnResponse,
-    },
-    InterruptConversation {
-        params: v1::InterruptConversationParams,
-        response: v1::InterruptConversationResponse,
-    },
-    AddConversationListener {
-        params: v1::AddConversationListenerParams,
-        response: v1::AddConversationSubscriptionResponse,
-    },
-    RemoveConversationListener {
-        params: v1::RemoveConversationListenerParams,
-        response: v1::RemoveConversationSubscriptionResponse,
     },
     GitDiffToRemote {
         params: v1::GitDiffToRemoteParams,
         response: v1::GitDiffToRemoteResponse,
     },
-    LoginApiKey {
-        params: v1::LoginApiKeyParams,
-        response: v1::LoginApiKeyResponse,
-    },
-    LoginChatGpt {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v1::LoginChatGptResponse,
-    },
-    // DEPRECATED in favor of CancelLoginAccount
-    CancelLoginChatGpt {
-        params: v1::CancelLoginChatGptParams,
-        response: v1::CancelLoginChatGptResponse,
-    },
-    LogoutChatGpt {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v1::LogoutChatGptResponse,
-    },
     /// DEPRECATED in favor of GetAccount
     GetAuthStatus {
         params: v1::GetAuthStatusParams,
         response: v1::GetAuthStatusResponse,
-    },
-    GetUserSavedConfig {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v1::GetUserSavedConfigResponse,
-    },
-    SetDefaultModel {
-        params: v1::SetDefaultModelParams,
-        response: v1::SetDefaultModelResponse,
-    },
-    GetUserAgent {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v1::GetUserAgentResponse,
-    },
-    UserInfo {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v1::UserInfoResponse,
     },
     FuzzyFileSearch {
         params: FuzzyFileSearchParams,
@@ -510,11 +434,6 @@ client_request_definitions! {
     FuzzyFileSearchSessionStop => "fuzzyFileSearch/sessionStop" {
         params: FuzzyFileSearchSessionStopParams,
         response: FuzzyFileSearchSessionStopResponse,
-    },
-    /// Execute a command (argv vector) under the server's sandbox.
-    ExecOneOffCommand {
-        params: v1::ExecOneOffCommandParams,
-        response: v1::ExecOneOffCommandResponse,
     },
 }
 
@@ -882,12 +801,6 @@ server_notification_definitions! {
     #[strum(serialize = "account/login/completed")]
     AccountLoginCompleted(v2::AccountLoginCompletedNotification),
 
-    /// DEPRECATED NOTIFICATIONS below
-    AuthStatusChange(v1::AuthStatusChangeNotification),
-
-    /// Deprecated: use `account/login/completed` instead.
-    LoginChatGptComplete(v1::LoginChatGptCompleteNotification),
-    SessionConfigured(v1::SessionConfiguredNotification),
 }
 
 client_notification_definitions! {
@@ -901,7 +814,6 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
     use codex_protocol::parse_command::ParsedCommand;
-    use codex_protocol::protocol::AskForApproval;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -912,37 +824,19 @@ mod tests {
     }
 
     #[test]
-    fn serialize_new_conversation() -> Result<()> {
-        let request = ClientRequest::NewConversation {
+    fn serialize_get_conversation_summary() -> Result<()> {
+        let request = ClientRequest::GetConversationSummary {
             request_id: RequestId::Integer(42),
-            params: v1::NewConversationParams {
-                model: Some("gpt-5.1-codex-max".to_string()),
-                model_provider: None,
-                profile: None,
-                cwd: None,
-                approval_policy: Some(AskForApproval::OnRequest),
-                sandbox: None,
-                config: None,
-                base_instructions: None,
-                developer_instructions: None,
-                compact_prompt: None,
-                include_apply_patch_tool: None,
+            params: v1::GetConversationSummaryParams::ThreadId {
+                conversation_id: ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?,
             },
         };
         assert_eq!(
             json!({
-                "method": "newConversation",
+                "method": "getConversationSummary",
                 "id": 42,
                 "params": {
-                    "model": "gpt-5.1-codex-max",
-                    "modelProvider": null,
-                    "profile": null,
-                    "cwd": null,
-                    "approvalPolicy": "on-request",
-                    "sandbox": null,
-                    "config": null,
-                    "baseInstructions": null,
-                    "includeApplyPatchTool": null
+                    "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8"
                 }
             }),
             serde_json::to_value(&request)?,

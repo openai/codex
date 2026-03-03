@@ -23,8 +23,7 @@ use anyhow::bail;
 use clap::ArgAction;
 use clap::Parser;
 use clap::Subcommand;
-use codex_app_server_protocol::AddConversationListenerParams;
-use codex_app_server_protocol::AddConversationSubscriptionResponse;
+use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
@@ -40,22 +39,16 @@ use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
-use codex_app_server_protocol::InputItem;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoginChatGptCompleteNotification;
-use codex_app_server_protocol::LoginChatGptResponse;
+use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::ReadOnlyAccess;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
-use codex_app_server_protocol::SendUserMessageParams;
-use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
@@ -69,9 +62,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::W3cTraceContext;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -502,26 +492,16 @@ fn send_message(
     config_overrides: &[String],
     user_message: String,
 ) -> Result<()> {
-    with_client(endpoint, config_overrides, |client| {
-        let initialize = client.initialize()?;
-        println!("< initialize response: {initialize:?}");
-
-        let conversation = client.start_thread()?;
-        println!("< newConversation response: {conversation:?}");
-
-        let subscription = client.add_conversation_listener(&conversation.conversation_id)?;
-        println!("< addConversationListener response: {subscription:?}");
-
-        let send_response =
-            client.send_user_message(&conversation.conversation_id, &user_message)?;
-        println!("< sendUserMessage response: {send_response:?}");
-
-        client.stream_conversation(&conversation.conversation_id)?;
-
-        client.remove_thread_listener(subscription.subscription_id)?;
-
-        Ok(())
-    })
+    let dynamic_tools = None;
+    send_message_v2_with_policies(
+        endpoint,
+        config_overrides,
+        user_message,
+        false,
+        None,
+        None,
+        &dynamic_tools,
+    )
 }
 
 pub fn send_message_v2(
@@ -877,15 +857,15 @@ fn test_login(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
         let initialize = client.initialize()?;
         println!("< initialize response: {initialize:?}");
 
-        let login_response = client.login_chat_gpt()?;
-        println!("< loginChatGpt response: {login_response:?}");
-        println!(
-            "Open the following URL in your browser to continue:\n{}",
-            login_response.auth_url
-        );
+        let login_response = client.login_account_chatgpt()?;
+        println!("< account/login/start response: {login_response:?}");
+        let LoginAccountResponse::Chatgpt { login_id, auth_url } = login_response else {
+            bail!("expected chatgpt login response");
+        };
+        println!("Open the following URL in your browser to continue:\n{auth_url}");
 
-        let completion = client.wait_for_login_completion(&login_response.login_id)?;
-        println!("< loginChatGptComplete notification: {completion:?}");
+        let completion = client.wait_for_account_login_completion(&login_id)?;
+        println!("< account/login/completed notification: {completion:?}");
 
         if completion.success {
             println!("Login succeeded.");
@@ -896,7 +876,7 @@ fn test_login(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
                 completion
                     .error
                     .as_deref()
-                    .unwrap_or("unknown error from loginChatGptComplete")
+                    .unwrap_or("unknown error from account/login/completed")
             );
         }
     })
@@ -1142,69 +1122,6 @@ impl CodexClient {
         Ok(response)
     }
 
-    fn start_thread(&mut self) -> Result<NewConversationResponse> {
-        let request_id = self.request_id();
-        let request = ClientRequest::NewConversation {
-            request_id: request_id.clone(),
-            params: NewConversationParams::default(),
-        };
-
-        self.send_request(request, request_id, "newConversation")
-    }
-
-    fn add_conversation_listener(
-        &mut self,
-        conversation_id: &ThreadId,
-    ) -> Result<AddConversationSubscriptionResponse> {
-        let request_id = self.request_id();
-        let request = ClientRequest::AddConversationListener {
-            request_id: request_id.clone(),
-            params: AddConversationListenerParams {
-                conversation_id: *conversation_id,
-                experimental_raw_events: false,
-            },
-        };
-
-        self.send_request(request, request_id, "addConversationListener")
-    }
-
-    fn remove_thread_listener(&mut self, subscription_id: Uuid) -> Result<()> {
-        let request_id = self.request_id();
-        let request = ClientRequest::RemoveConversationListener {
-            request_id: request_id.clone(),
-            params: codex_app_server_protocol::RemoveConversationListenerParams { subscription_id },
-        };
-
-        self.send_request::<codex_app_server_protocol::RemoveConversationSubscriptionResponse>(
-            request,
-            request_id,
-            "removeConversationListener",
-        )?;
-
-        Ok(())
-    }
-
-    fn send_user_message(
-        &mut self,
-        conversation_id: &ThreadId,
-        message: &str,
-    ) -> Result<SendUserMessageResponse> {
-        let request_id = self.request_id();
-        let request = ClientRequest::SendUserMessage {
-            request_id: request_id.clone(),
-            params: SendUserMessageParams {
-                conversation_id: *conversation_id,
-                items: vec![InputItem::Text {
-                    text: message.to_string(),
-                    // Test client sends plain text without UI element ranges.
-                    text_elements: Vec::new(),
-                }],
-            },
-        };
-
-        self.send_request(request, request_id, "sendUserMessage")
-    }
-
     fn thread_start(&mut self, params: ThreadStartParams) -> Result<ThreadStartResponse> {
         let request_id = self.request_id();
         let request = ClientRequest::ThreadStart {
@@ -1235,14 +1152,14 @@ impl CodexClient {
         self.send_request(request, request_id, "turn/start")
     }
 
-    fn login_chat_gpt(&mut self) -> Result<LoginChatGptResponse> {
+    fn login_account_chatgpt(&mut self) -> Result<LoginAccountResponse> {
         let request_id = self.request_id();
-        let request = ClientRequest::LoginChatGpt {
+        let request = ClientRequest::LoginAccount {
             request_id: request_id.clone(),
-            params: None,
+            params: codex_app_server_protocol::LoginAccountParams::Chatgpt,
         };
 
-        self.send_request(request, request_id, "loginChatGpt")
+        self.send_request(request, request_id, "account/login/start")
     }
 
     fn get_account_rate_limits(&mut self) -> Result<GetAccountRateLimitsResponse> {
@@ -1275,77 +1192,31 @@ impl CodexClient {
         self.send_request(request, request_id, "thread/list")
     }
 
-    fn stream_conversation(&mut self, conversation_id: &ThreadId) -> Result<()> {
-        loop {
-            let notification = self.next_notification()?;
-
-            if !notification.method.starts_with("codex/event/") {
-                continue;
-            }
-
-            if let Some(event) = self.extract_event(notification, conversation_id)? {
-                match &event.msg {
-                    EventMsg::AgentMessage(event) => {
-                        println!("{}", event.message);
-                    }
-                    EventMsg::AgentMessageDelta(event) => {
-                        print!("{}", event.delta);
-                        std::io::stdout().flush().ok();
-                    }
-                    EventMsg::TurnComplete(event) => {
-                        println!("\n[task complete: {event:?}]");
-                        break;
-                    }
-                    EventMsg::TurnAborted(event) => {
-                        println!("\n[turn aborted: {:?}]", event.reason);
-                        break;
-                    }
-                    EventMsg::Error(event) => {
-                        println!("[error] {event:?}");
-                    }
-                    _ => {
-                        println!("[UNKNOWN EVENT] {:?}", event.msg);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn wait_for_login_completion(
+    fn wait_for_account_login_completion(
         &mut self,
-        expected_login_id: &Uuid,
-    ) -> Result<LoginChatGptCompleteNotification> {
+        expected_login_id: &str,
+    ) -> Result<AccountLoginCompletedNotification> {
         loop {
             let notification = self.next_notification()?;
 
             if let Ok(server_notification) = ServerNotification::try_from(notification) {
                 match server_notification {
-                    ServerNotification::LoginChatGptComplete(completion) => {
-                        if &completion.login_id == expected_login_id {
+                    ServerNotification::AccountLoginCompleted(completion) => {
+                        if completion.login_id.as_deref() == Some(expected_login_id) {
                             return Ok(completion);
                         }
 
                         println!(
-                            "[ignoring loginChatGptComplete for unexpected login_id: {}]",
+                            "[ignoring account/login/completed for unexpected login_id: {:?}]",
                             completion.login_id
                         );
-                    }
-                    ServerNotification::AuthStatusChange(status) => {
-                        println!("< authStatusChange notification: {status:?}");
                     }
                     ServerNotification::AccountRateLimitsUpdated(snapshot) => {
                         println!("< accountRateLimitsUpdated notification: {snapshot:?}");
                     }
-                    ServerNotification::SessionConfigured(_) => {
-                        // SessionConfigured notifications are unrelated to login; skip.
-                    }
                     _ => {}
                 }
             }
-
-            // Not a server notification (likely a conversation event); keep waiting.
         }
     }
 
@@ -1417,36 +1288,6 @@ impl CodexClient {
         loop {
             let _ = self.next_notification()?;
         }
-    }
-
-    fn extract_event(
-        &self,
-        notification: JSONRPCNotification,
-        conversation_id: &ThreadId,
-    ) -> Result<Option<Event>> {
-        let params = notification
-            .params
-            .context("event notification missing params")?;
-
-        let mut map = match params {
-            Value::Object(map) => map,
-            other => bail!("unexpected params shape: {other:?}"),
-        };
-
-        let conversation_value = map
-            .remove("conversationId")
-            .context("event missing conversationId")?;
-        let notification_conversation: ThreadId = serde_json::from_value(conversation_value)
-            .context("conversationId was not a valid UUID")?;
-
-        if &notification_conversation != conversation_id {
-            return Ok(None);
-        }
-
-        let event_value = Value::Object(map);
-        let event: Event =
-            serde_json::from_value(event_value).context("failed to decode event payload")?;
-        Ok(Some(event))
     }
 
     fn send_request<T>(

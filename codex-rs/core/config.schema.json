@@ -1107,14 +1107,8 @@
         "enabled": {
           "default": true,
           "type": "boolean"
-        },
-        "path": {
-          "$ref": "#/definitions/AbsolutePathBuf"
         }
       },
-      "required": [
-        "path"
-      ],
       "type": "object"
     },
     "ProjectConfig": {

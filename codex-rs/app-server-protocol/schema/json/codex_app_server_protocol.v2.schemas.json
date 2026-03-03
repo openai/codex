@@ -2499,6 +2499,16 @@
             }
           ]
         },
+        "service_tier": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tools": {
           "anyOf": [
             {
@@ -3838,6 +3848,16 @@
                 }
               ],
               "description": "How to sandbox commands executed in the system"
+            },
+            "service_tier": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "session_id": {
               "$ref": "#/definitions/ThreadId"
@@ -8218,6 +8238,16 @@
             }
           ]
         },
+        "service_tier": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "web_search": {
           "anyOf": [
             {
@@ -10647,6 +10677,12 @@
       "title": "ServerRequestResolvedNotification",
       "type": "object"
     },
+    "ServiceTier": {
+      "enum": [
+        "fast"
+      ],
+      "type": "string"
+    },
     "SessionNetworkProxyRuntime": {
       "properties": {
         "admin_addr": {
@@ -11489,6 +11525,23 @@
             }
           ]
         },
+        "serviceTier": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threadId": {
           "type": "string"
         }
@@ -11526,6 +11579,16 @@
         },
         "sandbox": {
           "$ref": "#/definitions/SandboxPolicy"
+        },
+        "serviceTier": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "thread": {
           "$ref": "#/definitions/Thread"
@@ -12472,6 +12535,23 @@
             }
           ]
         },
+        "serviceTier": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threadId": {
           "type": "string"
         }
@@ -12509,6 +12589,16 @@
         },
         "sandbox": {
           "$ref": "#/definitions/SandboxPolicy"
+        },
+        "serviceTier": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "thread": {
           "$ref": "#/definitions/Thread"
@@ -12688,6 +12778,23 @@
             "string",
             "null"
           ]
+        },
+        "serviceTier": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "title": "ThreadStartParams",
@@ -12720,6 +12827,16 @@
         },
         "sandbox": {
           "$ref": "#/definitions/SandboxPolicy"
+        },
+        "serviceTier": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "thread": {
           "$ref": "#/definitions/Thread"
@@ -13525,6 +13642,24 @@
             }
           ],
           "description": "Override the sandbox policy for this turn and subsequent turns."
+        },
+        "serviceTier": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override the service tier for this turn and subsequent turns."
         },
         "summary": {
           "anyOf": [

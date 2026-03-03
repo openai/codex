@@ -417,7 +417,7 @@ mod tests {
         fs::write(path, contents).unwrap();
     }
 
-    fn plugin_config_toml(plugin_root: &Path) -> String {
+    fn plugin_config_toml() -> String {
         let mut root = toml::map::Map::new();
 
         let mut features = toml::map::Map::new();
@@ -425,14 +425,10 @@ mod tests {
         root.insert("features".to_string(), Value::Table(features));
 
         let mut plugin = toml::map::Map::new();
-        plugin.insert(
-            "path".to_string(),
-            Value::String(plugin_root.display().to_string()),
-        );
         plugin.insert("enabled".to_string(), Value::Boolean(true));
 
         let mut plugins = toml::map::Map::new();
-        plugins.insert("sample".to_string(), Value::Table(plugin));
+        plugins.insert("sample@test".to_string(), Value::Table(plugin));
         root.insert("plugins".to_string(), Value::Table(plugins));
 
         toml::to_string(&Value::Table(root)).expect("plugin test config should serialize")
@@ -616,7 +612,10 @@ mod tests {
     #[tokio::test]
     async fn effective_mcp_servers_include_plugins_without_overriding_user_config() {
         let codex_home = tempfile::tempdir().expect("tempdir");
-        let plugin_root = codex_home.path().join("plugin-sample");
+        let plugin_root = codex_home
+            .path()
+            .join("plugins/cache")
+            .join("test/sample/local");
         write_file(
             &plugin_root.join(".codex-plugin/plugin.json"),
             r#"{"name":"sample"}"#,
@@ -638,7 +637,7 @@ mod tests {
         );
         write_file(
             &codex_home.path().join(CONFIG_TOML_FILE),
-            &plugin_config_toml(&plugin_root),
+            &plugin_config_toml(),
         );
 
         let mut config = ConfigBuilder::default()

@@ -1,4 +1,14 @@
+use super::load_plugin_manifest;
+use super::plugin_manifest_name;
+use super::store::DEFAULT_PLUGIN_VERSION;
+use super::store::PluginId;
+use super::store::PluginInstallRequest;
+use super::store::PluginInstallResult;
+use super::store::PluginStore;
+use super::store::PluginStoreError;
 use crate::config::Config;
+use crate::config::ConfigService;
+use crate::config::ConfigServiceError;
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
 use crate::config::types::McpServerConfig;
@@ -7,10 +17,13 @@ use crate::config_loader::ConfigLayerStack;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
+use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::MergeStrategy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
+use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -18,7 +31,6 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 use tracing::warn;
 
-const PLUGIN_MANIFEST_PATH: &str = ".codex-plugin/plugin.json";
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 
@@ -71,12 +83,16 @@ impl PluginLoadOutcome {
 }
 
 pub struct PluginsManager {
+    codex_home: PathBuf,
+    store: PluginStore,
     cache_by_cwd: RwLock<HashMap<PathBuf, PluginLoadOutcome>>,
 }
 
 impl PluginsManager {
-    pub fn new(_codex_home: PathBuf) -> Self {
+    pub fn new(codex_home: PathBuf) -> Self {
         Self {
+            codex_home: codex_home.clone(),
+            store: PluginStore::new(codex_home),
             cache_by_cwd: RwLock::new(HashMap::new()),
         }
     }
@@ -104,7 +120,7 @@ impl PluginsManager {
             return outcome;
         }
 
-        let outcome = load_plugins_from_layer_stack(config_layer_stack);
+        let outcome = load_plugins_from_layer_stack(config_layer_stack, &self.store);
         log_plugin_load_errors(&outcome);
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
@@ -127,6 +143,50 @@ impl PluginsManager {
             Ok(cache) => cache.get(cwd).cloned(),
             Err(err) => err.into_inner().get(cwd).cloned(),
         }
+    }
+
+    pub async fn install_plugin(
+        &self,
+        request: PluginInstallRequest,
+    ) -> Result<PluginInstallResult, PluginInstallError> {
+        let store = self.store.clone();
+        let result = tokio::task::spawn_blocking(move || store.install(request))
+            .await
+            .map_err(PluginInstallError::join)??;
+
+        ConfigService::new_with_defaults(self.codex_home.clone())
+            .write_value(ConfigValueWriteParams {
+                key_path: format!("plugins.{}", result.plugin_id.as_key()),
+                value: json!({
+                    "enabled": true,
+                }),
+                merge_strategy: MergeStrategy::Replace,
+                file_path: None,
+                expected_version: None,
+            })
+            .await
+            .map(|_| ())
+            .map_err(PluginInstallError::from)?;
+
+        Ok(result)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PluginInstallError {
+    #[error("{0}")]
+    Store(#[from] PluginStoreError),
+
+    #[error("{0}")]
+    Config(#[from] ConfigServiceError),
+
+    #[error("failed to join plugin install task: {0}")]
+    Join(#[from] tokio::task::JoinError),
+}
+
+impl PluginInstallError {
+    fn join(source: tokio::task::JoinError) -> Self {
+        Self::Join(source)
     }
 }
 
@@ -161,18 +221,16 @@ fn log_plugin_load_errors(outcome: &PluginLoadOutcome) {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct PluginManifest {
-    name: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginMcpFile {
     #[serde(default)]
     mcp_servers: HashMap<String, JsonValue>,
 }
 
-pub fn load_plugins_from_layer_stack(config_layer_stack: &ConfigLayerStack) -> PluginLoadOutcome {
+pub(crate) fn load_plugins_from_layer_stack(
+    config_layer_stack: &ConfigLayerStack,
+    store: &PluginStore,
+) -> PluginLoadOutcome {
     let mut configured_plugins: Vec<_> = configured_plugins_from_stack(config_layer_stack)
         .into_iter()
         .collect();
@@ -181,7 +239,7 @@ pub fn load_plugins_from_layer_stack(config_layer_stack: &ConfigLayerStack) -> P
     let mut plugins = Vec::with_capacity(configured_plugins.len());
     let mut seen_mcp_server_names = HashMap::<String, String>::new();
     for (configured_name, plugin) in configured_plugins {
-        let loaded_plugin = load_plugin(configured_name.clone(), &plugin);
+        let loaded_plugin = load_plugin(configured_name.clone(), &plugin, store);
         for name in loaded_plugin.mcp_servers.keys() {
             if let Some(previous_plugin) =
                 seen_mcp_server_names.insert(name.clone(), configured_name.clone())
@@ -226,12 +284,18 @@ fn configured_plugins_from_stack(
     }
 }
 
-fn load_plugin(config_name: String, plugin: &PluginConfig) -> LoadedPlugin {
-    let plugin_root = plugin.path.clone();
+fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) -> LoadedPlugin {
+    let plugin_version = DEFAULT_PLUGIN_VERSION.to_string();
+    let plugin_root = PluginId::parse(&config_name)
+        .map(|plugin_id| store.plugin_root(&plugin_id, &plugin_version));
+    let root = match &plugin_root {
+        Ok(plugin_root) => plugin_root.clone(),
+        Err(_) => store.root().clone(),
+    };
     let mut loaded_plugin = LoadedPlugin {
         config_name,
         manifest_name: None,
-        root: plugin_root.clone(),
+        root,
         enabled: plugin.enabled,
         skill_roots: Vec::new(),
         mcp_servers: HashMap::new(),
@@ -241,6 +305,14 @@ fn load_plugin(config_name: String, plugin: &PluginConfig) -> LoadedPlugin {
     if !plugin.enabled {
         return loaded_plugin;
     }
+
+    let plugin_root = match plugin_root {
+        Ok(plugin_root) => plugin_root,
+        Err(err) => {
+            loaded_plugin.error = Some(err.to_string());
+            return loaded_plugin;
+        }
+    };
 
     if !plugin_root.as_path().is_dir() {
         loaded_plugin.error = Some("path does not exist or is not a directory".to_string());
@@ -270,33 +342,6 @@ fn load_plugin(config_name: String, plugin: &PluginConfig) -> LoadedPlugin {
     }
     loaded_plugin.mcp_servers = mcp_servers;
     loaded_plugin
-}
-
-fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
-    let manifest_path = plugin_root.join(PLUGIN_MANIFEST_PATH);
-    if !manifest_path.is_file() {
-        return None;
-    }
-    let contents = fs::read_to_string(&manifest_path).ok()?;
-    match serde_json::from_str(&contents) {
-        Ok(manifest) => Some(manifest),
-        Err(err) => {
-            warn!(
-                path = %manifest_path.display(),
-                "failed to parse plugin manifest: {err}"
-            );
-            None
-        }
-    }
-}
-
-fn plugin_manifest_name(manifest: &PluginManifest, plugin_root: &Path) -> String {
-    plugin_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|_| manifest.name.trim().is_empty())
-        .unwrap_or(&manifest.name)
-        .to_string()
 }
 
 fn default_skill_roots(plugin_root: &Path) -> Vec<PathBuf> {
@@ -422,6 +467,7 @@ mod tests {
     use crate::config::ConfigBuilder;
     use crate::config::types::McpServerTransportConfig;
     use pretty_assertions::assert_eq;
+    use std::fs;
     use tempfile::TempDir;
     use toml::Value;
 
@@ -430,11 +476,20 @@ mod tests {
         fs::write(path, contents).unwrap();
     }
 
-    fn plugin_config_toml(
-        plugin_root: &Path,
-        enabled: bool,
-        plugins_feature_enabled: bool,
-    ) -> String {
+    fn write_plugin(root: &Path, dir_name: &str, manifest_name: &str) {
+        let plugin_root = root.join(dir_name);
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+        fs::create_dir_all(plugin_root.join("skills")).unwrap();
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            format!(r#"{{"name":"{manifest_name}"}}"#),
+        )
+        .unwrap();
+        fs::write(plugin_root.join("skills/SKILL.md"), "skill").unwrap();
+        fs::write(plugin_root.join(".mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
+    }
+
+    fn plugin_config_toml(enabled: bool, plugins_feature_enabled: bool) -> String {
         let mut root = toml::map::Map::new();
 
         let mut features = toml::map::Map::new();
@@ -445,14 +500,10 @@ mod tests {
         root.insert("features".to_string(), Value::Table(features));
 
         let mut plugin = toml::map::Map::new();
-        plugin.insert(
-            "path".to_string(),
-            Value::String(plugin_root.display().to_string()),
-        );
         plugin.insert("enabled".to_string(), Value::Boolean(enabled));
 
         let mut plugins = toml::map::Map::new();
-        plugins.insert("sample".to_string(), Value::Table(plugin));
+        plugins.insert("sample@test".to_string(), Value::Table(plugin));
         root.insert("plugins".to_string(), Value::Table(plugins));
 
         toml::to_string(&Value::Table(root)).expect("plugin test config should serialize")
@@ -471,7 +522,10 @@ mod tests {
     #[tokio::test]
     async fn load_plugins_loads_default_skills_and_mcp_servers() {
         let codex_home = TempDir::new().unwrap();
-        let plugin_root = codex_home.path().join("plugin-sample");
+        let plugin_root = codex_home
+            .path()
+            .join("plugins/cache")
+            .join("test/sample/local");
 
         write_file(
             &plugin_root.join(".codex-plugin/plugin.json"),
@@ -497,16 +551,13 @@ mod tests {
 }"#,
         );
 
-        let outcome = load_plugins_from_config(
-            &plugin_config_toml(&plugin_root, true, true),
-            codex_home.path(),
-        )
-        .await;
+        let outcome =
+            load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path()).await;
 
         assert_eq!(
             outcome.plugins,
             vec![LoadedPlugin {
-                config_name: "sample".to_string(),
+                config_name: "sample@test".to_string(),
                 manifest_name: Some("sample".to_string()),
                 root: AbsolutePathBuf::try_from(plugin_root.clone()).unwrap(),
                 enabled: true,
@@ -544,7 +595,10 @@ mod tests {
     #[tokio::test]
     async fn load_plugins_preserves_disabled_plugins_without_effective_contributions() {
         let codex_home = TempDir::new().unwrap();
-        let plugin_root = codex_home.path().join("plugin-sample");
+        let plugin_root = codex_home
+            .path()
+            .join("plugins/cache")
+            .join("test/sample/local");
 
         write_file(
             &plugin_root.join(".codex-plugin/plugin.json"),
@@ -562,16 +616,13 @@ mod tests {
 }"#,
         );
 
-        let outcome = load_plugins_from_config(
-            &plugin_config_toml(&plugin_root, false, true),
-            codex_home.path(),
-        )
-        .await;
+        let outcome =
+            load_plugins_from_config(&plugin_config_toml(false, true), codex_home.path()).await;
 
         assert_eq!(
             outcome.plugins,
             vec![LoadedPlugin {
-                config_name: "sample".to_string(),
+                config_name: "sample@test".to_string(),
                 manifest_name: None,
                 root: AbsolutePathBuf::try_from(plugin_root).unwrap(),
                 enabled: false,
@@ -605,7 +656,10 @@ mod tests {
     #[tokio::test]
     async fn load_plugins_returns_empty_when_feature_disabled() {
         let codex_home = TempDir::new().unwrap();
-        let plugin_root = codex_home.path().join("plugin-sample");
+        let plugin_root = codex_home
+            .path()
+            .join("plugins/cache")
+            .join("test/sample/local");
 
         write_file(
             &plugin_root.join(".codex-plugin/plugin.json"),
@@ -616,12 +670,77 @@ mod tests {
             "---\nname: sample-search\ndescription: search sample data\n---\n",
         );
 
+        let outcome =
+            load_plugins_from_config(&plugin_config_toml(true, false), codex_home.path()).await;
+
+        assert_eq!(outcome, PluginLoadOutcome::default());
+    }
+
+    #[tokio::test]
+    async fn load_plugins_rejects_invalid_plugin_keys() {
+        let codex_home = TempDir::new().unwrap();
+        let plugin_root = codex_home
+            .path()
+            .join("plugins/cache")
+            .join("test/sample/local");
+
+        write_file(
+            &plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"sample"}"#,
+        );
+
+        let mut root = toml::map::Map::new();
+        let mut features = toml::map::Map::new();
+        features.insert("plugins".to_string(), Value::Boolean(true));
+        root.insert("features".to_string(), Value::Table(features));
+
+        let mut plugin = toml::map::Map::new();
+        plugin.insert("enabled".to_string(), Value::Boolean(true));
+
+        let mut plugins = toml::map::Map::new();
+        plugins.insert("sample".to_string(), Value::Table(plugin));
+        root.insert("plugins".to_string(), Value::Table(plugins));
+
         let outcome = load_plugins_from_config(
-            &plugin_config_toml(&plugin_root, true, false),
+            &toml::to_string(&Value::Table(root)).expect("plugin test config should serialize"),
             codex_home.path(),
         )
         .await;
 
-        assert_eq!(outcome, PluginLoadOutcome::default());
+        assert_eq!(outcome.plugins.len(), 1);
+        assert_eq!(
+            outcome.plugins[0].error.as_deref(),
+            Some("invalid plugin key `sample`; expected <plugin>@<marketplace>")
+        );
+        assert!(outcome.effective_skill_roots().is_empty());
+        assert!(outcome.effective_mcp_servers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
+
+        let result = PluginsManager::new(tmp.path().to_path_buf())
+            .install_plugin(PluginInstallRequest {
+                source_path: tmp.path().join("sample-plugin"),
+                marketplace_name: None,
+            })
+            .await
+            .unwrap();
+
+        let installed_path = tmp.path().join("plugins/cache/debug/sample-plugin/local");
+        assert_eq!(
+            result,
+            PluginInstallResult {
+                plugin_id: PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap(),
+                plugin_version: "local".to_string(),
+                installed_path,
+            }
+        );
+
+        let config = fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(config.contains(r#"[plugins."sample-plugin@debug"]"#));
+        assert!(config.contains("enabled = true"));
     }
 }

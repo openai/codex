@@ -48,6 +48,8 @@ use rama_http::Request;
 use rama_http::Response;
 use rama_http::StatusCode;
 use rama_http::header;
+use rama_http::headers::HeaderMapExt;
+use rama_http::headers::Host;
 use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
 use rama_http::matcher::MethodMatcher;
 use rama_http_backend::client::proxy::layer::HttpProxyConnector;
@@ -55,7 +57,6 @@ use rama_http_backend::server::HttpServer;
 use rama_http_backend::server::layer::upgrade::UpgradeLayer;
 use rama_http_backend::server::layer::upgrade::Upgraded;
 use rama_net::Protocol;
-use rama_net::address::HostWithOptPort;
 use rama_net::address::ProxyAddress;
 use rama_net::client::ConnectorService;
 use rama_net::client::EstablishedClientConnection;
@@ -562,18 +563,27 @@ async fn http_plain_proxy(
         };
     }
 
-    let authority = match RequestContext::try_from(&req).map(|ctx| ctx.host_with_port()) {
-        Ok(authority) => authority,
+    let request_ctx = match RequestContext::try_from(&req) {
+        Ok(request_ctx) => request_ctx,
         Err(err) => {
             warn!("missing host: {err}");
             return Ok(text_response(StatusCode::BAD_REQUEST, "missing host"));
         }
     };
+    let authority = request_ctx.host_with_port();
     let host = normalize_host(&authority.host.to_string());
     let port = authority.port;
-    if let Err(err) = validate_plain_http_host_header(&req, &authority) {
-        warn!("HTTP request host mismatch: {err}");
-        return Ok(text_response(StatusCode::BAD_REQUEST, "host mismatch"));
+    if let Err(reason) = validate_absolute_form_host_header(&req, &request_ctx) {
+        let client = client.as_deref().unwrap_or_default();
+        let host_header = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("<missing>");
+        warn!(
+            "request rejected due to mismatched Host header (client={client}, target={host}:{port}, host_header={host_header}, reason={reason})"
+        );
+        return Ok(text_response(StatusCode::BAD_REQUEST, reason));
     }
     let enabled = match app_state
         .enabled()
@@ -757,6 +767,39 @@ fn client_addr<T: ExtensionsRef>(input: &T) -> Option<String> {
         .map(|info| info.peer_addr().to_string())
 }
 
+fn validate_absolute_form_host_header(
+    req: &Request,
+    request_ctx: &RequestContext,
+) -> Result<(), &'static str> {
+    if req.uri().scheme_str().is_none() {
+        return Ok(());
+    }
+
+    let Some(host_header) = req
+        .headers()
+        .typed_try_get::<Host>()
+        .map_err(|_| "invalid Host header")?
+    else {
+        return Ok(());
+    };
+
+    if host_header.0.host != request_ctx.authority.host {
+        return Err("Host header does not match request target");
+    }
+
+    if let Some(host_port) = host_header.0.port {
+        if Some(host_port) != request_ctx.authority.port {
+            return Err("Host header does not match request target");
+        }
+        return Ok(());
+    }
+
+    if !request_ctx.authority_has_default_port() {
+        return Err("Host header does not match request target");
+    }
+
+    Ok(())
+}
 fn remove_hop_by_hop_request_headers(headers: &mut HeaderMap) {
     while let Some(raw_connection) = headers.get(header::CONNECTION).cloned() {
         headers.remove(header::CONNECTION);
@@ -790,45 +833,6 @@ fn remove_hop_by_hop_request_headers(headers: &mut HeaderMap) {
     if let Ok(short_hop_header_name) = HeaderName::from_bytes(&[0x74, 0x65]) {
         headers.remove(short_hop_header_name);
     }
-}
-
-fn validate_plain_http_host_header(
-    req: &Request,
-    target: &rama_net::address::HostWithPort,
-) -> std::result::Result<(), &'static str> {
-    // Only enforce this in absolute-form requests. Origin-form requests use the Host header as the
-    // routing authority, so there is no separate target authority to compare against.
-    if req.uri().authority().is_none() {
-        return Ok(());
-    }
-
-    let Some(raw_host) = req.headers().get(header::HOST) else {
-        return Ok(());
-    };
-    let raw_host = raw_host.to_str().map_err(|_| "invalid Host header")?;
-    let parsed = HostWithOptPort::try_from(raw_host).map_err(|_| "invalid Host header")?;
-
-    let target_host = normalize_host(&target.host.to_string());
-    let request_host = normalize_host(&parsed.host.to_string());
-    if request_host.is_empty() || request_host != target_host {
-        return Err("request Host header host does not match target authority");
-    }
-
-    let expected_port = target.port;
-    let request_port = match parsed.port {
-        Some(port) => port,
-        None => match req.uri().scheme_str() {
-            Some("http") => 80,
-            Some("https") => 443,
-            Some(_) | None => expected_port,
-        },
-    };
-
-    if request_port != expected_port {
-        return Err("request Host header port does not match target authority");
-    }
-
-    Ok(())
 }
 
 fn json_blocked(host: &str, reason: &str, details: Option<&PolicyDecisionDetails<'_>>) -> Response {
@@ -1134,6 +1138,51 @@ mod tests {
 
         let response = http_plain_proxy(None, req).await;
         assert_eq!(response.unwrap().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_absolute_form_host_header_allows_matching_default_port() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/")
+            .header("host", "example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            validate_absolute_form_host_header(&req, &RequestContext::try_from(&req).unwrap(),),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validate_absolute_form_host_header_rejects_mismatched_host() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://raw.githubusercontent.com/")
+            .header("host", "api.github.com")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            validate_absolute_form_host_header(&req, &RequestContext::try_from(&req).unwrap(),),
+            Err("Host header does not match request target")
+        );
+    }
+
+    #[test]
+    fn validate_absolute_form_host_header_rejects_missing_non_default_port() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com:8080/")
+            .header("host", "example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            validate_absolute_form_host_header(&req, &RequestContext::try_from(&req).unwrap(),),
+            Err("Host header does not match request target")
+        );
     }
 
     #[test]

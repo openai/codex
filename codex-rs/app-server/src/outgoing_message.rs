@@ -500,7 +500,6 @@ mod tests {
     use codex_app_server_protocol::ConfigWarningNotification;
     use codex_app_server_protocol::DynamicToolCallParams;
     use codex_app_server_protocol::FileChangeRequestApprovalParams;
-    use codex_app_server_protocol::LoginChatGptCompleteNotification;
     use codex_app_server_protocol::ModelRerouteReason;
     use codex_app_server_protocol::ModelReroutedNotification;
     use codex_app_server_protocol::RateLimitSnapshot;
@@ -518,8 +517,8 @@ mod tests {
     #[test]
     fn verify_server_notification_serialization() {
         let notification =
-            ServerNotification::LoginChatGptComplete(LoginChatGptCompleteNotification {
-                login_id: Uuid::nil(),
+            ServerNotification::AccountLoginCompleted(AccountLoginCompletedNotification {
+                login_id: Some(Uuid::nil().to_string()),
                 success: true,
                 error: None,
             });
@@ -527,9 +526,9 @@ mod tests {
         let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
         assert_eq!(
             json!({
-                "method": "loginChatGptComplete",
+                "method": "account/login/completed",
                 "params": {
-                    "loginId": Uuid::nil(),
+                    "loginId": Uuid::nil().to_string(),
                     "success": true,
                     "error": null,
                 },
