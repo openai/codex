@@ -74,7 +74,7 @@ pub fn run_setup_refresh(
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
-    managed_proxy_enforced: bool,
+    proxy_enforced: bool,
 ) -> Result<()> {
     run_setup_refresh_inner(
         policy,
@@ -84,7 +84,7 @@ pub fn run_setup_refresh(
         codex_home,
         None,
         None,
-        managed_proxy_enforced,
+        proxy_enforced,
     )
 }
 
@@ -95,7 +95,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
     env_map: &HashMap<String, String>,
     codex_home: &Path,
     extra_read_roots: Vec<PathBuf>,
-    managed_proxy_enforced: bool,
+    proxy_enforced: bool,
 ) -> Result<()> {
     let mut read_roots = gather_read_roots(command_cwd, policy);
     read_roots.extend(extra_read_roots);
@@ -107,7 +107,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
         codex_home,
         Some(read_roots),
         Some(Vec::new()),
-        managed_proxy_enforced,
+        proxy_enforced,
     )
 }
 
@@ -119,7 +119,7 @@ fn run_setup_refresh_inner(
     codex_home: &Path,
     read_roots_override: Option<Vec<PathBuf>>,
     write_roots_override: Option<Vec<PathBuf>>,
-    managed_proxy_enforced: bool,
+    proxy_enforced: bool,
 ) -> Result<()> {
     // Skip in danger-full-access.
     if matches!(
@@ -137,7 +137,7 @@ fn run_setup_refresh_inner(
         read_roots_override,
         write_roots_override,
     );
-    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, managed_proxy_enforced);
+    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, proxy_enforced);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -380,9 +380,9 @@ const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
 
 pub(crate) fn offline_proxy_settings_from_env(
     env_map: &HashMap<String, String>,
-    managed_proxy_enforced: bool,
+    proxy_enforced: bool,
 ) -> OfflineProxySettings {
-    if !managed_proxy_enforced {
+    if !proxy_enforced {
         return OfflineProxySettings {
             proxy_ports: vec![],
             allow_local_binding: false,
@@ -615,7 +615,7 @@ pub fn run_elevated_setup(
     codex_home: &Path,
     read_roots_override: Option<Vec<PathBuf>>,
     write_roots_override: Option<Vec<PathBuf>>,
-    managed_proxy_enforced: bool,
+    proxy_enforced: bool,
 ) -> Result<()> {
     // Ensure the shared sandbox directory exists before we send it to the elevated helper.
     let sbx_dir = sandbox_dir(codex_home);
@@ -634,7 +634,7 @@ pub fn run_elevated_setup(
         read_roots_override,
         write_roots_override,
     );
-    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, managed_proxy_enforced);
+    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, proxy_enforced);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),

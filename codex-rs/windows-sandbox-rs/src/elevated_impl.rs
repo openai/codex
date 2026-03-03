@@ -216,7 +216,7 @@ mod windows_impl {
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
-        managed_proxy_enforced: bool,
+        proxy_enforced: bool,
     ) -> Result<CaptureResult> {
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
@@ -236,7 +236,7 @@ mod windows_impl {
             cwd,
             &env_map,
             codex_home,
-            managed_proxy_enforced,
+            proxy_enforced,
         )?;
         // Build capability SID for ACL grants.
         if matches!(
@@ -533,7 +533,7 @@ mod stub {
         _cwd: &Path,
         _env_map: HashMap<String, String>,
         _timeout_ms: Option<u64>,
-        _managed_proxy_enforced: bool,
+        _proxy_enforced: bool,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
     }
