@@ -4754,6 +4754,10 @@ impl CodexMessageProcessor {
 
         match turn_id {
             Ok(turn_id) => {
+                self.thread_watch_manager
+                    .note_turn_started(&params.thread_id)
+                    .await;
+
                 let turn = Turn {
                     id: turn_id.clone(),
                     items: vec![],

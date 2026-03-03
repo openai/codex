@@ -445,14 +445,13 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         "https://github.com/openai/codex.git",
     ]);
 
-    let expected_head = String::from_utf8(run_git(&["rev-parse", "HEAD"]).stdout)
-        .expect("git rev-parse output should be valid UTF-8")
-        .trim()
-        .to_string();
-    let expected_origin = String::from_utf8(run_git(&["remote", "get-url", "origin"]).stdout)
-        .expect("git remote get-url output should be valid UTF-8")
-        .trim()
-        .to_string();
+    let expected_head = codex_core::git_info::get_head_commit_hash(cwd)
+        .await
+        .expect("production git helper should read HEAD");
+    let expected_origin = codex_core::git_info::get_git_remote_urls_assume_git_repo(cwd)
+        .await
+        .and_then(|remotes| remotes.get("origin").cloned())
+        .expect("production git helper should read origin");
 
     let first_response = responses::sse(vec![
         responses::ev_response_created("resp-2"),
