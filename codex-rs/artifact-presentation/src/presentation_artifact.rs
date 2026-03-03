@@ -7,6 +7,8 @@ use image::imageops::FilterType;
 use ppt_rs::Chart;
 use ppt_rs::ChartSeries;
 use ppt_rs::ChartType;
+use ppt_rs::Hyperlink as PptHyperlink;
+use ppt_rs::HyperlinkAction as PptHyperlinkAction;
 use ppt_rs::Image;
 use ppt_rs::Presentation;
 use ppt_rs::Shape;
@@ -30,10 +32,16 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::Cursor;
+use std::io::Read;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
 use uuid::Uuid;
+use zip::ZipArchive;
+use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 const POINT_TO_EMU: u32 = 12_700;
 const DEFAULT_SLIDE_WIDTH_POINTS: u32 = 720;
@@ -193,6 +201,7 @@ impl PresentationArtifactManager {
             "append_notes" => self.append_notes(request),
             "clear_notes" => self.clear_notes(request),
             "set_notes_visibility" => self.set_notes_visibility(request),
+            "set_active_slide" => self.set_active_slide(request),
             "set_slide_background" => self.set_slide_background(request),
             "add_text_shape" => self.add_text_shape(request),
             "add_shape" => self.add_shape(request),
@@ -204,6 +213,9 @@ impl PresentationArtifactManager {
             "merge_table_cells" => self.merge_table_cells(request),
             "add_chart" => self.add_chart(request),
             "update_text" => self.update_text(request),
+            "replace_text" => self.replace_text(request),
+            "insert_text_after" => self.insert_text_after(request),
+            "set_hyperlink" => self.set_hyperlink(request),
             "update_shape_style" => self.update_shape_style(request),
             "bring_to_front" => self.bring_to_front(request),
             "send_to_back" => self.send_to_back(request),
@@ -287,11 +299,15 @@ impl PresentationArtifactManager {
             })?;
         }
 
-        document.to_ppt_rs().save(&path).map_err(|error| {
+        let bytes = build_pptx_bytes(document, &request.action).map_err(|message| {
             PresentationArtifactError::ExportFailed {
                 path: path.clone(),
-                message: error.to_string(),
+                message,
             }
+        })?;
+        std::fs::write(&path, bytes).map_err(|error| PresentationArtifactError::ExportFailed {
+            path: path.clone(),
+            message: error.to_string(),
         })?;
 
         let mut response = PresentationArtifactResponse::new(
@@ -348,6 +364,7 @@ impl PresentationArtifactManager {
                 theme: document.theme.clone(),
                 layouts: Vec::new(),
                 slides: vec![slide],
+                active_slide_index: Some(0),
                 next_slide_seq: 1,
                 next_element_seq: 1,
                 next_layout_seq: 1,
@@ -426,17 +443,22 @@ impl PresentationArtifactManager {
             artifact_id,
             request.action,
             format!(
-                "Presentation `{}` has {} slides, {} elements, and {} layouts",
+                "Presentation `{}` has {} slides, {} elements, {} layouts, and active slide {}",
                 document.name.as_deref().unwrap_or("Untitled"),
                 document.slides.len(),
                 document.total_element_count(),
-                document.layouts.len()
+                document.layouts.len(),
+                document
+                    .active_slide_index
+                    .map(|index| index.to_string())
+                    .unwrap_or_else(|| "none".to_string())
             ),
             snapshot_for_document(document),
         );
         response.slide_list = Some(slide_list(document));
         response.layout_list = Some(layout_list(document));
         response.theme = Some(document.theme_snapshot());
+        response.active_slide_index = document.active_slide_index;
         Ok(response)
     }
 
@@ -454,6 +476,7 @@ impl PresentationArtifactManager {
         );
         response.slide_list = Some(slide_list(document));
         response.theme = Some(document.theme_snapshot());
+        response.active_slide_index = document.active_slide_index;
         Ok(response)
     }
 
@@ -545,6 +568,7 @@ impl PresentationArtifactManager {
         );
         response.inspect_ndjson = Some(inspect_ndjson);
         response.theme = Some(document.theme_snapshot());
+        response.active_slide_index = document.active_slide_index;
         Ok(response)
     }
 
@@ -563,6 +587,7 @@ impl PresentationArtifactManager {
             snapshot_for_document(document),
         );
         response.resolved_record = Some(resolved_record);
+        response.active_slide_index = document.active_slide_index;
         Ok(response)
     }
 
@@ -671,6 +696,7 @@ impl PresentationArtifactManager {
                     frame: placeholder.frame,
                     fill: None,
                     style: TextStyle::default(),
+                    hyperlink: None,
                     placeholder: placeholder_ref,
                     z_order: placeholder_elements.len(),
                 }));
@@ -683,6 +709,7 @@ impl PresentationArtifactManager {
                     stroke: None,
                     text: placeholder.text,
                     text_style: TextStyle::default(),
+                    hyperlink: None,
                     placeholder: placeholder_ref,
                     rotation_degrees: None,
                     z_order: placeholder_elements.len(),
@@ -851,6 +878,25 @@ impl PresentationArtifactManager {
         ))
     }
 
+    fn set_active_slide(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: SetActiveSlideArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        document.set_active_slide_index(args.slide_index as usize, &request.action)?;
+        let mut response = PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Set active slide to {}", args.slide_index),
+            snapshot_for_document(document),
+        );
+        response.slide_list = Some(slide_list(document));
+        response.active_slide_index = document.active_slide_index;
+        Ok(response)
+    }
+
     fn add_slide(
         &mut self,
         request: PresentationArtifactRequest,
@@ -900,6 +946,7 @@ impl PresentationArtifactManager {
         if let Some(layout_id) = args.layout {
             apply_layout_to_slide(document, &mut slide, &layout_id, &request.action)?;
         }
+        document.adjust_active_slide_for_insert(index);
         document.slides.insert(index, slide);
         Ok(PresentationArtifactResponse::new(
             artifact_id,
@@ -929,6 +976,7 @@ impl PresentationArtifactManager {
             })?;
         let duplicated = document.clone_slide(source);
         let insert_at = args.slide_index as usize + 1;
+        document.adjust_active_slide_for_insert(insert_at);
         document.slides.insert(insert_at, duplicated);
         Ok(PresentationArtifactResponse::new(
             artifact_id,
@@ -963,6 +1011,7 @@ impl PresentationArtifactManager {
         }
         let slide = document.slides.remove(from);
         document.slides.insert(to, slide);
+        document.adjust_active_slide_for_move(from, to);
         Ok(PresentationArtifactResponse::new(
             artifact_id,
             request.action,
@@ -987,6 +1036,7 @@ impl PresentationArtifactManager {
             ));
         }
         document.slides.remove(index);
+        document.adjust_active_slide_for_delete(index);
         Ok(PresentationArtifactResponse::new(
             artifact_id,
             request.action,
@@ -1035,6 +1085,7 @@ impl PresentationArtifactManager {
             frame: args.position.into(),
             fill,
             style,
+            hyperlink: None,
             placeholder: None,
             z_order: slide.elements.len(),
         }));
@@ -1076,6 +1127,7 @@ impl PresentationArtifactManager {
                 stroke,
                 text: args.text,
                 text_style,
+                hyperlink: None,
                 placeholder: None,
                 rotation_degrees: None,
                 z_order: slide.elements.len(),
@@ -1480,6 +1532,170 @@ impl PresentationArtifactManager {
         ))
     }
 
+    fn replace_text(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: ReplaceTextArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let element = document.find_element_mut(&args.element_id, &request.action)?;
+        match element {
+            PresentationElement::Text(text) => {
+                if !text.text.contains(&args.search) {
+                    return Err(PresentationArtifactError::InvalidArgs {
+                        action: request.action,
+                        message: format!(
+                            "text `{}` was not found in element `{}`",
+                            args.search, args.element_id
+                        ),
+                    });
+                }
+                text.text = text.text.replace(&args.search, &args.replace);
+            }
+            PresentationElement::Shape(shape) => {
+                let Some(text) = &mut shape.text else {
+                    return Err(PresentationArtifactError::UnsupportedFeature {
+                        action: request.action,
+                        message: format!(
+                            "element `{}` does not contain editable text",
+                            args.element_id
+                        ),
+                    });
+                };
+                if !text.contains(&args.search) {
+                    return Err(PresentationArtifactError::InvalidArgs {
+                        action: request.action,
+                        message: format!(
+                            "text `{}` was not found in element `{}`",
+                            args.search, args.element_id
+                        ),
+                    });
+                }
+                *text = text.replace(&args.search, &args.replace);
+            }
+            other => {
+                return Err(PresentationArtifactError::UnsupportedFeature {
+                    action: request.action,
+                    message: format!(
+                        "element `{}` is `{}`; only text-bearing elements support `replace_text`",
+                        args.element_id,
+                        other.kind()
+                    ),
+                });
+            }
+        }
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Replaced text in element `{}`", args.element_id),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn insert_text_after(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: InsertTextAfterArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let element = document.find_element_mut(&args.element_id, &request.action)?;
+        match element {
+            PresentationElement::Text(text) => {
+                let Some(index) = text.text.find(&args.after) else {
+                    return Err(PresentationArtifactError::InvalidArgs {
+                        action: request.action,
+                        message: format!(
+                            "text `{}` was not found in element `{}`",
+                            args.after, args.element_id
+                        ),
+                    });
+                };
+                let insert_at = index + args.after.len();
+                text.text.insert_str(insert_at, &args.insert);
+            }
+            PresentationElement::Shape(shape) => {
+                let Some(text) = &mut shape.text else {
+                    return Err(PresentationArtifactError::UnsupportedFeature {
+                        action: request.action,
+                        message: format!(
+                            "element `{}` does not contain editable text",
+                            args.element_id
+                        ),
+                    });
+                };
+                let Some(index) = text.find(&args.after) else {
+                    return Err(PresentationArtifactError::InvalidArgs {
+                        action: request.action,
+                        message: format!(
+                            "text `{}` was not found in element `{}`",
+                            args.after, args.element_id
+                        ),
+                    });
+                };
+                let insert_at = index + args.after.len();
+                text.insert_str(insert_at, &args.insert);
+            }
+            other => {
+                return Err(PresentationArtifactError::UnsupportedFeature {
+                    action: request.action,
+                    message: format!(
+                        "element `{}` is `{}`; only text-bearing elements support `insert_text_after`",
+                        args.element_id,
+                        other.kind()
+                    ),
+                });
+            }
+        }
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Inserted text in element `{}`", args.element_id),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn set_hyperlink(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: SetHyperlinkArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let clear = args.clear.unwrap_or(false);
+        let hyperlink = if clear {
+            None
+        } else {
+            Some(parse_hyperlink_state(document, &args, &request.action)?)
+        };
+        let element = document.find_element_mut(&args.element_id, &request.action)?;
+        match element {
+            PresentationElement::Text(text) => text.hyperlink = hyperlink,
+            PresentationElement::Shape(shape) => shape.hyperlink = hyperlink,
+            other => {
+                return Err(PresentationArtifactError::UnsupportedFeature {
+                    action: request.action,
+                    message: format!(
+                        "element `{}` is `{}`; only text boxes and shapes support `set_hyperlink`",
+                        args.element_id,
+                        other.kind()
+                    ),
+                });
+            }
+        }
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            "set_hyperlink".to_string(),
+            if clear {
+                format!("Cleared hyperlink for element `{}`", args.element_id)
+            } else {
+                format!("Updated hyperlink for element `{}`", args.element_id)
+            },
+            snapshot_for_document(document),
+        ))
+    }
+
     fn update_shape_style(
         &mut self,
         request: PresentationArtifactRequest,
@@ -1703,6 +1919,7 @@ impl PresentationArtifactManager {
             theme: None,
             inspect_ndjson: None,
             resolved_record: None,
+            active_slide_index: None,
         })
     }
 
@@ -1754,6 +1971,8 @@ pub struct PresentationArtifactResponse {
     pub inspect_ndjson: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_record: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_slide_index: Option<usize>,
 }
 
 impl PresentationArtifactResponse {
@@ -1775,6 +1994,7 @@ impl PresentationArtifactResponse {
             theme: None,
             inspect_ndjson: None,
             resolved_record: None,
+            active_slide_index: None,
         }
     }
 }
@@ -1797,6 +2017,7 @@ pub struct SlideSnapshot {
 pub struct SlideListEntry {
     pub slide_id: String,
     pub index: usize,
+    pub is_active: bool,
     pub notes: Option<String>,
     pub notes_visible: bool,
     pub background_fill: Option<String>,
@@ -1910,6 +2131,140 @@ struct TextStyle {
     underline: bool,
 }
 
+#[derive(Debug, Clone)]
+struct HyperlinkState {
+    target: HyperlinkTarget,
+    tooltip: Option<String>,
+    highlight_click: bool,
+}
+
+#[derive(Debug, Clone)]
+enum HyperlinkTarget {
+    Url(String),
+    Slide(u32),
+    FirstSlide,
+    LastSlide,
+    NextSlide,
+    PreviousSlide,
+    EndShow,
+    Email {
+        address: String,
+        subject: Option<String>,
+    },
+    File(String),
+}
+
+impl HyperlinkTarget {
+    fn relationship_target(&self) -> String {
+        match self {
+            Self::Url(url) => url.clone(),
+            Self::Slide(slide_index) => format!("slide{}.xml", slide_index + 1),
+            Self::FirstSlide => "ppaction://hlinkshowjump?jump=firstslide".to_string(),
+            Self::LastSlide => "ppaction://hlinkshowjump?jump=lastslide".to_string(),
+            Self::NextSlide => "ppaction://hlinkshowjump?jump=nextslide".to_string(),
+            Self::PreviousSlide => "ppaction://hlinkshowjump?jump=previousslide".to_string(),
+            Self::EndShow => "ppaction://hlinkshowjump?jump=endshow".to_string(),
+            Self::Email { address, subject } => {
+                let mut mailto = format!("mailto:{address}");
+                if let Some(subject) = subject {
+                    mailto.push_str(&format!("?subject={subject}"));
+                }
+                mailto
+            }
+            Self::File(path) => format!("file:///{}", path.replace('\\', "/")),
+        }
+    }
+
+    fn is_external(&self) -> bool {
+        matches!(self, Self::Url(_) | Self::Email { .. } | Self::File(_))
+    }
+}
+
+impl HyperlinkState {
+    fn to_ppt_rs(&self, relationship_id: &str) -> PptHyperlink {
+        let hyperlink = match &self.target {
+            HyperlinkTarget::Url(url) => PptHyperlink::new(PptHyperlinkAction::url(url)),
+            HyperlinkTarget::Slide(slide_index) => {
+                PptHyperlink::new(PptHyperlinkAction::slide(slide_index + 1))
+            }
+            HyperlinkTarget::FirstSlide => PptHyperlink::new(PptHyperlinkAction::FirstSlide),
+            HyperlinkTarget::LastSlide => PptHyperlink::new(PptHyperlinkAction::LastSlide),
+            HyperlinkTarget::NextSlide => PptHyperlink::new(PptHyperlinkAction::NextSlide),
+            HyperlinkTarget::PreviousSlide => PptHyperlink::new(PptHyperlinkAction::PreviousSlide),
+            HyperlinkTarget::EndShow => PptHyperlink::new(PptHyperlinkAction::EndShow),
+            HyperlinkTarget::Email { address, subject } => PptHyperlink::new(match subject {
+                Some(subject) => PptHyperlinkAction::email_with_subject(address, subject),
+                None => PptHyperlinkAction::email(address),
+            }),
+            HyperlinkTarget::File(path) => PptHyperlink::new(PptHyperlinkAction::file(path)),
+        };
+        let hyperlink = if let Some(tooltip) = &self.tooltip {
+            hyperlink.with_tooltip(tooltip)
+        } else {
+            hyperlink
+        };
+        hyperlink
+            .with_highlight_click(self.highlight_click)
+            .with_r_id(relationship_id)
+    }
+
+    fn to_json(&self) -> Value {
+        let mut record = match &self.target {
+            HyperlinkTarget::Url(url) => serde_json::json!({
+                "type": "url",
+                "url": url,
+            }),
+            HyperlinkTarget::Slide(slide_index) => serde_json::json!({
+                "type": "slide",
+                "slideIndex": slide_index,
+            }),
+            HyperlinkTarget::FirstSlide => serde_json::json!({
+                "type": "firstSlide",
+            }),
+            HyperlinkTarget::LastSlide => serde_json::json!({
+                "type": "lastSlide",
+            }),
+            HyperlinkTarget::NextSlide => serde_json::json!({
+                "type": "nextSlide",
+            }),
+            HyperlinkTarget::PreviousSlide => serde_json::json!({
+                "type": "previousSlide",
+            }),
+            HyperlinkTarget::EndShow => serde_json::json!({
+                "type": "endShow",
+            }),
+            HyperlinkTarget::Email { address, subject } => serde_json::json!({
+                "type": "email",
+                "address": address,
+                "subject": subject,
+            }),
+            HyperlinkTarget::File(path) => serde_json::json!({
+                "type": "file",
+                "path": path,
+            }),
+        };
+        record["tooltip"] = self
+            .tooltip
+            .as_ref()
+            .map(|tooltip| Value::String(tooltip.clone()))
+            .unwrap_or(Value::Null);
+        record["highlightClick"] = Value::Bool(self.highlight_click);
+        record
+    }
+
+    fn relationship_xml(&self, relationship_id: &str) -> String {
+        let target_mode = if self.target.is_external() {
+            r#" TargetMode="External""#
+        } else {
+            ""
+        };
+        format!(
+            r#"<Relationship Id="{relationship_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="{}"{target_mode}/>"#,
+            ppt_rs::escape_xml(&self.target.relationship_target()),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum TextAlignment {
@@ -1950,6 +2305,7 @@ struct PresentationDocument {
     theme: ThemeState,
     layouts: Vec<LayoutDocument>,
     slides: Vec<PresentationSlide>,
+    active_slide_index: Option<usize>,
     next_slide_seq: u32,
     next_element_seq: u32,
     next_layout_seq: u32,
@@ -1969,6 +2325,7 @@ impl PresentationDocument {
             theme: ThemeState::default(),
             layouts: Vec::new(),
             slides: Vec::new(),
+            active_slide_index: None,
             next_slide_seq: 1,
             next_element_seq: 1,
             next_layout_seq: 1,
@@ -2004,6 +2361,7 @@ impl PresentationDocument {
                     },
                     fill: None,
                     style: TextStyle::default(),
+                    hyperlink: None,
                     placeholder: None,
                     z_order: slide.elements.len(),
                 }));
@@ -2021,6 +2379,7 @@ impl PresentationDocument {
                     },
                     fill: None,
                     style: TextStyle::default(),
+                    hyperlink: None,
                     placeholder: None,
                     z_order: slide.elements.len(),
                 }));
@@ -2045,6 +2404,7 @@ impl PresentationDocument {
                         }),
                         text: imported_shape.text.clone(),
                         text_style: TextStyle::default(),
+                        hyperlink: None,
                         placeholder: None,
                         rotation_degrees: imported_shape.rotation,
                         z_order: slide.elements.len(),
@@ -2085,6 +2445,7 @@ impl PresentationDocument {
 
             document.slides.push(slide);
         }
+        document.active_slide_index = (!document.slides.is_empty()).then_some(0);
         document
     }
 
@@ -2116,6 +2477,9 @@ impl PresentationDocument {
     fn append_slide(&mut self, slide: PresentationSlide) -> usize {
         let index = self.slides.len();
         self.slides.push(slide);
+        if self.active_slide_index.is_none() {
+            self.active_slide_index = Some(index);
+        }
         index
     }
 
@@ -2137,6 +2501,54 @@ impl PresentationDocument {
 
     fn total_element_count(&self) -> usize {
         self.slides.iter().map(|slide| slide.elements.len()).sum()
+    }
+
+    fn set_active_slide_index(
+        &mut self,
+        slide_index: usize,
+        action: &str,
+    ) -> Result<(), PresentationArtifactError> {
+        if slide_index >= self.slides.len() {
+            return Err(index_out_of_range(action, slide_index, self.slides.len()));
+        }
+        self.active_slide_index = Some(slide_index);
+        Ok(())
+    }
+
+    fn adjust_active_slide_for_insert(&mut self, inserted_index: usize) {
+        match self.active_slide_index {
+            None => self.active_slide_index = Some(inserted_index),
+            Some(active_index) if inserted_index <= active_index => {
+                self.active_slide_index = Some(active_index + 1);
+            }
+            Some(_) => {}
+        }
+    }
+
+    fn adjust_active_slide_for_move(&mut self, from_index: usize, to_index: usize) {
+        if let Some(active_index) = self.active_slide_index {
+            self.active_slide_index = Some(if active_index == from_index {
+                to_index
+            } else if from_index < active_index && active_index <= to_index {
+                active_index - 1
+            } else if to_index <= active_index && active_index < from_index {
+                active_index + 1
+            } else {
+                active_index
+            });
+        }
+    }
+
+    fn adjust_active_slide_for_delete(&mut self, deleted_index: usize) {
+        self.active_slide_index = match self.active_slide_index {
+            None => None,
+            Some(_) if self.slides.is_empty() => None,
+            Some(active_index) if active_index == deleted_index => {
+                Some(deleted_index.min(self.slides.len() - 1))
+            }
+            Some(active_index) if deleted_index < active_index => Some(active_index - 1),
+            Some(active_index) => Some(active_index),
+        };
     }
 
     fn next_layout_id(&mut self) -> String {
@@ -2293,6 +2705,7 @@ impl PresentationSlide {
 
         let mut ordered = self.elements.clone();
         ordered.sort_by_key(PresentationElement::z_order);
+        let mut hyperlink_seq = 1_u32;
         for element in ordered {
             match element {
                 PresentationElement::Text(text) => {
@@ -2306,6 +2719,11 @@ impl PresentationSlide {
                     .with_text(&text.text);
                     if let Some(fill) = text.fill {
                         shape = shape.with_fill(ShapeFill::new(&fill));
+                    }
+                    if let Some(hyperlink) = &text.hyperlink {
+                        let relationship_id = format!("rIdHyperlink{hyperlink_seq}");
+                        hyperlink_seq += 1;
+                        shape = shape.with_hyperlink(hyperlink.to_ppt_rs(&relationship_id));
                     }
                     content = content.add_shape(shape);
                 }
@@ -2329,6 +2747,11 @@ impl PresentationSlide {
                     }
                     if let Some(rotation) = shape.rotation_degrees {
                         ppt_shape = ppt_shape.with_rotation(rotation);
+                    }
+                    if let Some(hyperlink) = &shape.hyperlink {
+                        let relationship_id = format!("rIdHyperlink{hyperlink_seq}");
+                        hyperlink_seq += 1;
+                        ppt_shape = ppt_shape.with_hyperlink(hyperlink.to_ppt_rs(&relationship_id));
                     }
                     content = content.add_shape(ppt_shape);
                 }
@@ -2516,6 +2939,7 @@ struct TextElement {
     frame: Rect,
     fill: Option<String>,
     style: TextStyle,
+    hyperlink: Option<HyperlinkState>,
     placeholder: Option<PlaceholderRef>,
     z_order: usize,
 }
@@ -2529,6 +2953,7 @@ struct ShapeElement {
     stroke: Option<StrokeStyle>,
     text: Option<String>,
     text_style: TextStyle,
+    hyperlink: Option<HyperlinkState>,
     placeholder: Option<PlaceholderRef>,
     rotation_degrees: Option<i32>,
     z_order: usize,
@@ -3043,6 +3468,11 @@ struct MoveSlideArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct SetActiveSlideArgs {
+    slide_index: u32,
+}
+
+#[derive(Debug, Deserialize)]
 struct SetSlideBackgroundArgs {
     slide_index: u32,
     fill: String,
@@ -3204,6 +3634,34 @@ struct UpdateTextArgs {
     text: String,
     #[serde(default)]
     styling: TextStylingArgs,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplaceTextArgs {
+    element_id: String,
+    search: String,
+    replace: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InsertTextAfterArgs {
+    element_id: String,
+    after: String,
+    insert: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetHyperlinkArgs {
+    element_id: String,
+    link_type: Option<String>,
+    url: Option<String>,
+    slide_index: Option<u32>,
+    address: Option<String>,
+    subject: Option<String>,
+    path: Option<String>,
+    tooltip: Option<String>,
+    highlight_click: Option<bool>,
+    clear: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3546,6 +4004,76 @@ fn normalize_text_style_with_palette(
     })
 }
 
+fn parse_hyperlink_state(
+    document: &PresentationDocument,
+    args: &SetHyperlinkArgs,
+    action: &str,
+) -> Result<HyperlinkState, PresentationArtifactError> {
+    let link_type =
+        args.link_type
+            .as_deref()
+            .ok_or_else(|| PresentationArtifactError::InvalidArgs {
+                action: action.to_string(),
+                message: "`link_type` is required unless `clear` is true".to_string(),
+            })?;
+    let target = match link_type {
+        "url" => HyperlinkTarget::Url(required_hyperlink_field(&args.url, action, "url")?.clone()),
+        "slide" => {
+            let slide_index =
+                args.slide_index
+                    .ok_or_else(|| PresentationArtifactError::InvalidArgs {
+                        action: action.to_string(),
+                        message: "`slide_index` is required for slide hyperlinks".to_string(),
+                    })?;
+            if slide_index as usize >= document.slides.len() {
+                return Err(index_out_of_range(
+                    action,
+                    slide_index as usize,
+                    document.slides.len(),
+                ));
+            }
+            HyperlinkTarget::Slide(slide_index)
+        }
+        "first_slide" => HyperlinkTarget::FirstSlide,
+        "last_slide" => HyperlinkTarget::LastSlide,
+        "next_slide" => HyperlinkTarget::NextSlide,
+        "previous_slide" => HyperlinkTarget::PreviousSlide,
+        "end_show" => HyperlinkTarget::EndShow,
+        "email" => HyperlinkTarget::Email {
+            address: required_hyperlink_field(&args.address, action, "address")?.clone(),
+            subject: args.subject.clone(),
+        },
+        "file" => {
+            HyperlinkTarget::File(required_hyperlink_field(&args.path, action, "path")?.clone())
+        }
+        other => {
+            return Err(PresentationArtifactError::UnsupportedFeature {
+                action: action.to_string(),
+                message: format!("hyperlink type `{other}` is not supported"),
+            });
+        }
+    };
+    Ok(HyperlinkState {
+        target,
+        tooltip: args.tooltip.clone(),
+        highlight_click: args.highlight_click.unwrap_or(true),
+    })
+}
+
+fn required_hyperlink_field<'a>(
+    value: &'a Option<String>,
+    action: &str,
+    field: &str,
+) -> Result<&'a String, PresentationArtifactError> {
+    value
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| PresentationArtifactError::InvalidArgs {
+            action: action.to_string(),
+            message: format!("`{field}` is required for this hyperlink type"),
+        })
+}
+
 fn coerce_table_rows(
     rows: Vec<Vec<Value>>,
     action: &str,
@@ -3633,6 +4161,7 @@ fn apply_layout_to_slide(
                 frame: placeholder.frame,
                 fill: None,
                 style: TextStyle::default(),
+                hyperlink: None,
                 placeholder: placeholder_ref,
                 z_order: slide.elements.len(),
             }));
@@ -3647,6 +4176,7 @@ fn apply_layout_to_slide(
                     stroke: None,
                     text: placeholder.text,
                     text_style: TextStyle::default(),
+                    hyperlink: None,
                     placeholder: placeholder_ref,
                     rotation_degrees: None,
                     z_order: slide.elements.len(),
@@ -3861,6 +4391,8 @@ fn inspect_document(
             "id": format!("pr/{}", document.artifact_id),
             "name": document.name,
             "slides": document.slides.len(),
+            "activeSlideIndex": document.active_slide_index,
+            "activeSlideId": document.active_slide_index.and_then(|index| document.slides.get(index)).map(|slide| format!("sl/{}", slide.slide_id)),
         });
         if target_matches(target_id, &record) {
             lines.push(record);
@@ -3901,6 +4433,8 @@ fn inspect_document(
                 "kind": "slide",
                 "id": slide_id,
                 "slide": index + 1,
+                "slideIndex": index,
+                "isActive": document.active_slide_index == Some(index),
                 "layoutId": slide.layout_id,
                 "elements": slide.elements.len(),
             });
@@ -4045,6 +4579,16 @@ fn inspect_document(
                     .map(serde_json::Value::from)
                     .unwrap_or(serde_json::Value::Null);
             }
+            if let Some(hyperlink) = match element {
+                PresentationElement::Text(text) => text.hyperlink.as_ref(),
+                PresentationElement::Shape(shape) => shape.hyperlink.as_ref(),
+                PresentationElement::Connector(_)
+                | PresentationElement::Image(_)
+                | PresentationElement::Table(_)
+                | PresentationElement::Chart(_) => None,
+            } {
+                record["hyperlink"] = hyperlink.to_json();
+            }
             lines.push(record);
         }
     }
@@ -4098,6 +4642,8 @@ fn resolve_anchor(
             "artifactId": document.artifact_id,
             "name": document.name,
             "slideCount": document.slides.len(),
+            "activeSlideIndex": document.active_slide_index,
+            "activeSlideId": document.active_slide_index.and_then(|index| document.slides.get(index)).map(|slide| format!("sl/{}", slide.slide_id)),
         }));
     }
 
@@ -4109,6 +4655,7 @@ fn resolve_anchor(
                 "id": slide_id,
                 "slide": slide_index + 1,
                 "slideIndex": slide_index,
+                "isActive": document.active_slide_index == Some(slide_index),
                 "layoutId": slide.layout_id,
                 "notesId": (!slide.notes.text.is_empty()).then(|| format!("nt/{}", slide.slide_id)),
                 "elementIds": slide.elements.iter().map(|element| {
@@ -4135,7 +4682,7 @@ fn resolve_anchor(
             }));
         }
         for element in &slide.elements {
-            let record = match element {
+            let mut record = match element {
                 PresentationElement::Text(text) => serde_json::json!({
                     "kind": "textbox",
                     "id": format!("sh/{}", text.element_id),
@@ -4212,6 +4759,16 @@ fn resolve_anchor(
                     "bboxUnit": "points",
                 }),
             };
+            if let Some(hyperlink) = match element {
+                PresentationElement::Text(text) => text.hyperlink.as_ref(),
+                PresentationElement::Shape(shape) => shape.hyperlink.as_ref(),
+                PresentationElement::Connector(_)
+                | PresentationElement::Image(_)
+                | PresentationElement::Table(_)
+                | PresentationElement::Chart(_) => None,
+            } {
+                record["hyperlink"] = hyperlink.to_json();
+            }
             if record.get("id").and_then(Value::as_str) == Some(id) {
                 return Ok(record);
             }
@@ -4242,17 +4799,144 @@ fn resolve_anchor(
     })
 }
 
+fn build_pptx_bytes(document: &PresentationDocument, action: &str) -> Result<Vec<u8>, String> {
+    let bytes = document
+        .to_ppt_rs()
+        .build()
+        .map_err(|error| format!("{action}: {error}"))?;
+    patch_pptx_hyperlinks(bytes, document).map_err(|error| format!("{action}: {error}"))
+}
+
+fn patch_pptx_hyperlinks(
+    source_bytes: Vec<u8>,
+    document: &PresentationDocument,
+) -> Result<Vec<u8>, String> {
+    let mut archive =
+        ZipArchive::new(Cursor::new(source_bytes)).map_err(|error| error.to_string())?;
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let mut pending_slide_relationships = document
+        .slides
+        .iter()
+        .enumerate()
+        .filter_map(|(slide_index, slide)| {
+            let relationships = slide_hyperlink_relationships(slide);
+            (!relationships.is_empty()).then_some((slide_index + 1, relationships))
+        })
+        .collect::<HashMap<_, _>>();
+
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).map_err(|error| error.to_string())?;
+        if file.is_dir() {
+            continue;
+        }
+        let name = file.name().to_string();
+        let options = file.options();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        writer
+            .start_file(&name, options)
+            .map_err(|error| error.to_string())?;
+        if let Some(slide_number) = parse_slide_relationships_path(&name)
+            && let Some(relationships) = pending_slide_relationships.remove(&slide_number)
+        {
+            writer
+                .write_all(update_slide_relationships_xml(bytes, &relationships)?.as_bytes())
+                .map_err(|error| error.to_string())?;
+            continue;
+        }
+        writer
+            .write_all(&bytes)
+            .map_err(|error| error.to_string())?;
+    }
+
+    for (slide_number, relationships) in pending_slide_relationships {
+        writer
+            .start_file(
+                format!("ppt/slides/_rels/slide{slide_number}.xml.rels"),
+                SimpleFileOptions::default(),
+            )
+            .map_err(|error| error.to_string())?;
+        writer
+            .write_all(slide_relationships_xml(&relationships).as_bytes())
+            .map_err(|error| error.to_string())?;
+    }
+
+    writer
+        .finish()
+        .map_err(|error| error.to_string())
+        .map(Cursor::into_inner)
+}
+
+fn slide_hyperlink_relationships(slide: &PresentationSlide) -> Vec<String> {
+    let mut ordered = slide.elements.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|element| element.z_order());
+    let mut hyperlink_index = 1_u32;
+    let mut relationships = Vec::new();
+    for element in ordered {
+        let Some(hyperlink) = (match element {
+            PresentationElement::Text(text) => text.hyperlink.as_ref(),
+            PresentationElement::Shape(shape) => shape.hyperlink.as_ref(),
+            PresentationElement::Connector(_)
+            | PresentationElement::Image(_)
+            | PresentationElement::Table(_)
+            | PresentationElement::Chart(_) => None,
+        }) else {
+            continue;
+        };
+        let relationship_id = format!("rIdHyperlink{hyperlink_index}");
+        hyperlink_index += 1;
+        relationships.push(hyperlink.relationship_xml(&relationship_id));
+    }
+    relationships
+}
+
+fn parse_slide_relationships_path(path: &str) -> Option<usize> {
+    path.strip_prefix("ppt/slides/_rels/slide")?
+        .strip_suffix(".xml.rels")?
+        .parse::<usize>()
+        .ok()
+}
+
+fn update_slide_relationships_xml(
+    existing_bytes: Vec<u8>,
+    relationships: &[String],
+) -> Result<String, String> {
+    let existing = String::from_utf8(existing_bytes).map_err(|error| error.to_string())?;
+    let injected = relationships.join("\n");
+    existing
+        .contains("</Relationships>")
+        .then(|| existing.replace("</Relationships>", &format!("{injected}\n</Relationships>")))
+        .ok_or_else(|| {
+            "slide relationships xml is missing a closing `</Relationships>`".to_string()
+        })
+}
+
+fn slide_relationships_xml(relationships: &[String]) -> String {
+    let body = relationships.join("\n");
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+{body}
+</Relationships>"#
+    )
+}
+
 fn write_preview_images(
     document: &PresentationDocument,
     output_dir: &Path,
     action: &str,
 ) -> Result<(), PresentationArtifactError> {
     let pptx_path = output_dir.join("preview.pptx");
-    document.to_ppt_rs().save(&pptx_path).map_err(|error| {
+    let bytes = build_pptx_bytes(document, action).map_err(|message| {
         PresentationArtifactError::ExportFailed {
             path: pptx_path.clone(),
-            message: error.to_string(),
+            message,
         }
+    })?;
+    std::fs::write(&pptx_path, bytes).map_err(|error| PresentationArtifactError::ExportFailed {
+        path: pptx_path.clone(),
+        message: error.to_string(),
     })?;
     document
         .to_ppt_rs()
@@ -4433,6 +5117,7 @@ fn slide_list(document: &PresentationDocument) -> Vec<SlideListEntry> {
         .map(|(index, slide)| SlideListEntry {
             slide_id: slide.slide_id.clone(),
             index,
+            is_active: document.active_slide_index == Some(index),
             notes: (!slide.notes.text.is_empty()).then(|| slide.notes.text.clone()),
             notes_visible: slide.notes.visible,
             background_fill: slide.background_fill.clone(),

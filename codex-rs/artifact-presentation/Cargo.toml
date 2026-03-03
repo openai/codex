@@ -20,6 +20,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+zip = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

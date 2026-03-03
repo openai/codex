@@ -1,5 +1,18 @@
 use super::presentation_artifact::*;
 use pretty_assertions::assert_eq;
+use std::io::Read;
+
+fn zip_entry_text(
+    path: &std::path::Path,
+    entry_name: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let file = std::fs::File::open(path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let mut entry = archive.by_name(entry_name)?;
+    let mut text = String::new();
+    entry.read_to_string(&mut text)?;
+    Ok(text)
+}
 
 #[test]
 fn manager_can_create_add_text_and_export() -> Result<(), Box<dyn std::error::Error>> {
@@ -272,6 +285,398 @@ fn image_uris_can_add_and_replace_images() -> Result<(), Box<dyn std::error::Err
             .contains("\"fit\":\"Contain\"")
     );
     server_thread.join().expect("server thread");
+    Ok(())
+}
+
+#[test]
+fn active_slide_can_be_set_and_tracks_reorders() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Active Slide" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    for _ in 0..3 {
+        manager.execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "add_slide".to_string(),
+                args: serde_json::json!({}),
+            },
+            temp_dir.path(),
+        )?;
+    }
+    let set_active = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "set_active_slide".to_string(),
+            args: serde_json::json!({ "slide_index": 2 }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(set_active.active_slide_index, Some(2));
+    assert_eq!(
+        set_active.slide_list.as_ref().map(|slides| slides
+            .iter()
+            .map(|slide| slide.is_active)
+            .collect::<Vec<_>>()),
+        Some(vec![false, false, true])
+    );
+
+    let moved = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "move_slide".to_string(),
+            args: serde_json::json!({ "from_index": 2, "to_index": 0 }),
+        },
+        temp_dir.path(),
+    )?;
+    let summary = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "get_summary".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(summary.active_slide_index, Some(0));
+    assert_eq!(
+        summary.slide_list.as_ref().map(|slides| slides
+            .iter()
+            .map(|slide| slide.is_active)
+            .collect::<Vec<_>>()),
+        Some(vec![true, false, false])
+    );
+
+    let inspect = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "inspect".to_string(),
+            args: serde_json::json!({ "kind": "deck,slide" }),
+        },
+        temp_dir.path(),
+    )?;
+    let inspect_ndjson = inspect.inspect_ndjson.expect("inspect");
+    assert!(inspect_ndjson.contains("\"activeSlideIndex\":0"));
+    assert!(inspect_ndjson.contains("\"isActive\":true"));
+
+    let active_slide_id = moved
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .map(|slide| slide.slide_id.clone())
+        .expect("active slide id");
+    let resolved = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": format!("sl/{active_slide_id}") }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("isActive"))
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+
+    let deleted = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "delete_slide".to_string(),
+            args: serde_json::json!({ "slide_index": 0 }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        deleted
+            .artifact_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.slide_count),
+        Some(2)
+    );
+    let after_delete = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(deleted.artifact_id.clone()),
+            action: "list_slides".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(after_delete.active_slide_index, Some(0));
+    assert_eq!(
+        after_delete.slide_list.as_ref().map(|slides| slides
+            .iter()
+            .map(|slide| slide.is_active)
+            .collect::<Vec<_>>()),
+        Some(vec![true, false])
+    );
+    Ok(())
+}
+
+#[test]
+fn text_replace_and_insert_helpers_update_text_elements() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Text Helpers" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let added = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_text_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "text": "Revenue up 24%",
+                "position": { "left": 24, "top": 24, "width": 240, "height": 80 }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let element_id = added
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .cloned()
+        .expect("text id");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "replace_text".to_string(),
+            args: serde_json::json!({
+                "element_id": format!("sh/{element_id}"),
+                "search": "24%",
+                "replace": "31%"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "insert_text_after".to_string(),
+            args: serde_json::json!({
+                "element_id": format!("sh/{element_id}"),
+                "after": "Revenue",
+                "insert": " QoQ"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let resolved = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": format!("sh/{element_id}") }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("text"))
+            .and_then(serde_json::Value::as_str),
+        Some("Revenue QoQ up 31%")
+    );
+    Ok(())
+}
+
+#[test]
+fn hyperlinks_are_inspectable_and_exported() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Hyperlinks" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    for _ in 0..2 {
+        manager.execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "add_slide".to_string(),
+                args: serde_json::json!({}),
+            },
+            temp_dir.path(),
+        )?;
+    }
+
+    let text = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_text_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "text": "Open roadmap",
+                "position": { "left": 24, "top": 24, "width": 220, "height": 60 }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let text_id = text
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .cloned()
+        .expect("text id");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "set_hyperlink".to_string(),
+            args: serde_json::json!({
+                "element_id": format!("sh/{text_id}"),
+                "link_type": "url",
+                "url": "https://example.com/roadmap",
+                "tooltip": "Roadmap",
+                "highlight_click": false
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let shape = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "geometry": "rounded_rectangle",
+                "position": { "left": 24, "top": 120, "width": 220, "height": 72 },
+                "text": "Jump to appendix"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let shape_id = shape
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.last())
+        .cloned()
+        .expect("shape id");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "set_hyperlink".to_string(),
+            args: serde_json::json!({
+                "element_id": format!("sh/{shape_id}"),
+                "link_type": "slide",
+                "slide_index": 1,
+                "tooltip": "Appendix"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let inspect = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "inspect".to_string(),
+            args: serde_json::json!({ "kind": "textbox,shape" }),
+        },
+        temp_dir.path(),
+    )?;
+    let inspect_ndjson = inspect.inspect_ndjson.expect("inspect");
+    assert!(inspect_ndjson.contains("\"type\":\"url\""));
+    assert!(inspect_ndjson.contains("\"url\":\"https://example.com/roadmap\""));
+    assert!(inspect_ndjson.contains("\"type\":\"slide\""));
+    assert!(inspect_ndjson.contains("\"slideIndex\":1"));
+
+    let resolved = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": format!("sh/{text_id}") }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("hyperlink"))
+            .and_then(|hyperlink| hyperlink.get("url"))
+            .and_then(serde_json::Value::as_str),
+        Some("https://example.com/roadmap")
+    );
+
+    let export_path = temp_dir.path().join("hyperlinks.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+    let slide_xml = zip_entry_text(
+        &temp_dir.path().join("hyperlinks.pptx"),
+        "ppt/slides/slide1.xml",
+    )?;
+    let rels_xml = zip_entry_text(
+        &temp_dir.path().join("hyperlinks.pptx"),
+        "ppt/slides/_rels/slide1.xml.rels",
+    )?;
+    assert!(slide_xml.contains("hlinkClick"));
+    assert!(rels_xml.contains("https://example.com/roadmap"));
+    assert!(rels_xml.contains("slide2.xml"));
+
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "set_hyperlink".to_string(),
+            args: serde_json::json!({
+                "element_id": format!("sh/{text_id}"),
+                "clear": true
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let cleared = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": format!("sh/{text_id}") }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        cleared
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("hyperlink")),
+        None
+    );
     Ok(())
 }
 

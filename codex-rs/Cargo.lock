@@ -1555,6 +1555,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tiny_http",
  "uuid",
+ "zip 2.4.2",
 ]
 
 [[package]]

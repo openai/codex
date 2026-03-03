@@ -26,6 +26,7 @@ Supported actions:
 - `append_notes`
 - `clear_notes`
 - `set_notes_visibility`
+- `set_active_slide`
 - `add_slide`
 - `insert_slide`
 - `duplicate_slide`
@@ -42,6 +43,9 @@ Supported actions:
 - `merge_table_cells`
 - `add_chart`
 - `update_text`
+- `replace_text`
+- `insert_text_after`
+- `set_hyperlink`
 - `update_shape_style`
 - `bring_to_front`
 - `send_to_back`
@@ -73,6 +77,12 @@ Example inspect:
 
 Example resolve:
 `{"artifact_id":"presentation_x","action":"resolve","args":{"id":"sh/element_3"}}`
+
+Deck summaries, slide listings, `inspect`, and `resolve` now include active-slide metadata. Use `set_active_slide` to change it explicitly.
+
+Text-bearing elements also support literal `replace_text` and `insert_text_after` helpers for in-place edits without resending the full string.
+
+Text boxes and shapes support whole-element hyperlinks via `set_hyperlink`. Supported `link_type` values are `url`, `slide`, `first_slide`, `last_slide`, `next_slide`, `previous_slide`, `end_show`, `email`, and `file`. Use `clear: true` to remove an existing hyperlink.
 
 Notes visibility is honored on export: `set_notes_visibility` controls whether speaker notes are emitted into exported PPTX output.
 
