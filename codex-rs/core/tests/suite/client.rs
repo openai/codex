@@ -21,7 +21,9 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
@@ -483,6 +485,127 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
 
     assert!(legacy_output_index < new_user_index);
     assert!(legacy_image_index < new_user_index);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_replays_image_tool_outputs_with_detail() {
+    skip_if_no_network!();
+
+    let image_url = "data:image/webp;base64,UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEAAUAmJaACdLoB+AADsAD+8ut//NgVzXPv9//S4P0uD9Lg/9KQAAA=";
+    let function_call_id = "view-image-call";
+    let custom_call_id = "js-repl-call";
+    let rollout = vec![
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: ThreadId::default(),
+                    timestamp: "2024-01-01T00:00:00Z".to_string(),
+                    cwd: ".".into(),
+                    originator: "test_originator".to_string(),
+                    cli_version: "test_version".to_string(),
+                    model_provider: Some("test-provider".to_string()),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: None,
+                name: "view_image".to_string(),
+                arguments: "{\"path\":\"/tmp/example.webp\"}".to_string(),
+                call_id: function_call_id.to_string(),
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.500Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                call_id: function_call_id.to_string(),
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: image_url.to_string(),
+                        detail: Some(ImageDetail::Original),
+                    },
+                ]),
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:02.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::CustomToolCall {
+                id: None,
+                status: Some("completed".to_string()),
+                call_id: custom_call_id.to_string(),
+                name: "js_repl".to_string(),
+                input: "console.log('image flow')".to_string(),
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:02.500Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+                call_id: custom_call_id.to_string(),
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: image_url.to_string(),
+                        detail: Some(ImageDetail::Original),
+                    },
+                ]),
+            }),
+        },
+    ];
+
+    let tmpdir = TempDir::new().unwrap();
+    let session_path = tmpdir
+        .path()
+        .join("resume-image-tool-outputs-with-detail.jsonl");
+    let mut file = std::fs::File::create(&session_path).unwrap();
+    for line in rollout {
+        writeln!(file, "{}", serde_json::to_string(&line).unwrap()).unwrap();
+    }
+
+    let server = MockServer::start().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let mut builder = test_codex().with_model("gpt-5.1");
+    let test = builder
+        .resume(&server, codex_home, session_path.clone())
+        .await
+        .expect("resume conversation");
+    test.submit_turn("after resume").await.unwrap();
+
+    let function_output = resp_mock
+        .single_request()
+        .function_call_output(function_call_id);
+    assert_eq!(
+        function_output.get("output"),
+        Some(&serde_json::json!([
+            {
+                "type": "input_image",
+                "image_url": image_url,
+                "detail": "original"
+            }
+        ]))
+    );
+
+    let custom_output = resp_mock
+        .single_request()
+        .custom_tool_call_output(custom_call_id);
+    assert_eq!(
+        custom_output.get("output"),
+        Some(&serde_json::json!([
+            {
+                "type": "input_image",
+                "image_url": image_url,
+                "detail": "original"
+            }
+        ]))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

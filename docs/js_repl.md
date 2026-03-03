@@ -65,8 +65,13 @@ For `CODEX_JS_REPL_NODE_MODULE_DIRS` and `js_repl_node_module_dirs`, module reso
 
 - `codex.tmpDir`: per-session scratch directory path.
 - `codex.tool(name, args?)`: executes a normal Codex tool call from inside `js_repl` (including shell tools like `shell` / `shell_command` when available).
+- `codex.emitImage(imageLike)`: explicitly adds exactly one image to the outer `js_repl` function output.
 - Each `codex.tool(...)` call emits a bounded summary at `info` level from the `codex_core::tools::js_repl` logger. At `trace` level, the same path also logs the exact raw response object or error string seen by JavaScript.
-- To share generated images with the model, write a file under `codex.tmpDir`, call `await codex.tool("view_image", { path: "/absolute/path" })`, then delete the file.
+- Nested `codex.tool(...)` outputs stay inside JavaScript unless you emit them explicitly.
+- `codex.emitImage(...)` accepts a direct image URL, a single `input_image` item, an object like `{ bytes, mimeType }`, or a raw tool response object that contains exactly one image and no text.
+- `codex.emitImage(...)` rejects mixed text-and-image content.
+- Example of sharing an in-memory Playwright screenshot: `await codex.emitImage({ bytes: await page.screenshot({ type: "jpeg", quality: 85 }), mimeType: "image/jpeg" })`.
+- Example of sharing a local image tool result: `await codex.emitImage(codex.tool("view_image", { path: "/absolute/path" }))`.
 
 Avoid writing directly to `process.stdout` / `process.stderr` / `process.stdin`; the kernel uses a JSON-line transport over stdio.
 
