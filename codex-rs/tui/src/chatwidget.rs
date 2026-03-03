@@ -3681,7 +3681,7 @@ impl ChatWidget {
                 self.open_model_popup();
             }
             SlashCommand::Fast => {
-                let next_tier = if self.config.service_tier.is_some() {
+                let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
                     None
                 } else {
                     Some(ServiceTier::Fast)
@@ -3976,7 +3976,8 @@ impl ChatWidget {
                     "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
                     "off" => self.set_service_tier_selection(None),
                     "status" => {
-                        let status = if self.config.service_tier.is_some() {
+                        let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast))
+                        {
                             "on"
                         } else {
                             "off"
@@ -4342,7 +4343,7 @@ impl ChatWidget {
             .personality
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
-        let service_tier = self.fast_mode_enabled().then_some(self.config.service_tier);
+        let service_tier = self.config.service_tier.map(Some);
         let op = Op::UserTurn {
             items,
             cwd: self.config.cwd.clone(),
