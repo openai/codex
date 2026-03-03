@@ -1,12 +1,10 @@
 ---
 source: tui/src/bottom_pane/feedback_view.rs
-assertion_line: 698
+assertion_line: 699
 expression: rendered
 ---
 ▌ Tell us more (bad result)
 ▌
-▌ Connectivity diagnostics
-▌   No connectivity diagnostics detected.
 ▌
 ▌ (optional) Write a short description to help us further
 

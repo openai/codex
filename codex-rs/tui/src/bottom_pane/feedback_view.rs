@@ -351,21 +351,19 @@ impl FeedbackNoteView {
         let mut lines = vec![
             Line::from(vec![gutter(), title.bold()]),
             Line::from(vec![gutter()]),
-            Line::from(vec![gutter(), "Connectivity diagnostics".bold()]),
         ];
-        lines.extend(self.diagnostics_lines(width));
+        if should_show_feedback_connectivity_details(self.category, &self.diagnostics) {
+            lines.push(Line::from(vec![
+                gutter(),
+                "Connectivity diagnostics".bold(),
+            ]));
+            lines.extend(self.diagnostics_lines(width));
+        }
         lines
     }
 
     fn diagnostics_lines(&self, width: u16) -> Vec<Line<'static>> {
         let width = usize::from(width.max(1));
-        if self.diagnostics.is_empty() {
-            let options = RtOptions::new(width)
-                .initial_indent(Line::from(vec![gutter(), "  ".dim()]))
-                .subsequent_indent(Line::from(vec![gutter(), "  ".dim()]));
-            return word_wrap_lines(["No connectivity diagnostics detected.".dim()], options);
-        }
-
         let headline_options = RtOptions::new(width)
             .initial_indent(Line::from(vec![gutter(), "  - ".into()]))
             .subsequent_indent(Line::from(vec![gutter(), "    ".into()]));
@@ -416,6 +414,13 @@ impl FeedbackNoteView {
             _diagnostics_attachment: diagnostics_attachment,
         }
     }
+}
+
+pub(crate) fn should_show_feedback_connectivity_details(
+    category: FeedbackCategory,
+    diagnostics: &FeedbackDiagnostics,
+) -> bool {
+    category != FeedbackCategory::GoodResult && !diagnostics.is_empty()
 }
 
 fn gutter() -> Span<'static> {
@@ -749,6 +754,28 @@ mod tests {
         let rendered = render(&view, 60);
 
         insta::assert_snapshot!("feedback_view_with_connectivity_diagnostics", rendered);
+    }
+
+    #[test]
+    fn should_show_feedback_connectivity_details_only_for_non_good_result_with_diagnostics() {
+        let diagnostics =
+            FeedbackDiagnostics::collect_from_pairs([("HTTP_PROXY", "proxy.example.com:8080")]);
+
+        assert_eq!(
+            should_show_feedback_connectivity_details(FeedbackCategory::Bug, &diagnostics),
+            true
+        );
+        assert_eq!(
+            should_show_feedback_connectivity_details(FeedbackCategory::GoodResult, &diagnostics),
+            false
+        );
+        assert_eq!(
+            should_show_feedback_connectivity_details(
+                FeedbackCategory::BadResult,
+                &FeedbackDiagnostics::default()
+            ),
+            false
+        );
     }
 
     #[test]

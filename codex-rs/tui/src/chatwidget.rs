@@ -1255,9 +1255,18 @@ impl ChatWidget {
         category: crate::app_event::FeedbackCategory,
         include_logs: bool,
     ) {
+        let diagnostics = codex_core::feedback_diagnostics::FeedbackDiagnostics::collect_from_env();
+        self.show_feedback_note(category, include_logs, diagnostics);
+    }
+
+    fn show_feedback_note(
+        &mut self,
+        category: crate::app_event::FeedbackCategory,
+        include_logs: bool,
+        diagnostics: codex_core::feedback_diagnostics::FeedbackDiagnostics,
+    ) {
         // Build a fresh snapshot at the time of opening the note overlay.
         let snapshot = self.feedback.snapshot(self.thread_id);
-        let diagnostics = codex_core::feedback_diagnostics::FeedbackDiagnostics::collect_from_env();
         let rollout = if include_logs {
             self.current_rollout_path.clone()
         } else {
@@ -1283,6 +1292,11 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
+        let diagnostics = codex_core::feedback_diagnostics::FeedbackDiagnostics::collect_from_env();
+        if !crate::bottom_pane::should_show_feedback_connectivity_details(category, &diagnostics) {
+            self.show_feedback_note(category, false, diagnostics);
+            return;
+        }
         let params = crate::bottom_pane::feedback_upload_consent_params(
             self.app_event_tx.clone(),
             category,
