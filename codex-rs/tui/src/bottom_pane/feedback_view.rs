@@ -595,7 +595,7 @@ pub(crate) fn feedback_upload_consent_params(
     let mut header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
         Line::from("Upload logs?".bold()).into(),
         Line::from("").into(),
-        Line::from("If you choose Yes, the following files may be sent:".dim()).into(),
+        Line::from("The following files will be sent:".dim()).into(),
         Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
     ];
     if let Some(path) = rollout_path.as_deref()
@@ -618,7 +618,7 @@ pub(crate) fn feedback_upload_consent_params(
             super::SelectionItem {
                 name: "Yes".to_string(),
                 description: Some(
-                    "Share the current Codex session logs and any generated diagnostics attachment."
+                    "Share the current Codex session logs with the team for troubleshooting."
                         .to_string(),
                 ),
                 actions: vec![yes_action],

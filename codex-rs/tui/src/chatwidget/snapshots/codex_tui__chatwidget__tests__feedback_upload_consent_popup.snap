@@ -5,12 +5,12 @@ expression: popup
 ---
   Upload logs?
 
-  If you choose Yes, the following files may be sent:
+  The following files will be sent:
     • codex-logs.log
     • codex-connectivity-diagnostics.txt (if connectivity diagnostics are dete
 
-› 1. Yes  Share the current Codex session logs and any generated diagnostics
-          attachment.
-  2. No   Send feedback without any attached files.
+› 1. Yes  Share the current Codex session logs with the team for
+          troubleshooting.
+  2. No
 
   Press enter to confirm or esc to go back
