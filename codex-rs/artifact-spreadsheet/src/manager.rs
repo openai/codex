@@ -12,6 +12,8 @@ use crate::CellAddress;
 use crate::CellRange;
 use crate::SpreadsheetArtifact;
 use crate::SpreadsheetArtifactError;
+use crate::SpreadsheetCellRangeRef;
+use crate::SpreadsheetCellRef;
 use crate::SpreadsheetCellValue;
 use crate::SpreadsheetCitation;
 use crate::SpreadsheetRangeView;
@@ -101,16 +103,22 @@ impl SpreadsheetArtifactManager {
             "set_sheet_properties" => self.set_sheet_properties(request),
             "set_column_widths" => self.set_column_widths(request),
             "get_cell" => self.get_cell(request),
+            "get_cell_by_indices" => self.get_cell_by_indices(request),
+            "get_cell_field" => self.get_cell_field(request),
+            "get_cell_field_by_indices" => self.get_cell_field_by_indices(request),
             "get_range" => self.get_range(request),
             "set_cell_value" => self.set_cell_value(request),
+            "set_range_value" => self.set_range_value(request),
             "set_range_values" => self.set_range_values(request),
             "set_cell_formula" => self.set_cell_formula(request),
+            "set_range_formula" => self.set_range_formula(request),
             "set_range_formulas" => self.set_range_formulas(request),
             "set_cell_style" => self.set_cell_style(request),
             "set_range_style" => self.set_range_style(request),
             "clear_range" => self.clear_range(request),
             "merge_range" => self.merge_range(request),
             "unmerge_range" => self.unmerge_range(request),
+            "cite_cell" => self.cite_cell(request),
             "cite_range" => self.cite_range(request),
             "calculate" | "recalculate" => self.calculate(request),
             "serialize_dict" => self.serialize_dict(request),
@@ -191,7 +199,7 @@ impl SpreadsheetArtifactManager {
             artifact
                 .sheets
                 .iter()
-                .map(|sheet| sheet.summary())
+                .map(super::model::SpreadsheetSheet::summary)
                 .collect(),
         );
         Ok(response)
@@ -239,7 +247,7 @@ impl SpreadsheetArtifactManager {
             artifact
                 .sheets
                 .iter()
-                .map(|sheet| sheet.summary())
+                .map(super::model::SpreadsheetSheet::summary)
                 .collect(),
         );
         Ok(response)
@@ -261,7 +269,7 @@ impl SpreadsheetArtifactManager {
             artifact
                 .sheets
                 .iter()
-                .map(|sheet| sheet.summary())
+                .map(super::model::SpreadsheetSheet::summary)
                 .collect(),
         );
         Ok(response)
@@ -291,8 +299,13 @@ impl SpreadsheetArtifactManager {
             snapshot_for_artifact(artifact),
         );
         response.sheet_list = Some(vec![sheet.summary()]);
+        response.sheet_ref = Some(sheet_reference(sheet));
+        response.range_ref = range
+            .as_ref()
+            .map(|entry| SpreadsheetCellRangeRef::new(sheet.name.clone(), entry));
         response.rendered_text = Some(sheet.to_rendered_text(range.as_ref()));
         response.range = range.as_ref().map(|entry| sheet.get_range_view(entry));
+        response.serialized_dict = Some(sheet.to_dict()?);
         Ok(response)
     }
 
@@ -346,7 +359,7 @@ impl SpreadsheetArtifactManager {
             artifact
                 .sheets
                 .iter()
-                .map(|sheet| sheet.summary())
+                .map(super::model::SpreadsheetSheet::summary)
                 .collect(),
         );
         Ok(response)
@@ -375,7 +388,7 @@ impl SpreadsheetArtifactManager {
             artifact
                 .sheets
                 .iter()
-                .map(|sheet| sheet.summary())
+                .map(super::model::SpreadsheetSheet::summary)
                 .collect(),
         );
         Ok(response)
@@ -402,7 +415,7 @@ impl SpreadsheetArtifactManager {
             artifact
                 .sheets
                 .iter()
-                .map(|sheet| sheet.summary())
+                .map(super::model::SpreadsheetSheet::summary)
                 .collect(),
         );
         Ok(response)
@@ -491,6 +504,96 @@ impl SpreadsheetArtifactManager {
             snapshot_for_artifact(artifact),
         );
         response.cell = Some(cell);
+        response.cell_ref = Some(sheet.cell_ref(&args.address)?);
+        Ok(response)
+    }
+
+    fn get_cell_by_indices(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CellIndicesArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let address = CellAddress {
+            column: args.column_index,
+            row: args.row_index,
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Retrieved cell by indices ({}, {}) from `{}`",
+                args.column_index, args.row_index, sheet.name
+            ),
+            snapshot_for_artifact(artifact),
+        );
+        response.cell = Some(sheet.get_cell_view_by_indices(args.column_index, args.row_index));
+        response.cell_ref = Some(sheet.cell_ref(address.to_a1())?);
+        Ok(response)
+    }
+
+    fn get_cell_field(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CellFieldArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let value = sheet.get_cell_field(CellAddress::parse(&args.address)?, &args.field)?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Retrieved field `{}` from `{}` on `{}`",
+                args.field, args.address, sheet.name
+            ),
+            snapshot_for_artifact(artifact),
+        );
+        response.cell_field = value;
+        response.cell_ref = Some(sheet.cell_ref(&args.address)?);
+        Ok(response)
+    }
+
+    fn get_cell_field_by_indices(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CellFieldByIndicesArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let value =
+            sheet.get_cell_field_by_indices(args.column_index, args.row_index, &args.field)?;
+        let address = CellAddress {
+            column: args.column_index,
+            row: args.row_index,
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Retrieved field `{}` from indices ({}, {}) on `{}`",
+                args.field, args.column_index, args.row_index, sheet.name
+            ),
+            snapshot_for_artifact(artifact),
+        );
+        response.cell_field = value;
+        response.cell_ref = Some(sheet.cell_ref(address.to_a1())?);
         Ok(response)
     }
 
@@ -552,6 +655,44 @@ impl SpreadsheetArtifactManager {
             args.sheet_index.map(|value| value as usize),
         )?;
         response.cell = Some(sheet.get_cell_view(address));
+        response.cell_ref = Some(sheet.cell_ref(&args.address)?);
+        Ok(response)
+    }
+
+    fn set_range_value(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let action = request.action.clone();
+        let args: SetRangeValueArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let range = CellRange::parse(&args.range)?;
+        let recalculate = args.recalculate.unwrap_or(artifact.auto_recalculate);
+        {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            sheet.set_range_to_value(&range, normalize_optional_cell_value(args.value)?)?;
+        }
+        if recalculate {
+            artifact.recalculate();
+        }
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            action.clone(),
+            format!("Updated range `{}` to a single value", args.range),
+            snapshot_for_artifact(artifact),
+        );
+        let sheet = artifact.sheet_lookup(
+            &action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        response.range = Some(sheet.get_range_view(&range));
+        response.range_ref = Some(SpreadsheetCellRangeRef::new(sheet.name.clone(), &range));
         Ok(response)
     }
 
@@ -589,6 +730,7 @@ impl SpreadsheetArtifactManager {
             args.sheet_index.map(|value| value as usize),
         )?;
         response.range = Some(sheet.get_range_view(&range));
+        response.range_ref = Some(SpreadsheetCellRangeRef::new(sheet.name.clone(), &range));
         Ok(response)
     }
 
@@ -625,6 +767,44 @@ impl SpreadsheetArtifactManager {
             args.sheet_index.map(|value| value as usize),
         )?;
         response.cell = Some(sheet.get_cell_view(address));
+        response.cell_ref = Some(sheet.cell_ref(&args.address)?);
+        Ok(response)
+    }
+
+    fn set_range_formula(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let action = request.action.clone();
+        let args: SetRangeFormulaArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let range = CellRange::parse(&args.range)?;
+        let recalculate = args.recalculate.unwrap_or(artifact.auto_recalculate);
+        {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            sheet.set_range_to_formula(&range, Some(normalize_formula(args.formula)))?;
+        }
+        if recalculate {
+            artifact.recalculate();
+        }
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            action.clone(),
+            format!("Updated range `{}` to a single formula", args.range),
+            snapshot_for_artifact(artifact),
+        );
+        let sheet = artifact.sheet_lookup(
+            &action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        response.range = Some(sheet.get_range_view(&range));
+        response.range_ref = Some(SpreadsheetCellRangeRef::new(sheet.name.clone(), &range));
         Ok(response)
     }
 
@@ -670,6 +850,7 @@ impl SpreadsheetArtifactManager {
             args.sheet_index.map(|value| value as usize),
         )?;
         response.range = Some(sheet.get_range_view(&range));
+        response.range_ref = Some(SpreadsheetCellRangeRef::new(sheet.name.clone(), &range));
         Ok(response)
     }
 
@@ -734,6 +915,7 @@ impl SpreadsheetArtifactManager {
             sheet_index.map(|value| value as usize),
         )?;
         response.range = Some(sheet.get_range_view(&range));
+        response.range_ref = Some(SpreadsheetCellRangeRef::new(sheet.name.clone(), &range));
         Ok(response)
     }
 
@@ -770,6 +952,7 @@ impl SpreadsheetArtifactManager {
             args.sheet_index.map(|value| value as usize),
         )?;
         response.range = Some(sheet.get_range_view(&range));
+        response.range_ref = Some(SpreadsheetCellRangeRef::new(sheet.name.clone(), &range));
         Ok(response)
     }
 
@@ -802,6 +985,48 @@ impl SpreadsheetArtifactManager {
             args.sheet_index.map(|value| value as usize),
         )?;
         response.range = Some(sheet.get_range_view(&range));
+        response.range_ref = Some(SpreadsheetCellRangeRef::new(sheet.name.clone(), &range));
+        Ok(response)
+    }
+
+    fn cite_cell(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let action = request.action.clone();
+        let args: CiteCellArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let address = CellAddress::parse(&args.address)?;
+        let citation = SpreadsheetCitation {
+            tether_id: args.tether_id,
+            start_line: args.start_line,
+            end_line: args.end_line,
+            content_reference_type: args.content_reference_type,
+            source_type: args.source_type,
+        };
+        {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            let cell_ref = sheet.cell_ref(&args.address)?;
+            cell_ref.cite(sheet, citation)?;
+        }
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            action.clone(),
+            format!("Attached citation to cell `{}`", args.address),
+            snapshot_for_artifact(artifact),
+        );
+        let sheet = artifact.sheet_lookup(
+            &action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        response.cell = Some(sheet.get_cell_view(address));
+        response.cell_ref = Some(sheet.cell_ref(&args.address)?);
         Ok(response)
     }
 
@@ -1058,7 +1283,15 @@ pub struct SpreadsheetArtifactResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sheet_list: Option<Vec<SpreadsheetSheetSummary>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub sheet_ref: Option<SpreadsheetSheetRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell_ref: Option<SpreadsheetCellRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range_ref: Option<SpreadsheetCellRangeRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cell: Option<crate::SpreadsheetCellView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell_field: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<SpreadsheetRangeView>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1086,7 +1319,11 @@ impl SpreadsheetArtifactResponse {
             artifact_snapshot: Some(artifact_snapshot),
             workbook_summary: None,
             sheet_list: None,
+            sheet_ref: None,
+            cell_ref: None,
+            range_ref: None,
             cell: None,
+            cell_field: None,
             range: None,
             rendered_text: None,
             serialized_dict: None,
@@ -1094,6 +1331,11 @@ impl SpreadsheetArtifactResponse {
             serialized_bytes_base64: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpreadsheetSheetRef {
+    pub sheet_name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1180,6 +1422,31 @@ struct CellAddressArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct CellIndicesArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    column_index: u32,
+    row_index: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct CellFieldArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    address: String,
+    field: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CellFieldByIndicesArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    column_index: u32,
+    row_index: u32,
+    field: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct RangeArgs {
     sheet_name: Option<String>,
     sheet_index: Option<u32>,
@@ -1205,6 +1472,15 @@ struct SetRangeValuesArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct SetRangeValueArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    range: String,
+    value: Value,
+    recalculate: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
 struct SetCellFormulaArgs {
     sheet_name: Option<String>,
     sheet_index: Option<u32>,
@@ -1219,6 +1495,15 @@ struct SetRangeFormulasArgs {
     sheet_index: Option<u32>,
     range: String,
     formulas: Vec<Vec<Option<String>>>,
+    recalculate: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetRangeFormulaArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    range: String,
+    formula: String,
     recalculate: Option<bool>,
 }
 
@@ -1268,6 +1553,18 @@ struct CiteRangeArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct CiteCellArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    address: String,
+    tether_id: String,
+    start_line: Option<u32>,
+    end_line: Option<u32>,
+    content_reference_type: Option<String>,
+    source_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct DeserializeDictArgs {
     data: Value,
     artifact_id: Option<String>,
@@ -1301,6 +1598,12 @@ fn snapshot_for_artifact(artifact: &SpreadsheetArtifact) -> SpreadsheetArtifactS
                 merged_range_count: sheet.merged_ranges.len(),
             })
             .collect(),
+    }
+}
+
+fn sheet_reference(sheet: &crate::SpreadsheetSheet) -> SpreadsheetSheetRef {
+    SpreadsheetSheetRef {
+        sheet_name: sheet.name.clone(),
     }
 }
 

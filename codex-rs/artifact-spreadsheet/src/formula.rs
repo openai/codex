@@ -53,7 +53,7 @@ enum EvalValue {
 }
 
 pub(crate) fn recalculate_workbook(artifact: &mut SpreadsheetArtifact) {
-    let formulas = artifact
+    let updates = artifact
         .sheets
         .iter()
         .enumerate()
@@ -64,10 +64,6 @@ pub(crate) fn recalculate_workbook(artifact: &mut SpreadsheetArtifact) {
                     .map(|formula| (sheet_index, *address, formula.clone()))
             })
         })
-        .collect::<Vec<_>>();
-
-    let updates = formulas
-        .into_iter()
         .map(|(sheet_index, address, formula)| {
             let mut stack = BTreeSet::new();
             let value = evaluate_formula(artifact, sheet_index, &formula, &mut stack)
@@ -79,11 +75,10 @@ pub(crate) fn recalculate_workbook(artifact: &mut SpreadsheetArtifact) {
         .collect::<Vec<_>>();
 
     for (sheet_index, address, value) in updates {
-        if let Some(sheet) = artifact.sheets.get_mut(sheet_index) {
-            if let Some(cell) = sheet.cells.get_mut(&address) {
+        if let Some(sheet) = artifact.sheets.get_mut(sheet_index)
+            && let Some(cell) = sheet.cells.get_mut(&address) {
                 cell.value = value;
             }
-        }
     }
 }
 

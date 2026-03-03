@@ -197,12 +197,12 @@ pub(crate) fn import_xlsx(
             &mut archive,
             "xl/sharedStrings.xml",
             path,
-        )?))
+        )?)?)
     } else {
         None
     };
 
-    let relationships = parse_relationships(&workbook_rels);
+    let relationships = parse_relationships(&workbook_rels)?;
     let sheets = parse_sheet_definitions(&workbook_xml)?
         .into_iter()
         .map(|(name, relation)| {
@@ -287,9 +287,13 @@ fn parse_sheet_definitions(
     Ok(sheets)
 }
 
-fn parse_relationships(xml: &str) -> BTreeMap<String, String> {
-    let regex = Regex::new(r#"<Relationship\b([^>]*)/?>"#).expect("relationship regex");
-    regex
+fn parse_relationships(xml: &str) -> Result<BTreeMap<String, String>, SpreadsheetArtifactError> {
+    let regex = Regex::new(r#"<Relationship\b([^>]*)/?>"#).map_err(|error| {
+        SpreadsheetArtifactError::Serialization {
+            message: error.to_string(),
+        }
+    })?;
+    Ok(regex
         .captures_iter(xml)
         .filter_map(|captures| {
             let attributes = captures.get(1)?.as_str();
@@ -297,11 +301,15 @@ fn parse_relationships(xml: &str) -> BTreeMap<String, String> {
             let target = extract_attribute(attributes, "Target")?;
             Some((id, target))
         })
-        .collect()
+        .collect())
 }
 
-fn parse_shared_strings(xml: &str) -> Vec<String> {
-    let regex = Regex::new(r#"(?s)<si\b[^>]*>(.*?)</si>"#).expect("shared string regex");
+fn parse_shared_strings(xml: &str) -> Result<Vec<String>, SpreadsheetArtifactError> {
+    let regex = Regex::new(r#"(?s)<si\b[^>]*>(.*?)</si>"#).map_err(|error| {
+        SpreadsheetArtifactError::Serialization {
+            message: error.to_string(),
+        }
+    })?;
     regex
         .captures_iter(xml)
         .filter_map(|captures| captures.get(1).map(|value| value.as_str()))
@@ -316,11 +324,10 @@ fn parse_sheet(
 ) -> Result<SpreadsheetSheet, SpreadsheetArtifactError> {
     let mut sheet = SpreadsheetSheet::new(name.to_string());
 
-    if let Some(sheet_view) = first_tag_attributes(xml, "sheetView") {
-        if let Some(show_grid_lines) = extract_attribute(&sheet_view, "showGridLines") {
+    if let Some(sheet_view) = first_tag_attributes(xml, "sheetView")
+        && let Some(show_grid_lines) = extract_attribute(&sheet_view, "showGridLines") {
             sheet.show_grid_lines = show_grid_lines != "0";
         }
-    }
     if let Some(format_pr) = first_tag_attributes(xml, "sheetFormatPr") {
         sheet.default_row_height = extract_attribute(&format_pr, "defaultRowHeight")
             .and_then(|value| value.parse::<f64>().ok());
@@ -328,7 +335,11 @@ fn parse_sheet(
             .and_then(|value| value.parse::<f64>().ok());
     }
 
-    let col_regex = Regex::new(r#"<col\b([^>]*)/?>"#).expect("col regex");
+    let col_regex = Regex::new(r#"<col\b([^>]*)/?>"#).map_err(|error| {
+        SpreadsheetArtifactError::Serialization {
+            message: error.to_string(),
+        }
+    })?;
     for captures in col_regex.captures_iter(xml) {
         let Some(attributes) = captures.get(1).map(|value| value.as_str()) else {
             continue;
@@ -353,8 +364,16 @@ fn parse_sheet(
         }
     }
 
-    let row_regex = Regex::new(r#"(?s)<row\b[^>]*>(.*?)</row>"#).expect("row regex");
-    let cell_regex = Regex::new(r#"(?s)<c\b([^>]*)>(.*?)</c>"#).expect("cell regex");
+    let row_regex = Regex::new(r#"(?s)<row\b[^>]*>(.*?)</row>"#).map_err(|error| {
+        SpreadsheetArtifactError::Serialization {
+            message: error.to_string(),
+        }
+    })?;
+    let cell_regex = Regex::new(r#"(?s)<c\b([^>]*)>(.*?)</c>"#).map_err(|error| {
+        SpreadsheetArtifactError::Serialization {
+            message: error.to_string(),
+        }
+    })?;
     for row_captures in row_regex.captures_iter(xml) {
         let Some(row_body) = row_captures.get(1).map(|value| value.as_str()) else {
             continue;
@@ -389,7 +408,11 @@ fn parse_sheet(
         }
     }
 
-    let merge_regex = Regex::new(r#"<mergeCell\b([^>]*)/?>"#).expect("merge regex");
+    let merge_regex = Regex::new(r#"<mergeCell\b([^>]*)/?>"#).map_err(|error| {
+        SpreadsheetArtifactError::Serialization {
+            message: error.to_string(),
+        }
+    })?;
     for captures in merge_regex.captures_iter(xml) {
         let Some(attributes) = captures.get(1).map(|value| value.as_str()) else {
             continue;
@@ -754,13 +777,17 @@ fn first_tag_text(xml: &str, tag: &str) -> Option<String> {
     captures.get(1).map(|value| value.as_str().to_string())
 }
 
-fn all_text_nodes(xml: &str) -> String {
-    let regex = Regex::new(r#"(?s)<t\b[^>]*>(.*?)</t>"#).expect("text regex");
-    regex
+fn all_text_nodes(xml: &str) -> Result<String, SpreadsheetArtifactError> {
+    let regex = Regex::new(r#"(?s)<t\b[^>]*>(.*?)</t>"#).map_err(|error| {
+        SpreadsheetArtifactError::Serialization {
+            message: error.to_string(),
+        }
+    })?;
+    Ok(regex
         .captures_iter(xml)
         .filter_map(|captures| captures.get(1).map(|value| xml_unescape(value.as_str())))
         .collect::<Vec<_>>()
-        .join("")
+        .join(""))
 }
 
 fn extract_attribute(attributes: &str, name: &str) -> Option<String> {

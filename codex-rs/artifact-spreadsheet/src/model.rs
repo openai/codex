@@ -99,6 +99,12 @@ pub struct SpreadsheetCell {
 }
 
 impl SpreadsheetCell {
+    pub fn to_dict(&self) -> Result<Value, SpreadsheetArtifactError> {
+        serde_json::to_value(self).map_err(|error| SpreadsheetArtifactError::Serialization {
+            message: error.to_string(),
+        })
+    }
+
     pub fn data(&self) -> Option<Value> {
         if let Some(formula) = &self.formula {
             return Some(Value::String(formula.clone()));
@@ -157,10 +163,253 @@ pub struct SpreadsheetCellRef {
     pub address: String,
 }
 
+impl SpreadsheetCellRef {
+    pub fn new(sheet_name: String, address: CellAddress) -> Self {
+        Self {
+            sheet_name,
+            address: address.to_a1(),
+        }
+    }
+
+    pub fn cell_address(&self) -> Result<CellAddress, SpreadsheetArtifactError> {
+        CellAddress::parse(&self.address)
+    }
+
+    pub fn get(
+        &self,
+        sheet: &SpreadsheetSheet,
+    ) -> Result<SpreadsheetCellView, SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        Ok(sheet.get_cell_view(self.cell_address()?))
+    }
+
+    pub fn data(
+        &self,
+        sheet: &SpreadsheetSheet,
+    ) -> Result<Option<Value>, SpreadsheetArtifactError> {
+        Ok(self.get(sheet)?.data)
+    }
+
+    pub fn raw_cell(
+        &self,
+        sheet: &SpreadsheetSheet,
+    ) -> Result<Option<SpreadsheetCell>, SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        Ok(sheet.get_cell(self.cell_address()?).cloned())
+    }
+
+    pub fn to_dict(&self, sheet: &SpreadsheetSheet) -> Result<Value, SpreadsheetArtifactError> {
+        Ok(match self.raw_cell(sheet)? {
+            Some(cell) => cell.to_dict()?,
+            None => Value::Object(Default::default()),
+        })
+    }
+
+    pub fn set_value(
+        &self,
+        sheet: &mut SpreadsheetSheet,
+        value: Option<SpreadsheetCellValue>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.set_value(self.cell_address()?, value)
+    }
+
+    pub fn set_formula(
+        &self,
+        sheet: &mut SpreadsheetSheet,
+        formula: Option<String>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.set_formula(self.cell_address()?, formula)
+    }
+
+    pub fn cite(
+        &self,
+        sheet: &mut SpreadsheetSheet,
+        citation: SpreadsheetCitation,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.cite_range(
+            &CellRange::from_start_end(self.cell_address()?, self.cell_address()?),
+            citation,
+        )
+    }
+
+    pub fn set_style_index(
+        &self,
+        sheet: &mut SpreadsheetSheet,
+        style_index: u32,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.set_style_index(
+            &CellRange::from_start_end(self.cell_address()?, self.cell_address()?),
+            style_index,
+        )
+    }
+
+    pub fn is_calculation_error(
+        &self,
+        sheet: &SpreadsheetSheet,
+    ) -> Result<bool, SpreadsheetArtifactError> {
+        Ok(self.get(sheet)?.is_calculation_error)
+    }
+
+    pub fn get_calculation_error_message(
+        &self,
+        sheet: &SpreadsheetSheet,
+    ) -> Result<Option<String>, SpreadsheetArtifactError> {
+        Ok(self.get(sheet)?.calculation_error_message)
+    }
+
+    fn ensure_sheet(&self, sheet: &SpreadsheetSheet) -> Result<(), SpreadsheetArtifactError> {
+        if self.sheet_name != sheet.name {
+            return Err(SpreadsheetArtifactError::SheetLookup {
+                action: "cell_ref".to_string(),
+                message: format!(
+                    "cell ref points to `{}` but sheet is `{}`",
+                    self.sheet_name, sheet.name
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpreadsheetCellRangeRef {
     pub sheet_name: String,
     pub address: String,
+}
+
+impl SpreadsheetCellRangeRef {
+    pub fn new(sheet_name: String, range: &CellRange) -> Self {
+        Self {
+            sheet_name,
+            address: range.to_a1(),
+        }
+    }
+
+    pub fn range(&self) -> Result<CellRange, SpreadsheetArtifactError> {
+        CellRange::parse(&self.address)
+    }
+
+    pub fn get(
+        &self,
+        sheet: &SpreadsheetSheet,
+    ) -> Result<SpreadsheetRangeView, SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        Ok(sheet.get_range_view(&self.range()?))
+    }
+
+    pub fn get_values(
+        &self,
+        sheet: &SpreadsheetSheet,
+    ) -> Result<Vec<Vec<Option<SpreadsheetCellValue>>>, SpreadsheetArtifactError> {
+        Ok(self.get(sheet)?.values)
+    }
+
+    pub fn get_formulas(
+        &self,
+        sheet: &SpreadsheetSheet,
+    ) -> Result<Vec<Vec<Option<String>>>, SpreadsheetArtifactError> {
+        Ok(self.get(sheet)?.formulas)
+    }
+
+    pub fn get_style_indices(
+        &self,
+        sheet: &SpreadsheetSheet,
+    ) -> Result<Vec<Vec<u32>>, SpreadsheetArtifactError> {
+        Ok(self.get(sheet)?.style_indices)
+    }
+
+    pub fn get_data(
+        &self,
+        sheet: &SpreadsheetSheet,
+    ) -> Result<Vec<Vec<Option<Value>>>, SpreadsheetArtifactError> {
+        Ok(self.get(sheet)?.data)
+    }
+
+    pub fn set_value(
+        &self,
+        sheet: &mut SpreadsheetSheet,
+        value: Option<SpreadsheetCellValue>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.set_range_to_value(&self.range()?, value)
+    }
+
+    pub fn set_values(
+        &self,
+        sheet: &mut SpreadsheetSheet,
+        values: &[Vec<Option<SpreadsheetCellValue>>],
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.set_values_matrix(&self.range()?, values)
+    }
+
+    pub fn set_formula(
+        &self,
+        sheet: &mut SpreadsheetSheet,
+        formula: Option<String>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.set_range_to_formula(&self.range()?, formula)
+    }
+
+    pub fn set_formulas(
+        &self,
+        sheet: &mut SpreadsheetSheet,
+        formulas: &[Vec<Option<String>>],
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.set_formulas_matrix(&self.range()?, formulas)
+    }
+
+    pub fn set_style_index(
+        &self,
+        sheet: &mut SpreadsheetSheet,
+        style_index: u32,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.set_style_index(&self.range()?, style_index)
+    }
+
+    pub fn merge(
+        &self,
+        sheet: &mut SpreadsheetSheet,
+        raise_on_conflict: bool,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.merge_cells(&self.range()?, raise_on_conflict)
+    }
+
+    pub fn unmerge(&self, sheet: &mut SpreadsheetSheet) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.unmerge_cells(&self.range()?);
+        Ok(())
+    }
+
+    pub fn cite(
+        &self,
+        sheet: &mut SpreadsheetSheet,
+        citation: SpreadsheetCitation,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        sheet.cite_range(&self.range()?, citation)
+    }
+
+    fn ensure_sheet(&self, sheet: &SpreadsheetSheet) -> Result<(), SpreadsheetArtifactError> {
+        if self.sheet_name != sheet.name {
+            return Err(SpreadsheetArtifactError::SheetLookup {
+                action: "range_ref".to_string(),
+                message: format!(
+                    "range ref points to `{}` but sheet is `{}`",
+                    self.sheet_name, sheet.name
+                ),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -347,6 +596,11 @@ impl SpreadsheetSheet {
         ))
     }
 
+    pub fn minimum_range_ref(&self) -> Option<SpreadsheetCellRangeRef> {
+        self.minimum_range()
+            .map(|range| SpreadsheetCellRangeRef::new(self.name.clone(), &range))
+    }
+
     pub fn minimum_range_filled(&self) -> String {
         self.minimum_range()
             .map(|range| range.to_a1())
@@ -400,6 +654,30 @@ impl SpreadsheetSheet {
         }
     }
 
+    pub fn to_dict(&self) -> Result<Value, SpreadsheetArtifactError> {
+        serde_json::to_value(self).map_err(|error| SpreadsheetArtifactError::Serialization {
+            message: error.to_string(),
+        })
+    }
+
+    pub fn cell_ref(
+        &self,
+        address: impl AsRef<str>,
+    ) -> Result<SpreadsheetCellRef, SpreadsheetArtifactError> {
+        Ok(SpreadsheetCellRef::new(
+            self.name.clone(),
+            CellAddress::parse(address.as_ref())?,
+        ))
+    }
+
+    pub fn range_ref(
+        &self,
+        address: impl AsRef<str>,
+    ) -> Result<SpreadsheetCellRangeRef, SpreadsheetArtifactError> {
+        let range = CellRange::parse(address.as_ref())?;
+        Ok(SpreadsheetCellRangeRef::new(self.name.clone(), &range))
+    }
+
     pub fn set_column_widths(
         &mut self,
         reference: &str,
@@ -448,6 +726,10 @@ impl SpreadsheetSheet {
     pub fn get_cell(&self, address: CellAddress) -> Option<&SpreadsheetCell> {
         let effective = self.effective_address(address);
         self.cells.get(&effective)
+    }
+
+    pub fn get_cell_by_indices(&self, column: u32, row: u32) -> Option<&SpreadsheetCell> {
+        self.get_cell(CellAddress { column, row })
     }
 
     pub fn get_cell_mut(&mut self, address: CellAddress) -> Option<&mut SpreadsheetCell> {
@@ -519,6 +801,21 @@ impl SpreadsheetSheet {
         Ok(())
     }
 
+    pub fn set_range_to_value(
+        &mut self,
+        range: &CellRange,
+        value: Option<SpreadsheetCellValue>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_range_write_allowed(range, false, "set_range_to_value")?;
+        for address in range.addresses() {
+            let cell = self.get_or_create_cell_mut(address);
+            cell.formula = None;
+            cell.value = value.clone();
+        }
+        self.cells.retain(|_, cell| !cell.is_empty());
+        Ok(())
+    }
+
     pub fn set_formula(
         &mut self,
         address: CellAddress,
@@ -535,6 +832,38 @@ impl SpreadsheetSheet {
             self.cells.remove(&address);
         }
         Ok(())
+    }
+
+    pub fn set_range_to_formula(
+        &mut self,
+        range: &CellRange,
+        formula: Option<String>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        self.ensure_range_write_allowed(range, false, "set_range_to_formula")?;
+        for address in range.addresses() {
+            let cell = self.get_or_create_cell_mut(address);
+            cell.formula = formula.clone();
+        }
+        self.cells.retain(|_, cell| !cell.is_empty());
+        Ok(())
+    }
+
+    pub fn set_cell_values_to(
+        &mut self,
+        address: &str,
+        value: Option<SpreadsheetCellValue>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        let range = CellRange::parse(address)?;
+        self.set_range_to_value(&range, value)
+    }
+
+    pub fn set_cell_formulas_to(
+        &mut self,
+        address: &str,
+        formula: Option<String>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        let range = CellRange::parse(address)?;
+        self.set_range_to_formula(&range, formula)
     }
 
     pub fn set_style_index(
@@ -691,6 +1020,54 @@ impl SpreadsheetSheet {
                 .map(|entry| entry.citations.clone())
                 .unwrap_or_default(),
         }
+    }
+
+    pub fn get_cell_view_by_indices(&self, column: u32, row: u32) -> SpreadsheetCellView {
+        self.get_cell_view(CellAddress { column, row })
+    }
+
+    pub fn get_cell_field(
+        &self,
+        address: CellAddress,
+        field: &str,
+    ) -> Result<Option<Value>, SpreadsheetArtifactError> {
+        let cell = self.get_cell(address);
+        Ok(match field {
+            "value" => cell.and_then(|entry| {
+                entry
+                    .value
+                    .as_ref()
+                    .map(SpreadsheetCellValue::to_json_value)
+            }),
+            "formula" => cell.and_then(|entry| entry.formula.clone().map(Value::String)),
+            "style_index" => cell.map(|entry| Value::Number(entry.style_index.into())),
+            "data" => cell.and_then(SpreadsheetCell::data),
+            "citations" => cell
+                .map(|entry| serde_json::to_value(&entry.citations))
+                .transpose()
+                .map_err(|error| SpreadsheetArtifactError::Serialization {
+                    message: error.to_string(),
+                })?,
+            other => {
+                return Err(SpreadsheetArtifactError::InvalidArgs {
+                    action: "get_cell_field".to_string(),
+                    message: format!("unsupported field `{other}`"),
+                });
+            }
+        })
+    }
+
+    pub fn get_cell_field_by_indices(
+        &self,
+        column: u32,
+        row: u32,
+        field: &str,
+    ) -> Result<Option<Value>, SpreadsheetArtifactError> {
+        self.get_cell_field(CellAddress { column, row }, field)
+    }
+
+    pub fn get_raw_cell(&self, address: CellAddress) -> Option<SpreadsheetCell> {
+        self.get_cell(address).cloned()
     }
 
     pub fn get_range_view(&self, range: &CellRange) -> SpreadsheetRangeView {
