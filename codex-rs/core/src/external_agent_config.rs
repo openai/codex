@@ -6,11 +6,6 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
-use toml_edit::DocumentMut;
-use toml_edit::InlineTable;
-use toml_edit::Item as TomlEditItem;
-use toml_edit::Table as TomlEditTable;
-use toml_edit::Value as TomlEditValue;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentConfigDetectOptions {
@@ -515,23 +510,20 @@ fn build_config_from_external(settings: &JsonValue) -> io::Result<TomlValue> {
 
     let mut root = toml::map::Map::new();
 
-    let mut shell_policy = toml::map::Map::new();
-    shell_policy.insert("inherit".to_string(), TomlValue::String("core".to_string()));
-    shell_policy.insert(
-        "set".to_string(),
-        TomlValue::Table(
-            settings_obj
-                .get("env")
-                .and_then(JsonValue::as_object)
-                .map(json_object_to_toml_table)
-                .transpose()?
-                .unwrap_or_default(),
-        ),
-    );
-    root.insert(
-        "shell_environment_policy".to_string(),
-        TomlValue::Table(shell_policy),
-    );
+    if let Some(env) = settings_obj.get("env").and_then(JsonValue::as_object)
+        && !env.is_empty()
+    {
+        let mut shell_policy = toml::map::Map::new();
+        shell_policy.insert("inherit".to_string(), TomlValue::String("core".to_string()));
+        shell_policy.insert(
+            "set".to_string(),
+            TomlValue::Table(json_object_to_env_toml_table(env)),
+        );
+        root.insert(
+            "shell_environment_policy".to_string(),
+            TomlValue::Table(shell_policy),
+        );
+    }
 
     if let Some(sandbox_enabled) = settings_obj
         .get("sandbox")
@@ -549,36 +541,26 @@ fn build_config_from_external(settings: &JsonValue) -> io::Result<TomlValue> {
     Ok(TomlValue::Table(root))
 }
 
-fn json_object_to_toml_table(
+fn json_object_to_env_toml_table(
     object: &serde_json::Map<String, JsonValue>,
-) -> io::Result<toml::map::Map<String, TomlValue>> {
+) -> toml::map::Map<String, TomlValue> {
     let mut table = toml::map::Map::new();
     for (key, value) in object {
-        table.insert(key.clone(), json_to_toml_value(value)?);
+        table.insert(
+            key.clone(),
+            TomlValue::String(json_env_value_to_string(value)),
+        );
     }
-    Ok(table)
+    table
 }
 
-fn json_to_toml_value(value: &JsonValue) -> io::Result<TomlValue> {
+fn json_env_value_to_string(value: &JsonValue) -> String {
     match value {
-        JsonValue::Null => Ok(TomlValue::String("null".to_string())),
-        JsonValue::Bool(v) => Ok(TomlValue::Boolean(*v)),
-        JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                return Ok(TomlValue::Integer(i));
-            }
-            if let Some(f) = n.as_f64() {
-                return Ok(TomlValue::Float(f));
-            }
-            Err(invalid_data_error("unsupported JSON number"))
-        }
-        JsonValue::String(v) => Ok(TomlValue::String(v.clone())),
-        JsonValue::Array(values) => values
-            .iter()
-            .map(json_to_toml_value)
-            .collect::<io::Result<Vec<_>>>()
-            .map(TomlValue::Array),
-        JsonValue::Object(map) => json_object_to_toml_table(map).map(TomlValue::Table),
+        JsonValue::String(value) => value.clone(),
+        JsonValue::Null => "null".to_string(),
+        JsonValue::Bool(value) => value.to_string(),
+        JsonValue::Number(value) => value.to_string(),
+        JsonValue::Array(_) | JsonValue::Object(_) => value.to_string(),
     }
 }
 
@@ -612,78 +594,9 @@ fn merge_missing_toml_values(existing: &mut TomlValue, incoming: &TomlValue) -> 
 }
 
 fn write_toml_file(path: &Path, value: &TomlValue) -> io::Result<()> {
-    let serialized = toml_value_to_document(value)
-        .map(|document| document.to_string())
+    let serialized = toml::to_string_pretty(value)
         .map_err(|err| invalid_data_error(format!("failed to serialize config.toml: {err}")))?;
     fs::write(path, format!("{}\n", serialized.trim_end()))
-}
-
-fn toml_value_to_document(value: &TomlValue) -> io::Result<DocumentMut> {
-    let TomlValue::Table(table) = value else {
-        return Err(invalid_data_error(
-            "expected config.toml root to serialize as a TOML table",
-        ));
-    };
-
-    let mut document = DocumentMut::new();
-    for (key, value) in table {
-        document.insert(key, toml_value_to_edit_item(&[key.as_str()], value)?);
-    }
-    Ok(document)
-}
-
-fn toml_value_to_edit_item(path: &[&str], value: &TomlValue) -> io::Result<TomlEditItem> {
-    match value {
-        TomlValue::Table(table) if matches!(path, ["shell_environment_policy", "set"]) => {
-            toml_table_to_inline_table(path, table)
-                .map(TomlEditValue::InlineTable)
-                .map(TomlEditItem::Value)
-        }
-        TomlValue::Table(table) => {
-            let mut item = TomlEditTable::new();
-            item.set_implicit(false);
-            for (key, value) in table {
-                let mut child_path = path.to_vec();
-                child_path.push(key.as_str());
-                item.insert(key, toml_value_to_edit_item(&child_path, value)?);
-            }
-            Ok(TomlEditItem::Table(item))
-        }
-        _ => toml_value_to_edit_value(path, value).map(TomlEditItem::Value),
-    }
-}
-
-fn toml_table_to_inline_table(
-    path: &[&str],
-    table: &toml::map::Map<String, TomlValue>,
-) -> io::Result<InlineTable> {
-    let mut inline = InlineTable::new();
-    for (key, value) in table {
-        let mut child_path = path.to_vec();
-        child_path.push(key.as_str());
-        inline.insert(key, toml_value_to_edit_value(&child_path, value)?);
-    }
-    Ok(inline)
-}
-
-fn toml_value_to_edit_value(path: &[&str], value: &TomlValue) -> io::Result<TomlEditValue> {
-    match value {
-        TomlValue::String(value) => Ok(TomlEditValue::from(value.clone())),
-        TomlValue::Integer(value) => Ok(TomlEditValue::from(*value)),
-        TomlValue::Float(value) => Ok(TomlEditValue::from(*value)),
-        TomlValue::Boolean(value) => Ok(TomlEditValue::from(*value)),
-        TomlValue::Datetime(value) => Ok(TomlEditValue::from(*value)),
-        TomlValue::Array(values) => {
-            let mut array = toml_edit::Array::new();
-            for value in values {
-                array.push(toml_value_to_edit_value(path, value)?);
-            }
-            Ok(TomlEditValue::Array(array))
-        }
-        TomlValue::Table(table) => {
-            toml_table_to_inline_table(path, table).map(TomlEditValue::InlineTable)
-        }
-    }
 }
 
 fn is_empty_toml_table(value: &TomlValue) -> bool {
@@ -824,7 +737,7 @@ mod tests {
         fs::create_dir_all(claude_home.join("skills").join("skill-a")).expect("create skills");
         fs::write(
             claude_home.join("settings.json"),
-            r#"{"model":"claude","permissions":{"ask":["git push"]},"env":{"FOO":"bar"},"sandbox":{"enabled":true,"network":{"allowLocalBinding":true}}}"#,
+            r#"{"model":"claude","permissions":{"ask":["git push"]},"env":{"FOO":"bar","CI":false,"MAX_RETRIES":3,"MY_TEAM":"codex"},"sandbox":{"enabled":true,"network":{"allowLocalBinding":true}}}"#,
         )
         .expect("write settings");
         fs::write(
@@ -861,7 +774,7 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(codex_home.join("config.toml")).expect("read config"),
-            "sandbox_mode = \"workspace-write\"\n\n[shell_environment_policy]\ninherit = \"core\"\nset = { FOO = \"bar\" }\n"
+            "sandbox_mode = \"workspace-write\"\n\n[shell_environment_policy]\ninherit = \"core\"\n\n[shell_environment_policy.set]\nCI = \"false\"\nFOO = \"bar\"\nMAX_RETRIES = \"3\"\nMY_TEAM = \"codex\"\n"
         );
         assert_eq!(
             fs::read_to_string(agents_skills.join("skill-a").join("SKILL.md"))
@@ -888,10 +801,7 @@ mod tests {
             }])
             .expect("import");
 
-        assert_eq!(
-            fs::read_to_string(codex_home.join("config.toml")).expect("read config"),
-            "[shell_environment_policy]\ninherit = \"core\"\nset = {}\n"
-        );
+        assert!(!codex_home.join("config.toml").exists());
     }
 
     #[test]
@@ -911,7 +821,9 @@ mod tests {
 
             [shell_environment_policy]
             inherit = "core"
-            set = { FOO = "bar" }
+
+            [shell_environment_policy.set]
+            FOO = "bar"
             "#,
         )
         .expect("write config");
