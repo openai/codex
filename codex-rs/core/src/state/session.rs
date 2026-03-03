@@ -1,5 +1,6 @@
 //! Session-wide mutable state.
 
+use codex_presentation_artifact::PresentationArtifactManager;
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -32,6 +33,7 @@ pub(crate) struct SessionState {
     pub(crate) startup_regular_task: Option<JoinHandle<CodexResult<RegularTask>>>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
     pub(crate) active_connector_selection: HashSet<String>,
+    pub(crate) presentation_artifacts: PresentationArtifactManager,
 }
 
 impl SessionState {
@@ -49,6 +51,7 @@ impl SessionState {
             startup_regular_task: None,
             active_mcp_tool_selection: None,
             active_connector_selection: HashSet::new(),
+            presentation_artifacts: PresentationArtifactManager::default(),
         }
     }
 

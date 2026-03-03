@@ -313,6 +313,9 @@
             "apps_mcp_gateway": {
               "type": "boolean"
             },
+            "artifact": {
+              "type": "boolean"
+            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -1709,6 +1712,9 @@
           "type": "boolean"
         },
         "apps_mcp_gateway": {
+          "type": "boolean"
+        },
+        "artifact": {
           "type": "boolean"
         },
         "child_agents_md": {

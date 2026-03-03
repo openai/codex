@@ -64,6 +64,9 @@ use codex_hooks::HooksConfig;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
+use codex_presentation_artifact::PresentationArtifactError;
+use codex_presentation_artifact::PresentationArtifactRequest;
+use codex_presentation_artifact::PresentationArtifactResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -1773,6 +1776,15 @@ impl Session {
     pub(crate) async fn clear_connector_selection(&self) {
         let mut state = self.state.lock().await;
         state.clear_connector_selection();
+    }
+
+    pub(crate) async fn execute_presentation_artifact(
+        &self,
+        request: PresentationArtifactRequest,
+        cwd: &Path,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let mut state = self.state.lock().await;
+        state.presentation_artifacts.execute(request, cwd)
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
