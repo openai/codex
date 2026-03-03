@@ -1328,11 +1328,21 @@
       "type": "object"
     },
     "ServiceTier": {
-      "enum": [
-        "standard",
-        "fast"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "fast"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Legacy compatibility value for older local config files.",
+          "enum": [
+            "standard"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
