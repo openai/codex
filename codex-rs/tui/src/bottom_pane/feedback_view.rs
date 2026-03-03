@@ -348,11 +348,9 @@ impl FeedbackNoteView {
 
     fn intro_lines(&self, width: u16) -> Vec<Line<'static>> {
         let (title, _) = feedback_title_and_placeholder(self.category);
-        let mut lines = vec![
-            Line::from(vec![gutter(), title.bold()]),
-            Line::from(vec![gutter()]),
-        ];
+        let mut lines = vec![Line::from(vec![gutter(), title.bold()])];
         if should_show_feedback_connectivity_details(self.category, &self.diagnostics) {
+            lines.push(Line::from(vec![gutter()]));
             lines.push(Line::from(vec![
                 gutter(),
                 "Connectivity diagnostics".bold(),

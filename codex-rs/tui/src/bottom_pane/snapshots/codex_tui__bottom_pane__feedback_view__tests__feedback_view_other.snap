@@ -1,10 +1,9 @@
 ---
 source: tui/src/bottom_pane/feedback_view.rs
-assertion_line: 720
+assertion_line: 724
 expression: rendered
 ---
 ▌ Tell us more (other)
-▌
 ▌
 ▌ (optional) Write a short description to help us further
 
