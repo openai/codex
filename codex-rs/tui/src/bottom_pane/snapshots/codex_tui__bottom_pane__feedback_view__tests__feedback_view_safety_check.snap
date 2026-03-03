@@ -1,8 +1,12 @@
 ---
 source: tui/src/bottom_pane/feedback_view.rs
+assertion_line: 726
 expression: rendered
 ---
 ▌ Tell us more (safety check)
+▌
+▌ Connectivity diagnostics
+▌   No connectivity diagnostics detected.
 ▌
 ▌ (optional) Share what was refused and why it should have b
 

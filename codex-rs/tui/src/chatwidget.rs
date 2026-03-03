@@ -1251,6 +1251,7 @@ impl ChatWidget {
     ) {
         // Build a fresh snapshot at the time of opening the note overlay.
         let snapshot = self.feedback.snapshot(self.thread_id);
+        let diagnostics = codex_core::feedback_diagnostics::FeedbackDiagnostics::collect_from_env();
         let rollout = if include_logs {
             self.current_rollout_path.clone()
         } else {
@@ -1260,6 +1261,7 @@ impl ChatWidget {
             category,
             snapshot,
             rollout,
+            diagnostics,
             self.app_event_tx.clone(),
             include_logs,
             self.feedback_audience,

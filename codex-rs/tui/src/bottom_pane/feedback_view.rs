@@ -1,6 +1,9 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 
+use codex_core::feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
+use codex_core::feedback_diagnostics::FeedbackDiagnostics;
+use codex_core::feedback_diagnostics::FeedbackDiagnosticsAttachment;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -19,6 +22,8 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_lines;
 use codex_protocol::protocol::SessionSource;
 
 use super::CancellationEvent;
@@ -48,6 +53,7 @@ pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
     snapshot: codex_feedback::CodexLogSnapshot,
     rollout_path: Option<PathBuf>,
+    diagnostics: FeedbackDiagnostics,
     app_event_tx: AppEventSender,
     include_logs: bool,
     feedback_audience: FeedbackAudience,
@@ -58,11 +64,17 @@ pub(crate) struct FeedbackNoteView {
     complete: bool,
 }
 
+struct PreparedFeedbackAttachments {
+    attachment_paths: Vec<PathBuf>,
+    _diagnostics_attachment: Option<FeedbackDiagnosticsAttachment>,
+}
+
 impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
         snapshot: codex_feedback::CodexLogSnapshot,
         rollout_path: Option<PathBuf>,
+        diagnostics: FeedbackDiagnostics,
         app_event_tx: AppEventSender,
         include_logs: bool,
         feedback_audience: FeedbackAudience,
@@ -71,6 +83,7 @@ impl FeedbackNoteView {
             category,
             snapshot,
             rollout_path,
+            diagnostics,
             app_event_tx,
             include_logs,
             feedback_audience,
@@ -87,11 +100,7 @@ impl FeedbackNoteView {
         } else {
             Some(note.as_str())
         };
-        let log_file_paths = if self.include_logs {
-            self.rollout_path.iter().cloned().collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+        let attachments = self.prepare_feedback_attachments();
         let classification = feedback_classification(self.category);
 
         let mut thread_id = self.snapshot.thread_id.clone();
@@ -100,7 +109,7 @@ impl FeedbackNoteView {
             classification,
             reason_opt,
             self.include_logs,
-            &log_file_paths,
+            &attachments.attachment_paths,
             Some(SessionSource::Cli),
         );
 
@@ -216,21 +225,21 @@ impl BottomPaneView for FeedbackNoteView {
 
 impl Renderable for FeedbackNoteView {
     fn desired_height(&self, width: u16) -> u16 {
-        1u16 + self.input_height(width) + 3u16
+        self.intro_lines(width).len() as u16 + self.input_height(width) + 2u16
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         if area.height < 2 || area.width <= 2 {
             return None;
         }
+        let intro_height = self.intro_lines(area.width).len() as u16;
         let text_area_height = self.input_height(area.width).saturating_sub(1);
         if text_area_height == 0 {
             return None;
         }
-        let top_line_count = 1u16; // title only
         let textarea_rect = Rect {
             x: area.x.saturating_add(2),
-            y: area.y.saturating_add(top_line_count).saturating_add(1),
+            y: area.y.saturating_add(intro_height).saturating_add(1),
             width: area.width.saturating_sub(2),
             height: text_area_height,
         };
@@ -243,23 +252,26 @@ impl Renderable for FeedbackNoteView {
             return;
         }
 
-        let (title, placeholder) = feedback_title_and_placeholder(self.category);
+        let intro_lines = self.intro_lines(area.width);
+        let (_, placeholder) = feedback_title_and_placeholder(self.category);
         let input_height = self.input_height(area.width);
 
-        // Title line
-        let title_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: 1,
-        };
-        let title_spans: Vec<Span<'static>> = vec![gutter(), title.bold()];
-        Paragraph::new(Line::from(title_spans)).render(title_area, buf);
+        for (offset, line) in intro_lines.iter().enumerate() {
+            Paragraph::new(line.clone()).render(
+                Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(offset as u16),
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+        }
 
         // Input line
         let input_area = Rect {
             x: area.x,
-            y: area.y.saturating_add(1),
+            y: area.y.saturating_add(intro_lines.len() as u16),
             width: area.width,
             height: input_height,
         };
@@ -332,6 +344,77 @@ impl FeedbackNoteView {
         let usable_width = width.saturating_sub(2);
         let text_height = self.textarea.desired_height(usable_width).clamp(1, 8);
         text_height.saturating_add(1).min(9)
+    }
+
+    fn intro_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let (title, _) = feedback_title_and_placeholder(self.category);
+        let mut lines = vec![
+            Line::from(vec![gutter(), title.bold()]),
+            Line::from(vec![gutter()]),
+            Line::from(vec![gutter(), "Connectivity diagnostics".bold()]),
+        ];
+        lines.extend(self.diagnostics_lines(width));
+        lines
+    }
+
+    fn diagnostics_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let width = usize::from(width.max(1));
+        if self.diagnostics.is_empty() {
+            let options = RtOptions::new(width)
+                .initial_indent(Line::from(vec![gutter(), "  ".dim()]))
+                .subsequent_indent(Line::from(vec![gutter(), "  ".dim()]));
+            return word_wrap_lines(["No connectivity diagnostics detected.".dim()], options);
+        }
+
+        let headline_options = RtOptions::new(width)
+            .initial_indent(Line::from(vec![gutter(), "  - ".into()]))
+            .subsequent_indent(Line::from(vec![gutter(), "    ".into()]));
+        let detail_options = RtOptions::new(width)
+            .initial_indent(Line::from(vec![gutter(), "    - ".dim()]))
+            .subsequent_indent(Line::from(vec![gutter(), "      ".into()]));
+        let mut lines = Vec::new();
+
+        for diagnostic in self.diagnostics.diagnostics() {
+            lines.extend(word_wrap_lines(
+                [Line::from(diagnostic.headline.clone())],
+                headline_options.clone(),
+            ));
+            for detail in &diagnostic.details {
+                lines.extend(word_wrap_lines(
+                    [Line::from(detail.clone())],
+                    detail_options.clone(),
+                ));
+            }
+        }
+
+        lines
+    }
+
+    fn prepare_feedback_attachments(&self) -> PreparedFeedbackAttachments {
+        let mut attachment_paths = if self.include_logs {
+            self.rollout_path.iter().cloned().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let diagnostics_attachment = if self.include_logs {
+            match self.diagnostics.write_temp_attachment() {
+                Ok(attachment) => attachment,
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to write diagnostics attachment");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(attachment) = diagnostics_attachment.as_ref() {
+            attachment_paths.push(attachment.path().to_path_buf());
+        }
+
+        PreparedFeedbackAttachments {
+            attachment_paths,
+            _diagnostics_attachment: diagnostics_attachment,
+        }
     }
 }
 
@@ -512,7 +595,7 @@ pub(crate) fn feedback_upload_consent_params(
     let mut header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
         Line::from("Upload logs?".bold()).into(),
         Line::from("").into(),
-        Line::from("The following files will be sent:".dim()).into(),
+        Line::from("If you choose Yes, the following files may be sent:".dim()).into(),
         Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
     ];
     if let Some(path) = rollout_path.as_deref()
@@ -520,6 +603,14 @@ pub(crate) fn feedback_upload_consent_params(
     {
         header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
     }
+    header_lines.push(
+        Line::from(vec![
+            "  • ".into(),
+            FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME.into(),
+            " (if connectivity diagnostics are detected)".dim(),
+        ])
+        .into(),
+    );
 
     super::SelectionViewParams {
         footer_hint: Some(standard_popup_hint_line()),
@@ -527,7 +618,7 @@ pub(crate) fn feedback_upload_consent_params(
             super::SelectionItem {
                 name: "Yes".to_string(),
                 description: Some(
-                    "Share the current Codex session logs with the team for troubleshooting."
+                    "Share the current Codex session logs and any generated diagnostics attachment."
                         .to_string(),
                 ),
                 actions: vec![yes_action],
@@ -536,7 +627,7 @@ pub(crate) fn feedback_upload_consent_params(
             },
             super::SelectionItem {
                 name: "No".to_string(),
-                description: Some("".to_string()),
+                description: Some("Send feedback without any attached files.".to_string()),
                 actions: vec![no_action],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -554,6 +645,9 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
+    use pretty_assertions::assert_eq;
+    use std::ffi::OsStr;
+    use std::fs;
 
     fn render(view: &FeedbackNoteView, width: u16) -> String {
         let height = view.desired_height(width);
@@ -593,6 +687,7 @@ mod tests {
             category,
             snapshot,
             None,
+            FeedbackDiagnostics::default(),
             tx,
             true,
             FeedbackAudience::External,
@@ -632,6 +727,90 @@ mod tests {
         let view = make_view(FeedbackCategory::SafetyCheck);
         let rendered = render(&view, 60);
         insta::assert_snapshot!("feedback_view_safety_check", rendered);
+    }
+
+    #[test]
+    fn feedback_view_with_connectivity_diagnostics() {
+        let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
+        let diagnostics = FeedbackDiagnostics::collect_from_pairs([
+            ("HTTP_PROXY", "proxy.example.com:8080"),
+            ("OPENAI_BASE_URL", "https://example.com/v1"),
+        ]);
+        let view = FeedbackNoteView::new(
+            FeedbackCategory::Bug,
+            snapshot,
+            None,
+            diagnostics,
+            tx,
+            false,
+            FeedbackAudience::External,
+        );
+        let rendered = render(&view, 60);
+
+        insta::assert_snapshot!("feedback_view_with_connectivity_diagnostics", rendered);
+    }
+
+    #[test]
+    fn prepare_feedback_attachments_skips_diagnostics_without_logs() {
+        let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
+        let diagnostics = FeedbackDiagnostics::collect_from_pairs([(
+            "OPENAI_BASE_URL",
+            "https://example.com/v1",
+        )]);
+        let view = FeedbackNoteView::new(
+            FeedbackCategory::Other,
+            snapshot,
+            None,
+            diagnostics,
+            tx,
+            false,
+            FeedbackAudience::External,
+        );
+
+        let attachments = view.prepare_feedback_attachments();
+        assert_eq!(attachments.attachment_paths, Vec::<PathBuf>::new());
+        assert!(attachments._diagnostics_attachment.is_none());
+    }
+
+    #[test]
+    fn prepare_feedback_attachments_includes_diagnostics_with_logs() {
+        let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
+        let diagnostics = FeedbackDiagnostics::collect_from_pairs([(
+            "OPENAI_BASE_URL",
+            "https://example.com/v1",
+        )]);
+        let view = FeedbackNoteView::new(
+            FeedbackCategory::Other,
+            snapshot,
+            None,
+            diagnostics,
+            tx,
+            true,
+            FeedbackAudience::External,
+        );
+
+        let attachments = view.prepare_feedback_attachments();
+        assert_eq!(attachments.attachment_paths.len(), 1);
+        assert_eq!(
+            attachments.attachment_paths[0].file_name(),
+            Some(OsStr::new(FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME))
+        );
+        assert!(
+            attachments._diagnostics_attachment.is_some(),
+            "diagnostics attachment should stay alive until upload completes"
+        );
+        let contents = fs::read_to_string(&attachments.attachment_paths[0])
+            .expect("diagnostics attachment should be readable");
+        assert_eq!(
+            contents,
+            "Connectivity diagnostics\n\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1"
+        );
     }
 
     #[test]

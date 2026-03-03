@@ -1,14 +1,16 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 6401
 expression: popup
 ---
   Upload logs?
 
-  The following files will be sent:
+  If you choose Yes, the following files may be sent:
     • codex-logs.log
+    • codex-connectivity-diagnostics.txt (if connectivity diagnostics are dete
 
-› 1. Yes  Share the current Codex session logs with the team for
-          troubleshooting.
-  2. No
+› 1. Yes  Share the current Codex session logs and any generated diagnostics
+          attachment.
+  2. No   Send feedback without any attached files.
 
   Press enter to confirm or esc to go back
