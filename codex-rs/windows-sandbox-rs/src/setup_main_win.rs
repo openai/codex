@@ -85,6 +85,8 @@ struct Payload {
     write_roots: Vec<PathBuf>,
     #[serde(default)]
     proxy_ports: Vec<u16>,
+    #[serde(default)]
+    allow_local_binding: bool,
     real_user: String,
     #[serde(default)]
     mode: SetupMode,
@@ -514,6 +516,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             &payload.offline_username,
             &payload.online_username,
             &payload.proxy_ports,
+            payload.allow_local_binding,
             log,
         );
         if let Err(err) = provision_result {
@@ -576,8 +579,12 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     };
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
-        let proxy_allowlist_result =
-            firewall::ensure_offline_proxy_allowlist(&offline_sid_str, &payload.proxy_ports, log);
+        let proxy_allowlist_result = firewall::ensure_offline_proxy_allowlist(
+            &offline_sid_str,
+            &payload.proxy_ports,
+            payload.allow_local_binding,
+            log,
+        );
         if let Err(err) = proxy_allowlist_result {
             if extract_setup_failure(&err).is_some() {
                 return Err(err);

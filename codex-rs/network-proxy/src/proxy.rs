@@ -156,6 +156,23 @@ impl NetworkProxyBuilder {
         let (requested_http_addr, requested_socks_addr, requested_admin_addr, reserved_listeners) =
             if self.managed_by_codex {
                 let runtime = config::resolve_runtime(&current_cfg)?;
+                #[cfg(target_os = "windows")]
+                let (managed_http_addr, managed_socks_addr, _managed_admin_addr) =
+                    config::clamp_bind_addrs(
+                        runtime.http_addr,
+                        runtime.socks_addr,
+                        runtime.admin_addr,
+                        &current_cfg.network,
+                    );
+                #[cfg(target_os = "windows")]
+                let (http_listener, socks_listener, admin_listener) =
+                    reserve_windows_managed_listeners(
+                        managed_http_addr,
+                        managed_socks_addr,
+                        current_cfg.network.enable_socks5,
+                    )
+                    .context("reserve managed loopback proxy listeners")?;
+                #[cfg(not(target_os = "windows"))]
                 let (http_listener, socks_listener, admin_listener) =
                     reserve_loopback_ephemeral_listeners(current_cfg.network.enable_socks5)
                         .context("reserve managed loopback proxy listeners")?;
@@ -230,6 +247,32 @@ fn reserve_loopback_ephemeral_listeners(
     let admin_listener =
         reserve_loopback_ephemeral_listener().context("reserve admin API listener")?;
     Ok((http_listener, socks_listener, admin_listener))
+}
+
+#[cfg(target_os = "windows")]
+fn reserve_windows_managed_listeners(
+    http_addr: SocketAddr,
+    socks_addr: SocketAddr,
+    reserve_socks_listener: bool,
+) -> Result<(StdTcpListener, Option<StdTcpListener>, StdTcpListener)> {
+    let http_listener = reserve_loopback_listener(http_addr)
+        .with_context(|| format!("reserve HTTP proxy listener on {http_addr}"))?;
+    let socks_listener = if reserve_socks_listener {
+        Some(
+            reserve_loopback_listener(socks_addr)
+                .with_context(|| format!("reserve SOCKS5 proxy listener on {socks_addr}"))?,
+        )
+    } else {
+        None
+    };
+    let admin_listener =
+        reserve_loopback_ephemeral_listener().context("reserve admin API listener")?;
+    Ok((http_listener, socks_listener, admin_listener))
+}
+
+#[cfg(target_os = "windows")]
+fn reserve_loopback_listener(addr: SocketAddr) -> Result<StdTcpListener> {
+    StdTcpListener::bind(addr).with_context(|| format!("bind loopback port {addr}"))
 }
 
 fn reserve_loopback_ephemeral_listener() -> Result<StdTcpListener> {
@@ -629,10 +672,13 @@ mod tests {
     use std::net::Ipv4Addr;
 
     #[tokio::test]
-    async fn managed_proxy_builder_uses_loopback_ephemeral_ports() {
-        let state = Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings::default(),
-        ));
+    async fn managed_proxy_builder_uses_loopback_ports() {
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
+            proxy_url: "http://127.0.0.1:43128".to_string(),
+            socks_url: "http://127.0.0.1:48081".to_string(),
+            admin_url: "http://127.0.0.1:48080".to_string(),
+            ..NetworkProxySettings::default()
+        }));
         let proxy = match NetworkProxy::builder().state(state).build().await {
             Ok(proxy) => proxy,
             Err(err) => {
@@ -649,8 +695,22 @@ mod tests {
         assert!(proxy.http_addr.ip().is_loopback());
         assert!(proxy.socks_addr.ip().is_loopback());
         assert!(proxy.admin_addr.ip().is_loopback());
-        assert_ne!(proxy.http_addr.port(), 0);
-        assert_ne!(proxy.socks_addr.port(), 0);
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(
+                proxy.http_addr,
+                "127.0.0.1:43128".parse::<SocketAddr>().unwrap()
+            );
+            assert_eq!(
+                proxy.socks_addr,
+                "127.0.0.1:48081".parse::<SocketAddr>().unwrap()
+            );
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_ne!(proxy.http_addr.port(), 0);
+            assert_ne!(proxy.socks_addr.port(), 0);
+        }
         assert_ne!(proxy.admin_addr.port(), 0);
     }
 
@@ -688,7 +748,9 @@ mod tests {
     async fn managed_proxy_builder_does_not_reserve_socks_listener_when_disabled() {
         let settings = NetworkProxySettings {
             enable_socks5: false,
+            proxy_url: "http://127.0.0.1:43128".to_string(),
             socks_url: "http://127.0.0.1:43129".to_string(),
+            admin_url: "http://127.0.0.1:48080".to_string(),
             ..NetworkProxySettings::default()
         };
         let state = Arc::new(network_proxy_state_for_policy(settings));
@@ -707,6 +769,11 @@ mod tests {
 
         assert!(proxy.http_addr.ip().is_loopback());
         assert!(proxy.admin_addr.ip().is_loopback());
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            proxy.http_addr,
+            "127.0.0.1:43128".parse::<SocketAddr>().unwrap()
+        );
         assert_eq!(
             proxy.socks_addr,
             "127.0.0.1:43129".parse::<SocketAddr>().unwrap()

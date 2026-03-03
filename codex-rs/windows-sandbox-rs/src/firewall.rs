@@ -56,6 +56,7 @@ struct BlockRuleSpec<'a> {
 pub fn ensure_offline_proxy_allowlist(
     offline_sid: &str,
     proxy_ports: &[u16],
+    allow_local_binding: bool,
     log: &mut File,
 ) -> Result<()> {
     let local_user_spec = format!("O:LSD:(A;;CC;;;{offline_sid})");
@@ -87,6 +88,12 @@ pub fn ensure_offline_proxy_allowlist(
             // Remove the legacy overlapping allow rule. We now enforce proxy-only egress with
             // non-overlapping block rules so behavior does not depend on firewall rule precedence.
             remove_rule_if_present(&rules, OFFLINE_PROXY_ALLOW_RULE_NAME, log)?;
+
+            if allow_local_binding {
+                remove_rule_if_present(&rules, OFFLINE_BLOCK_LOOPBACK_UDP_RULE_NAME, log)?;
+                remove_rule_if_present(&rules, OFFLINE_BLOCK_LOOPBACK_TCP_RULE_NAME, log)?;
+                return Ok(());
+            }
 
             ensure_block_rule(
                 &rules,

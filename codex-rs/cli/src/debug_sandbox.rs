@@ -165,6 +165,7 @@ async fn run_command_under_sandbox(
                         &cwd_clone,
                         env_map,
                         None,
+                        false,
                     )
                 } else {
                     run_windows_sandbox_capture(

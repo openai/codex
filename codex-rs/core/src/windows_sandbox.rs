@@ -174,6 +174,7 @@ pub fn run_elevated_setup(
         codex_home,
         None,
         None,
+        false,
     )
 }
 
@@ -221,6 +222,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
         env_map,
         codex_home,
         extra_read_roots,
+        false,
     )
 }
 

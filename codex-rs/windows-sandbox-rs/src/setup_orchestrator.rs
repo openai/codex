@@ -74,6 +74,7 @@ pub fn run_setup_refresh(
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
+    managed_proxy_enforced: bool,
 ) -> Result<()> {
     run_setup_refresh_inner(
         policy,
@@ -83,6 +84,7 @@ pub fn run_setup_refresh(
         codex_home,
         None,
         None,
+        managed_proxy_enforced,
     )
 }
 
@@ -93,6 +95,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
     env_map: &HashMap<String, String>,
     codex_home: &Path,
     extra_read_roots: Vec<PathBuf>,
+    managed_proxy_enforced: bool,
 ) -> Result<()> {
     let mut read_roots = gather_read_roots(command_cwd, policy);
     read_roots.extend(extra_read_roots);
@@ -104,6 +107,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
         codex_home,
         Some(read_roots),
         Some(Vec::new()),
+        managed_proxy_enforced,
     )
 }
 
@@ -115,6 +119,7 @@ fn run_setup_refresh_inner(
     codex_home: &Path,
     read_roots_override: Option<Vec<PathBuf>>,
     write_roots_override: Option<Vec<PathBuf>>,
+    managed_proxy_enforced: bool,
 ) -> Result<()> {
     // Skip in danger-full-access.
     if matches!(
@@ -132,6 +137,7 @@ fn run_setup_refresh_inner(
         read_roots_override,
         write_roots_override,
     );
+    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, managed_proxy_enforced);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -140,7 +146,8 @@ fn run_setup_refresh_inner(
         command_cwd: command_cwd.to_path_buf(),
         read_roots,
         write_roots,
-        proxy_ports: proxy_ports_from_env(env_map),
+        proxy_ports: offline_proxy_settings.proxy_ports,
+        allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: true,
     };
@@ -189,6 +196,8 @@ pub struct SetupMarker {
     pub created_at: Option<String>,
     #[serde(default)]
     pub proxy_ports: Vec<u16>,
+    #[serde(default)]
+    pub allow_local_binding: bool,
 }
 
 impl SetupMarker {
@@ -342,9 +351,17 @@ struct ElevationPayload {
     write_roots: Vec<PathBuf>,
     #[serde(default)]
     proxy_ports: Vec<u16>,
+    #[serde(default)]
+    allow_local_binding: bool,
     real_user: String,
     #[serde(default)]
     refresh_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OfflineProxySettings {
+    pub proxy_ports: Vec<u16>,
+    pub allow_local_binding: bool,
 }
 
 const PROXY_ENV_KEYS: &[&str] = &[
@@ -359,6 +376,25 @@ const PROXY_ENV_KEYS: &[&str] = &[
     "ws_proxy",
     "wss_proxy",
 ];
+const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
+
+pub(crate) fn offline_proxy_settings_from_env(
+    env_map: &HashMap<String, String>,
+    managed_proxy_enforced: bool,
+) -> OfflineProxySettings {
+    if !managed_proxy_enforced {
+        return OfflineProxySettings {
+            proxy_ports: vec![],
+            allow_local_binding: false,
+        };
+    }
+    OfflineProxySettings {
+        proxy_ports: proxy_ports_from_env(env_map),
+        allow_local_binding: env_map
+            .get(ALLOW_LOCAL_BINDING_ENV_KEY)
+            .is_some_and(|value| value == "1"),
+    }
+}
 
 pub(crate) fn proxy_ports_from_env(env_map: &HashMap<String, String>) -> Vec<u16> {
     let mut ports = BTreeSet::new();
@@ -579,6 +615,7 @@ pub fn run_elevated_setup(
     codex_home: &Path,
     read_roots_override: Option<Vec<PathBuf>>,
     write_roots_override: Option<Vec<PathBuf>>,
+    managed_proxy_enforced: bool,
 ) -> Result<()> {
     // Ensure the shared sandbox directory exists before we send it to the elevated helper.
     let sbx_dir = sandbox_dir(codex_home);
@@ -597,6 +634,7 @@ pub fn run_elevated_setup(
         read_roots_override,
         write_roots_override,
     );
+    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, managed_proxy_enforced);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -605,7 +643,8 @@ pub fn run_elevated_setup(
         command_cwd: command_cwd.to_path_buf(),
         read_roots,
         write_roots,
-        proxy_ports: proxy_ports_from_env(env_map),
+        proxy_ports: offline_proxy_settings.proxy_ports,
+        allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: false,
     };
@@ -666,6 +705,7 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 #[cfg(test)]
 mod tests {
     use super::loopback_proxy_port_from_url;
+    use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
     use pretty_assertions::assert_eq;
@@ -719,6 +759,52 @@ mod tests {
         );
 
         assert_eq!(proxy_ports_from_env(&env), vec![1081, 8080]);
+    }
+
+    #[test]
+    fn offline_proxy_settings_ignore_proxy_env_when_managed_proxy_disabled() {
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:8080".to_string(),
+        );
+        env.insert(
+            "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
+            "1".to_string(),
+        );
+
+        assert_eq!(
+            offline_proxy_settings_from_env(&env, false),
+            super::OfflineProxySettings {
+                proxy_ports: vec![],
+                allow_local_binding: false,
+            }
+        );
+    }
+
+    #[test]
+    fn offline_proxy_settings_capture_proxy_ports_and_local_binding() {
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:8080".to_string(),
+        );
+        env.insert(
+            "ALL_PROXY".to_string(),
+            "socks5h://127.0.0.1:1081".to_string(),
+        );
+        env.insert(
+            "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
+            "1".to_string(),
+        );
+
+        assert_eq!(
+            offline_proxy_settings_from_env(&env, true),
+            super::OfflineProxySettings {
+                proxy_ports: vec![1081, 8080],
+                allow_local_binding: true,
+            }
+        );
     }
 
     #[test]

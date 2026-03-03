@@ -3,7 +3,7 @@ use crate::logging::debug_log;
 use crate::policy::SandboxPolicy;
 use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots;
-use crate::setup::proxy_ports_from_env;
+use crate::setup::offline_proxy_settings_from_env;
 use crate::setup::run_elevated_setup;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
@@ -102,7 +102,11 @@ fn decode_password(record: &SandboxUserRecord) -> Result<String> {
     Ok(pwd)
 }
 
-fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<SandboxIdentity>> {
+fn select_identity(
+    policy: &SandboxPolicy,
+    codex_home: &Path,
+    managed_proxy_enforced: bool,
+) -> Result<Option<SandboxIdentity>> {
     let _marker = match load_marker(codex_home)? {
         Some(m) if m.version_matches() => m,
         _ => return Ok(None),
@@ -111,7 +115,7 @@ fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<S
         Some(u) if u.version_matches() => u,
         _ => return Ok(None),
     };
-    let chosen = if !policy.has_full_network_access() {
+    let chosen = if managed_proxy_enforced || !policy.has_full_network_access() {
         users.offline
     } else {
         users.online
@@ -129,11 +133,14 @@ pub fn require_logon_sandbox_creds(
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
+    managed_proxy_enforced: bool,
 ) -> Result<SandboxCreds> {
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
     let needed_read = gather_read_roots(command_cwd, policy);
     let needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
-    let desired_proxy_ports = proxy_ports_from_env(env_map);
+    let uses_offline_identity = managed_proxy_enforced || !policy.has_full_network_access();
+    let desired_offline_proxy_settings =
+        offline_proxy_settings_from_env(env_map, managed_proxy_enforced);
     // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.
@@ -143,7 +150,7 @@ pub fn require_logon_sandbox_creds(
     let mut identity = match load_marker(codex_home)? {
         Some(marker) if marker.version_matches() => {
             existing_marker = Some(marker.clone());
-            let selected = select_identity(policy, codex_home)?;
+            let selected = select_identity(policy, codex_home, managed_proxy_enforced)?;
             if selected.is_none() {
                 setup_reason =
                     Some("sandbox users missing or incompatible with marker version".to_string());
@@ -155,13 +162,21 @@ pub fn require_logon_sandbox_creds(
             None
         }
     };
-    if let (Some(marker), Some(_)) = (&existing_marker, &identity) {
-        if marker.proxy_ports != desired_proxy_ports {
-            setup_reason = Some(format!(
-                "sandbox proxy allowlist changed (stored={:?}, desired={:?})",
-                marker.proxy_ports, desired_proxy_ports
-            ));
-            identity = None;
+    if uses_offline_identity {
+        if let (Some(marker), Some(_)) = (&existing_marker, &identity) {
+            if marker.proxy_ports != desired_offline_proxy_settings.proxy_ports
+                || marker.allow_local_binding
+                    != desired_offline_proxy_settings.allow_local_binding
+            {
+                setup_reason = Some(format!(
+                    "offline firewall settings changed (stored_ports={:?}, desired_ports={:?}, stored_allow_local_binding={}, desired_allow_local_binding={})",
+                    marker.proxy_ports,
+                    desired_offline_proxy_settings.proxy_ports,
+                    marker.allow_local_binding,
+                    desired_offline_proxy_settings.allow_local_binding
+                ));
+                identity = None;
+            }
         }
     }
 
@@ -182,11 +197,19 @@ pub fn require_logon_sandbox_creds(
             codex_home,
             Some(needed_read.clone()),
             Some(needed_write.clone()),
+            managed_proxy_enforced,
         )?;
-        identity = select_identity(policy, codex_home)?;
+        identity = select_identity(policy, codex_home, managed_proxy_enforced)?;
     }
     // Always refresh ACLs (non-elevated) for current roots via the setup binary.
-    crate::setup::run_setup_refresh(policy, policy_cwd, command_cwd, env_map, codex_home)?;
+    crate::setup::run_setup_refresh(
+        policy,
+        policy_cwd,
+        command_cwd,
+        env_map,
+        codex_home,
+        managed_proxy_enforced,
+    )?;
     let identity = identity.ok_or_else(|| {
         anyhow!(
             "Windows sandbox setup is missing or out of date; rerun the sandbox setup with elevation"
