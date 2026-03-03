@@ -18,6 +18,14 @@ use crate::parse_column_reference;
 use crate::xlsx::import_xlsx;
 use crate::xlsx::write_xlsx;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpreadsheetFileType {
+    Xlsx,
+    Json,
+    Binary,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum SpreadsheetCellValue {
@@ -683,9 +691,25 @@ impl SpreadsheetSheet {
         reference: &str,
         width: f64,
     ) -> Result<(), SpreadsheetArtifactError> {
+        if width <= 0.0 {
+            return Err(SpreadsheetArtifactError::InvalidArgs {
+                action: "set_column_widths".to_string(),
+                message: "column width must be positive".to_string(),
+            });
+        }
         let (start, end) = parse_column_reference(reference)?;
         for column in start..=end {
             self.column_widths.insert(column, width);
+        }
+        Ok(())
+    }
+
+    pub fn set_column_widths_bulk(
+        &mut self,
+        widths: &BTreeMap<String, f64>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        for (reference, width) in widths {
+            self.set_column_widths(reference, *width)?;
         }
         Ok(())
     }
@@ -705,6 +729,68 @@ impl SpreadsheetSheet {
             .get(&start)
             .copied()
             .or(self.default_column_width))
+    }
+
+    pub fn set_row_height(
+        &mut self,
+        row_index: u32,
+        height: Option<f64>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        if row_index == 0 {
+            return Err(SpreadsheetArtifactError::InvalidArgs {
+                action: "set_row_height".to_string(),
+                message: "row index must be positive".to_string(),
+            });
+        }
+        if let Some(height) = height {
+            if height <= 0.0 {
+                return Err(SpreadsheetArtifactError::InvalidArgs {
+                    action: "set_row_height".to_string(),
+                    message: "row height must be positive".to_string(),
+                });
+            }
+            self.row_heights.insert(row_index, height);
+        } else {
+            self.row_heights.remove(&row_index);
+        }
+        Ok(())
+    }
+
+    pub fn set_row_heights(
+        &mut self,
+        start_row_index: u32,
+        end_row_index: u32,
+        height: Option<f64>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        if start_row_index == 0 || end_row_index == 0 {
+            return Err(SpreadsheetArtifactError::InvalidArgs {
+                action: "set_row_heights".to_string(),
+                message: "row indices must be positive".to_string(),
+            });
+        }
+        let start = start_row_index.min(end_row_index);
+        let end = start_row_index.max(end_row_index);
+        for row_index in start..=end {
+            self.set_row_height(row_index, height)?;
+        }
+        Ok(())
+    }
+
+    pub fn set_row_heights_bulk(
+        &mut self,
+        heights: &BTreeMap<u32, Option<f64>>,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        for (row_index, height) in heights {
+            self.set_row_height(*row_index, *height)?;
+        }
+        Ok(())
+    }
+
+    pub fn get_row_height(&self, row_index: u32) -> Option<f64> {
+        self.row_heights
+            .get(&row_index)
+            .copied()
+            .or(self.default_row_height)
     }
 
     pub fn cell_exists(&self, address: CellAddress) -> bool {
@@ -1138,6 +1224,49 @@ impl SpreadsheetSheet {
         lines.join("\n")
     }
 
+    pub fn cleanup_and_validate_sheet(&mut self) -> Result<(), SpreadsheetArtifactError> {
+        self.cells.retain(|_, cell| !cell.is_empty());
+
+        for (column, width) in &self.column_widths {
+            if *column == 0 || *width <= 0.0 {
+                return Err(SpreadsheetArtifactError::InvalidArgs {
+                    action: "cleanup_and_validate_sheet".to_string(),
+                    message: format!("invalid column width entry for column {column}"),
+                });
+            }
+        }
+        for (row, height) in &self.row_heights {
+            if *row == 0 || *height <= 0.0 {
+                return Err(SpreadsheetArtifactError::InvalidArgs {
+                    action: "cleanup_and_validate_sheet".to_string(),
+                    message: format!("invalid row height entry for row {row}"),
+                });
+            }
+        }
+
+        self.merged_ranges.sort_by_key(|range| {
+            (
+                range.start.row,
+                range.start.column,
+                range.end.row,
+                range.end.column,
+            )
+        });
+        self.merged_ranges.dedup();
+        for index in 0..self.merged_ranges.len() {
+            for other in index + 1..self.merged_ranges.len() {
+                if self.merged_ranges[index].intersects(&self.merged_ranges[other]) {
+                    return Err(SpreadsheetArtifactError::MergeConflict {
+                        action: "cleanup_and_validate_sheet".to_string(),
+                        range: self.merged_ranges[index].to_a1(),
+                        conflict: self.merged_ranges[other].to_a1(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn ensure_range_write_allowed(
         &self,
         range: &CellRange,
@@ -1192,6 +1321,38 @@ impl SpreadsheetArtifact {
 
     pub fn allowed_file_extensions() -> &'static [&'static str] {
         &["xlsx", "json", "bin"]
+    }
+
+    pub fn allowed_file_mime_types() -> &'static [&'static str] {
+        &[
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/json",
+            "application/octet-stream",
+        ]
+    }
+
+    pub fn allowed_file_types() -> &'static [SpreadsheetFileType] {
+        &[
+            SpreadsheetFileType::Xlsx,
+            SpreadsheetFileType::Json,
+            SpreadsheetFileType::Binary,
+        ]
+    }
+
+    pub fn get_output_file_name(
+        &self,
+        suffix: Option<&str>,
+        file_type: SpreadsheetFileType,
+    ) -> String {
+        let extension = match file_type {
+            SpreadsheetFileType::Xlsx => "xlsx",
+            SpreadsheetFileType::Json => "json",
+            SpreadsheetFileType::Binary => "bin",
+        };
+        match suffix {
+            Some(suffix) => format!("{}_{}.{}", self.artifact_id, suffix, extension),
+            None => format!("{}.{}", self.artifact_id, extension),
+        }
     }
 
     pub fn create_sheet(

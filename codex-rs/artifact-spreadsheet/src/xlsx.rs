@@ -25,6 +25,9 @@ pub(crate) fn write_xlsx(
     if artifact.auto_recalculate {
         artifact.recalculate();
     }
+    for sheet in &mut artifact.sheets {
+        sheet.cleanup_and_validate_sheet()?;
+    }
 
     let file = File::create(path).map_err(|error| SpreadsheetArtifactError::ExportFailed {
         path: path.to_path_buf(),
@@ -365,7 +368,7 @@ fn parse_sheet(
         }
     }
 
-    let row_regex = Regex::new(r#"(?s)<row\b[^>]*>(.*?)</row>"#).map_err(|error| {
+    let row_regex = Regex::new(r#"(?s)<row\b([^>]*)>(.*?)</row>"#).map_err(|error| {
         SpreadsheetArtifactError::Serialization {
             message: error.to_string(),
         }
@@ -376,7 +379,20 @@ fn parse_sheet(
         }
     })?;
     for row_captures in row_regex.captures_iter(xml) {
-        let Some(row_body) = row_captures.get(1).map(|value| value.as_str()) else {
+        let row_attributes = row_captures
+            .get(1)
+            .map(|value| value.as_str())
+            .unwrap_or_default();
+        if let Some(row_index) =
+            extract_attribute(row_attributes, "r").and_then(|value| value.parse::<u32>().ok())
+            && let Some(height) =
+                extract_attribute(row_attributes, "ht").and_then(|value| value.parse::<f64>().ok())
+            && row_index > 0
+            && height > 0.0
+        {
+            sheet.row_heights.insert(row_index, height);
+        }
+        let Some(row_body) = row_captures.get(2).map(|value| value.as_str()) else {
             continue;
         };
         for cell_captures in cell_regex.captures_iter(row_body) {
@@ -628,6 +644,9 @@ fn styles_xml(artifact: &SpreadsheetArtifact) -> String {
 
 fn sheet_xml(sheet: &SpreadsheetSheet) -> String {
     let mut rows = BTreeMap::<u32, Vec<(CellAddress, &SpreadsheetCell)>>::new();
+    for row_index in sheet.row_heights.keys() {
+        rows.entry(*row_index).or_default();
+    }
     for (address, cell) in &sheet.cells {
         rows.entry(address.row).or_default().push((*address, cell));
     }
@@ -641,7 +660,12 @@ fn sheet_xml(sheet: &SpreadsheetSheet) -> String {
                 .map(|(address, cell)| cell_xml(address, cell))
                 .collect::<Vec<_>>()
                 .join("");
-            format!(r#"<row r="{row_index}">{cells}</row>"#)
+            let height = sheet
+                .row_heights
+                .get(&row_index)
+                .map(|value| format!(r#" ht="{value}" customHeight="1""#))
+                .unwrap_or_default();
+            format!(r#"<row r="{row_index}"{height}>{cells}</row>"#)
         })
         .collect::<Vec<_>>()
         .join("");

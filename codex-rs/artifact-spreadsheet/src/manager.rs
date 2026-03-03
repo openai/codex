@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -102,6 +103,12 @@ impl SpreadsheetArtifactManager {
             "delete_sheet" => self.delete_sheet(request),
             "set_sheet_properties" => self.set_sheet_properties(request),
             "set_column_widths" => self.set_column_widths(request),
+            "set_column_widths_bulk" => self.set_column_widths_bulk(request),
+            "set_row_height" => self.set_row_height(request),
+            "set_row_heights" => self.set_row_heights(request),
+            "set_row_heights_bulk" => self.set_row_heights_bulk(request),
+            "get_row_height" => self.get_row_height(request),
+            "cleanup_and_validate_sheet" => self.cleanup_and_validate_sheet(request),
             "get_cell" => self.get_cell(request),
             "get_cell_by_indices" => self.get_cell_by_indices(request),
             "get_cell_field" => self.get_cell_field(request),
@@ -478,6 +485,180 @@ impl SpreadsheetArtifactManager {
                 "Updated column widths `{}` on `{}`",
                 args.reference, sheet_summary.name
             ),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_list = Some(vec![sheet_summary]);
+        Ok(response)
+    }
+
+    fn set_column_widths_bulk(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SetColumnWidthsBulkArgs = parse_args(&request.action, &request.args)?;
+        let width_count = args.widths.len();
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let sheet_summary = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            sheet.set_column_widths_bulk(&args.widths)?;
+            sheet.summary()
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Updated {width_count} column width references on `{}`",
+                sheet_summary.name
+            ),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_list = Some(vec![sheet_summary]);
+        Ok(response)
+    }
+
+    fn set_row_height(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SetRowHeightArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let (sheet_summary, row_height) = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            sheet.set_row_height(args.row_index, args.height)?;
+            (sheet.summary(), sheet.get_row_height(args.row_index))
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Updated row height for row {} on `{}`",
+                args.row_index, sheet_summary.name
+            ),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_list = Some(vec![sheet_summary]);
+        response.row_height = row_height;
+        Ok(response)
+    }
+
+    fn set_row_heights(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SetRowHeightsArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let start = args.start_row_index.min(args.end_row_index);
+        let end = args.start_row_index.max(args.end_row_index);
+        let sheet_summary = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            sheet.set_row_heights(args.start_row_index, args.end_row_index, args.height)?;
+            sheet.summary()
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Updated row heights {start}:{end} on `{}`",
+                sheet_summary.name
+            ),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_list = Some(vec![sheet_summary]);
+        Ok(response)
+    }
+
+    fn set_row_heights_bulk(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SetRowHeightsBulkArgs = parse_args(&request.action, &request.args)?;
+        let height_count = args.heights.len();
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let sheet_summary = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            sheet.set_row_heights_bulk(&args.heights)?;
+            sheet.summary()
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Updated {height_count} row height entries on `{}`",
+                sheet_summary.name
+            ),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_list = Some(vec![sheet_summary]);
+        Ok(response)
+    }
+
+    fn get_row_height(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: GetRowHeightArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Retrieved row height for row {} from `{}`",
+                args.row_index, sheet.name
+            ),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_ref = Some(sheet_reference(sheet));
+        response.sheet_list = Some(vec![sheet.summary()]);
+        response.row_height = sheet.get_row_height(args.row_index);
+        Ok(response)
+    }
+
+    fn cleanup_and_validate_sheet(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SheetLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let sheet_summary = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            sheet.cleanup_and_validate_sheet()?;
+            sheet.summary()
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Cleaned and validated `{}`", sheet_summary.name),
             snapshot_for_artifact(artifact),
         );
         response.sheet_list = Some(vec![sheet_summary]);
@@ -1297,6 +1478,8 @@ pub struct SpreadsheetArtifactResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rendered_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub serialized_dict: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serialized_json: Option<String>,
@@ -1326,6 +1509,7 @@ impl SpreadsheetArtifactResponse {
             cell_field: None,
             range: None,
             rendered_text: None,
+            row_height: None,
             serialized_dict: None,
             serialized_json: None,
             serialized_bytes_base64: None,
@@ -1412,6 +1596,44 @@ struct SetColumnWidthsArgs {
     sheet_index: Option<u32>,
     reference: String,
     width: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetColumnWidthsBulkArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    widths: BTreeMap<String, f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetRowHeightArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    row_index: u32,
+    height: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetRowHeightsArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    start_row_index: u32,
+    end_row_index: u32,
+    height: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetRowHeightsBulkArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    heights: BTreeMap<u32, Option<f64>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetRowHeightArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    row_index: u32,
 }
 
 #[derive(Debug, Deserialize)]
