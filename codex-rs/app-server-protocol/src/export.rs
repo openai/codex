@@ -117,6 +117,7 @@ pub fn generate_ts_with_options(
     ServerRequest::export_all_to(out_dir)?;
     export_server_responses(out_dir)?;
     ServerNotification::export_all_to(out_dir)?;
+    EventMsg::export_all_to(out_dir)?;
 
     if !options.experimental_api {
         filter_experimental_ts(out_dir)?;
@@ -1910,6 +1911,7 @@ mod tests {
             client_request_ts.contains("MockExperimentalMethodParams"),
             false
         );
+        assert_eq!(output_dir.join("EventMsg.ts").exists(), true);
         let thread_start_ts =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.ts"))?;
         assert_eq!(thread_start_ts.contains("mockExperimentalField"), false);
