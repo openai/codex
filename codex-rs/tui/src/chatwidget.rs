@@ -1294,10 +1294,7 @@ impl ChatWidget {
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
-            crate::bottom_pane::should_show_feedback_connectivity_details(
-                category,
-                snapshot.feedback_diagnostics(),
-            ),
+            !snapshot.feedback_diagnostics().is_empty(),
         );
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
