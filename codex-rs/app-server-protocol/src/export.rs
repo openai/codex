@@ -973,7 +973,10 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
 /// a direct feed would treat `v2` itself as a schema and miss unreferenced v2
 /// leaves. This helper flattens all v2 definitions to the root definitions map,
 /// then pulls in the shared root schemas and any non-v2 transitive deps they
-/// still reference.
+/// still reference. Keep the shared root unions intact here: some valid
+/// request/notification/event variants are inline or only reference shared root
+/// helpers, so filtering them by the presence of a `#/definitions/v2/` ref
+/// would silently drop real API surface from the flat bundle.
 fn build_flat_v2_schema(bundle: &Value) -> Result<Value> {
     let Value::Object(root) = bundle else {
         return Err(anyhow!("expected bundle root to be an object"));
@@ -1000,8 +1003,7 @@ fn build_flat_v2_schema(bundle: &Value) -> Result<Value> {
         let Some(shared_schema) = definitions.get(*shared) else {
             continue;
         };
-        let mut shared_schema = shared_schema.clone();
-        filter_schema_variants_by_namespace(&mut shared_schema, true);
+        let shared_schema = shared_schema.clone();
         non_v2_refs.extend(collect_non_v2_refs(&shared_schema));
         shared_definitions.insert((*shared).to_string(), shared_schema);
     }
@@ -1023,41 +1025,6 @@ fn build_flat_v2_schema(bundle: &Value) -> Result<Value> {
     ensure_no_ref_prefix(&flat_bundle, "#/definitions/v2/", "flat v2")?;
     ensure_referenced_definitions_present(&flat_bundle, "flat v2")?;
     Ok(flat_bundle)
-}
-
-fn filter_schema_variants_by_namespace(schema: &mut Value, keep_v2: bool) {
-    let variants = match schema {
-        Value::Object(obj) => {
-            if let Some(variants) = obj.get_mut("oneOf").and_then(Value::as_array_mut) {
-                Some(variants)
-            } else {
-                obj.get_mut("anyOf").and_then(Value::as_array_mut)
-            }
-        }
-        _ => None,
-    };
-    let Some(variants) = variants else {
-        return;
-    };
-    variants.retain(|variant| value_has_ref_prefix(variant, "#/definitions/v2/") == keep_v2);
-}
-
-fn value_has_ref_prefix(value: &Value, prefix: &str) -> bool {
-    match value {
-        Value::Object(obj) => {
-            if let Some(Value::String(reference)) = obj.get("$ref")
-                && reference.starts_with(prefix)
-            {
-                return true;
-            }
-            obj.values()
-                .any(|child| value_has_ref_prefix(child, prefix))
-        }
-        Value::Array(items) => items
-            .iter()
-            .any(|child| value_has_ref_prefix(child, prefix)),
-        _ => false,
-    }
 }
 
 fn collect_non_v2_refs(value: &Value) -> HashSet<String> {
@@ -2350,7 +2317,7 @@ mod tests {
     }
 
     #[test]
-    fn build_flat_v2_schema_flattens_namespace_and_keeps_unreferenced_v2_defs() -> Result<()> {
+    fn build_flat_v2_schema_keeps_shared_root_schemas_and_dependencies() -> Result<()> {
         let bundle = serde_json::json!({
             "$schema": "http://json-schema.org/draft-07/schema#",
             "title": "CodexAppServerProtocol",
@@ -2367,10 +2334,17 @@ mod tests {
                             }
                         },
                         {
-                            "title": "LegacyRequest",
+                            "title": "InitializeRequest",
                             "type": "object",
                             "properties": {
-                                "params": { "$ref": "#/definitions/LegacyOnly" }
+                                "params": { "$ref": "#/definitions/InitializeParams" }
+                            }
+                        },
+                        {
+                            "title": "LogoutRequest",
+                            "type": "object",
+                            "properties": {
+                                "params": { "type": "null" }
                             }
                         }
                     ]
@@ -2378,13 +2352,30 @@ mod tests {
                 "EventMsg": {
                     "oneOf": [
                         { "$ref": "#/definitions/v2/ThreadStartedEventMsg" },
-                        { "$ref": "#/definitions/LegacyEventMsg" }
+                        {
+                            "title": "WarningEventMsg",
+                            "type": "object",
+                            "properties": {
+                                "message": { "type": "string" },
+                                "type": {
+                                    "enum": ["warning"],
+                                    "type": "string"
+                                }
+                            },
+                            "required": ["message", "type"]
+                        }
                     ]
                 },
                 "ServerNotification": {
                     "oneOf": [
                         { "$ref": "#/definitions/v2/ThreadStartedNotification" },
-                        { "$ref": "#/definitions/LegacyNotification" }
+                        {
+                            "title": "ServerRequestResolvedNotification",
+                            "type": "object",
+                            "properties": {
+                                "params": { "$ref": "#/definitions/ServerRequestResolvedNotificationPayload" }
+                            }
+                        }
                     ]
                 },
                 "SharedHelper": {
@@ -2397,16 +2388,12 @@ mod tests {
                     "title": "SharedLeaf",
                     "type": "string"
                 },
-                "LegacyOnly": {
-                    "title": "LegacyOnly",
+                "InitializeParams": {
+                    "title": "InitializeParams",
                     "type": "string"
                 },
-                "LegacyEventMsg": {
-                    "title": "LegacyEventMsg",
-                    "type": "string"
-                },
-                "LegacyNotification": {
-                    "title": "LegacyNotification",
+                "ServerRequestResolvedNotificationPayload": {
+                    "title": "ServerRequestResolvedNotificationPayload",
                     "type": "string"
                 },
                 "v2": {
@@ -2458,9 +2445,65 @@ mod tests {
         assert_eq!(definitions.contains_key("ThreadStartedNotification"), true);
         assert_eq!(definitions.contains_key("SharedHelper"), true);
         assert_eq!(definitions.contains_key("SharedLeaf"), true);
-        assert_eq!(definitions.contains_key("LegacyOnly"), false);
-        assert_eq!(definitions.contains_key("LegacyEventMsg"), false);
-        assert_eq!(definitions.contains_key("LegacyNotification"), false);
+        assert_eq!(definitions.contains_key("InitializeParams"), true);
+        assert_eq!(
+            definitions.contains_key("ServerRequestResolvedNotificationPayload"),
+            true
+        );
+        let client_request_titles: BTreeSet<String> = definitions["ClientRequest"]["oneOf"]
+            .as_array()
+            .expect("ClientRequest should remain a oneOf")
+            .iter()
+            .map(|variant| {
+                variant["title"]
+                    .as_str()
+                    .expect("ClientRequest variant should have a title")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            client_request_titles,
+            BTreeSet::from([
+                "InitializeRequest".to_string(),
+                "LogoutRequest".to_string(),
+                "StartRequest".to_string(),
+            ])
+        );
+        let event_titles: BTreeSet<String> = definitions["EventMsg"]["oneOf"]
+            .as_array()
+            .expect("EventMsg should remain a oneOf")
+            .iter()
+            .map(|variant| {
+                variant
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            event_titles,
+            BTreeSet::from(["".to_string(), "WarningEventMsg".to_string(),])
+        );
+        let notification_titles: BTreeSet<String> = definitions["ServerNotification"]["oneOf"]
+            .as_array()
+            .expect("ServerNotification should remain a oneOf")
+            .iter()
+            .map(|variant| {
+                variant
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            notification_titles,
+            BTreeSet::from([
+                "".to_string(),
+                "ServerRequestResolvedNotification".to_string(),
+            ])
+        );
         assert_eq!(
             first_ref_with_prefix(&flat_bundle, "#/definitions/v2/").is_none(),
             true
@@ -2614,6 +2657,82 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
             flat_v2_bundle_json.contains("\"title\": \"CodexAppServerProtocolV2\""),
             true
         );
+        let flat_v2_bundle =
+            read_json_value(&output_dir.join("codex_app_server_protocol.v2.schemas.json"))?;
+        let definitions = flat_v2_bundle["definitions"]
+            .as_object()
+            .expect("flat v2 bundle should include definitions");
+        let client_request_methods: BTreeSet<String> = definitions["ClientRequest"]["oneOf"]
+            .as_array()
+            .expect("flat v2 ClientRequest should remain a oneOf")
+            .iter()
+            .filter_map(|variant| {
+                variant["properties"]["method"]["enum"]
+                    .as_array()
+                    .and_then(|values| values.first())
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
+        let missing_client_request_methods: Vec<String> = [
+            "account/logout",
+            "account/rateLimits/read",
+            "config/mcpServer/reload",
+            "configRequirements/read",
+            "fuzzyFileSearch",
+            "initialize",
+        ]
+        .into_iter()
+        .filter(|method| !client_request_methods.contains(*method))
+        .map(str::to_string)
+        .collect();
+        assert_eq!(missing_client_request_methods, Vec::<String>::new());
+        let server_notification_methods: BTreeSet<String> =
+            definitions["ServerNotification"]["oneOf"]
+                .as_array()
+                .expect("flat v2 ServerNotification should remain a oneOf")
+                .iter()
+                .filter_map(|variant| {
+                    variant["properties"]["method"]["enum"]
+                        .as_array()
+                        .and_then(|values| values.first())
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect();
+        let missing_server_notification_methods: Vec<String> = [
+            "fuzzyFileSearch/sessionCompleted",
+            "fuzzyFileSearch/sessionUpdated",
+            "serverRequest/resolved",
+        ]
+        .into_iter()
+        .filter(|method| !server_notification_methods.contains(*method))
+        .map(str::to_string)
+        .collect();
+        assert_eq!(missing_server_notification_methods, Vec::<String>::new());
+        let event_types: BTreeSet<String> = definitions["EventMsg"]["oneOf"]
+            .as_array()
+            .expect("flat v2 EventMsg should remain a oneOf")
+            .iter()
+            .filter_map(|variant| {
+                variant["properties"]["type"]["enum"]
+                    .as_array()
+                    .and_then(|values| values.first())
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
+        let missing_event_types: Vec<String> = [
+            "agent_message_delta",
+            "task_complete",
+            "warning",
+            "web_search_begin",
+        ]
+        .into_iter()
+        .filter(|event_type| !event_types.contains(*event_type))
+        .map(str::to_string)
+        .collect();
+        assert_eq!(missing_event_types, Vec::<String>::new());
         assert_eq!(
             output_dir
                 .join("v2")
