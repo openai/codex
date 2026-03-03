@@ -134,6 +134,48 @@ fn manager_can_import_exported_presentation() -> Result<(), Box<dyn std::error::
 }
 
 #[test]
+fn custom_slide_size_is_written_to_exported_pptx() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({
+                "name": "Custom Size",
+                "slide_size": { "width": 960, "height": 540 }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let export_path = temp_dir.path().join("custom-size.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let presentation_xml = zip_entry_text(
+        &temp_dir.path().join("custom-size.pptx"),
+        "ppt/presentation.xml",
+    )?;
+    assert!(presentation_xml.contains(r#"cx="12192000" cy="6858000""#));
+    assert!(presentation_xml.contains(r#"p:notesSz cx="6858000" cy="12192000""#));
+    Ok(())
+}
+
+#[test]
 fn image_fit_contain_preserves_aspect_ratio() {
     let image = ImageElement {
         element_id: "element_1".to_string(),
@@ -1288,6 +1330,8 @@ fn manager_supports_table_cell_updates_and_merges() -> Result<(), Box<dyn std::e
                 "slide_index": 0,
                 "position": { "left": 24, "top": 24, "width": 240, "height": 120 },
                 "rows": [["A", "B"], ["C", "D"]],
+                "column_widths": [90, 150],
+                "row_heights": [40, 80],
                 "style": "TableStyleMedium9"
             }),
         },
@@ -1331,6 +1375,38 @@ fn manager_supports_table_cell_updates_and_merges() -> Result<(), Box<dyn std::e
             .expect("inspect")
             .contains("\"kind\":\"table\"")
     );
+    let resolved = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": format!("tb/{table_id}") }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("columnWidths"))
+            .and_then(serde_json::Value::as_array)
+            .map(|widths| widths
+                .iter()
+                .filter_map(serde_json::Value::as_u64)
+                .collect::<Vec<_>>()),
+        Some(vec![90, 150])
+    );
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("rowHeights"))
+            .and_then(serde_json::Value::as_array)
+            .map(|heights| heights
+                .iter()
+                .filter_map(serde_json::Value::as_u64)
+                .collect::<Vec<_>>()),
+        Some(vec![40, 80])
+    );
 
     let merged = manager.execute(
         PresentationArtifactRequest {
@@ -1353,5 +1429,25 @@ fn manager_supports_table_cell_updates_and_merges() -> Result<(), Box<dyn std::e
             .map(|snapshot| snapshot.slide_count),
         Some(1)
     );
+    let export_path = temp_dir.path().join("tables.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(merged.artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+    let slide_xml = zip_entry_text(
+        &temp_dir.path().join("tables.pptx"),
+        "ppt/slides/slide1.xml",
+    )?;
+    assert!(
+        slide_xml.contains(r#"<a:gridCol w="1143000"/>"#),
+        "{slide_xml}"
+    );
+    assert!(slide_xml.contains(r#"<a:gridCol w="1905000"/>"#));
+    assert!(slide_xml.contains(r#"<a:tr h="508000">"#));
+    assert!(slide_xml.contains(r#"<a:tr h="1016000">"#));
     Ok(())
 }

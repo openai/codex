@@ -55,8 +55,13 @@ Supported actions:
 Example create:
 `{"action":"create","args":{"name":"Quarterly Update"}}`
 
+Example create with custom slide size:
+`{"action":"create","args":{"name":"Quarterly Update","slide_size":{"width":960,"height":540}}}`
+
 Example edit:
 `{"artifact_id":"presentation_x","action":"add_text_shape","args":{"slide_index":0,"text":"Revenue up 24%","position":{"left":48,"top":72,"width":260,"height":80}}}`
+
+Table creation also accepts optional `column_widths` and `row_heights` arrays in points when you need explicit table sizing instead of even splits.
 
 Example export:
 `{"artifact_id":"presentation_x","action":"export_pptx","args":{"path":"artifacts/q2-update.pptx"}}`

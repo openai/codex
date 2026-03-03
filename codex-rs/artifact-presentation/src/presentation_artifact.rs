@@ -37,6 +37,7 @@ use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use thiserror::Error;
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -1326,14 +1327,27 @@ impl PresentationArtifactManager {
         let args: AddTableArgs = parse_args(&request.action, &request.args)?;
         let artifact_id = required_artifact_id(&request)?;
         let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let rows = coerce_table_rows(args.rows, &request.action)?;
+        let mut frame: Rect = args.position.into();
+        let (column_widths, row_heights) = normalize_table_dimensions(
+            &rows,
+            frame,
+            args.column_widths,
+            args.row_heights,
+            &request.action,
+        )?;
+        frame.width = column_widths.iter().sum();
+        frame.height = row_heights.iter().sum();
         let element_id = document.next_element_id();
         let slide = document.get_slide_mut(args.slide_index, &request.action)?;
         slide
             .elements
             .push(PresentationElement::Table(TableElement {
                 element_id: element_id.clone(),
-                frame: args.position.into(),
-                rows: coerce_table_rows(args.rows, &request.action)?,
+                frame,
+                rows,
+                column_widths,
+                row_heights,
                 style: args.style,
                 merges: Vec::new(),
                 z_order: slide.elements.len(),
@@ -2437,6 +2451,18 @@ impl PresentationDocument {
                                     .collect()
                             })
                             .collect(),
+                        column_widths: imported_table
+                            .column_widths
+                            .iter()
+                            .copied()
+                            .map(emu_to_points)
+                            .collect(),
+                        row_heights: imported_table
+                            .rows
+                            .iter()
+                            .map(|row| row.height.map_or(400_000, |height| height))
+                            .map(emu_to_points)
+                            .collect(),
                         style: None,
                         merges: Vec::new(),
                         z_order: slide.elements.len(),
@@ -2821,15 +2847,18 @@ impl PresentationSlide {
                     }
                 }
                 PresentationElement::Table(table) => {
-                    let row_count = table.rows.len().max(1) as u32;
-                    let column_count =
-                        table.rows.iter().map(std::vec::Vec::len).max().unwrap_or(1) as u32;
-                    let column_width = points_to_emu(table.frame.width / column_count.max(1));
-                    let mut builder = TableBuilder::new(vec![column_width; column_count as usize])
-                        .position(
-                            points_to_emu(table.frame.left),
-                            points_to_emu(table.frame.top),
-                        );
+                    let mut builder = TableBuilder::new(
+                        table
+                            .column_widths
+                            .iter()
+                            .copied()
+                            .map(points_to_emu)
+                            .collect(),
+                    )
+                    .position(
+                        points_to_emu(table.frame.left),
+                        points_to_emu(table.frame.top),
+                    );
                     for (row_index, row) in table.rows.into_iter().enumerate() {
                         let cells = row
                             .into_iter()
@@ -2838,9 +2867,12 @@ impl PresentationSlide {
                                 build_table_cell(cell, &table.merges, row_index, column_index)
                             })
                             .collect::<Vec<_>>();
-                        builder = builder.add_row(TableRow::new(cells));
+                        let mut table_row = TableRow::new(cells);
+                        if let Some(height) = table.row_heights.get(row_index) {
+                            table_row = table_row.with_height(points_to_emu(*height));
+                        }
+                        builder = builder.add_row(table_row);
                     }
-                    let _ = row_count;
                     content = content.table(builder.build());
                 }
                 PresentationElement::Chart(chart) => {
@@ -2993,6 +3025,8 @@ struct TableElement {
     element_id: String,
     frame: Rect,
     rows: Vec<Vec<TableCellSpec>>,
+    column_widths: Vec<u32>,
+    row_heights: Vec<u32>,
     style: Option<String>,
     merges: Vec<TableMergeRegion>,
     z_order: usize,
@@ -3609,6 +3643,8 @@ struct AddTableArgs {
     slide_index: u32,
     position: PositionArgs,
     rows: Vec<Vec<Value>>,
+    column_widths: Option<Vec<u32>>,
+    row_heights: Option<Vec<u32>>,
     style: Option<String>,
 }
 
@@ -4099,6 +4135,57 @@ fn coerce_table_rows(
         .collect())
 }
 
+fn normalize_table_dimensions(
+    rows: &[Vec<TableCellSpec>],
+    frame: Rect,
+    column_widths: Option<Vec<u32>>,
+    row_heights: Option<Vec<u32>>,
+    action: &str,
+) -> Result<(Vec<u32>, Vec<u32>), PresentationArtifactError> {
+    let column_count = rows.iter().map(std::vec::Vec::len).max().unwrap_or(1);
+    let normalized_column_widths = match column_widths {
+        Some(widths) => {
+            if widths.len() != column_count {
+                return Err(PresentationArtifactError::InvalidArgs {
+                    action: action.to_string(),
+                    message: format!(
+                        "`column_widths` must contain {column_count} entries for this table"
+                    ),
+                });
+            }
+            widths
+        }
+        None => split_points(frame.width, column_count),
+    };
+    let normalized_row_heights = match row_heights {
+        Some(heights) => {
+            if heights.len() != rows.len() {
+                return Err(PresentationArtifactError::InvalidArgs {
+                    action: action.to_string(),
+                    message: format!(
+                        "`row_heights` must contain {} entries for this table",
+                        rows.len()
+                    ),
+                });
+            }
+            heights
+        }
+        None => split_points(frame.height, rows.len()),
+    };
+    Ok((normalized_column_widths, normalized_row_heights))
+}
+
+fn split_points(total: u32, count: usize) -> Vec<u32> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let base = total / count as u32;
+    let remainder = total % count as u32;
+    (0..count)
+        .map(|index| base + u32::from(index < remainder as usize))
+        .collect()
+}
+
 fn parse_alignment(value: &str, action: &str) -> Result<TextAlignment, PresentationArtifactError> {
     match value {
         "left" => Ok(TextAlignment::Left),
@@ -4129,13 +4216,24 @@ fn normalize_theme(args: ThemeArgs, action: &str) -> Result<ThemeState, Presenta
 }
 
 fn parse_slide_size(value: &Value, action: &str) -> Result<Rect, PresentationArtifactError> {
-    let position: PositionArgs = serde_json::from_value(value.clone()).map_err(|error| {
+    #[derive(Deserialize)]
+    struct SlideSizeArgs {
+        width: u32,
+        height: u32,
+    }
+
+    let slide_size: SlideSizeArgs = serde_json::from_value(value.clone()).map_err(|error| {
         PresentationArtifactError::InvalidArgs {
             action: action.to_string(),
             message: format!("invalid slide_size: {error}"),
         }
     })?;
-    Ok(position.into())
+    Ok(Rect {
+        left: 0,
+        top: 0,
+        width: slide_size.width,
+        height: slide_size.height,
+    })
 }
 
 fn apply_layout_to_slide(
@@ -4516,6 +4614,8 @@ fn inspect_document(
                         "slide": index + 1,
                         "rows": table.rows.len(),
                         "cols": table.rows.iter().map(std::vec::Vec::len).max().unwrap_or(0),
+                        "columnWidths": table.column_widths,
+                        "rowHeights": table.row_heights,
                         "preview": table.rows.first().map(|row| row.iter().map(|cell| cell.text.clone()).collect::<Vec<_>>().join(" | ")),
                         "style": table.style,
                         "bbox": [table.frame.left, table.frame.top, table.frame.width, table.frame.height],
@@ -4744,6 +4844,8 @@ fn resolve_anchor(
                     "slideIndex": slide_index,
                     "rows": table.rows.len(),
                     "cols": table.rows.iter().map(std::vec::Vec::len).max().unwrap_or(0),
+                    "columnWidths": table.column_widths,
+                    "rowHeights": table.row_heights,
                     "bbox": [table.frame.left, table.frame.top, table.frame.width, table.frame.height],
                     "bboxUnit": "points",
                 }),
@@ -4804,10 +4906,10 @@ fn build_pptx_bytes(document: &PresentationDocument, action: &str) -> Result<Vec
         .to_ppt_rs()
         .build()
         .map_err(|error| format!("{action}: {error}"))?;
-    patch_pptx_hyperlinks(bytes, document).map_err(|error| format!("{action}: {error}"))
+    patch_pptx_package(bytes, document).map_err(|error| format!("{action}: {error}"))
 }
 
-fn patch_pptx_hyperlinks(
+fn patch_pptx_package(
     source_bytes: Vec<u8>,
     document: &PresentationDocument,
 ) -> Result<Vec<u8>, String> {
@@ -4837,6 +4939,20 @@ fn patch_pptx_hyperlinks(
         writer
             .start_file(&name, options)
             .map_err(|error| error.to_string())?;
+        if name == "ppt/presentation.xml" {
+            writer
+                .write_all(
+                    update_presentation_xml_dimensions(bytes, document.slide_size)?.as_bytes(),
+                )
+                .map_err(|error| error.to_string())?;
+            continue;
+        }
+        if let Some(slide_number) = parse_slide_xml_path(&name) {
+            writer
+                .write_all(update_slide_xml(bytes, &document.slides[slide_number - 1])?.as_bytes())
+                .map_err(|error| error.to_string())?;
+            continue;
+        }
         if let Some(slide_number) = parse_slide_relationships_path(&name)
             && let Some(relationships) = pending_slide_relationships.remove(&slide_number)
         {
@@ -4866,6 +4982,42 @@ fn patch_pptx_hyperlinks(
         .finish()
         .map_err(|error| error.to_string())
         .map(Cursor::into_inner)
+}
+
+fn update_presentation_xml_dimensions(
+    existing_bytes: Vec<u8>,
+    slide_size: Rect,
+) -> Result<String, String> {
+    let existing = String::from_utf8(existing_bytes).map_err(|error| error.to_string())?;
+    let updated = replace_self_closing_xml_tag(
+        &existing,
+        "p:sldSz",
+        &format!(
+            r#"<p:sldSz cx="{}" cy="{}" type="screen4x3"/>"#,
+            points_to_emu(slide_size.width),
+            points_to_emu(slide_size.height)
+        ),
+    )?;
+    replace_self_closing_xml_tag(
+        &updated,
+        "p:notesSz",
+        &format!(
+            r#"<p:notesSz cx="{}" cy="{}"/>"#,
+            points_to_emu(slide_size.height),
+            points_to_emu(slide_size.width)
+        ),
+    )
+}
+
+fn replace_self_closing_xml_tag(xml: &str, tag: &str, replacement: &str) -> Result<String, String> {
+    let start = xml
+        .find(&format!("<{tag} "))
+        .ok_or_else(|| format!("presentation xml is missing `<{tag} .../>`"))?;
+    let end = xml[start..]
+        .find("/>")
+        .map(|offset| start + offset + 2)
+        .ok_or_else(|| format!("presentation xml tag `{tag}` is not self-closing"))?;
+    Ok(format!("{}{replacement}{}", &xml[..start], &xml[end..]))
 }
 
 fn slide_hyperlink_relationships(slide: &PresentationSlide) -> Vec<String> {
@@ -4898,6 +5050,13 @@ fn parse_slide_relationships_path(path: &str) -> Option<usize> {
         .ok()
 }
 
+fn parse_slide_xml_path(path: &str) -> Option<usize> {
+    path.strip_prefix("ppt/slides/slide")?
+        .strip_suffix(".xml")?
+        .parse::<usize>()
+        .ok()
+}
+
 fn update_slide_relationships_xml(
     existing_bytes: Vec<u8>,
     relationships: &[String],
@@ -4922,6 +5081,68 @@ fn slide_relationships_xml(relationships: &[String]) -> String {
     )
 }
 
+fn update_slide_xml(existing_bytes: Vec<u8>, slide: &PresentationSlide) -> Result<String, String> {
+    let existing = String::from_utf8(existing_bytes).map_err(|error| error.to_string())?;
+    let table_xml = slide_table_xml(slide);
+    if table_xml.is_empty() {
+        return Ok(existing);
+    }
+    existing
+        .contains("</p:spTree>")
+        .then(|| existing.replace("</p:spTree>", &format!("{table_xml}\n</p:spTree>")))
+        .ok_or_else(|| "slide xml is missing a closing `</p:spTree>`".to_string())
+}
+
+fn slide_table_xml(slide: &PresentationSlide) -> String {
+    let mut ordered = slide.elements.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|element| element.z_order());
+    let mut table_index = 0_usize;
+    ordered
+        .into_iter()
+        .filter_map(|element| {
+            let PresentationElement::Table(table) = element else {
+                return None;
+            };
+            table_index += 1;
+            let rows = table
+                .rows
+                .clone()
+                .into_iter()
+                .enumerate()
+                .map(|(row_index, row)| {
+                    let cells = row
+                        .into_iter()
+                        .enumerate()
+                        .map(|(column_index, cell)| {
+                            build_table_cell(cell, &table.merges, row_index, column_index)
+                        })
+                        .collect::<Vec<_>>();
+                    let mut table_row = TableRow::new(cells);
+                    if let Some(height) = table.row_heights.get(row_index) {
+                        table_row = table_row.with_height(points_to_emu(*height));
+                    }
+                    Some(table_row)
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(ppt_rs::generator::table::generate_table_xml(
+                &ppt_rs::generator::table::Table::new(
+                    rows,
+                    table
+                        .column_widths
+                        .iter()
+                        .copied()
+                        .map(points_to_emu)
+                        .collect(),
+                    points_to_emu(table.frame.left),
+                    points_to_emu(table.frame.top),
+                ),
+                300 + table_index,
+            ))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn write_preview_images(
     document: &PresentationDocument,
     output_dir: &Path,
@@ -4938,13 +5159,74 @@ fn write_preview_images(
         path: pptx_path.clone(),
         message: error.to_string(),
     })?;
-    document
-        .to_ppt_rs()
-        .save_as_png(output_dir)
+    render_pptx_to_pngs(&pptx_path, output_dir, action)
+}
+
+fn render_pptx_to_pngs(
+    pptx_path: &Path,
+    output_dir: &Path,
+    action: &str,
+) -> Result<(), PresentationArtifactError> {
+    let soffice_cmd = if cfg!(target_os = "macos")
+        && Path::new("/Applications/LibreOffice.app/Contents/MacOS/soffice").exists()
+    {
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+    } else {
+        "soffice"
+    };
+    let conversion = Command::new(soffice_cmd)
+        .arg("--headless")
+        .arg("--convert-to")
+        .arg("pdf")
+        .arg(pptx_path)
+        .arg("--outdir")
+        .arg(output_dir)
+        .output()
         .map_err(|error| PresentationArtifactError::ExportFailed {
+            path: pptx_path.to_path_buf(),
+            message: format!("{action}: failed to execute LibreOffice: {error}"),
+        })?;
+    if !conversion.status.success() {
+        return Err(PresentationArtifactError::ExportFailed {
+            path: pptx_path.to_path_buf(),
+            message: format!(
+                "{action}: LibreOffice conversion failed: {}",
+                String::from_utf8_lossy(&conversion.stderr)
+            ),
+        });
+    }
+
+    let pdf_path = output_dir.join(
+        pptx_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| format!("{stem}.pdf"))
+            .ok_or_else(|| PresentationArtifactError::ExportFailed {
+                path: pptx_path.to_path_buf(),
+                message: format!("{action}: preview pptx filename is invalid"),
+            })?,
+    );
+    let prefix = output_dir.join("slide");
+    let conversion = Command::new("pdftoppm")
+        .arg("-png")
+        .arg(&pdf_path)
+        .arg(&prefix)
+        .output()
+        .map_err(|error| PresentationArtifactError::ExportFailed {
+            path: pdf_path.clone(),
+            message: format!("{action}: failed to execute pdftoppm: {error}"),
+        })?;
+    std::fs::remove_file(&pdf_path).ok();
+    if !conversion.status.success() {
+        return Err(PresentationArtifactError::ExportFailed {
             path: output_dir.to_path_buf(),
-            message: format!("{action}: {error}"),
-        })
+            message: format!(
+                "{action}: pdftoppm conversion failed: {}",
+                String::from_utf8_lossy(&conversion.stderr)
+            ),
+        });
+    }
+    Ok(())
 }
 
 pub(crate) fn write_preview_image(
