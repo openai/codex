@@ -9,6 +9,7 @@ use codex_app_server_protocol::ExperimentalFeatureListResponse;
 use codex_app_server_protocol::ExperimentalFeatureStage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_core::config::ConfigBuilder;
 use codex_core::features::FEATURES;
 use codex_core::features::Stage;
 use pretty_assertions::assert_eq;
@@ -20,6 +21,11 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::test]
 async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -63,7 +69,7 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
                 display_name,
                 description,
                 announcement,
-                enabled: spec.default_enabled,
+                enabled: config.features.enabled(spec.id),
                 default_enabled: spec.default_enabled,
             }
         })

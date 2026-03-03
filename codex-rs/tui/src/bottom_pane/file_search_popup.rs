@@ -119,6 +119,7 @@ impl WidgetRef for &FileSearchPopup {
                 .iter()
                 .map(|m| GenericDisplayRow {
                     name: m.path.to_string_lossy().to_string(),
+                    name_prefix_spans: Vec::new(),
                     match_indices: m
                         .indices
                         .as_ref()

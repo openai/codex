@@ -3,6 +3,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+/// Conservative cap so one user message cannot monopolize a large context window.
+pub const MAX_USER_INPUT_TEXT_CHARS: usize = 1 << 20;
+
 /// User input
 #[non_exhaustive]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS, JsonSchema)]

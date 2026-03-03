@@ -11,12 +11,12 @@ use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::SessionConfiguredEvent;
-use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -24,6 +24,7 @@ use wiremock::MockServer;
 
 use crate::load_default_config_for_test;
 use crate::responses::WebSocketTestServer;
+use crate::responses::output_value_to_text;
 use crate::responses::start_mock_server;
 use crate::streaming_sse::StreamingSseServer;
 use crate::wait_for_event;
@@ -126,6 +127,7 @@ impl TestCodexBuilder {
         let base_url_clone = base_url.clone();
         self.config_mutators.push(Box::new(move |config| {
             config.model_provider.base_url = Some(base_url_clone);
+            config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
             config.features.enable(Feature::ResponsesWebsockets);
         }));
         self.build_with_home_and_base_url(base_url, home, None)
@@ -215,6 +217,14 @@ impl TestCodexBuilder {
         }
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
             config.codex_linux_sandbox_exe = Some(path);
+        } else if let Ok(exe) = std::env::current_exe()
+            && let Some(path) = exe
+                .parent()
+                .and_then(|parent| parent.parent())
+                .map(|parent| parent.join("codex"))
+            && path.is_file()
+        {
+            config.codex_linux_sandbox_exe = Some(path);
         }
 
         let mut mutators = vec![];
@@ -273,11 +283,36 @@ impl TestCodex {
             .await
     }
 
+    pub async fn submit_turn_with_service_tier(
+        &self,
+        prompt: &str,
+        service_tier: Option<ServiceTier>,
+    ) -> Result<()> {
+        self.submit_turn_with_context(
+            prompt,
+            AskForApproval::Never,
+            SandboxPolicy::DangerFullAccess,
+            Some(service_tier),
+        )
+        .await
+    }
+
     pub async fn submit_turn_with_policies(
         &self,
         prompt: &str,
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
+    ) -> Result<()> {
+        self.submit_turn_with_context(prompt, approval_policy, sandbox_policy, None)
+            .await
+    }
+
+    async fn submit_turn_with_context(
+        &self,
+        prompt: &str,
+        approval_policy: AskForApproval,
+        sandbox_policy: SandboxPolicy,
+        service_tier: Option<Option<ServiceTier>>,
     ) -> Result<()> {
         let session_model = self.session_configured.model.clone();
         self.codex
@@ -292,7 +327,8 @@ impl TestCodex {
                 sandbox_policy,
                 model: session_model,
                 effort: None,
-                summary: ReasoningSummary::Auto,
+                summary: None,
+                service_tier,
                 collaboration_mode: None,
                 personality: None,
             })
@@ -387,11 +423,7 @@ impl TestCodexHarness {
 
     pub async fn custom_tool_call_output(&self, call_id: &str) -> String {
         let bodies = self.request_bodies().await;
-        custom_tool_call_output(&bodies, call_id)
-            .get("output")
-            .and_then(Value::as_str)
-            .expect("output string")
-            .to_string()
+        custom_tool_call_output_text(&bodies, call_id)
     }
 
     pub async fn apply_patch_output(
@@ -426,6 +458,14 @@ fn custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value 
     panic!("custom_tool_call_output {call_id} not found");
 }
 
+fn custom_tool_call_output_text(bodies: &[Value], call_id: &str) -> String {
+    let output = custom_tool_call_output(bodies, call_id)
+        .get("output")
+        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing output"));
+    output_value_to_text(output)
+        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing text output"))
+}
+
 fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
     for body in bodies {
         if let Some(items) = body.get("input").and_then(Value::as_array) {
@@ -447,5 +487,38 @@ pub fn test_codex() -> TestCodexBuilder {
         auth: CodexAuth::from_api_key("dummy"),
         pre_build_hooks: vec![],
         home: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn custom_tool_call_output_text_returns_output_text() {
+        let bodies = vec![json!({
+            "input": [{
+                "type": "custom_tool_call_output",
+                "call_id": "call-1",
+                "output": "hello"
+            }]
+        })];
+
+        assert_eq!(custom_tool_call_output_text(&bodies, "call-1"), "hello");
+    }
+
+    #[test]
+    #[should_panic(expected = "custom_tool_call_output call-2 missing output")]
+    fn custom_tool_call_output_text_panics_when_output_is_missing() {
+        let bodies = vec![json!({
+            "input": [{
+                "type": "custom_tool_call_output",
+                "call_id": "call-2"
+            }]
+        })];
+
+        let _ = custom_tool_call_output_text(&bodies, "call-2");
     }
 }

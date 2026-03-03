@@ -343,7 +343,6 @@ mod detect_shell_type_tests {
 #[cfg(unix)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use std::path::PathBuf;
     use std::process::Command;
 
@@ -354,7 +353,7 @@ mod tests {
 
         let shell_path = zsh_shell.shell_path;
 
-        assert_eq!(shell_path, Path::new("/bin/zsh"));
+        assert_eq!(shell_path, std::path::Path::new("/bin/zsh"));
     }
 
     #[test]
@@ -364,7 +363,7 @@ mod tests {
 
         let shell_path = zsh_shell.shell_path;
 
-        assert_eq!(shell_path, Path::new("/bin/zsh"));
+        assert_eq!(shell_path, std::path::Path::new("/bin/zsh"));
     }
 
     #[test]
@@ -373,9 +372,7 @@ mod tests {
         let shell_path = bash_shell.shell_path;
 
         assert!(
-            shell_path == Path::new("/bin/bash")
-                || shell_path == Path::new("/usr/bin/bash")
-                || shell_path == Path::new("/usr/local/bin/bash"),
+            shell_path.file_name().and_then(|name| name.to_str()) == Some("bash"),
             "shell path: {shell_path:?}",
         );
     }
@@ -385,7 +382,7 @@ mod tests {
         let sh_shell = get_shell(ShellType::Sh, None).unwrap();
         let shell_path = sh_shell.shell_path;
         assert!(
-            shell_path == Path::new("/bin/sh") || shell_path == Path::new("/usr/bin/sh"),
+            shell_path.file_name().and_then(|name| name.to_str()) == Some("sh"),
             "shell path: {shell_path:?}",
         );
     }

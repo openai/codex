@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.",
+  "properties": {
+    "item": true,
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "item",
+    "threadId"
+  ],
+  "title": "ThreadRealtimeItemAddedNotification",
+  "type": "object"
+}

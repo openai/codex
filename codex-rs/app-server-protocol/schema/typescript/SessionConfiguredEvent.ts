@@ -5,6 +5,7 @@ import type { AskForApproval } from "./AskForApproval";
 import type { EventMsg } from "./EventMsg";
 import type { ReasoningEffort } from "./ReasoningEffort";
 import type { SandboxPolicy } from "./SandboxPolicy";
+import type { ServiceTier } from "./ServiceTier";
 import type { SessionNetworkProxyRuntime } from "./SessionNetworkProxyRuntime";
 import type { ThreadId } from "./ThreadId";
 
@@ -16,7 +17,7 @@ thread_name?: string,
 /**
  * Tell the client what model is being queried.
  */
-model: string, model_provider_id: string, 
+model: string, model_provider_id: string, service_tier: ServiceTier | null, 
 /**
  * When to escalate for approval for execution
  */

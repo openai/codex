@@ -6,7 +6,8 @@ Scenario: Remote pre-turn auto-compaction parse failure: compaction request excl
 
 ## Remote Compaction Request (Incoming User Excluded)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:turn that exceeds token threshold
-04:message/assistant:initial turn complete
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:turn that exceeds token threshold
+03:message/assistant:initial turn complete

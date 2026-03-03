@@ -13,8 +13,10 @@ use sha2::Digest;
 use sha2::Sha256;
 
 mod local;
+mod sanitizer;
 
 pub use local::LocalSecretsBackend;
+pub use sanitizer::redact_secrets;
 
 const KEYRING_SERVICE: &str = "codex";
 

@@ -6,8 +6,8 @@ import type { ThreadId } from "./ThreadId";
 
 export type ApplyPatchApprovalParams = { conversationId: ThreadId, 
 /**
- * Use to correlate this with [codex_core::protocol::PatchApplyBeginEvent]
- * and [codex_core::protocol::PatchApplyEndEvent].
+ * Use to correlate this with [codex_protocol::protocol::PatchApplyBeginEvent]
+ * and [codex_protocol::protocol::PatchApplyEndEvent].
  */
 callId: string, fileChanges: { [key in string]?: FileChange }, 
 /**

@@ -13,6 +13,7 @@ pub mod exec_events;
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
+use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
@@ -31,16 +32,18 @@ use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SessionSource;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
@@ -71,6 +74,8 @@ use codex_core::default_client::set_default_originator;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 
+const DEFAULT_ANALYTICS_ENABLED: bool = true;
+
 enum InitialOperation {
     UserTurn {
         items: Vec<UserInput>,
@@ -86,9 +91,10 @@ struct ThreadEventEnvelope {
     thread_id: codex_protocol::ThreadId,
     thread: Arc<codex_core::CodexThread>,
     event: Event,
+    suppress_output: bool,
 }
 
-pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
@@ -113,15 +119,34 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         prompt,
         output_schema: output_schema_path,
         config_overrides,
+        progress_cursor,
     } = cli;
 
-    let (stdout_with_ansi, stderr_with_ansi) = match color {
+    let (_stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
         cli::Color::Never => (false, false),
         cli::Color::Auto => (
             supports_color::on_cached(Stream::Stdout).is_some(),
             supports_color::on_cached(Stream::Stderr).is_some(),
         ),
+    };
+    let cursor_ansi = if progress_cursor {
+        true
+    } else {
+        match color {
+            cli::Color::Never => false,
+            cli::Color::Always => true,
+            cli::Color::Auto => {
+                if stderr_with_ansi || std::io::stderr().is_terminal() {
+                    true
+                } else {
+                    match std::env::var("TERM") {
+                        Ok(term) => !term.is_empty() && term != "dumb",
+                        Err(_) => false,
+                    }
+                }
+            }
+        }
     };
 
     // Build fmt layer (existing logging) to compose with OTEL layer.
@@ -250,7 +275,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         sandbox_mode,
         cwd: resolved_cwd,
         model_provider: model_provider.clone(),
-        codex_linux_sandbox_exe,
+        service_tier: None,
+        codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
+        main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         js_repl_node_path: None,
         js_repl_node_module_dirs: None,
         zsh_path: None,
@@ -292,7 +319,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
+        codex_core::otel_init::build_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            None,
+            DEFAULT_ANALYTICS_ENABLED,
+        )
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
@@ -318,7 +350,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let mut event_processor: Box<dyn EventProcessor> = match json_mode {
         true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
         _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
-            stdout_with_ansi,
+            stderr_with_ansi,
+            cursor_ansi,
             &config,
             last_message_file.clone(),
         )),
@@ -352,7 +385,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_sandbox_policy = config.permissions.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
-    let default_summary = config.model_reasoning_summary;
 
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
@@ -374,6 +406,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         auth_manager.clone(),
         SessionSource::Exec,
         config.model_catalog.clone(),
+        CollaborationModesConfig {
+            default_mode_request_user_input: config
+                .features
+                .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+        },
     ));
     let default_model = thread_manager
         .get_models_manager()
@@ -466,7 +503,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ThreadEventEnvelope>();
     let attached_threads = Arc::new(Mutex::new(HashSet::from([primary_thread_id])));
-    spawn_thread_listener(primary_thread_id, thread.clone(), tx.clone());
+    spawn_thread_listener(primary_thread_id, thread.clone(), tx.clone(), false);
 
     {
         let thread = thread.clone();
@@ -494,7 +531,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                         match thread_manager.get_thread(thread_id).await {
                             Ok(thread) => {
                                 attached_threads.lock().await.insert(thread_id);
-                                spawn_thread_listener(thread_id, thread, tx.clone());
+                                let suppress_output =
+                                    is_agent_job_subagent(&thread.config_snapshot().await);
+                                spawn_thread_listener(
+                                    thread_id,
+                                    thread,
+                                    tx.clone(),
+                                    suppress_output,
+                                );
                             }
                             Err(err) => {
                                 warn!("failed to attach listener for thread {thread_id}: {err}")
@@ -523,7 +567,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     sandbox_policy: default_sandbox_policy.clone(),
                     model: default_model,
                     effort: default_effort,
-                    summary: default_summary,
+                    summary: None,
+                    service_tier: None,
                     final_output_json_schema: output_schema,
                     collaboration_mode: None,
                     personality: None,
@@ -549,7 +594,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             thread_id,
             thread,
             event,
+            suppress_output,
         } = envelope;
+        if suppress_output && should_suppress_agent_job_event(&event.msg) {
+            continue;
+        }
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }
@@ -570,7 +619,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
         if let EventMsg::McpStartupUpdate(update) = &event.msg
             && required_mcp_servers.contains(&update.server)
-            && let codex_core::protocol::McpStartupStatus::Failed { error } = &update.status
+            && let codex_protocol::protocol::McpStartupStatus::Failed { error } = &update.status
         {
             error_seen = true;
             eprintln!(
@@ -613,6 +662,7 @@ fn spawn_thread_listener(
     thread_id: codex_protocol::ThreadId,
     thread: Arc<codex_core::CodexThread>,
     tx: tokio::sync::mpsc::UnboundedSender<ThreadEventEnvelope>,
+    suppress_output: bool,
 ) {
     tokio::spawn(async move {
         loop {
@@ -625,6 +675,7 @@ fn spawn_thread_listener(
                         thread_id,
                         thread: Arc::clone(&thread),
                         event,
+                        suppress_output,
                     }) {
                         error!("Error sending event: {err:?}");
                         break;
@@ -643,6 +694,30 @@ fn spawn_thread_listener(
             }
         }
     });
+}
+
+fn is_agent_job_subagent(config: &codex_core::ThreadConfigSnapshot) -> bool {
+    match &config.session_source {
+        SessionSource::SubAgent(SubAgentSource::Other(source)) => source.starts_with("agent_job:"),
+        _ => false,
+    }
+}
+
+fn should_suppress_agent_job_event(msg: &EventMsg) -> bool {
+    !matches!(
+        msg,
+        EventMsg::ExecApprovalRequest(_)
+            | EventMsg::ApplyPatchApprovalRequest(_)
+            | EventMsg::RequestUserInput(_)
+            | EventMsg::DynamicToolCallRequest(_)
+            | EventMsg::DynamicToolCallResponse(_)
+            | EventMsg::ElicitationRequest(_)
+            | EventMsg::Error(_)
+            | EventMsg::Warning(_)
+            | EventMsg::DeprecationNotice(_)
+            | EventMsg::StreamError(_)
+            | EventMsg::ShutdownComplete
+    )
 }
 
 async fn resolve_resume_path(
@@ -860,6 +935,11 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn exec_defaults_analytics_to_enabled() {
+        assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
+    }
 
     #[test]
     fn builds_uncommitted_review_request() {

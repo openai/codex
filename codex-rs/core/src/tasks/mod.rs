@@ -21,12 +21,12 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;
-use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
@@ -121,8 +121,6 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        self.seed_initial_context_if_needed(turn_context.as_ref())
-            .await;
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
@@ -140,7 +138,6 @@ impl Session {
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
-                    let model_slug = ctx_for_finish.model_info.slug.clone();
                     let last_agent_message = task_for_run
                         .run(
                             Arc::clone(&session_ctx),
@@ -151,9 +148,6 @@ impl Session {
                         .await;
                     let sess = session_ctx.clone_session();
                     sess.flush_rollout().await;
-                    // Update previous model before TurnComplete is emitted so
-                    // immediately following turns observe the correct switch state.
-                    sess.set_previous_model(Some(model_slug)).await;
                     if !task_cancellation_token.is_cancelled() {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                         sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
@@ -277,10 +271,6 @@ impl Session {
         }
 
         task.handle.abort();
-
-        // Set previous model even when interrupted so model-switch handling stays correct.
-        self.set_previous_model(Some(task.turn_context.model_info.slug.clone()))
-            .await;
 
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task

@@ -43,6 +43,40 @@ use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::widgets::WidgetRef;
+use unicode_width::UnicodeWidthStr;
+
+/// Returns the display width of a cell symbol, ignoring OSC escape sequences.
+///
+/// OSC sequences (e.g. OSC 8 hyperlinks: `\x1B]8;;URL\x07`) are terminal
+/// control sequences that don't consume display columns.  The standard
+/// `UnicodeWidthStr::width()` method incorrectly counts the printable
+/// characters inside OSC payloads (like `]`, `8`, `;`, and URL characters).
+/// This function strips them first so that only visible characters contribute
+/// to the width.
+fn display_width(s: &str) -> usize {
+    // Fast path: no escape sequences present.
+    if !s.contains('\x1B') {
+        return s.width();
+    }
+
+    // Strip OSC sequences: ESC ] ... BEL
+    let mut visible = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1B' && chars.clone().next() == Some(']') {
+            // Consume the ']' and everything up to and including BEL.
+            chars.next(); // skip ']'
+            for c in chars.by_ref() {
+                if c == '\x07' {
+                    break;
+                }
+            }
+            continue;
+        }
+        visible.push(ch);
+    }
+    visible.width()
+}
 
 #[derive(Debug, Hash)]
 pub struct Frame<'a> {
@@ -121,6 +155,8 @@ where
     /// Last known position of the cursor. Used to find the new area when the viewport is inlined
     /// and the terminal resized.
     pub last_known_cursor_pos: Position,
+    /// Count of visible history rows rendered above the viewport in inline mode.
+    visible_history_rows: u16,
 }
 
 impl<B> Drop for Terminal<B>
@@ -161,6 +197,7 @@ where
             viewport_area: Rect::new(0, cursor_pos.y, 0, 0),
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
+            visible_history_rows: 0,
         })
     }
 
@@ -228,6 +265,7 @@ where
         self.current_buffer_mut().resize(area);
         self.previous_buffer_mut().resize(area);
         self.viewport_area = area;
+        self.visible_history_rows = self.visible_history_rows.min(area.top());
     }
 
     /// Queries the backend for size and resizes if it doesn't match the previous size.
@@ -391,12 +429,60 @@ where
         if self.viewport_area.is_empty() {
             return Ok(());
         }
-        self.backend
-            .set_cursor_position(self.viewport_area.as_position())?;
+        let home = Position { x: 0, y: 0 };
+        // Use an explicit cursor-home around scrollback purge for terminals that
+        // are sensitive to inline viewport cursor placement (e.g. Terminal.app).
+        self.set_cursor_position(home)?;
         queue!(self.backend, Clear(crossterm::terminal::ClearType::Purge))?;
+        self.set_cursor_position(home)?;
         std::io::Write::flush(&mut self.backend)?;
         self.previous_buffer_mut().reset();
         Ok(())
+    }
+
+    /// Clear the entire visible screen (not just the viewport) and force a full redraw.
+    pub fn clear_visible_screen(&mut self) -> io::Result<()> {
+        let home = Position { x: 0, y: 0 };
+        // Some terminals (notably Terminal.app) behave more reliably if we pair ED2
+        // with an explicit cursor-home before/after, matching the common `clear`
+        // sequence (`CSI 2J` + `CSI H`).
+        self.set_cursor_position(home)?;
+        self.backend.clear_region(ClearType::All)?;
+        self.set_cursor_position(home)?;
+        std::io::Write::flush(&mut self.backend)?;
+        self.visible_history_rows = 0;
+        self.previous_buffer_mut().reset();
+        Ok(())
+    }
+
+    /// Hard-reset scrollback + visible screen using an explicit ANSI sequence.
+    ///
+    /// Some terminals behave more reliably when purge + clear are emitted as a
+    /// single ANSI sequence instead of separate backend commands.
+    pub fn clear_scrollback_and_visible_screen_ansi(&mut self) -> io::Result<()> {
+        if self.viewport_area.is_empty() {
+            return Ok(());
+        }
+
+        // Reset scroll region + style state, home cursor, clear screen, purge scrollback.
+        // The order matches the common shell `clear && printf '\\e[3J'` behavior.
+        write!(self.backend, "\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H")?;
+        std::io::Write::flush(&mut self.backend)?;
+        self.last_known_cursor_pos = Position { x: 0, y: 0 };
+        self.visible_history_rows = 0;
+        self.previous_buffer_mut().reset();
+        Ok(())
+    }
+
+    pub fn visible_history_rows(&self) -> u16 {
+        self.visible_history_rows
+    }
+
+    pub(crate) fn note_history_rows_inserted(&mut self, inserted_rows: u16) {
+        self.visible_history_rows = self
+            .visible_history_rows
+            .saturating_add(inserted_rows)
+            .min(self.viewport_area.top());
     }
 
     /// Clears the inactive buffer and swaps it with the current buffer
@@ -412,7 +498,6 @@ where
 }
 
 use ratatui::buffer::Cell;
-use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, IsVariant)]
 enum DrawCommand {
@@ -441,7 +526,7 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         let mut column = 0usize;
         while column < row.len() {
             let cell = &row[column];
-            let width = cell.symbol().width();
+            let width = display_width(cell.symbol());
             if cell.symbol() != " " || cell.bg != bg || cell.modifier != Modifier::empty() {
                 last_nonblank_column = column + (width.saturating_sub(1));
             }
@@ -474,9 +559,12 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
             }
         }
 
-        to_skip = current.symbol().width().saturating_sub(1);
+        to_skip = display_width(current.symbol()).saturating_sub(1);
 
-        let affected_width = std::cmp::max(current.symbol().width(), previous.symbol().width());
+        let affected_width = std::cmp::max(
+            display_width(current.symbol()),
+            display_width(previous.symbol()),
+        );
         invalidated = std::cmp::max(affected_width, invalidated).saturating_sub(1);
     }
     updates

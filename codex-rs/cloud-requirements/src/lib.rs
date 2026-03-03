@@ -4,9 +4,9 @@
 //! from the local filesystem. It only applies to Business (aka Enterprise CBP) or Enterprise ChatGPT
 //! customers.
 //!
-//! Today, fetching is best-effort: on error or timeout, Codex continues without cloud requirements.
-//! We expect to tighten this so that Enterprise ChatGPT customers must successfully fetch these
-//! requirements before Codex will run.
+//! Fetching fails closed for eligible ChatGPT Business and Enterprise accounts. When cloud
+//! requirements cannot be loaded for those accounts, Codex fails configuration loading rather than
+//! continuing without them.
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -17,6 +17,7 @@ use chrono::Utc;
 use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
 use codex_core::auth::CodexAuth;
+use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::util::backoff;
@@ -28,23 +29,32 @@ use serde::Serialize;
 use sha2::Sha256;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 use thiserror::Error;
 use tokio::fs;
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
 const CLOUD_REQUIREMENTS_TIMEOUT: Duration = Duration::from_secs(15);
 const CLOUD_REQUIREMENTS_MAX_ATTEMPTS: usize = 5;
 const CLOUD_REQUIREMENTS_CACHE_FILENAME: &str = "cloud-requirements-cache.json";
-const CLOUD_REQUIREMENTS_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+const CLOUD_REQUIREMENTS_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const CLOUD_REQUIREMENTS_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 const CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY: &[u8] =
     b"codex-cloud-requirements-cache-v3-064f8542-75b4-494c-a294-97d3ce597271";
 const CLOUD_REQUIREMENTS_CACHE_READ_HMAC_KEYS: &[&[u8]] =
     &[CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY];
 
 type HmacSha256 = Hmac<Sha256>;
+
+fn refresher_task_slot() -> &'static Mutex<Option<JoinHandle<()>>> {
+    static REFRESHER_TASK: OnceLock<Mutex<Option<JoinHandle<()>>>> = OnceLock::new();
+    REFRESHER_TASK.get_or_init(|| Mutex::new(None))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FetchCloudRequirementsStatus {
@@ -188,6 +198,7 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
     }
 }
 
+#[derive(Clone)]
 struct CloudRequirementsService {
     auth_manager: Arc<AuthManager>,
     fetcher: Arc<dyn RequirementsFetcher>,
@@ -210,16 +221,34 @@ impl CloudRequirementsService {
         }
     }
 
-    async fn fetch_with_timeout(&self) -> Option<ConfigRequirementsToml> {
+    async fn fetch_with_timeout(
+        &self,
+    ) -> Result<Option<ConfigRequirementsToml>, CloudRequirementsLoadError> {
         let _timer =
             codex_otel::start_global_timer("codex.cloud_requirements.fetch.duration_ms", &[]);
         let started_at = Instant::now();
         let result = timeout(self.timeout, self.fetch())
             .await
             .inspect_err(|_| {
-                tracing::warn!("Timed out waiting for cloud requirements; continuing without them");
+                let message = format!(
+                    "Timed out waiting for cloud requirements after {}s",
+                    self.timeout.as_secs()
+                );
+                tracing::error!("{message}");
+                if let Some(metrics) = codex_otel::metrics::global() {
+                    let _ = metrics.counter(
+                        "codex.cloud_requirements.load_failure",
+                        1,
+                        &[("trigger", "startup")],
+                    );
+                }
             })
-            .ok()?;
+            .map_err(|_| {
+                CloudRequirementsLoadError::new(format!(
+                    "timed out waiting for cloud requirements after {}s",
+                    self.timeout.as_secs()
+                ))
+            })??;
 
         match result.as_ref() {
             Some(requirements) => {
@@ -237,18 +266,20 @@ impl CloudRequirementsService {
             }
         }
 
-        result
+        Ok(result)
     }
 
-    async fn fetch(&self) -> Option<ConfigRequirementsToml> {
-        let auth = self.auth_manager.auth().await?;
+    async fn fetch(&self) -> Result<Option<ConfigRequirementsToml>, CloudRequirementsLoadError> {
+        let Some(auth) = self.auth_manager.auth().await else {
+            return Ok(None);
+        };
         if !auth.is_chatgpt_auth()
             || !matches!(
                 auth.account_plan_type(),
                 Some(PlanType::Business | PlanType::Enterprise)
             )
         {
-            return None;
+            return Ok(None);
         }
         let token_data = auth.get_token_data().ok();
         let chatgpt_user_id = token_data
@@ -263,7 +294,7 @@ impl CloudRequirementsService {
                     path = %self.cache_path.display(),
                     "Using cached cloud requirements"
                 );
-                return signed_payload.requirements();
+                return Ok(signed_payload.requirements());
             }
             Err(cache_load_status) => {
                 self.log_cache_load_status(&cache_load_status);
@@ -271,7 +302,15 @@ impl CloudRequirementsService {
         }
 
         self.fetch_with_retries(&auth, chatgpt_user_id, account_id)
-            .await?
+            .await
+            .ok_or_else(|| {
+                let message = "failed to load your workspace-managed config";
+                tracing::error!(
+                    path = %self.cache_path.display(),
+                    "{message}"
+                );
+                CloudRequirementsLoadError::new(message)
+            })
     }
 
     async fn fetch_with_retries(
@@ -301,7 +340,7 @@ impl CloudRequirementsService {
                 Some(contents) => match parse_cloud_requirements(contents) {
                     Ok(requirements) => requirements,
                     Err(err) => {
-                        tracing::warn!(error = %err, "Failed to parse cloud requirements");
+                        tracing::error!(error = %err, "Failed to parse cloud requirements");
                         return None;
                     }
                 },
@@ -323,6 +362,61 @@ impl CloudRequirementsService {
         }
 
         None
+    }
+
+    async fn refresh_cache_in_background(&self) {
+        loop {
+            sleep(CLOUD_REQUIREMENTS_CACHE_REFRESH_INTERVAL).await;
+            match timeout(self.timeout, self.refresh_cache()).await {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(_) => {
+                    tracing::error!(
+                        "Timed out refreshing cloud requirements cache from remote; keeping existing cache"
+                    );
+                }
+            }
+        }
+    }
+
+    async fn refresh_cache(&self) -> bool {
+        let Some(auth) = self.auth_manager.auth().await else {
+            return false;
+        };
+        if !auth.is_chatgpt_auth()
+            || !matches!(
+                auth.account_plan_type(),
+                Some(PlanType::Business | PlanType::Enterprise)
+            )
+        {
+            return false;
+        }
+
+        let token_data = auth.get_token_data().ok();
+        let chatgpt_user_id = token_data
+            .as_ref()
+            .and_then(|token_data| token_data.id_token.chatgpt_user_id.as_deref());
+        let account_id = auth.get_account_id();
+        let account_id = account_id.as_deref();
+
+        if self
+            .fetch_with_retries(&auth, chatgpt_user_id, account_id)
+            .await
+            .is_none()
+        {
+            tracing::error!(
+                path = %self.cache_path.display(),
+                "Failed to refresh cloud requirements cache from remote"
+            );
+            if let Some(metrics) = codex_otel::metrics::global() {
+                let _ = metrics.counter(
+                    "codex.cloud_requirements.load_failure",
+                    1,
+                    &[("trigger", "refresh")],
+                );
+            }
+        }
+        true
     }
 
     async fn load_cache(
@@ -452,12 +546,22 @@ pub fn cloud_requirements_loader(
         codex_home,
         CLOUD_REQUIREMENTS_TIMEOUT,
     );
+    let refresh_service = service.clone();
     let task = tokio::spawn(async move { service.fetch_with_timeout().await });
+    let refresh_task =
+        tokio::spawn(async move { refresh_service.refresh_cache_in_background().await });
+    let mut refresher_guard = refresher_task_slot().lock().unwrap_or_else(|err| {
+        tracing::warn!("cloud requirements refresher task slot was poisoned");
+        err.into_inner()
+    });
+    if let Some(existing_task) = refresher_guard.replace(refresh_task) {
+        existing_task.abort();
+    }
     CloudRequirementsLoader::new(async move {
-        task.await
-            .inspect_err(|err| tracing::warn!(error = %err, "Cloud requirements task failed"))
-            .ok()
-            .flatten()
+        task.await.map_err(|err| {
+            tracing::error!(error = %err, "Cloud requirements task failed");
+            CloudRequirementsLoadError::new(format!("cloud requirements load failed: {err}"))
+        })?
     })
 }
 
@@ -624,7 +728,7 @@ mod tests {
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
         let result = service.fetch().await;
-        assert!(result.is_none());
+        assert_eq!(result, Ok(None));
     }
 
     #[tokio::test]
@@ -637,7 +741,7 @@ mod tests {
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
         let result = service.fetch().await;
-        assert!(result.is_none());
+        assert_eq!(result, Ok(None));
     }
 
     #[tokio::test]
@@ -653,7 +757,7 @@ mod tests {
         );
         assert_eq!(
             service.fetch().await,
-            Some(ConfigRequirementsToml {
+            Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
@@ -661,7 +765,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
-            })
+            }))
         );
     }
 
@@ -721,7 +825,11 @@ mod tests {
         tokio::time::advance(CLOUD_REQUIREMENTS_TIMEOUT + Duration::from_millis(1)).await;
 
         let result = handle.await.expect("cloud requirements task");
-        assert!(result.is_none());
+        let err = result.expect_err("cloud requirements timeout should fail closed");
+        assert!(
+            err.to_string()
+                .contains("timed out waiting for cloud requirements")
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -744,7 +852,7 @@ mod tests {
 
         assert_eq!(
             handle.await.expect("cloud requirements task"),
-            Some(ConfigRequirementsToml {
+            Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
@@ -752,7 +860,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
-            })
+            }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
     }
@@ -771,7 +879,7 @@ mod tests {
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
 
-        assert!(service.fetch().await.is_none());
+        assert!(service.fetch().await.is_err());
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
@@ -800,7 +908,7 @@ mod tests {
 
         assert_eq!(
             service.fetch().await,
-            Some(ConfigRequirementsToml {
+            Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
@@ -808,7 +916,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
-            })
+            }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
     }
@@ -827,7 +935,7 @@ mod tests {
 
         assert_eq!(
             service.fetch().await,
-            Some(ConfigRequirementsToml {
+            Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
@@ -835,7 +943,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
-            })
+            }))
         );
 
         let path = codex_home.path().join(CLOUD_REQUIREMENTS_CACHE_FILENAME);
@@ -874,7 +982,7 @@ mod tests {
 
         assert_eq!(
             service.fetch().await,
-            Some(ConfigRequirementsToml {
+            Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
@@ -882,7 +990,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
-            })
+            }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
@@ -920,7 +1028,7 @@ mod tests {
 
         assert_eq!(
             service.fetch().await,
-            Some(ConfigRequirementsToml {
+            Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
@@ -928,7 +1036,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
-            })
+            }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
@@ -970,7 +1078,7 @@ mod tests {
 
         assert_eq!(
             service.fetch().await,
-            Some(ConfigRequirementsToml {
+            Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
@@ -978,7 +1086,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
-            })
+            }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
@@ -1021,7 +1129,7 @@ mod tests {
 
         assert_eq!(
             service.fetch().await,
-            Some(ConfigRequirementsToml {
+            Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
@@ -1029,7 +1137,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
-            })
+            }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
@@ -1052,7 +1160,11 @@ mod tests {
         let cache_file: CloudRequirementsCacheFile =
             serde_json::from_str(&std::fs::read_to_string(path).expect("read cache"))
                 .expect("parse cache");
-        assert!(cache_file.signed_payload.expires_at > Utc::now());
+        assert!(
+            cache_file.signed_payload.expires_at
+                <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(30)
+        );
+        assert!(cache_file.signed_payload.expires_at > cache_file.signed_payload.cached_at);
         assert!(cache_file.signed_payload.cached_at <= Utc::now());
         assert_eq!(
             cache_file.signed_payload.chatgpt_user_id,
@@ -1099,7 +1211,7 @@ mod tests {
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
 
-        assert!(service.fetch().await.is_none());
+        assert_eq!(service.fetch().await, Ok(None));
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
@@ -1124,10 +1236,70 @@ mod tests {
         tokio::time::advance(Duration::from_secs(5)).await;
         tokio::task::yield_now().await;
 
-        assert!(handle.await.expect("cloud requirements task").is_none());
+        let err = handle
+            .await
+            .expect("cloud requirements task")
+            .expect_err("cloud requirements retry exhaustion should fail closed");
+        assert_eq!(
+            err.to_string(),
+            "failed to load your workspace-managed config"
+        );
         assert_eq!(
             fetcher.request_count.load(Ordering::SeqCst),
             CLOUD_REQUIREMENTS_MAX_ATTEMPTS
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_from_remote_updates_cached_cloud_requirements() {
+        let codex_home = tempdir().expect("tempdir");
+        let fetcher = Arc::new(SequenceFetcher::new(vec![
+            Ok(Some("allowed_approval_policies = [\"never\"]".to_string())),
+            Ok(Some(
+                "allowed_approval_policies = [\"on-request\"]".to_string(),
+            )),
+        ]));
+        let service = CloudRequirementsService::new(
+            auth_manager_with_plan("business"),
+            fetcher,
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        );
+
+        assert_eq!(
+            service.fetch().await,
+            Ok(Some(ConfigRequirementsToml {
+                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
+                mcp_servers: None,
+                rules: None,
+                enforce_residency: None,
+                network: None,
+            }))
+        );
+
+        assert!(service.refresh_cache().await);
+
+        let path = codex_home.path().join(CLOUD_REQUIREMENTS_CACHE_FILENAME);
+        let cache_file: CloudRequirementsCacheFile =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("read cache"))
+                .expect("parse cache");
+        assert_eq!(
+            cache_file
+                .signed_payload
+                .contents
+                .as_deref()
+                .and_then(|contents| parse_cloud_requirements(contents).ok().flatten()),
+            Some(ConfigRequirementsToml {
+                allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
+                mcp_servers: None,
+                rules: None,
+                enforce_residency: None,
+                network: None,
+            })
         );
     }
 }

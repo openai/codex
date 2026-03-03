@@ -1,17 +1,28 @@
 //! Session-wide mutable state.
 
+use codex_artifact_presentation::PresentationArtifactManager;
+use codex_artifact_spreadsheet::SpreadsheetArtifactManager;
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use tokio::task::JoinHandle;
 
+use crate::codex::PreviousTurnSettings;
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
+use crate::error::Result as CodexResult;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::tasks::RegularTask;
 use crate::truncate::TruncationPolicy;
 use codex_protocol::protocol::TurnContextItem;
+
+#[derive(Default)]
+pub(crate) struct SessionArtifacts {
+    pub(crate) presentation: PresentationArtifactManager,
+    pub(crate) spreadsheet: SpreadsheetArtifactManager,
+}
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
@@ -21,17 +32,15 @@ pub(crate) struct SessionState {
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
-    /// Whether the session's initial context has been seeded into history.
-    ///
-    /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
-    /// timestamp when resuming a session. Remove this once SQLite is in place.
-    pub(crate) initial_context_seeded: bool,
-    /// Previous model seen by the session, used for model-switch handling on task start.
-    previous_model: Option<String>,
+    /// Settings used by the latest regular user turn, used for turn-to-turn
+    /// model/realtime handling on subsequent regular turns (including full-context
+    /// reinjection after resume or `/compact`).
+    previous_turn_settings: Option<PreviousTurnSettings>,
     /// Startup regular task pre-created during session initialization.
-    pub(crate) startup_regular_task: Option<RegularTask>,
+    pub(crate) startup_regular_task: Option<JoinHandle<CodexResult<RegularTask>>>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
     pub(crate) active_connector_selection: HashSet<String>,
+    pub(crate) artifacts: SessionArtifacts,
 }
 
 impl SessionState {
@@ -45,11 +54,11 @@ impl SessionState {
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
-            initial_context_seeded: false,
-            previous_model: None,
+            previous_turn_settings: None,
             startup_regular_task: None,
             active_mcp_tool_selection: None,
             active_connector_selection: HashSet::new(),
+            artifacts: SessionArtifacts::default(),
         }
     }
 
@@ -62,31 +71,40 @@ impl SessionState {
         self.history.record_items(items, policy);
     }
 
-    pub(crate) fn previous_model(&self) -> Option<String> {
-        self.previous_model.clone()
+    pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
+        self.previous_turn_settings.clone()
     }
-    pub(crate) fn set_previous_model(&mut self, previous_model: Option<String>) {
-        self.previous_model = previous_model;
+    pub(crate) fn set_previous_turn_settings(
+        &mut self,
+        previous_turn_settings: Option<PreviousTurnSettings>,
+    ) {
+        self.previous_turn_settings = previous_turn_settings;
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {
         self.history.clone()
     }
 
-    pub(crate) fn replace_history(&mut self, items: Vec<ResponseItem>) {
+    pub(crate) fn replace_history(
+        &mut self,
+        items: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+    ) {
         self.history.replace(items);
+        self.history
+            .set_reference_context_item(reference_context_item);
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         self.history.set_token_info(info);
     }
 
-    pub(crate) fn set_previous_context_item(&mut self, item: Option<TurnContextItem>) {
-        self.history.set_previous_context_item(item);
+    pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.history.set_reference_context_item(item);
     }
 
-    pub(crate) fn previous_context_item(&self) -> Option<TurnContextItem> {
-        self.history.previous_context_item()
+    pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
+        self.history.reference_context_item()
     }
 
     // Token/rate limit helpers
@@ -153,11 +171,13 @@ impl SessionState {
         self.dependency_env.clone()
     }
 
-    pub(crate) fn set_startup_regular_task(&mut self, task: RegularTask) {
+    pub(crate) fn set_startup_regular_task(&mut self, task: JoinHandle<CodexResult<RegularTask>>) {
         self.startup_regular_task = Some(task);
     }
 
-    pub(crate) fn take_startup_regular_task(&mut self) -> Option<RegularTask> {
+    pub(crate) fn take_startup_regular_task(
+        &mut self,
+    ) -> Option<JoinHandle<CodexResult<RegularTask>>> {
         self.startup_regular_task.take()
     }
 

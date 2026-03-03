@@ -14,6 +14,7 @@ use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint::KeyBinding;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
@@ -28,6 +29,7 @@ use super::scroll_state::ScrollState;
 #[derive(Default)]
 pub(crate) struct GenericDisplayRow {
     pub name: String,
+    pub name_prefix_spans: Vec<Span<'static>>,
     pub display_shortcut: Option<KeyBinding>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
@@ -104,12 +106,6 @@ pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'
     word_wrap_line(line, opts)
 }
 
-fn line_width(line: &Line<'_>) -> usize {
-    line.iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum()
-}
-
 fn line_to_owned(line: Line<'_>) -> Line<'static> {
     Line {
         style: line.style,
@@ -122,91 +118,6 @@ fn line_to_owned(line: Line<'_>) -> Line<'static> {
                 content: Cow::Owned(span.content.into_owned()),
             })
             .collect(),
-    }
-}
-
-pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
-    if max_width == 0 {
-        return Line::from(Vec::<Span<'static>>::new());
-    }
-
-    let Line {
-        style,
-        alignment,
-        spans,
-    } = line;
-    let mut used = 0usize;
-    let mut spans_out: Vec<Span<'static>> = Vec::new();
-
-    for span in spans {
-        let text = span.content.into_owned();
-        let style = span.style;
-        let span_width = UnicodeWidthStr::width(text.as_str());
-
-        if span_width == 0 {
-            spans_out.push(Span::styled(text, style));
-            continue;
-        }
-
-        if used >= max_width {
-            break;
-        }
-
-        if used + span_width <= max_width {
-            used += span_width;
-            spans_out.push(Span::styled(text, style));
-            continue;
-        }
-
-        let mut truncated = String::new();
-        for ch in text.chars() {
-            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if used + ch_width > max_width {
-                break;
-            }
-            truncated.push(ch);
-            used += ch_width;
-        }
-
-        if !truncated.is_empty() {
-            spans_out.push(Span::styled(truncated, style));
-        }
-
-        break;
-    }
-
-    Line {
-        style,
-        alignment,
-        spans: spans_out,
-    }
-}
-
-pub(crate) fn truncate_line_with_ellipsis_if_overflow(
-    line: Line<'static>,
-    max_width: usize,
-) -> Line<'static> {
-    if max_width == 0 {
-        return Line::from(Vec::<Span<'static>>::new());
-    }
-
-    let width = line_width(&line);
-    if width <= max_width {
-        return line;
-    }
-
-    let truncated = truncate_line_to_width(line, max_width.saturating_sub(1));
-    let Line {
-        style,
-        alignment,
-        mut spans,
-    } = truncated;
-    let ellipsis_style = spans.last().map(|span| span.style).unwrap_or_default();
-    spans.push(Span::styled("…", ellipsis_style));
-    Line {
-        style,
-        alignment,
-        spans,
     }
 }
 
@@ -242,7 +153,8 @@ fn compute_desc_col(
                     .skip(start_idx)
                     .take(visible_items)
                     .map(|(_, row)| {
-                        let mut spans: Vec<Span> = vec![row.name.clone().into()];
+                        let mut spans = row.name_prefix_spans.clone();
+                        spans.push(row.name.clone().into());
                         if row.disabled_reason.is_some() {
                             spans.push(" (disabled)".dim());
                         }
@@ -253,7 +165,8 @@ fn compute_desc_col(
                 ColumnWidthMode::AutoAllRows => rows_all
                     .iter()
                     .map(|row| {
-                        let mut spans: Vec<Span> = vec![row.name.clone().into()];
+                        let mut spans = row.name_prefix_spans.clone();
+                        spans.push(row.name.clone().into());
                         if row.disabled_reason.is_some() {
                             spans.push(" (disabled)".dim());
                         }
@@ -291,6 +204,7 @@ fn should_wrap_name_in_column(row: &GenericDisplayRow) -> bool {
         && row.match_indices.is_none()
         && row.display_shortcut.is_none()
         && row.category_tag.is_none()
+        && row.name_prefix_spans.is_empty()
 }
 
 fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<Line<'static>> {
@@ -508,9 +422,10 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
 
     // Enforce single-line name: allow at most desc_col - 2 cells for name,
     // reserving two spaces before the description column.
+    let name_prefix_width = Line::from(row.name_prefix_spans.clone()).width();
     let name_limit = combined_description
         .as_ref()
-        .map(|_| desc_col.saturating_sub(2))
+        .map(|_| desc_col.saturating_sub(2).saturating_sub(name_prefix_width))
         .unwrap_or(usize::MAX);
 
     let mut name_spans: Vec<Span> = Vec::with_capacity(row.name.len());
@@ -558,8 +473,9 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         name_spans.push(" (disabled)".dim());
     }
 
-    let this_name_width = Line::from(name_spans.clone()).width();
-    let mut full_spans: Vec<Span> = name_spans;
+    let this_name_width = name_prefix_width + Line::from(name_spans.clone()).width();
+    let mut full_spans: Vec<Span> = row.name_prefix_spans.clone();
+    full_spans.extend(name_spans);
     if let Some(display_shortcut) = row.display_shortcut {
         full_spans.push(" (".into());
         full_spans.push(display_shortcut.into());

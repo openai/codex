@@ -181,6 +181,7 @@ impl AppServerClient {
                 source_kinds: None,
                 archived: None,
                 cwd: None,
+                search_term: None,
             },
         };
         self.send(&request)?;

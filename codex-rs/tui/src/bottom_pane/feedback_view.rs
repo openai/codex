@@ -19,7 +19,7 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
-use codex_core::protocol::SessionSource;
+use codex_protocol::protocol::SessionSource;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -27,8 +27,8 @@ use super::popup_consts::standard_popup_hint_line;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
-const BASE_BUG_ISSUE_URL: &str =
-    "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
+const BASE_CLI_BUG_ISSUE_URL: &str =
+    "https://github.com/openai/codex/issues/new?template=3-cli.yml";
 /// Internal routing link for employee feedback follow-ups. This must not be shown to external users.
 const CODEX_FEEDBACK_INTERNAL_URL: &str = "http://go/codex-feedback-internal";
 
@@ -87,7 +87,11 @@ impl FeedbackNoteView {
         } else {
             Some(note.as_str())
         };
-        let rollout_path_ref = self.rollout_path.as_deref();
+        let log_file_paths = if self.include_logs {
+            self.rollout_path.iter().cloned().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let classification = feedback_classification(self.category);
 
         let mut thread_id = self.snapshot.thread_id.clone();
@@ -96,12 +100,9 @@ impl FeedbackNoteView {
             classification,
             reason_opt,
             self.include_logs,
-            if self.include_logs {
-                rollout_path_ref
-            } else {
-                None
-            },
+            &log_file_paths,
             Some(SessionSource::Cli),
+            None,
         );
 
         match result {
@@ -389,7 +390,7 @@ fn issue_url_for_category(
         | FeedbackCategory::Other => Some(match feedback_audience {
             FeedbackAudience::OpenAiEmployee => slack_feedback_url(thread_id),
             FeedbackAudience::External => {
-                format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}")
+                format!("{BASE_CLI_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}")
             }
         }),
         FeedbackCategory::GoodResult => None,
@@ -675,10 +676,7 @@ mod tests {
         );
         let bug_url_non_employee =
             issue_url_for_category(FeedbackCategory::Bug, "t", FeedbackAudience::External);
-        let expected_external_url = format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20t");
-        assert_eq!(
-            bug_url_non_employee.as_deref(),
-            Some(expected_external_url.as_str())
-        );
+        let expected_external_url = "https://github.com/openai/codex/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20t";
+        assert_eq!(bug_url_non_employee.as_deref(), Some(expected_external_url));
     }
 }

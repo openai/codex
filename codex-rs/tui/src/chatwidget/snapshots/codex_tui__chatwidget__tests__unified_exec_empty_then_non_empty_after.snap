@@ -2,8 +2,7 @@
 source: tui/src/chatwidget/tests.rs
 expression: combined
 ---
-↳ Interacted with background terminal · just fix
-  └ (waited)
+• Waited for background terminal · just fix
 
 ↳ Interacted with background terminal · just fix
   └ ls

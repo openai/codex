@@ -18,6 +18,15 @@ cargo run -p codex-app-server-test-client -- \
 cargo run -p codex-app-server-test-client -- model-list
 ```
 
+## Watching Raw Inbound Traffic
+
+Initialize a connection, then print every inbound JSON-RPC message until you stop it with
+`Ctrl+C`:
+
+```bash
+cargo run -p codex-app-server-test-client -- watch
+```
+
 ## Testing Thread Rejoin Behavior
 
 Build and start an app server using commands above. The app-server log is written to `/tmp/codex-app-server-test-client/app-server.log`

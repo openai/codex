@@ -5,7 +5,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::MentionBinding;
 use crate::mention_codec::decode_history_mentions;
-use codex_core::protocol::Op;
+use codex_protocol::protocol::Op;
 use codex_protocol::user_input::TextElement;
 
 /// A composer history entry that can rehydrate draft state.
@@ -292,7 +292,7 @@ impl ChatComposerHistory {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use codex_core::protocol::Op;
+    use codex_protocol::protocol::Op;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 

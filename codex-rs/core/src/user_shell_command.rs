@@ -1,20 +1,11 @@
 use std::time::Duration;
 
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::TurnContext;
+use crate::contextual_user_message::USER_SHELL_COMMAND_FRAGMENT;
 use crate::exec::ExecToolCallOutput;
 use crate::tools::format_exec_output_str;
-
-pub const USER_SHELL_COMMAND_OPEN: &str = "<user_shell_command>";
-pub const USER_SHELL_COMMAND_CLOSE: &str = "</user_shell_command>";
-
-pub fn is_user_shell_command_text(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with(USER_SHELL_COMMAND_OPEN)
-}
 
 fn format_duration_line(duration: Duration) -> String {
     let duration_seconds = duration.as_secs_f64();
@@ -48,7 +39,7 @@ pub fn format_user_shell_command_record(
     turn_context: &TurnContext,
 ) -> String {
     let body = format_user_shell_command_body(command, exec_output, turn_context);
-    format!("{USER_SHELL_COMMAND_OPEN}\n{body}\n{USER_SHELL_COMMAND_CLOSE}")
+    USER_SHELL_COMMAND_FRAGMENT.wrap(body)
 }
 
 pub fn user_shell_command_record_item(
@@ -56,15 +47,11 @@ pub fn user_shell_command_record_item(
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
 ) -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: format_user_shell_command_record(command, exec_output, turn_context),
-        }],
-        end_turn: None,
-        phase: None,
-    }
+    USER_SHELL_COMMAND_FRAGMENT.into_message(format_user_shell_command_record(
+        command,
+        exec_output,
+        turn_context,
+    ))
 }
 
 #[cfg(test)]
@@ -72,14 +59,16 @@ mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
     use crate::exec::StreamOutput;
+    use codex_protocol::models::ContentItem;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn detects_user_shell_command_text_variants() {
-        assert!(is_user_shell_command_text(
-            "<user_shell_command>\necho hi\n</user_shell_command>"
-        ));
-        assert!(!is_user_shell_command_text("echo hi"));
+        assert!(
+            USER_SHELL_COMMAND_FRAGMENT
+                .matches_text("<user_shell_command>\necho hi\n</user_shell_command>")
+        );
+        assert!(!USER_SHELL_COMMAND_FRAGMENT.matches_text("echo hi"));
     }
 
     #[tokio::test]

@@ -39,11 +39,18 @@ use unicode_width::UnicodeWidthStr;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+
+#[derive(Debug, Clone)]
+pub struct SessionTarget {
+    pub path: PathBuf,
+    pub thread_id: ThreadId,
+}
+
 #[derive(Debug, Clone)]
 pub enum SessionSelection {
     StartFresh,
-    Resume(PathBuf),
-    Fork(PathBuf),
+    Resume(SessionTarget),
+    Fork(SessionTarget),
     Exit,
 }
 
@@ -68,10 +75,11 @@ impl SessionPickerAction {
         }
     }
 
-    fn selection(self, path: PathBuf) -> SessionSelection {
+    fn selection(self, path: PathBuf, thread_id: ThreadId) -> SessionSelection {
+        let target_session = SessionTarget { path, thread_id };
         match self {
-            SessionPickerAction::Resume => SessionSelection::Resume(path),
-            SessionPickerAction::Fork => SessionSelection::Fork(path),
+            SessionPickerAction::Resume => SessionSelection::Resume(target_session),
+            SessionPickerAction::Fork => SessionSelection::Fork(target_session),
         }
     }
 }
@@ -159,6 +167,7 @@ async fn run_session_picker(
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
+                None,
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
@@ -265,6 +274,7 @@ struct PickerState {
     action: SessionPickerAction,
     sort_key: ThreadSortKey,
     thread_name_cache: HashMap<ThreadId, Option<String>>,
+    inline_error: Option<String>,
 }
 
 struct PaginationState {
@@ -382,6 +392,7 @@ impl PickerState {
             action,
             sort_key: ThreadSortKey::CreatedAt,
             thread_name_cache: HashMap::new(),
+            inline_error: None,
         }
     }
 
@@ -390,6 +401,7 @@ impl PickerState {
     }
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<SessionSelection>> {
+        self.inline_error = None;
         match key.code {
             KeyCode::Esc => return Ok(Some(SessionSelection::StartFresh)),
             KeyCode::Char('c')
@@ -401,7 +413,19 @@ impl PickerState {
             }
             KeyCode::Enter => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
-                    return Ok(Some(self.action.selection(row.path.clone())));
+                    let path = row.path.clone();
+                    let thread_id = match row.thread_id {
+                        Some(thread_id) => Some(thread_id),
+                        None => crate::resolve_session_thread_id(path.as_path(), None).await,
+                    };
+                    if let Some(thread_id) = thread_id {
+                        return Ok(Some(self.action.selection(path, thread_id)));
+                    }
+                    self.inline_error = Some(format!(
+                        "Failed to read session metadata from {}",
+                        path.display()
+                    ));
+                    self.request_frame();
                 }
             }
             KeyCode::Up => {
@@ -865,12 +889,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         frame.render_widget_ref(header_line, header);
 
         // Search line
-        let q = if state.query.is_empty() {
-            "Type to search".dim().to_string()
-        } else {
-            format!("Search: {}", state.query)
-        };
-        frame.render_widget_ref(Line::from(q), search);
+        frame.render_widget_ref(search_line(state), search);
 
         let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
 
@@ -901,6 +920,16 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         .into();
         frame.render_widget_ref(hint_line, hint);
     })
+}
+
+fn search_line(state: &PickerState) -> Line<'_> {
+    if let Some(error) = state.inline_error.as_deref() {
+        return Line::from(error.red());
+    }
+    if state.query.is_empty() {
+        return Line::from("Type to search".dim());
+    }
+    Line::from(format!("Search: {}", state.query))
 }
 
 fn render_list(
@@ -1327,17 +1356,10 @@ mod tests {
     fn make_item(path: &str, ts: &str, preview: &str) -> ThreadItem {
         ThreadItem {
             path: PathBuf::from(path),
-            thread_id: None,
             first_user_message: Some(preview.to_string()),
-            cwd: None,
-            git_branch: None,
-            git_sha: None,
-            git_origin_url: None,
-            source: None,
-            model_provider: None,
-            cli_version: None,
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
+            ..Default::default()
         }
     }
 
@@ -1462,17 +1484,10 @@ mod tests {
     fn head_to_row_uses_first_user_message() {
         let item = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
-            thread_id: None,
             first_user_message: Some("real question".to_string()),
-            cwd: None,
-            git_branch: None,
-            git_sha: None,
-            git_origin_url: None,
-            source: None,
-            model_provider: None,
-            cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
+            ..Default::default()
         };
         let row = head_to_row(&item);
         assert_eq!(row.preview, "real question");
@@ -1483,31 +1498,17 @@ mod tests {
         // Construct two items with different timestamps and real user text.
         let a = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
-            thread_id: None,
             first_user_message: Some("A".to_string()),
-            cwd: None,
-            git_branch: None,
-            git_sha: None,
-            git_origin_url: None,
-            source: None,
-            model_provider: None,
-            cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
+            ..Default::default()
         };
         let b = ThreadItem {
             path: PathBuf::from("/tmp/b.jsonl"),
-            thread_id: None,
             first_user_message: Some("B".to_string()),
-            cwd: None,
-            git_branch: None,
-            git_sha: None,
-            git_origin_url: None,
-            source: None,
-            model_provider: None,
-            cli_version: None,
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
+            ..Default::default()
         };
         let rows = rows_from_items(vec![a, b]);
         assert_eq!(rows.len(), 2);
@@ -1520,17 +1521,10 @@ mod tests {
     fn row_uses_tail_timestamp_for_updated_at() {
         let item = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
-            thread_id: None,
             first_user_message: Some("Hello".to_string()),
-            cwd: None,
-            git_branch: None,
-            git_sha: None,
-            git_origin_url: None,
-            source: None,
-            model_provider: None,
-            cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T01:00:00Z".into()),
+            ..Default::default()
         };
 
         let row = head_to_row(&item);
@@ -1639,6 +1633,42 @@ mod tests {
 
         let snapshot = terminal.backend().to_string();
         assert_snapshot!("resume_picker_table", snapshot);
+    }
+
+    #[test]
+    fn resume_search_error_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+        state.inline_error = Some(String::from(
+            "Failed to read session metadata from /tmp/missing.jsonl",
+        ));
+
+        let width: u16 = 80;
+        let height: u16 = 1;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let line = search_line(&state);
+            frame.render_widget_ref(line, frame.area());
+        }
+        terminal.flush().expect("flush");
+
+        let snapshot = terminal.backend().to_string();
+        assert_snapshot!("resume_picker_search_error", snapshot);
     }
 
     // TODO(jif) fix
@@ -2134,6 +2164,46 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(state.selected, 5);
+    }
+
+    #[tokio::test]
+    async fn enter_on_row_without_resolvable_thread_id_shows_inline_error() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+
+        let row = Row {
+            path: PathBuf::from("/tmp/missing.jsonl"),
+            preview: String::from("missing metadata"),
+            thread_id: None,
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        };
+        state.all_rows = vec![row.clone()];
+        state.filtered_rows = vec![row];
+
+        let selection = state
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("enter should not abort the picker");
+
+        assert!(selection.is_none());
+        assert_eq!(
+            state.inline_error,
+            Some(String::from(
+                "Failed to read session metadata from /tmp/missing.jsonl"
+            ))
+        );
     }
 
     #[tokio::test]

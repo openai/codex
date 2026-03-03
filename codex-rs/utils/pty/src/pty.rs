@@ -35,10 +35,27 @@ pub fn conpty_supported() -> bool {
 
 struct PtyChildTerminator {
     killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+    #[cfg(unix)]
+    process_group_id: Option<u32>,
 }
 
 impl ChildTerminator for PtyChildTerminator {
     fn kill(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(process_group_id) = self.process_group_id {
+            // Match the pipe backend's hard-kill behavior so descendant
+            // processes from interactive shells/REPLs do not survive shutdown.
+            // Also try the direct child killer in case the cached PGID is stale.
+            let process_group_kill_result =
+                crate::process_group::kill_process_group(process_group_id);
+            let child_kill_result = self.killer.kill();
+            return match child_kill_result {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == ErrorKind::NotFound => process_group_kill_result,
+                Err(err) => process_group_kill_result.or(Err(err)),
+            };
+        }
+
         self.killer.kill()
     }
 }
@@ -86,6 +103,11 @@ pub async fn spawn_process(
     }
 
     let mut child = pair.slave.spawn_command(command_builder)?;
+    #[cfg(unix)]
+    // portable-pty establishes the spawned PTY child as a new session leader on
+    // Unix, so PID == PGID and we can reuse the pipe backend's process-group
+    // hard-kill semantics for descendants.
+    let process_group_id = child.process_id();
     let killer = child.clone_killer();
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
@@ -156,7 +178,11 @@ pub async fn spawn_process(
         writer_tx,
         output_tx,
         initial_output_rx,
-        Box::new(PtyChildTerminator { killer }),
+        Box::new(PtyChildTerminator {
+            killer,
+            #[cfg(unix)]
+            process_group_id,
+        }),
         reader_handle,
         Vec::new(),
         writer_handle,

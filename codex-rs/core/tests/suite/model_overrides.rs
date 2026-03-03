@@ -1,6 +1,6 @@
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -33,6 +33,7 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -69,6 +70,7 @@ async fn override_turn_context_does_not_create_config_file() {
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::Medium)),
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

@@ -266,6 +266,8 @@ impl CodexAuth {
     /// Returns a high-level `AccountPlanType` (e.g., Free/Plus/Pro/Team/…)
     /// mapped from the ID token's internal plan value. Prefer this when you
     /// need to make UI or product decisions based on the user's subscription.
+    /// When ChatGPT auth is active but the token omits the plan claim, report
+    /// `Unknown` instead of treating the account as invalid.
     pub fn account_plan_type(&self) -> Option<AccountPlanType> {
         let map_known = |kp: &InternalKnownPlan| match kp {
             InternalKnownPlan::Free => AccountPlanType::Free,
@@ -278,12 +280,15 @@ impl CodexAuth {
             InternalKnownPlan::Edu => AccountPlanType::Edu,
         };
 
-        self.get_current_token_data()
-            .and_then(|t| t.id_token.chatgpt_plan_type)
-            .map(|pt| match pt {
-                InternalPlanType::Known(k) => map_known(&k),
-                InternalPlanType::Unknown(_) => AccountPlanType::Unknown,
-            })
+        self.get_current_token_data().map(|t| {
+            t.id_token
+                .chatgpt_plan_type
+                .map(|pt| match pt {
+                    InternalPlanType::Known(k) => map_known(&k),
+                    InternalPlanType::Unknown(_) => AccountPlanType::Unknown,
+                })
+                .unwrap_or(AccountPlanType::Unknown)
+        })
     }
 
     /// Returns `None` if `is_chatgpt_auth()` is false.
@@ -1377,7 +1382,7 @@ mod tests {
         let fake_jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
-                chatgpt_plan_type: "pro".to_string(),
+                chatgpt_plan_type: Some("pro".to_string()),
                 chatgpt_account_id: None,
             },
             codex_home.path(),
@@ -1447,7 +1452,7 @@ mod tests {
         let fake_jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
-                chatgpt_plan_type: "pro".to_string(),
+                chatgpt_plan_type: Some("pro".to_string()),
                 chatgpt_account_id: None,
             },
             codex_home.path(),
@@ -1528,7 +1533,7 @@ mod tests {
 
     struct AuthFileParams {
         openai_api_key: Option<String>,
-        chatgpt_plan_type: String,
+        chatgpt_plan_type: Option<String>,
         chatgpt_account_id: Option<String>,
     }
 
@@ -1545,10 +1550,13 @@ mod tests {
             typ: "JWT",
         };
         let mut auth_payload = serde_json::json!({
-            "chatgpt_plan_type": params.chatgpt_plan_type,
             "chatgpt_user_id": "user-12345",
             "user_id": "user-12345",
         });
+
+        if let Some(chatgpt_plan_type) = params.chatgpt_plan_type {
+            auth_payload["chatgpt_plan_type"] = serde_json::Value::String(chatgpt_plan_type);
+        }
 
         if let Some(chatgpt_account_id) = params.chatgpt_account_id {
             let org_value = serde_json::Value::String(chatgpt_account_id);
@@ -1650,7 +1658,7 @@ mod tests {
         let _jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
-                chatgpt_plan_type: "pro".to_string(),
+                chatgpt_plan_type: Some("pro".to_string()),
                 chatgpt_account_id: Some("org_another_org".to_string()),
             },
             codex_home.path(),
@@ -1675,7 +1683,7 @@ mod tests {
         let _jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
-                chatgpt_plan_type: "pro".to_string(),
+                chatgpt_plan_type: Some("pro".to_string()),
                 chatgpt_account_id: Some("org_mine".to_string()),
             },
             codex_home.path(),
@@ -1729,7 +1737,7 @@ mod tests {
         let _jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
-                chatgpt_plan_type: "pro".to_string(),
+                chatgpt_plan_type: Some("pro".to_string()),
                 chatgpt_account_id: None,
             },
             codex_home.path(),
@@ -1749,7 +1757,27 @@ mod tests {
         let _jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
-                chatgpt_plan_type: "mystery-tier".to_string(),
+                chatgpt_plan_type: Some("mystery-tier".to_string()),
+                chatgpt_account_id: None,
+            },
+            codex_home.path(),
+        )
+        .expect("failed to write auth file");
+
+        let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
+            .expect("load auth")
+            .expect("auth available");
+
+        pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
+    }
+
+    #[test]
+    fn missing_plan_type_maps_to_unknown() {
+        let codex_home = tempdir().unwrap();
+        let _jwt = write_auth_file(
+            AuthFileParams {
+                openai_api_key: None,
+                chatgpt_plan_type: None,
                 chatgpt_account_id: None,
             },
             codex_home.path(),

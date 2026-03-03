@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Codex Sign-in Error</title>
+    <link rel="icon" href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="none" viewBox="0 0 32 32"%3E%3Cpath stroke="%23000" stroke-linecap="round" stroke-width="2.484" d="M22.356 19.797H17.17M9.662 12.29l1.979 3.576a.511.511 0 0 1-.005.504l-1.974 3.409M30.758 16c0 8.15-6.607 14.758-14.758 14.758-8.15 0-14.758-6.607-14.758-14.758C1.242 7.85 7.85 1.242 16 1.242c8.15 0 14.758 6.608 14.758 14.758Z"/%3E%3C/svg%3E' type="image/svg+xml">
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+          Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+        background: radial-gradient(circle at top, #f7f8fb 0%, #ffffff 48%);
+        color: #0d0d0d;
+      }
+      .container {
+        min-height: 100vh;
+        padding: 24px;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .card {
+        width: min(680px, 100%);
+        border-radius: 16px;
+        border: 1px solid rgba(13, 13, 13, 0.12);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.06);
+        background: #ffffff;
+        padding: 24px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .logo {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+        border: 1px solid rgba(0, 0, 0, 0.1);
+      }
+      .brand-title {
+        font-size: 14px;
+        color: #5d5d5d;
+      }
+      h1 {
+        margin: 18px 0 10px;
+        font-size: 28px;
+        line-height: 1.2;
+      }
+      .message {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.45;
+      }
+      .details {
+        margin-top: 18px;
+        border-radius: 12px;
+        border: 1px solid rgba(13, 13, 13, 0.1);
+        background: #fafafa;
+        padding: 14px;
+        display: grid;
+        gap: 8px;
+      }
+      .details-row {
+        display: grid;
+        grid-template-columns: 136px 1fr;
+        gap: 10px;
+        font-size: 13px;
+        align-items: baseline;
+      }
+      .details-row strong {
+        color: #5d5d5d;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+          "Courier New", monospace;
+        word-break: break-all;
+      }
+      .help {
+        margin-top: 16px;
+        font-size: 14px;
+        color: #5d5d5d;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <div class="brand">
+          <div class="logo" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 32 32"><path stroke="#000" stroke-linecap="round" stroke-width="2.484" d="M22.356 19.797H17.17M9.662 12.29l1.979 3.576a.511.511 0 0 1-.005.504l-1.974 3.409M30.758 16c0 8.15-6.607 14.758-14.758 14.758-8.15 0-14.758-6.607-14.758-14.758C1.242 7.85 7.85 1.242 16 1.242c8.15 0 14.758 6.608 14.758 14.758Z"></path></svg>
+          </div>
+          <div class="brand-title">Codex login</div>
+        </div>
+
+        <h1>__ERROR_TITLE__</h1>
+        <p class="message">__ERROR_MESSAGE__</p>
+
+        <div class="details">
+          <div class="details-row">
+            <strong>Error code</strong>
+            <code>__ERROR_CODE__</code>
+          </div>
+          <div class="details-row">
+            <strong>Details</strong>
+            <code>__ERROR_DESCRIPTION__</code>
+          </div>
+        </div>
+
+        <p class="help">__ERROR_HELP__</p>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+---
+source: tui/src/diff_render.rs
+expression: terminal.backend()
+---
+"• Edited 6 files (+9 -9)                                                        "
+"  └ assets/banner.txt (+3 -0)                                                   "
+"    1 +HEADER	VALUE                                                             "
+"    2 +rocket	🚀                                                                " Hidden by multi-width symbols: [(15, " ")]
+"    3 +city	東京                                                                " Hidden by multi-width symbols: [(13, " "), (15, " ")]
+"                                                                                "
+"  └ examples/new_sample.rs (+3 -0)                                              "
+"    1 +pub fn greet(name: &str) {                                               "
+"    2 +    println!("Hello, {name}!");                                          "
+"    3 +}                                                                        "
+"                                                                                "
+"  └ legacy/old_script.py (+0 -3)                                                "
+"    1 -def legacy(x):                                                           "
+"    2 -    return x + 1                                                         "
+"    3 -print(legacy(3))                                                         "
+"                                                                                "
+"  └ scripts/calc.txt → scripts/calc.py (+1 -1)                                  "
+"    1  def add(a, b):                                                           "
+"    2 -	return a + b                                                            "
+"    2 +	return a + b + 42                                                       "
+"    3                                                                           "
+"    4  print(add(1, 2))                                                         "
+"                                                                                "
+"  └ src/lib.rs (+2 -2)                                                          "

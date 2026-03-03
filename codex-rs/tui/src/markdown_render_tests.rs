@@ -4,6 +4,8 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
 
+use crate::markdown_render::COLON_LOCATION_SUFFIX_RE;
+use crate::markdown_render::HASH_LOCATION_SUFFIX_RE;
 use crate::markdown_render::render_markdown_text;
 use insta::assert_snapshot;
 
@@ -652,10 +654,226 @@ fn link() {
 }
 
 #[test]
-fn code_block_unhighlighted() {
-    let text = render_markdown_text("```rust\nfn main() {}\n```\n");
-    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"])]);
+fn load_location_suffix_regexes() {
+    let _colon = &*COLON_LOCATION_SUFFIX_RE;
+    let _hash = &*HASH_LOCATION_SUFFIX_RE;
+}
+
+#[test]
+fn file_link_hides_destination() {
+    let text = render_markdown_text(
+        "[codex-rs/tui/src/markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs)",
+    );
+    let expected = Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs".cyan()]));
     assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_appends_line_number_when_label_lacks_it() {
+    let text = render_markdown_text(
+        "[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)",
+    );
+    let expected = Text::from(Line::from_iter([
+        "markdown_render.rs".cyan(),
+        ":74".cyan(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_uses_label_for_line_number() {
+    let text = render_markdown_text(
+        "[markdown_render.rs:74](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)",
+    );
+    let expected = Text::from(Line::from_iter(["markdown_render.rs:74".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_appends_hash_anchor_when_label_lacks_it() {
+    let text = render_markdown_text(
+        "[markdown_render.rs](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3)",
+    );
+    let expected = Text::from(Line::from_iter([
+        "markdown_render.rs".cyan(),
+        ":74:3".cyan(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_uses_label_for_hash_anchor() {
+    let text = render_markdown_text(
+        "[markdown_render.rs#L74C3](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3)",
+    );
+    let expected = Text::from(Line::from_iter(["markdown_render.rs#L74C3".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_appends_range_when_label_lacks_it() {
+    let text = render_markdown_text(
+        "[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74:3-76:9)",
+    );
+    let expected = Text::from(Line::from_iter([
+        "markdown_render.rs".cyan(),
+        ":74:3-76:9".cyan(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_uses_label_for_range() {
+    let text = render_markdown_text(
+        "[markdown_render.rs:74:3-76:9](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74:3-76:9)",
+    );
+    let expected = Text::from(Line::from_iter(["markdown_render.rs:74:3-76:9".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_appends_hash_range_when_label_lacks_it() {
+    let text = render_markdown_text(
+        "[markdown_render.rs](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3-L76C9)",
+    );
+    let expected = Text::from(Line::from_iter([
+        "markdown_render.rs".cyan(),
+        ":74:3-76:9".cyan(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn multiline_file_link_label_after_styled_prefix_does_not_panic() {
+    let text = render_markdown_text(
+        "**bold** plain [foo\nbar](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3)",
+    );
+    let expected = Text::from_iter([
+        Line::from_iter(["bold".bold(), " plain ".into(), "foo".cyan()]),
+        Line::from_iter(["bar".cyan(), ":74:3".cyan()]),
+    ]);
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_uses_label_for_hash_range() {
+    let text = render_markdown_text(
+        "[markdown_render.rs#L74C3-L76C9](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3-L76C9)",
+    );
+    let expected = Text::from(Line::from_iter(["markdown_render.rs#L74C3-L76C9".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn url_link_shows_destination() {
+    let text = render_markdown_text("[docs](https://example.com/docs)");
+    let expected = Text::from(Line::from_iter([
+        "docs".into(),
+        " (".into(),
+        "https://example.com/docs".cyan().underlined(),
+        ")".into(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn markdown_render_file_link_snapshot() {
+    let text = render_markdown_text(
+        "See [markdown_render.rs:74](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74).",
+    );
+    let rendered = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_snapshot!(rendered);
+}
+
+#[test]
+fn code_block_known_lang_has_syntax_colors() {
+    let text = render_markdown_text("```rust\nfn main() {}\n```\n");
+    let content: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+    // Content should be preserved; ignore trailing empty line from highlighting.
+    let content: Vec<&str> = content
+        .iter()
+        .map(std::string::String::as_str)
+        .filter(|s| !s.is_empty())
+        .collect();
+    assert_eq!(content, vec!["fn main() {}"]);
+
+    // At least one span should have non-default style (syntax highlighting).
+    let has_colored_span = text
+        .lines
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .any(|sp| sp.style.fg.is_some());
+    assert!(has_colored_span, "expected syntax-highlighted spans with color");
+}
+
+#[test]
+fn code_block_unknown_lang_plain() {
+    let text = render_markdown_text("```xyzlang\nhello world\n```\n");
+    let content: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+    let content: Vec<&str> = content
+        .iter()
+        .map(std::string::String::as_str)
+        .filter(|s| !s.is_empty())
+        .collect();
+    assert_eq!(content, vec!["hello world"]);
+
+    // No syntax coloring for unknown language — all spans have default style.
+    let has_colored_span = text
+        .lines
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .any(|sp| sp.style.fg.is_some());
+    assert!(!has_colored_span, "expected no syntax coloring for unknown lang");
+}
+
+#[test]
+fn code_block_no_lang_plain() {
+    let text = render_markdown_text("```\nno lang specified\n```\n");
+    let content: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+    let content: Vec<&str> = content
+        .iter()
+        .map(std::string::String::as_str)
+        .filter(|s| !s.is_empty())
+        .collect();
+    assert_eq!(content, vec!["no lang specified"]);
 }
 
 #[test]
@@ -721,16 +939,25 @@ Here is a code block that shows another fenced block:
                 .collect::<String>()
         })
         .collect();
+    // Filter empty trailing lines for stability; the code block may or may
+    // not emit a trailing blank depending on the highlighting path.
+    let trimmed: Vec<&str> = {
+        let mut v: Vec<&str> = lines.iter().map(std::string::String::as_str).collect();
+        while v.last() == Some(&"") {
+            v.pop();
+        }
+        v
+    };
     assert_eq!(
-        lines,
+        trimmed,
         vec![
-            "Here is a code block that shows another fenced block:".to_string(),
-            String::new(),
-            "```md".to_string(),
-            "# Inside fence".to_string(),
-            "- bullet".to_string(),
-            "- `inline code`".to_string(),
-            "```".to_string(),
+            "Here is a code block that shows another fenced block:",
+            "",
+            "```md",
+            "# Inside fence",
+            "- bullet",
+            "- `inline code`",
+            "```",
         ]
     );
 }
@@ -992,4 +1219,37 @@ fn nested_item_continuation_paragraph_is_indented() {
         Line::from_iter(["2. ".light_blue(), "C".into()]),
     ]);
     assert_eq!(text, expected);
+}
+
+#[test]
+fn code_block_preserves_trailing_blank_lines() {
+    // A fenced code block with an intentional trailing blank line must keep it.
+    let md = "```rust\nfn main() {}\n\n```\n";
+    let text = render_markdown_text(md);
+    let content: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+    // Should have: "fn main() {}" then "" (the blank line).
+    // Filter only to content lines (skip leading/trailing empty from rendering).
+    assert!(
+        content.iter().any(|c| c == "fn main() {}"),
+        "expected code line, got {content:?}"
+    );
+    // The trailing blank line inside the fence should be preserved.
+    let code_start = content.iter().position(|c| c == "fn main() {}").unwrap();
+    assert!(
+        content.len() > code_start + 1,
+        "expected a line after 'fn main() {{}}' but content ends: {content:?}"
+    );
+    assert_eq!(
+        content[code_start + 1], "",
+        "trailing blank line inside code fence was lost: {content:?}"
+    );
 }
