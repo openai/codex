@@ -135,7 +135,11 @@ async fn run_remote_compact_task_inner_impl(
     }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+        InitialContextInjection::BeforeLastUserMessage => {
+            Some(turn_context.to_turn_context_item_with_exec_policy(
+                sess.services.exec_policy.current().as_ref(),
+            ))
+        }
     };
     let compacted_item = CompactedItem {
         message: String::new(),

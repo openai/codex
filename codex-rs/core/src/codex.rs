@@ -155,6 +155,7 @@ use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use codex_config::CONFIG_TOML_FILE;
+use codex_execpolicy::Policy;
 
 mod rollout_reconstruction;
 #[cfg(test)]
@@ -772,7 +773,24 @@ impl TurnContext {
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
     }
 
+    #[cfg(test)]
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
+        self.to_turn_context_item_with_approved_prefix_rules(None)
+    }
+
+    pub(crate) fn to_turn_context_item_with_exec_policy(
+        &self,
+        exec_policy: &Policy,
+    ) -> TurnContextItem {
+        self.to_turn_context_item_with_approved_prefix_rules(format_allow_prefixes(
+            exec_policy.get_allowed_prefixes(),
+        ))
+    }
+
+    fn to_turn_context_item_with_approved_prefix_rules(
+        &self,
+        approved_prefix_rules: Option<String>,
+    ) -> TurnContextItem {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             cwd: self.cwd.clone(),
@@ -781,6 +799,7 @@ impl TurnContext {
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
+            approved_prefix_rules,
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
@@ -1795,7 +1814,11 @@ impl Session {
                 self.record_conversation_items(&turn_context, &items).await;
                 {
                     let mut state = self.state.lock().await;
-                    state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
+                    state.set_reference_context_item(Some(
+                        turn_context.to_turn_context_item_with_exec_policy(
+                            self.services.exec_policy.current().as_ref(),
+                        ),
+                    ));
                 }
                 self.set_previous_turn_settings(None).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
@@ -1908,7 +1931,11 @@ impl Session {
                     .await;
                 {
                     let mut state = self.state.lock().await;
-                    state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
+                    state.set_reference_context_item(Some(
+                        turn_context.to_turn_context_item_with_exec_policy(
+                            self.services.exec_policy.current().as_ref(),
+                        ),
+                    ));
                 }
 
                 // Forked threads should remain file-backed immediately after startup.
@@ -3106,9 +3133,13 @@ impl Session {
             .format_environment_context_subagents(self.conversation_id)
             .await;
         contextual_user_sections.push(
-            EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
-                .with_subagents(subagents)
-                .serialize_to_xml(),
+            EnvironmentContext::from_turn_context(
+                turn_context,
+                shell.as_ref(),
+                format_allow_prefixes(self.services.exec_policy.current().get_allowed_prefixes()),
+            )
+            .with_subagents(subagents)
+            .serialize_to_xml(),
         );
 
         let mut items = Vec::with_capacity(2);
@@ -3176,7 +3207,8 @@ impl Session {
             self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
                 .await
         };
-        let turn_context_item = turn_context.to_turn_context_item();
+        let turn_context_item = turn_context
+            .to_turn_context_item_with_exec_policy(self.services.exec_policy.current().as_ref());
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
@@ -7487,6 +7519,7 @@ mod tests {
             approval_policy: turn_context.approval_policy.value(),
             sandbox_policy: turn_context.sandbox_policy.get().clone(),
             network: None,
+            approved_prefix_rules: None,
             model: previous_model.to_string(),
             personality: turn_context.personality,
             collaboration_mode: Some(turn_context.collaboration_mode.clone()),

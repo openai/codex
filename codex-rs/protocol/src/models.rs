@@ -352,7 +352,7 @@ impl DeveloperInstructions {
 
     pub fn from(
         approval_policy: AskForApproval,
-        exec_policy: &Policy,
+        _exec_policy: &Policy,
         request_permission_enabled: bool,
     ) -> DeveloperInstructions {
         let on_request_instructions = || {
@@ -361,15 +361,7 @@ impl DeveloperInstructions {
             } else {
                 APPROVAL_POLICY_ON_REQUEST_RULE
             };
-            let command_prefixes = format_allow_prefixes(exec_policy.get_allowed_prefixes());
-            match command_prefixes {
-                Some(prefixes) => {
-                    format!(
-                        "{on_request_rule}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-                    )
-                }
-                None => on_request_rule.to_string(),
-            }
+            on_request_rule.to_string()
         };
         let text = match approval_policy {
             AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
@@ -533,7 +525,10 @@ impl DeveloperInstructions {
             SandboxMode::WorkspaceWrite => SANDBOX_MODE_WORKSPACE_WRITE.trim_end(),
             SandboxMode::ReadOnly => SANDBOX_MODE_READ_ONLY.trim_end(),
         };
-        let text = template.replace("{network_access}", &network_access.to_string());
+        let text = format!(
+            "{} Approved command prefix rules (if any) are provided in `<environment_context>` under `<approved_prefix_rules>`.",
+            template.replace("{network_access}", &network_access.to_string())
+        );
 
         DeveloperInstructions::new(text)
     }
@@ -573,6 +568,10 @@ pub fn format_allow_prefixes(prefixes: Vec<Vec<String>>) -> Option<String> {
     if let Some(byte_idx) = byte_idx {
         truncated = true;
         output = output[..byte_idx].to_string();
+    }
+
+    if output.is_empty() {
+        return None;
     }
 
     if truncated {
@@ -1331,7 +1330,7 @@ mod tests {
         assert_eq!(
             workspace_write,
             DeveloperInstructions::new(
-                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted. Approved command prefix rules (if any) are provided in `<environment_context>` under `<approved_prefix_rules>`."
             )
         );
 
@@ -1339,7 +1338,7 @@ mod tests {
         assert_eq!(
             read_only,
             DeveloperInstructions::new(
-                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted. Approved command prefix rules (if any) are provided in `<environment_context>` under `<approved_prefix_rules>`."
             )
         );
     }
@@ -1408,8 +1407,8 @@ mod tests {
 
         let text = instructions.into_text();
         assert!(text.contains("prefix_rule"));
-        assert!(text.contains("Approved command prefixes"));
-        assert!(text.contains(r#"["git", "pull"]"#));
+        assert!(text.contains("<approved_prefix_rules>"));
+        assert!(!text.contains("Approved command prefixes"));
     }
 
     #[test]

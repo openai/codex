@@ -16,6 +16,7 @@ pub(crate) struct EnvironmentContext {
     pub current_date: Option<String>,
     pub timezone: Option<String>,
     pub network: Option<NetworkContext>,
+    pub approved_prefix_rules: Option<String>,
     pub subagents: Option<String>,
 }
 
@@ -32,6 +33,7 @@ impl EnvironmentContext {
         current_date: Option<String>,
         timezone: Option<String>,
         network: Option<NetworkContext>,
+        approved_prefix_rules: Option<String>,
         subagents: Option<String>,
     ) -> Self {
         Self {
@@ -40,6 +42,7 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
+            approved_prefix_rules,
             subagents,
         }
     }
@@ -53,6 +56,7 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
+            approved_prefix_rules,
             subagents,
             shell: _,
         } = other;
@@ -60,6 +64,7 @@ impl EnvironmentContext {
             && self.current_date == *current_date
             && self.timezone == *timezone
             && self.network == *network
+            && self.approved_prefix_rules == *approved_prefix_rules
             && self.subagents == *subagents
     }
 
@@ -67,9 +72,11 @@ impl EnvironmentContext {
         before: &TurnContextItem,
         after: &TurnContext,
         shell: &Shell,
+        approved_prefix_rules: Option<String>,
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
         let after_network = Self::network_from_turn_context(after);
+        let before_approved_prefix_rules = before.approved_prefix_rules.clone();
         let cwd = if before.cwd != after.cwd {
             Some(after.cwd.clone())
         } else {
@@ -82,16 +89,34 @@ impl EnvironmentContext {
         } else {
             before_network
         };
-        EnvironmentContext::new(cwd, shell.clone(), current_date, timezone, network, None)
+        let approved_prefix_rules = if before_approved_prefix_rules != approved_prefix_rules {
+            approved_prefix_rules
+        } else {
+            before_approved_prefix_rules
+        };
+        EnvironmentContext::new(
+            cwd,
+            shell.clone(),
+            current_date,
+            timezone,
+            network,
+            approved_prefix_rules,
+            None,
+        )
     }
 
-    pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
+    pub fn from_turn_context(
+        turn_context: &TurnContext,
+        shell: &Shell,
+        approved_prefix_rules: Option<String>,
+    ) -> Self {
         Self::new(
             Some(turn_context.cwd.clone()),
             shell.clone(),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
+            approved_prefix_rules,
             None,
         )
     }
@@ -103,6 +128,7 @@ impl EnvironmentContext {
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
+            turn_context_item.approved_prefix_rules.clone(),
             None,
         )
     }
@@ -183,6 +209,13 @@ impl EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
+        if let Some(approved_prefix_rules) = self.approved_prefix_rules {
+            lines.push("  <approved_prefix_rules>".to_string());
+            for line in approved_prefix_rules.lines() {
+                lines.push(format!("    {line}"));
+            }
+            lines.push("  </approved_prefix_rules>".to_string());
+        }
         if let Some(subagents) = self.subagents {
             lines.push("  <subagents>".to_string());
             lines.extend(subagents.lines().map(|line| format!("    {line}")));
@@ -224,6 +257,7 @@ mod tests {
             Some("America/Los_Angeles".to_string()),
             None,
             None,
+            None,
         );
 
         let expected = format!(
@@ -251,6 +285,7 @@ mod tests {
             Some("2026-02-26".to_string()),
             Some("America/Los_Angeles".to_string()),
             Some(network),
+            None,
             None,
         );
 
@@ -281,6 +316,7 @@ mod tests {
             Some("America/Los_Angeles".to_string()),
             None,
             None,
+            None,
         );
 
         let expected = r#"<environment_context>
@@ -299,6 +335,7 @@ mod tests {
             fake_shell(),
             Some("2026-02-26".to_string()),
             Some("America/Los_Angeles".to_string()),
+            None,
             None,
             None,
         );
@@ -321,6 +358,7 @@ mod tests {
             Some("America/Los_Angeles".to_string()),
             None,
             None,
+            None,
         );
 
         let expected = r#"<environment_context>
@@ -341,6 +379,7 @@ mod tests {
             Some("America/Los_Angeles".to_string()),
             None,
             None,
+            None,
         );
 
         let expected = r#"<environment_context>
@@ -348,6 +387,35 @@ mod tests {
   <current_date>2026-02-26</current_date>
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
+
+        assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
+    fn serialize_environment_context_with_approved_prefix_rules() {
+        let context = EnvironmentContext::new(
+            Some(test_path_buf("/repo")),
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+            Some("- [\"mkdir\"]\n- [\"gh\", \"api\"]".to_string()),
+            None,
+        );
+
+        let expected = format!(
+            r#"<environment_context>
+  <cwd>{}</cwd>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+  <approved_prefix_rules>
+    - ["mkdir"]
+    - ["gh", "api"]
+  </approved_prefix_rules>
+</environment_context>"#,
+            test_path_buf("/repo").display()
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -361,10 +429,12 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
             fake_shell(),
+            None,
             None,
             None,
             None,
@@ -382,10 +452,12 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
             fake_shell(),
+            None,
             None,
             None,
             None,
@@ -404,10 +476,12 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo2")),
             fake_shell(),
+            None,
             None,
             None,
             None,
@@ -430,6 +504,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
@@ -438,6 +513,7 @@ mod tests {
                 shell_path: "/bin/zsh".into(),
                 shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
             },
+            None,
             None,
             None,
             None,
@@ -454,6 +530,7 @@ mod tests {
             fake_shell(),
             Some("2026-02-26".to_string()),
             Some("America/Los_Angeles".to_string()),
+            None,
             None,
             Some("- agent-1: atlas\n- agent-2".to_string()),
         );
@@ -473,5 +550,29 @@ mod tests {
         );
 
         assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
+    fn equals_except_shell_compares_approved_prefix_rules() {
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            None,
+            None,
+            Some("- [\"mkdir\"]".to_string()),
+            None,
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            None,
+            None,
+            Some("- [\"gh\", \"api\"]".to_string()),
+            None,
+        );
+
+        assert!(!context1.equals_except_shell(&context2));
     }
 }

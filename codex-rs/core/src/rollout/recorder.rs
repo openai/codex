@@ -1401,6 +1401,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 network: None,
+                approved_prefix_rules: None,
                 model: "test-model".to_string(),
                 personality: None,
                 collaboration_mode: None,
