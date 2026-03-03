@@ -4606,6 +4606,20 @@ mod tests {
                 composer.show_footer_flash(Line::from("FLASH"), Duration::from_secs(10));
             },
         );
+
+        // When a task is running and the user has draft text, the queue hint
+        // ("tab to add to queue") should be shown instead of the status line.
+        snapshot_composer_state_with_width(
+            "footer_priority_queue_hint_vs_status_line",
+            120,
+            true,
+            |composer| {
+                composer.set_status_line_enabled(true);
+                composer.set_status_line(Some(Line::from("model: gpt-5 · cwd: codex-rs")));
+                composer.set_task_running(true);
+                composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+            },
+        );
     }
 
     fn snapshot_composer_state_with_width<F>(
