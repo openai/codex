@@ -434,6 +434,21 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
         started.turn.status,
         codex_app_server_protocol::TurnStatus::InProgress
     );
+    assert_eq!(started.turn.id, turn.id);
+
+    let completed_notif: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        completed_notif
+            .params
+            .expect("turn/completed params must be present"),
+    )?;
+    assert_eq!(completed.thread_id, thread.id);
+    assert_eq!(completed.turn.id, turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
 
     // Send a second turn that exercises the overrides path: change the model.
     let turn_req2 = mcp
@@ -457,25 +472,30 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     // Ensure the second turn has a different id than the first.
     assert_ne!(turn.id, turn2.id);
 
-    // Expect a second turn/started notification as well.
-    let _notif2: JSONRPCNotification = timeout(
+    let notif2: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/started"),
     )
     .await??;
+    let started2: TurnStartedNotification =
+        serde_json::from_value(notif2.params.expect("params must be present"))?;
+    assert_eq!(started2.thread_id, thread.id);
+    assert_eq!(started2.turn.id, turn2.id);
+    assert_eq!(started2.turn.status, TurnStatus::InProgress);
 
-    let completed_notif: JSONRPCNotification = timeout(
+    let completed_notif2: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
-    let completed: TurnCompletedNotification = serde_json::from_value(
-        completed_notif
+    let completed2: TurnCompletedNotification = serde_json::from_value(
+        completed_notif2
             .params
             .expect("turn/completed params must be present"),
     )?;
-    assert_eq!(completed.thread_id, thread.id);
-    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    assert_eq!(completed2.thread_id, thread.id);
+    assert_eq!(completed2.turn.id, turn2.id);
+    assert_eq!(completed2.turn.status, TurnStatus::Completed);
 
     Ok(())
 }
@@ -1365,6 +1385,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
+            service_tier: None,
             personality: None,
             output_schema: None,
             collaboration_mode: None,
@@ -1396,6 +1417,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
+            service_tier: None,
             personality: None,
             output_schema: None,
             collaboration_mode: None,

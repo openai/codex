@@ -33,6 +33,8 @@ members = [
     "mcp-server",
     "network-proxy",
     "ollama",
+    "artifact-presentation",
+    "artifact-spreadsheet",
     "process-hardening",
     "protocol",
     "rmcp-client",
@@ -109,6 +111,8 @@ codex-mcp-server = { path = "mcp-server" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
+codex-artifact-presentation = { path = "artifact-presentation" }
+codex-artifact-spreadsheet = { path = "artifact-spreadsheet" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
@@ -215,6 +219,7 @@ owo-colors = "4.3.0"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
 portable-pty = "0.9.0"
+ppt-rs = "0.2.6"
 predicates = "3"
 pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
@@ -349,6 +354,7 @@ ignored = [
     "openssl-sys",
     "codex-utils-readiness",
     "codex-secrets",
+    "codex-artifact-spreadsheet"
 ]
 
 [profile.release]

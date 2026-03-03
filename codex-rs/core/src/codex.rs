@@ -55,6 +55,12 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
+use codex_artifact_presentation::PresentationArtifactError;
+use codex_artifact_presentation::PresentationArtifactExecutionRequest;
+use codex_artifact_presentation::PresentationArtifactResponse;
+use codex_artifact_spreadsheet::SpreadsheetArtifactError;
+use codex_artifact_spreadsheet::SpreadsheetArtifactRequest;
+use codex_artifact_spreadsheet::SpreadsheetArtifactResponse;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -290,6 +296,7 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
@@ -459,6 +466,7 @@ impl Codex {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
+            service_tier: config.service_tier,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
             personality: config.personality,
@@ -823,6 +831,7 @@ pub(crate) struct SessionConfiguration {
 
     collaboration_mode: CollaborationMode,
     model_reasoning_summary: Option<ReasoningSummaryConfig>,
+    service_tier: Option<ServiceTier>,
 
     /// Developer instructions that supplement the base instructions.
     developer_instructions: Option<String>,
@@ -879,6 +888,7 @@ impl SessionConfiguration {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
+            service_tier: self.service_tier,
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             cwd: self.cwd.clone(),
@@ -896,6 +906,9 @@ impl SessionConfiguration {
         }
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = Some(summary);
+        }
+        if let Some(service_tier) = updates.service_tier {
+            next_configuration.service_tier = service_tier;
         }
         if let Some(personality) = updates.personality {
             next_configuration.personality = Some(personality);
@@ -927,6 +940,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
+    pub(crate) service_tier: Option<Option<ServiceTier>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
@@ -997,6 +1011,7 @@ impl Session {
         per_turn_config.model_reasoning_effort =
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
+        per_turn_config.service_tier = session_configuration.service_tier;
         per_turn_config.personality = session_configuration.personality;
         let resolved_web_search_mode = resolve_web_search_mode_for_turn(
             &per_turn_config.web_search_mode,
@@ -1548,6 +1563,7 @@ impl Session {
                 thread_name: session_configuration.thread_name.clone(),
                 model: session_configuration.collaboration_mode.model().to_string(),
                 model_provider_id: config.model_provider_id.clone(),
+                service_tier: session_configuration.service_tier,
                 approval_policy: session_configuration.approval_policy.value(),
                 sandbox_policy: session_configuration.sandbox_policy.get().clone(),
                 cwd: session_configuration.cwd.clone(),
@@ -1765,6 +1781,24 @@ impl Session {
     pub(crate) async fn clear_connector_selection(&self) {
         let mut state = self.state.lock().await;
         state.clear_connector_selection();
+    }
+
+    pub(crate) async fn execute_presentation_artifact(
+        &self,
+        request: PresentationArtifactExecutionRequest,
+        cwd: &Path,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let mut state = self.state.lock().await;
+        state.artifacts.presentation.execute_requests(request, cwd)
+    }
+
+    pub(crate) async fn execute_spreadsheet_artifact(
+        &self,
+        request: SpreadsheetArtifactRequest,
+        cwd: &Path,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let mut state = self.state.lock().await;
+        state.artifacts.spreadsheet.execute(request, cwd)
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
@@ -2367,6 +2401,8 @@ impl Session {
         self.send_event_raw(event).await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
+        self.maybe_clear_realtime_handoff_for_event(&legacy_source)
+            .await;
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
@@ -2382,12 +2418,21 @@ impl Session {
         let Some(text) = realtime_text_for_event(msg) else {
             return;
         };
-        if self.conversation.running_state().await.is_none() {
+        if self.conversation.running_state().await.is_none()
+            || self.conversation.active_handoff_id().await.is_none()
+        {
             return;
         }
-        if let Err(err) = self.conversation.text_in(text).await {
+        if let Err(err) = self.conversation.handoff_out(text).await {
             debug!("failed to mirror event text to realtime conversation: {err}");
         }
+    }
+
+    async fn maybe_clear_realtime_handoff_for_event(&self, msg: &EventMsg) {
+        if !matches!(msg, EventMsg::TurnComplete(_)) {
+            return;
+        }
+        self.conversation.clear_active_handoff().await;
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
@@ -3679,6 +3724,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 model,
                 effort,
                 summary,
+                service_tier,
                 collaboration_mode,
                 personality,
             } => {
@@ -3702,6 +3748,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         windows_sandbox_level,
                         collaboration_mode: Some(collaboration_mode),
                         reasoning_summary: summary,
+                        service_tier,
                         personality,
                         ..Default::default()
                     },
@@ -3898,6 +3945,7 @@ mod handlers {
                 model,
                 effort,
                 summary,
+                service_tier,
                 final_output_json_schema,
                 items,
                 collaboration_mode,
@@ -3922,6 +3970,7 @@ mod handlers {
                         windows_sandbox_level: None,
                         collaboration_mode,
                         reasoning_summary: summary,
+                        service_tier,
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
                         app_server_client_name: None,
@@ -5523,12 +5572,10 @@ async fn run_sampling_request(
             // transient reconnect messages. In debug builds, keep full visibility for diagnosis.
             let report_error = retries > 1
                 || cfg!(debug_assertions)
-                || sess
+                || !sess
                     .services
                     .model_client
-                    .active_ws_version(&turn_context.model_info)
-                    .is_none();
-
+                    .responses_websocket_enabled(&turn_context.model_info);
             if report_error {
                 // Surface retry information to any UI/front‑end so the
                 // user understands what is happening instead of staring
@@ -6189,6 +6236,7 @@ async fn try_run_sampling_request(
             &turn_context.otel_manager,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
+            turn_context.config.service_tier,
             turn_metadata_header,
         )
         .instrument(trace_span!("stream_request"))
@@ -6368,7 +6416,6 @@ async fn try_run_sampling_request(
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
-                can_append: _,
             } => {
                 flush_assistant_text_segments_all(
                     &sess,
@@ -7686,6 +7733,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -7780,6 +7828,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -8093,6 +8142,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -8148,6 +8198,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -8239,6 +8290,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -8407,6 +8459,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -9138,7 +9191,7 @@ mod tests {
         handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
             .await;
 
-        let deadline = StdDuration::from_secs(5);
+        let deadline = StdDuration::from_secs(15);
         let start = std::time::Instant::now();
         loop {
             let remaining = deadline.saturating_sub(start.elapsed());

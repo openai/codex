@@ -253,7 +253,6 @@ mod tests {
             dependencies: None,
             policy: None,
             permission_profile: None,
-            permissions: None,
             path_to_skills_md: skill_doc_path,
             scope: codex_protocol::protocol::SkillScope::User,
         }

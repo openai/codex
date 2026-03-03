@@ -340,6 +340,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
             model: Some("gpt-5.1-codex-max".to_string()),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

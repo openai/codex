@@ -37,6 +37,14 @@ use ts_rs::TS;
 const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 const JSON_V1_ALLOWLIST: &[&str] = &["InitializeParams", "InitializeResponse"];
+const SPECIAL_DEFINITIONS: &[&str] = &[
+    "ClientNotification",
+    "ClientRequest",
+    "EventMsg",
+    "ServerNotification",
+    "ServerRequest",
+];
+const FLAT_V2_SHARED_DEFINITIONS: &[&str] = &["ClientRequest", "EventMsg", "ServerNotification"];
 const V1_CLIENT_REQUEST_METHODS: &[&str] = &[
     "newConversation",
     "getConversationSummary",
@@ -222,6 +230,11 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
     write_pretty_json(
         out_dir.join("codex_app_server_protocol.schemas.json"),
         &bundle,
+    )?;
+    let flat_v2_bundle = build_flat_v2_schema(&bundle)?;
+    write_pretty_json(
+        out_dir.join("codex_app_server_protocol.v2.schemas.json"),
+        &flat_v2_bundle,
     )?;
 
     if !experimental_api {
@@ -870,14 +883,6 @@ impl Depth {
 }
 
 fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
-    const SPECIAL_DEFINITIONS: &[&str] = &[
-        "ClientNotification",
-        "ClientRequest",
-        "EventMsg",
-        "ServerNotification",
-        "ServerRequest",
-    ];
-
     let namespaced_types = collect_namespaced_types(&schemas);
     let mut definitions = Map::new();
 
@@ -895,6 +900,8 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
 
         if let Some(ref ns) = namespace {
             rewrite_refs_to_namespace(&mut value, ns);
+        } else {
+            rewrite_refs_to_known_namespaces(&mut value, &namespaced_types);
         }
 
         let mut forced_namespace_refs: Vec<(String, String)> = Vec::new();
@@ -956,6 +963,210 @@ fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
     root.insert("definitions".to_string(), Value::Object(definitions));
 
     Ok(Value::Object(root))
+}
+
+/// Build a datamodel-code-generator-friendly v2 bundle from the mixed export.
+///
+/// The full bundle keeps v2 schemas nested under `definitions.v2`, plus a few
+/// shared root definitions like `ClientRequest`, `EventMsg`, and
+/// `ServerNotification`. Python codegen only walks one definitions map level, so
+/// a direct feed would treat `v2` itself as a schema and miss unreferenced v2
+/// leaves. This helper flattens all v2 definitions to the root definitions map,
+/// then pulls in the shared root schemas and any non-v2 transitive deps they
+/// still reference. Keep the shared root unions intact here: some valid
+/// request/notification/event variants are inline or only reference shared root
+/// helpers, so filtering them by the presence of a `#/definitions/v2/` ref
+/// would silently drop real API surface from the flat bundle.
+fn build_flat_v2_schema(bundle: &Value) -> Result<Value> {
+    let Value::Object(root) = bundle else {
+        return Err(anyhow!("expected bundle root to be an object"));
+    };
+    let definitions = root
+        .get("definitions")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("expected bundle definitions map"))?;
+    let v2_definitions = definitions
+        .get("v2")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("expected v2 namespace in bundle definitions"))?;
+
+    let mut flat_root = root.clone();
+    let title = root
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("CodexAppServerProtocol");
+    let mut flat_definitions = v2_definitions.clone();
+    let mut shared_definitions = Map::new();
+    let mut non_v2_refs = HashSet::new();
+
+    for shared in FLAT_V2_SHARED_DEFINITIONS {
+        let Some(shared_schema) = definitions.get(*shared) else {
+            continue;
+        };
+        let shared_schema = shared_schema.clone();
+        non_v2_refs.extend(collect_non_v2_refs(&shared_schema));
+        shared_definitions.insert((*shared).to_string(), shared_schema);
+    }
+
+    for name in collect_definition_dependencies(definitions, non_v2_refs) {
+        if name == "v2" || flat_definitions.contains_key(&name) {
+            continue;
+        }
+        if let Some(schema) = definitions.get(&name) {
+            flat_definitions.insert(name, schema.clone());
+        }
+    }
+
+    flat_definitions.extend(shared_definitions);
+    flat_root.insert("title".to_string(), Value::String(format!("{title}V2")));
+    flat_root.insert("definitions".to_string(), Value::Object(flat_definitions));
+    let mut flat_bundle = Value::Object(flat_root);
+    rewrite_ref_prefix(&mut flat_bundle, "#/definitions/v2/", "#/definitions/");
+    ensure_no_ref_prefix(&flat_bundle, "#/definitions/v2/", "flat v2")?;
+    ensure_referenced_definitions_present(&flat_bundle, "flat v2")?;
+    Ok(flat_bundle)
+}
+
+fn collect_non_v2_refs(value: &Value) -> HashSet<String> {
+    let mut refs = HashSet::new();
+    collect_non_v2_refs_inner(value, &mut refs);
+    refs
+}
+
+fn collect_non_v2_refs_inner(value: &Value, refs: &mut HashSet<String>) {
+    match value {
+        Value::Object(obj) => {
+            if let Some(Value::String(reference)) = obj.get("$ref")
+                && let Some(name) = reference.strip_prefix("#/definitions/")
+                && !reference.starts_with("#/definitions/v2/")
+            {
+                refs.insert(name.to_string());
+            }
+            for child in obj.values() {
+                collect_non_v2_refs_inner(child, refs);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_non_v2_refs_inner(child, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_definition_dependencies(
+    definitions: &Map<String, Value>,
+    names: HashSet<String>,
+) -> HashSet<String> {
+    let mut seen = HashSet::new();
+    let mut to_process: Vec<String> = names.into_iter().collect();
+    while let Some(name) = to_process.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let Some(schema) = definitions.get(&name) else {
+            continue;
+        };
+        for dep in collect_non_v2_refs(schema) {
+            if !seen.contains(&dep) {
+                to_process.push(dep);
+            }
+        }
+    }
+    seen
+}
+
+fn rewrite_ref_prefix(value: &mut Value, prefix: &str, replacement: &str) {
+    match value {
+        Value::Object(obj) => {
+            if let Some(Value::String(reference)) = obj.get_mut("$ref") {
+                *reference = reference.replace(prefix, replacement);
+            }
+            for child in obj.values_mut() {
+                rewrite_ref_prefix(child, prefix, replacement);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                rewrite_ref_prefix(child, prefix, replacement);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn ensure_no_ref_prefix(value: &Value, prefix: &str, label: &str) -> Result<()> {
+    if let Some(reference) = first_ref_with_prefix(value, prefix) {
+        return Err(anyhow!(
+            "{label} schema still references namespaced definitions; found {reference}"
+        ));
+    }
+    Ok(())
+}
+
+fn first_ref_with_prefix(value: &Value, prefix: &str) -> Option<String> {
+    match value {
+        Value::Object(obj) => {
+            if let Some(Value::String(reference)) = obj.get("$ref")
+                && reference.starts_with(prefix)
+            {
+                return Some(reference.clone());
+            }
+            obj.values()
+                .find_map(|child| first_ref_with_prefix(child, prefix))
+        }
+        Value::Array(items) => items
+            .iter()
+            .find_map(|child| first_ref_with_prefix(child, prefix)),
+        _ => None,
+    }
+}
+
+fn ensure_referenced_definitions_present(schema: &Value, label: &str) -> Result<()> {
+    let definitions = schema
+        .get("definitions")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("expected definitions map in {label} schema"))?;
+    let mut missing = HashSet::new();
+    collect_missing_definitions(schema, definitions, &mut missing);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let mut missing_names: Vec<String> = missing.into_iter().collect();
+    missing_names.sort();
+    Err(anyhow!(
+        "{label} schema missing definitions: {}",
+        missing_names.join(", ")
+    ))
+}
+
+fn collect_missing_definitions(
+    value: &Value,
+    definitions: &Map<String, Value>,
+    missing: &mut HashSet<String>,
+) {
+    match value {
+        Value::Object(obj) => {
+            if let Some(Value::String(reference)) = obj.get("$ref")
+                && let Some(name) = reference.strip_prefix("#/definitions/")
+            {
+                let name = name.split('/').next().unwrap_or(name);
+                if !definitions.contains_key(name) {
+                    missing.insert(name.to_string());
+                }
+            }
+            for child in obj.values() {
+                collect_missing_definitions(child, definitions, missing);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_missing_definitions(child, definitions, missing);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn insert_into_namespace(
@@ -1224,6 +1435,43 @@ fn rewrite_refs_to_namespace(value: &mut Value, ns: &str) {
         Value::Array(items) => {
             for v in items.iter_mut() {
                 rewrite_refs_to_namespace(v, ns);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Recursively rewrite bare root definition refs to the namespace that owns the
+/// referenced type in the bundle.
+///
+/// The mixed export contains shared root helper schemas that are intentionally
+/// left outside the `v2` namespace, but some of their extracted child
+/// definitions still contain refs like `#/definitions/ThreadId`. When the real
+/// schema only exists under `#/definitions/v2/ThreadId`, those refs become
+/// dangling and downstream codegen falls back to placeholder `Any` models. This
+/// rewrite keeps the shared helpers at the root while retargeting their refs to
+/// the namespaced definitions that actually exist.
+fn rewrite_refs_to_known_namespaces(value: &mut Value, types: &HashMap<String, String>) {
+    match value {
+        Value::Object(obj) => {
+            if let Some(Value::String(reference)) = obj.get_mut("$ref")
+                && let Some(suffix) = reference.strip_prefix("#/definitions/")
+            {
+                let (name, tail) = suffix
+                    .split_once('/')
+                    .map_or((suffix, None), |(name, tail)| (name, Some(tail)));
+                if let Some(ns) = namespace_for_definition(name, types) {
+                    let tail = tail.map_or(String::new(), |rest| format!("/{rest}"));
+                    *reference = format!("#/definitions/{ns}/{name}{tail}");
+                }
+            }
+            for v in obj.values_mut() {
+                rewrite_refs_to_known_namespaces(v, types);
+            }
+        }
+        Value::Array(items) => {
+            for v in items.iter_mut() {
+                rewrite_refs_to_known_namespaces(v, types);
             }
         }
         _ => {}
@@ -1987,6 +2235,284 @@ mod tests {
     }
 
     #[test]
+    fn build_schema_bundle_rewrites_root_helper_refs_to_namespaced_defs() -> Result<()> {
+        let bundle = build_schema_bundle(vec![
+            GeneratedSchema {
+                namespace: None,
+                logical_name: "LegacyEnvelope".to_string(),
+                in_v1_dir: false,
+                value: serde_json::json!({
+                    "title": "LegacyEnvelope",
+                    "type": "object",
+                    "properties": {
+                        "current_thread": { "$ref": "#/definitions/ThreadId" },
+                        "turn_item": { "$ref": "#/definitions/TurnItem" }
+                    },
+                    "definitions": {
+                        "TurnItem": {
+                            "type": "object",
+                            "properties": {
+                                "thread_id": { "$ref": "#/definitions/ThreadId" },
+                                "phase": { "$ref": "#/definitions/MessagePhase" },
+                                "content": {
+                                    "type": "array",
+                                    "items": { "$ref": "#/definitions/UserInput" }
+                                }
+                            }
+                        }
+                    }
+                }),
+            },
+            GeneratedSchema {
+                namespace: Some("v2".to_string()),
+                logical_name: "ThreadId".to_string(),
+                in_v1_dir: false,
+                value: serde_json::json!({
+                    "title": "ThreadId",
+                    "type": "string"
+                }),
+            },
+            GeneratedSchema {
+                namespace: Some("v2".to_string()),
+                logical_name: "MessagePhase".to_string(),
+                in_v1_dir: false,
+                value: serde_json::json!({
+                    "title": "MessagePhase",
+                    "type": "string"
+                }),
+            },
+            GeneratedSchema {
+                namespace: Some("v2".to_string()),
+                logical_name: "UserInput".to_string(),
+                in_v1_dir: false,
+                value: serde_json::json!({
+                    "title": "UserInput",
+                    "type": "string"
+                }),
+            },
+        ])?;
+
+        assert_eq!(
+            bundle["definitions"]["LegacyEnvelope"]["properties"]["current_thread"]["$ref"],
+            serde_json::json!("#/definitions/v2/ThreadId")
+        );
+        assert_eq!(
+            bundle["definitions"]["LegacyEnvelope"]["properties"]["turn_item"]["$ref"],
+            serde_json::json!("#/definitions/TurnItem")
+        );
+        assert_eq!(
+            bundle["definitions"]["TurnItem"]["properties"]["thread_id"]["$ref"],
+            serde_json::json!("#/definitions/v2/ThreadId")
+        );
+        assert_eq!(
+            bundle["definitions"]["TurnItem"]["properties"]["phase"]["$ref"],
+            serde_json::json!("#/definitions/v2/MessagePhase")
+        );
+        assert_eq!(
+            bundle["definitions"]["TurnItem"]["properties"]["content"]["items"]["$ref"],
+            serde_json::json!("#/definitions/v2/UserInput")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn build_flat_v2_schema_keeps_shared_root_schemas_and_dependencies() -> Result<()> {
+        let bundle = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "title": "CodexAppServerProtocol",
+            "type": "object",
+            "definitions": {
+                "ClientRequest": {
+                    "oneOf": [
+                        {
+                            "title": "StartRequest",
+                            "type": "object",
+                            "properties": {
+                                "params": { "$ref": "#/definitions/v2/ThreadStartParams" },
+                                "shared": { "$ref": "#/definitions/SharedHelper" }
+                            }
+                        },
+                        {
+                            "title": "InitializeRequest",
+                            "type": "object",
+                            "properties": {
+                                "params": { "$ref": "#/definitions/InitializeParams" }
+                            }
+                        },
+                        {
+                            "title": "LogoutRequest",
+                            "type": "object",
+                            "properties": {
+                                "params": { "type": "null" }
+                            }
+                        }
+                    ]
+                },
+                "EventMsg": {
+                    "oneOf": [
+                        { "$ref": "#/definitions/v2/ThreadStartedEventMsg" },
+                        {
+                            "title": "WarningEventMsg",
+                            "type": "object",
+                            "properties": {
+                                "message": { "type": "string" },
+                                "type": {
+                                    "enum": ["warning"],
+                                    "type": "string"
+                                }
+                            },
+                            "required": ["message", "type"]
+                        }
+                    ]
+                },
+                "ServerNotification": {
+                    "oneOf": [
+                        { "$ref": "#/definitions/v2/ThreadStartedNotification" },
+                        {
+                            "title": "ServerRequestResolvedNotification",
+                            "type": "object",
+                            "properties": {
+                                "params": { "$ref": "#/definitions/ServerRequestResolvedNotificationPayload" }
+                            }
+                        }
+                    ]
+                },
+                "SharedHelper": {
+                    "type": "object",
+                    "properties": {
+                        "leaf": { "$ref": "#/definitions/SharedLeaf" }
+                    }
+                },
+                "SharedLeaf": {
+                    "title": "SharedLeaf",
+                    "type": "string"
+                },
+                "InitializeParams": {
+                    "title": "InitializeParams",
+                    "type": "string"
+                },
+                "ServerRequestResolvedNotificationPayload": {
+                    "title": "ServerRequestResolvedNotificationPayload",
+                    "type": "string"
+                },
+                "v2": {
+                    "ThreadStartParams": {
+                        "title": "ThreadStartParams",
+                        "type": "object",
+                        "properties": {
+                            "cwd": { "type": "string" }
+                        }
+                    },
+                    "ThreadStartResponse": {
+                        "title": "ThreadStartResponse",
+                        "type": "object",
+                        "properties": {
+                            "ok": { "type": "boolean" }
+                        }
+                    },
+                    "ThreadStartedEventMsg": {
+                        "title": "ThreadStartedEventMsg",
+                        "type": "object",
+                        "properties": {
+                            "thread_id": { "type": "string" }
+                        }
+                    },
+                    "ThreadStartedNotification": {
+                        "title": "ThreadStartedNotification",
+                        "type": "object",
+                        "properties": {
+                            "thread_id": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        });
+
+        let flat_bundle = build_flat_v2_schema(&bundle)?;
+        let definitions = flat_bundle["definitions"]
+            .as_object()
+            .expect("flat v2 schema should include definitions");
+
+        assert_eq!(
+            flat_bundle["title"],
+            serde_json::json!("CodexAppServerProtocolV2")
+        );
+        assert_eq!(definitions.contains_key("v2"), false);
+        assert_eq!(definitions.contains_key("ThreadStartParams"), true);
+        assert_eq!(definitions.contains_key("ThreadStartResponse"), true);
+        assert_eq!(definitions.contains_key("ThreadStartedEventMsg"), true);
+        assert_eq!(definitions.contains_key("ThreadStartedNotification"), true);
+        assert_eq!(definitions.contains_key("SharedHelper"), true);
+        assert_eq!(definitions.contains_key("SharedLeaf"), true);
+        assert_eq!(definitions.contains_key("InitializeParams"), true);
+        assert_eq!(
+            definitions.contains_key("ServerRequestResolvedNotificationPayload"),
+            true
+        );
+        let client_request_titles: BTreeSet<String> = definitions["ClientRequest"]["oneOf"]
+            .as_array()
+            .expect("ClientRequest should remain a oneOf")
+            .iter()
+            .map(|variant| {
+                variant["title"]
+                    .as_str()
+                    .expect("ClientRequest variant should have a title")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            client_request_titles,
+            BTreeSet::from([
+                "InitializeRequest".to_string(),
+                "LogoutRequest".to_string(),
+                "StartRequest".to_string(),
+            ])
+        );
+        let event_titles: BTreeSet<String> = definitions["EventMsg"]["oneOf"]
+            .as_array()
+            .expect("EventMsg should remain a oneOf")
+            .iter()
+            .map(|variant| {
+                variant
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            event_titles,
+            BTreeSet::from(["".to_string(), "WarningEventMsg".to_string(),])
+        );
+        let notification_titles: BTreeSet<String> = definitions["ServerNotification"]["oneOf"]
+            .as_array()
+            .expect("ServerNotification should remain a oneOf")
+            .iter()
+            .map(|variant| {
+                variant
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            notification_titles,
+            BTreeSet::from([
+                "".to_string(),
+                "ServerRequestResolvedNotification".to_string(),
+            ])
+        );
+        assert_eq!(
+            first_ref_with_prefix(&flat_bundle, "#/definitions/v2/").is_none(),
+            true
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn experimental_type_fields_ts_filter_handles_interface_shape() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_ts_filter_{}", Uuid::now_v7()));
         fs::create_dir_all(&output_dir)?;
@@ -2114,6 +2640,99 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
             bundle_json.contains("MockExperimentalMethodResponse"),
             false
         );
+        let flat_v2_bundle_json =
+            fs::read_to_string(output_dir.join("codex_app_server_protocol.v2.schemas.json"))?;
+        assert_eq!(flat_v2_bundle_json.contains("mockExperimentalField"), false);
+        assert_eq!(flat_v2_bundle_json.contains("additionalPermissions"), false);
+        assert_eq!(
+            flat_v2_bundle_json.contains("MockExperimentalMethodParams"),
+            false
+        );
+        assert_eq!(
+            flat_v2_bundle_json.contains("MockExperimentalMethodResponse"),
+            false
+        );
+        assert_eq!(flat_v2_bundle_json.contains("#/definitions/v2/"), false);
+        assert_eq!(
+            flat_v2_bundle_json.contains("\"title\": \"CodexAppServerProtocolV2\""),
+            true
+        );
+        let flat_v2_bundle =
+            read_json_value(&output_dir.join("codex_app_server_protocol.v2.schemas.json"))?;
+        let definitions = flat_v2_bundle["definitions"]
+            .as_object()
+            .expect("flat v2 bundle should include definitions");
+        let client_request_methods: BTreeSet<String> = definitions["ClientRequest"]["oneOf"]
+            .as_array()
+            .expect("flat v2 ClientRequest should remain a oneOf")
+            .iter()
+            .filter_map(|variant| {
+                variant["properties"]["method"]["enum"]
+                    .as_array()
+                    .and_then(|values| values.first())
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
+        let missing_client_request_methods: Vec<String> = [
+            "account/logout",
+            "account/rateLimits/read",
+            "config/mcpServer/reload",
+            "configRequirements/read",
+            "fuzzyFileSearch",
+            "initialize",
+        ]
+        .into_iter()
+        .filter(|method| !client_request_methods.contains(*method))
+        .map(str::to_string)
+        .collect();
+        assert_eq!(missing_client_request_methods, Vec::<String>::new());
+        let server_notification_methods: BTreeSet<String> =
+            definitions["ServerNotification"]["oneOf"]
+                .as_array()
+                .expect("flat v2 ServerNotification should remain a oneOf")
+                .iter()
+                .filter_map(|variant| {
+                    variant["properties"]["method"]["enum"]
+                        .as_array()
+                        .and_then(|values| values.first())
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect();
+        let missing_server_notification_methods: Vec<String> = [
+            "fuzzyFileSearch/sessionCompleted",
+            "fuzzyFileSearch/sessionUpdated",
+            "serverRequest/resolved",
+        ]
+        .into_iter()
+        .filter(|method| !server_notification_methods.contains(*method))
+        .map(str::to_string)
+        .collect();
+        assert_eq!(missing_server_notification_methods, Vec::<String>::new());
+        let event_types: BTreeSet<String> = definitions["EventMsg"]["oneOf"]
+            .as_array()
+            .expect("flat v2 EventMsg should remain a oneOf")
+            .iter()
+            .filter_map(|variant| {
+                variant["properties"]["type"]["enum"]
+                    .as_array()
+                    .and_then(|values| values.first())
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
+        let missing_event_types: Vec<String> = [
+            "agent_message_delta",
+            "task_complete",
+            "warning",
+            "web_search_begin",
+        ]
+        .into_iter()
+        .filter(|event_type| !event_types.contains(*event_type))
+        .map(str::to_string)
+        .collect();
+        assert_eq!(missing_event_types, Vec::<String>::new());
         assert_eq!(
             output_dir
                 .join("v2")

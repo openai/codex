@@ -1375,6 +1375,7 @@ impl App {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
         let model = self.chat_widget.current_model().to_string();
+        let config = self.fresh_session_config();
         let summary = session_summary(
             self.chat_widget.token_usage(),
             self.chat_widget.thread_id(),
@@ -1385,7 +1386,7 @@ impl App {
             tracing::warn!(error = %err, "failed to close all threads");
         }
         let init = crate::chatwidget::ChatWidgetInit {
-            config: self.config.clone(),
+            config,
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             // New sessions start without prefilled message content.
@@ -1412,6 +1413,12 @@ impl App {
             self.chat_widget.add_plain_history_lines(lines);
         }
         tui.frame_requester().schedule_frame();
+    }
+
+    fn fresh_session_config(&self) -> Config {
+        let mut config = self.config.clone();
+        config.service_tier = self.chat_widget.current_service_tier();
+        config
     }
 
     async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -2532,6 +2539,7 @@ impl App {
                                         model: None,
                                         effort: None,
                                         summary: None,
+                                        service_tier: None,
                                         collaboration_mode: None,
                                         personality: None,
                                     },
@@ -2554,6 +2562,7 @@ impl App {
                                         model: None,
                                         effort: None,
                                         summary: None,
+                                        service_tier: None,
                                         collaboration_mode: None,
                                         personality: None,
                                     },
@@ -2660,6 +2669,39 @@ impl App {
                         } else {
                             self.chat_widget.add_error_message(format!(
                                 "Failed to save default personality: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistServiceTierSelection { service_tier } => {
+                self.refresh_status_line();
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_service_tier(service_tier)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let status = if service_tier.is_some() { "on" } else { "off" };
+                        let mut message = format!("Fast mode set to {status}");
+                        if let Some(profile) = profile {
+                            message.push_str(" for ");
+                            message.push_str(profile);
+                            message.push_str(" profile");
+                        }
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist fast mode selection");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save Fast mode for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save default Fast mode: {err}"
                             ));
                         }
                     }
@@ -2827,6 +2869,7 @@ impl App {
                                 model: None,
                                 effort: None,
                                 summary: None,
+                                service_tier: None,
                                 collaboration_mode: None,
                                 personality: None,
                             }));
@@ -3310,6 +3353,7 @@ impl App {
                 thread_name: None,
                 model: config_snapshot.model,
                 model_provider_id: config_snapshot.model_provider_id,
+                service_tier: config_snapshot.service_tier,
                 approval_policy: config_snapshot.approval_policy,
                 sandbox_policy: config_snapshot.sandbox_policy,
                 cwd: config_snapshot.cwd,
@@ -3771,6 +3815,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
@@ -4103,6 +4148,7 @@ mod tests {
                         thread_name: None,
                         model: "gpt-5".to_string(),
                         model_provider_id: "test-provider".to_string(),
+                        service_tier: None,
                         approval_policy: AskForApproval::OnRequest,
                         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
                         cwd: PathBuf::from("/tmp/agent"),
@@ -4323,6 +4369,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
@@ -4917,6 +4964,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fresh_session_config_uses_current_service_tier() {
+        let mut app = make_test_app().await;
+        app.chat_widget
+            .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
+
+        let config = app.fresh_session_config();
+
+        assert_eq!(
+            config.service_tier,
+            Some(codex_protocol::config_types::ServiceTier::Fast)
+        );
+    }
+
+    #[tokio::test]
     async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
@@ -4946,6 +5007,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
@@ -5003,6 +5065,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
@@ -5094,6 +5157,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
@@ -5158,6 +5222,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
@@ -5237,6 +5302,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
@@ -5363,6 +5429,7 @@ mod tests {
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
+            service_tier: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
@@ -5431,6 +5498,7 @@ mod tests {
                 thread_name: Some("keep me".to_string()),
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),

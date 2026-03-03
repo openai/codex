@@ -78,26 +78,34 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
             .into_text()
             .expect("text");
         let first_json: Value = serde_json::from_str(&first).expect("json");
-        assert_eq!(first_json["type"], "session.create");
+        assert_eq!(first_json["type"], "session.update");
         assert_eq!(
-            first_json["session"]["backend_prompt"],
+            first_json["session"]["type"],
+            Value::String("quicksilver".to_string())
+        );
+        assert_eq!(
+            first_json["session"]["instructions"],
             Value::String("backend prompt".to_string())
         );
         assert_eq!(
-            first_json["session"]["conversation_id"],
-            Value::String("conv_123".to_string())
+            first_json["session"]["audio"]["input"]["format"]["type"],
+            Value::String("audio/pcm".to_string())
+        );
+        assert_eq!(
+            first_json["session"]["audio"]["input"]["format"]["rate"],
+            Value::from(24_000)
         );
 
         ws.send(Message::Text(
             json!({
-                "type": "session.created",
-                "session": {"id": "sess_mock"}
+                "type": "session.updated",
+                "session": {"id": "sess_mock", "instructions": "backend prompt"}
             })
             .to_string()
             .into(),
         ))
         .await
-        .expect("send session.created");
+        .expect("send session.updated");
 
         let second = ws
             .next()
@@ -107,14 +115,14 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
             .into_text()
             .expect("text");
         let second_json: Value = serde_json::from_str(&second).expect("json");
-        assert_eq!(second_json["type"], "response.input_audio.delta");
+        assert_eq!(second_json["type"], "input_audio_buffer.append");
 
         ws.send(Message::Text(
             json!({
-                "type": "response.output_audio.delta",
+                "type": "conversation.output_audio.delta",
                 "delta": "AQID",
                 "sample_rate": 48000,
-                "num_channels": 1
+                "channels": 1
             })
             .to_string()
             .into(),
@@ -128,7 +136,8 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
     let connection = client
         .connect(
             RealtimeSessionConfig {
-                prompt: "backend prompt".to_string(),
+                instructions: "backend prompt".to_string(),
+                model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
             },
             HeaderMap::new(),
@@ -144,8 +153,9 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
         .expect("event");
     assert_eq!(
         created,
-        RealtimeEvent::SessionCreated {
-            session_id: "sess_mock".to_string()
+        RealtimeEvent::SessionUpdated {
+            session_id: "sess_mock".to_string(),
+            instructions: Some("backend prompt".to_string()),
         }
     );
 
@@ -189,7 +199,7 @@ async fn realtime_ws_e2e_send_while_next_event_waits() {
             .into_text()
             .expect("text");
         let first_json: Value = serde_json::from_str(&first).expect("json");
-        assert_eq!(first_json["type"], "session.create");
+        assert_eq!(first_json["type"], "session.update");
 
         let second = ws
             .next()
@@ -199,18 +209,18 @@ async fn realtime_ws_e2e_send_while_next_event_waits() {
             .into_text()
             .expect("text");
         let second_json: Value = serde_json::from_str(&second).expect("json");
-        assert_eq!(second_json["type"], "response.input_audio.delta");
+        assert_eq!(second_json["type"], "input_audio_buffer.append");
 
         ws.send(Message::Text(
             json!({
-                "type": "session.created",
-                "session": {"id": "sess_after_send"}
+                "type": "session.updated",
+                "session": {"id": "sess_after_send", "instructions": "backend prompt"}
             })
             .to_string()
             .into(),
         ))
         .await
-        .expect("send session.created");
+        .expect("send session.updated");
     })
     .await;
 
@@ -218,7 +228,8 @@ async fn realtime_ws_e2e_send_while_next_event_waits() {
     let connection = client
         .connect(
             RealtimeSessionConfig {
-                prompt: "backend prompt".to_string(),
+                instructions: "backend prompt".to_string(),
+                model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
             },
             HeaderMap::new(),
@@ -249,8 +260,9 @@ async fn realtime_ws_e2e_send_while_next_event_waits() {
     let next_event = next_result.expect("next event").expect("event");
     assert_eq!(
         next_event,
-        RealtimeEvent::SessionCreated {
-            session_id: "sess_after_send".to_string()
+        RealtimeEvent::SessionUpdated {
+            session_id: "sess_after_send".to_string(),
+            instructions: Some("backend prompt".to_string()),
         }
     );
 
@@ -269,7 +281,7 @@ async fn realtime_ws_e2e_disconnected_emitted_once() {
             .into_text()
             .expect("text");
         let first_json: Value = serde_json::from_str(&first).expect("json");
-        assert_eq!(first_json["type"], "session.create");
+        assert_eq!(first_json["type"], "session.update");
 
         ws.send(Message::Close(None)).await.expect("send close");
     })
@@ -279,7 +291,8 @@ async fn realtime_ws_e2e_disconnected_emitted_once() {
     let connection = client
         .connect(
             RealtimeSessionConfig {
-                prompt: "backend prompt".to_string(),
+                instructions: "backend prompt".to_string(),
+                model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
             },
             HeaderMap::new(),
@@ -308,7 +321,7 @@ async fn realtime_ws_e2e_ignores_unknown_text_events() {
             .into_text()
             .expect("text");
         let first_json: Value = serde_json::from_str(&first).expect("json");
-        assert_eq!(first_json["type"], "session.create");
+        assert_eq!(first_json["type"], "session.update");
 
         ws.send(Message::Text(
             json!({
@@ -323,14 +336,14 @@ async fn realtime_ws_e2e_ignores_unknown_text_events() {
 
         ws.send(Message::Text(
             json!({
-                "type": "session.created",
-                "session": {"id": "sess_after_unknown"}
+                "type": "session.updated",
+                "session": {"id": "sess_after_unknown", "instructions": "backend prompt"}
             })
             .to_string()
             .into(),
         ))
         .await
-        .expect("send session.created");
+        .expect("send session.updated");
     })
     .await;
 
@@ -338,7 +351,8 @@ async fn realtime_ws_e2e_ignores_unknown_text_events() {
     let connection = client
         .connect(
             RealtimeSessionConfig {
-                prompt: "backend prompt".to_string(),
+                instructions: "backend prompt".to_string(),
+                model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
             },
             HeaderMap::new(),
@@ -354,8 +368,9 @@ async fn realtime_ws_e2e_ignores_unknown_text_events() {
         .expect("event");
     assert_eq!(
         event,
-        RealtimeEvent::SessionCreated {
-            session_id: "sess_after_unknown".to_string()
+        RealtimeEvent::SessionUpdated {
+            session_id: "sess_after_unknown".to_string(),
+            instructions: Some("backend prompt".to_string()),
         }
     );
 
