@@ -653,6 +653,8 @@ pub(crate) struct App {
     pub(crate) commit_anim_running: Arc<AtomicBool>,
     // Shared across ChatWidget instances so invalid status-line config warnings only emit once.
     status_line_invalid_items_warned: Arc<AtomicBool>,
+    // Shared across ChatWidget instances so invalid terminal-title config warnings only emit once.
+    terminal_title_invalid_items_warned: Arc<AtomicBool>,
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
@@ -739,6 +741,7 @@ impl App {
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
+            terminal_title_invalid_items_warned: self.terminal_title_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         }
     }
@@ -1332,7 +1335,7 @@ impl App {
             let (tx, _rx) = unbounded_channel();
             tx
         };
-        self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
+        self.replace_chat_widget(ChatWidget::new_with_op_sender(init, codex_op_tx));
 
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot);
@@ -1371,6 +1374,13 @@ impl App {
         self.chat_widget.set_pending_thread_approvals(Vec::new());
     }
 
+    fn replace_chat_widget(&mut self, chat_widget: ChatWidget) {
+        // The replacement widget applies its own title before assignment.
+        // Disarm cleanup on the old widget so its Drop impl does not clear that new title.
+        self.chat_widget.skip_terminal_title_cleanup_on_drop();
+        self.chat_widget = chat_widget;
+    }
+
     async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
@@ -1400,9 +1410,10 @@ impl App {
             model: Some(model),
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
+            terminal_title_invalid_items_warned: self.terminal_title_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         };
-        self.chat_widget = ChatWidget::new(init, self.server.clone());
+        self.replace_chat_widget(ChatWidget::new(init, self.server.clone()));
         self.reset_thread_event_state();
         if let Some(summary) = summary {
             let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
@@ -1480,7 +1491,7 @@ impl App {
         for event in snapshot.events {
             self.handle_codex_event_replay(event);
         }
-        self.refresh_status_line();
+        self.refresh_status_surfaces();
     }
 
     fn should_wait_for_initial_session(session_selection: &SessionSelection) -> bool {
@@ -1597,6 +1608,7 @@ impl App {
         }
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
@@ -1625,6 +1637,8 @@ impl App {
                     model: Some(model.clone()),
                     startup_tooltip_override,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
+                    terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
+                        .clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new(init, thread_manager.clone())
@@ -1660,6 +1674,8 @@ impl App {
                     model: config.model.clone(),
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
+                    terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
+                        .clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
@@ -1697,6 +1713,8 @@ impl App {
                     model: config.model.clone(),
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
+                    terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
+                        .clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
@@ -1730,6 +1748,7 @@ impl App {
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
+            terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
@@ -1874,7 +1893,7 @@ impl App {
         if matches!(event, TuiEvent::Draw) {
             let size = tui.terminal.size()?;
             if size != tui.terminal.last_known_screen_size {
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
         }
 
@@ -1997,11 +2016,11 @@ impl App {
                                     tui,
                                     self.config.clone(),
                                 );
-                                self.chat_widget = ChatWidget::new_from_existing(
+                                self.replace_chat_widget(ChatWidget::new_from_existing(
                                     init,
                                     resumed.thread,
                                     resumed.session_configured,
-                                );
+                                ));
                                 self.reset_thread_event_state();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
@@ -2057,11 +2076,11 @@ impl App {
                                     tui,
                                     self.config.clone(),
                                 );
-                                self.chat_widget = ChatWidget::new_from_existing(
+                                self.replace_chat_widget(ChatWidget::new_from_existing(
                                     init,
                                     forked.thread,
                                     forked.session_configured,
-                                );
+                                ));
                                 self.reset_thread_event_state();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
@@ -2231,15 +2250,15 @@ impl App {
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -2898,7 +2917,7 @@ impl App {
             AppEvent::UpdatePlanModeReasoningEffort(effort) => {
                 self.config.plan_mode_reasoning_effort = effort;
                 self.chat_widget.set_plan_mode_reasoning_effort(effort);
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
@@ -3188,10 +3207,37 @@ impl App {
             }
             AppEvent::StatusLineBranchUpdated { cwd, branch } => {
                 self.chat_widget.set_status_line_branch(cwd, branch);
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
             AppEvent::StatusLineSetupCancelled => {
                 self.chat_widget.cancel_status_line_setup();
+            }
+            AppEvent::TerminalTitleSetup { items } => {
+                let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+                let edit = codex_core::config::edit::terminal_title_items_edit(&ids);
+                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await;
+                match apply_result {
+                    Ok(()) => {
+                        self.config.tui_terminal_title = Some(ids.clone());
+                        self.chat_widget.setup_terminal_title(items);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist terminal title items; keeping previous selection");
+                        self.chat_widget.revert_terminal_title_setup_preview();
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save terminal title items: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::TerminalTitleSetupPreview { items } => {
+                self.chat_widget.preview_terminal_title(items);
+            }
+            AppEvent::TerminalTitleSetupCancelled => {
+                self.chat_widget.cancel_terminal_title_setup();
             }
             AppEvent::SyntaxThemeSelected { name } => {
                 let edit = codex_core::config::edit::syntax_theme_edit(&name);
@@ -3267,7 +3313,7 @@ impl App {
         self.chat_widget.handle_codex_event(event);
 
         if needs_refresh {
-            self.refresh_status_line();
+            self.refresh_status_surfaces();
         }
     }
 
@@ -3609,8 +3655,8 @@ impl App {
         };
     }
 
-    fn refresh_status_line(&mut self) {
-        self.chat_widget.refresh_status_line();
+    fn refresh_status_surfaces(&mut self) {
+        self.chat_widget.refresh_status_surfaces();
     }
 
     #[cfg(target_os = "windows")]
@@ -4476,6 +4522,7 @@ mod tests {
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+            terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
@@ -4536,6 +4583,7 @@ mod tests {
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+                terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
@@ -5484,6 +5532,18 @@ mod tests {
         assert_eq!(app.pending_shutdown_exit_thread_id, Some(thread_id));
         assert!(matches!(control, AppRunControl::Continue));
         assert_eq!(op_rx.try_recv(), Ok(Op::Shutdown));
+    }
+
+    #[tokio::test]
+    async fn replace_chat_widget_keeps_drop_cleanup_armed_on_new_widget() {
+        let mut app = make_test_app().await;
+        let (replacement, _app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+
+        assert!(app.chat_widget.clears_terminal_title_on_drop());
+
+        app.replace_chat_widget(replacement);
+
+        assert!(app.chat_widget.clears_terminal_title_on_drop());
     }
 
     #[tokio::test]

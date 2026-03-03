@@ -301,6 +301,11 @@ pub struct Config {
     /// `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
 
+    /// Ordered list of terminal title item identifiers for the TUI.
+    ///
+    /// When unset, the TUI defaults to: `project` and `status`.
+    pub tui_terminal_title: Option<Vec<String>>,
+
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
 
@@ -2262,6 +2267,7 @@ impl Config {
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
+            tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
@@ -2605,6 +2611,7 @@ consolidation_model = "gpt-5"
                 show_tooltips: true,
                 alternate_screen: AltScreenMode::default(),
                 status_line: None,
+                terminal_title: None,
                 theme: None,
                 model_availability_nux: ModelAvailabilityNuxConfig {
                     shown_count: HashMap::from([
@@ -2764,6 +2771,7 @@ theme = "dracula"
                 show_tooltips: true,
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
+                terminal_title: None,
                 theme: None,
                 model_availability_nux: ModelAvailabilityNuxConfig::default(),
             }
@@ -4984,6 +4992,7 @@ model_verbosity = "high"
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
                 tui_status_line: None,
+                tui_terminal_title: None,
                 tui_theme: None,
                 otel: OtelConfig::default(),
             },
@@ -5114,6 +5123,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_terminal_title: None,
             tui_theme: None,
             otel: OtelConfig::default(),
         };
@@ -5242,6 +5252,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_terminal_title: None,
             tui_theme: None,
             otel: OtelConfig::default(),
         };
@@ -5356,6 +5367,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_terminal_title: None,
             tui_theme: None,
             otel: OtelConfig::default(),
         };
