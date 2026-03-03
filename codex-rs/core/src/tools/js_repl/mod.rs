@@ -91,6 +91,10 @@ impl JsReplHandle {
             .await
             .cloned()
     }
+
+    pub(crate) fn manager_if_initialized(&self) -> Option<Arc<JsReplManager>> {
+        self.cell.get().cloned()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -121,6 +125,12 @@ struct ExecContext {
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
+}
+
+struct CurrentExec {
+    exec_id: String,
+    submitted: bool,
+    turn_id: String,
 }
 
 #[derive(Default)]
@@ -309,6 +319,7 @@ pub struct JsReplManager {
     kernel: Arc<Mutex<Option<KernelState>>>,
     exec_lock: Arc<tokio::sync::Semaphore>,
     exec_tool_calls: Arc<Mutex<HashMap<String, ExecToolCalls>>>,
+    current_exec: Arc<Mutex<Option<CurrentExec>>>,
 }
 
 impl JsReplManager {
@@ -327,6 +338,7 @@ impl JsReplManager {
             kernel: Arc::new(Mutex::new(None)),
             exec_lock: Arc::new(tokio::sync::Semaphore::new(1)),
             exec_tool_calls: Arc::new(Mutex::new(HashMap::new())),
+            current_exec: Arc::new(Mutex::new(None)),
         });
 
         Ok(manager)
@@ -451,6 +463,43 @@ impl JsReplManager {
             state.cancel.cancel();
             state.notify.notify_waiters();
         }
+    }
+
+    async fn register_current_exec(&self, exec_id: String, turn_id: String) {
+        *self.current_exec.lock().await = Some(CurrentExec {
+            exec_id,
+            submitted: false,
+            turn_id,
+        });
+    }
+
+    async fn clear_current_exec_if_matches(&self, exec_id: &str) {
+        Self::clear_current_exec_if_matches_map(&self.current_exec, exec_id).await;
+    }
+
+    async fn clear_current_exec_if_matches_map(
+        current_exec: &Arc<Mutex<Option<CurrentExec>>>,
+        exec_id: &str,
+    ) {
+        let mut current_exec = current_exec.lock().await;
+        if current_exec
+            .as_ref()
+            .is_some_and(|current_exec| current_exec.exec_id == exec_id)
+        {
+            current_exec.take();
+        }
+    }
+
+    async fn clear_current_exec(&self) {
+        self.current_exec.lock().await.take();
+    }
+
+    async fn turn_has_submitted_exec(&self, turn_id: &str) -> bool {
+        self.current_exec
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|current_exec| current_exec.submitted && current_exec.turn_id == turn_id)
     }
 
     fn log_tool_call_response(
@@ -658,7 +707,21 @@ impl JsReplManager {
         })?;
         self.reset_kernel().await;
         Self::clear_all_exec_tool_calls_map(&self.exec_tool_calls).await;
+        self.clear_current_exec().await;
         Ok(())
+    }
+
+    pub async fn interrupt_turn_exec(&self, turn_id: &str) -> Result<bool, FunctionCallError> {
+        let _permit = self.exec_lock.clone().acquire_owned().await.map_err(|_| {
+            FunctionCallError::RespondToModel("js_repl execution unavailable".to_string())
+        })?;
+        if !self.turn_has_submitted_exec(turn_id).await {
+            return Ok(false);
+        }
+        self.reset_kernel().await;
+        Self::clear_all_exec_tool_calls_map(&self.exec_tool_calls).await;
+        self.clear_current_exec().await;
+        Ok(true)
     }
 
     async fn reset_kernel(&self) {
@@ -688,8 +751,11 @@ impl JsReplManager {
             if kernel.is_none() {
                 let state = self
                     .start_kernel(Arc::clone(&turn), Some(session.conversation_id))
-                    .await
-                    .map_err(FunctionCallError::RespondToModel)?;
+                    .await;
+                let state = match state {
+                    Ok(state) => state,
+                    Err(err) => return Err(FunctionCallError::RespondToModel(err)),
+                };
                 *kernel = Some(state);
             }
 
@@ -725,6 +791,8 @@ impl JsReplManager {
             );
             (req_id, rx)
         };
+        self.register_current_exec(req_id.clone(), turn.sub_id.clone())
+            .await;
         self.register_exec_tool_calls(&req_id).await;
 
         let payload = HostToKernel::Exec {
@@ -733,8 +801,35 @@ impl JsReplManager {
             timeout_ms: args.timeout_ms,
         };
 
-        if let Err(err) = Self::write_message(&stdin, &payload).await {
-            pending_execs.lock().await.remove(&req_id);
+        let write_result = {
+            let mut current_exec = self.current_exec.lock().await;
+            // Treat the exec as submitted before the async pipe writes begin: once we start
+            // awaiting `write_all`, the kernel may already observe runnable JS even if the turn is
+            // aborted before control returns here.
+            if let Some(current_exec) = current_exec.as_mut()
+                && current_exec.exec_id == req_id
+            {
+                current_exec.submitted = true;
+            }
+            let write_result = Self::write_message(&stdin, &payload).await;
+            match write_result {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    if current_exec
+                        .as_ref()
+                        .is_some_and(|current_exec| current_exec.exec_id == req_id)
+                    {
+                        current_exec.take();
+                    }
+                    Err(err)
+                }
+            }
+        };
+
+        if let Err(err) = write_result {
+            if pending_execs.lock().await.remove(&req_id).is_some() {
+                self.clear_current_exec_if_matches(&req_id).await;
+            }
             exec_contexts.lock().await.remove(&req_id);
             self.clear_exec_tool_calls(&req_id).await;
             let snapshot = Self::kernel_debug_snapshot(&child, &recent_stderr).await;
@@ -766,7 +861,11 @@ impl JsReplManager {
             Ok(Ok(msg)) => msg,
             Ok(Err(_)) => {
                 let mut pending = pending_execs.lock().await;
-                pending.remove(&req_id);
+                let removed = pending.remove(&req_id).is_some();
+                drop(pending);
+                if removed {
+                    self.clear_current_exec_if_matches(&req_id).await;
+                }
                 exec_contexts.lock().await.remove(&req_id);
                 self.wait_for_exec_tool_calls(&req_id).await;
                 self.clear_exec_tool_calls(&req_id).await;
@@ -787,6 +886,7 @@ impl JsReplManager {
                 self.reset_kernel().await;
                 self.wait_for_exec_tool_calls(&req_id).await;
                 self.exec_tool_calls.lock().await.clear();
+                self.clear_current_exec_if_matches(&req_id).await;
                 return Err(FunctionCallError::RespondToModel(
                     "js_repl execution timed out; kernel reset, rerun your request".to_string(),
                 ));
@@ -926,6 +1026,7 @@ impl JsReplManager {
             stdout,
             Arc::clone(&child),
             Arc::clone(&self.kernel),
+            Arc::clone(&self.current_exec),
             Arc::clone(&recent_stderr),
             Arc::clone(&pending_execs),
             Arc::clone(&exec_contexts),
@@ -1069,6 +1170,7 @@ impl JsReplManager {
         stdout: tokio::process::ChildStdout,
         child: Arc<Mutex<Child>>,
         manager_kernel: Arc<Mutex<Option<KernelState>>>,
+        current_exec: Arc<Mutex<Option<CurrentExec>>>,
         recent_stderr: Arc<Mutex<VecDeque<String>>>,
         pending_execs: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ExecResultMessage>>>>,
         exec_contexts: Arc<Mutex<HashMap<String, ExecContext>>>,
@@ -1111,8 +1213,12 @@ impl JsReplManager {
                             .map(|state| state.content_items.clone())
                             .unwrap_or_default()
                     };
-                    let mut pending = pending_execs.lock().await;
-                    if let Some(tx) = pending.remove(&id) {
+                    let tx = {
+                        let mut pending = pending_execs.lock().await;
+                        pending.remove(&id)
+                    };
+                    if let Some(tx) = tx {
+                        Self::clear_current_exec_if_matches_map(&current_exec, &id).await;
                         let payload = if ok {
                             ExecResultMessage::Ok {
                                 content_items: build_exec_result_content_items(
@@ -1256,6 +1362,15 @@ impl JsReplManager {
             });
         }
         drop(pending);
+        if !pending_exec_ids.is_empty() {
+            let mut current_exec = current_exec.lock().await;
+            if current_exec
+                .as_ref()
+                .is_some_and(|current_exec| pending_exec_ids.contains(&current_exec.exec_id))
+            {
+                current_exec.take();
+            }
+        }
 
         if !matches!(end_reason, KernelStreamEnd::Shutdown) {
             let mut pending_exec_ids = pending_exec_ids;
@@ -1671,6 +1786,7 @@ mod tests {
     use crate::protocol::EventMsg;
     use crate::protocol::SandboxPolicy;
     use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_config::Constrained;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -1951,6 +2067,33 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn interrupt_turn_exec_clears_matching_submitted_exec() {
+        let manager = JsReplManager {
+            node_path: None,
+            node_module_dirs: Vec::new(),
+            tmp_dir: tempfile::tempdir().expect("tempdir should initialize"),
+            kernel: Arc::new(Mutex::new(None)),
+            exec_lock: Arc::new(tokio::sync::Semaphore::new(1)),
+            exec_tool_calls: Arc::new(Mutex::new(HashMap::new())),
+            current_exec: Arc::new(Mutex::new(Some(CurrentExec {
+                exec_id: "exec-1".to_string(),
+                submitted: true,
+                turn_id: "turn-1".to_string(),
+            }))),
+        };
+        manager.register_exec_tool_calls("exec-1").await;
+
+        assert!(
+            manager
+                .interrupt_turn_exec("turn-1")
+                .await
+                .expect("interrupt cleanup should succeed")
+        );
+        assert!(!manager.turn_has_submitted_exec("turn-1").await);
+        assert!(manager.exec_tool_calls.lock().await.is_empty());
+    }
+
     #[test]
     fn summarize_tool_call_error_marks_error_payload() {
         let actual = JsReplManager::summarize_tool_call_error("tool failed");
@@ -2147,6 +2290,112 @@ mod tests {
             exit_state.is_some(),
             "timed out js_repl execution should kill previous kernel process"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn interrupt_active_exec_stops_aborted_kernel_before_later_exec() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let dir = tempdir()?;
+        let (session, mut turn) = make_session_and_context().await;
+        turn.cwd = dir.path().to_path_buf();
+        turn.sandbox_policy = Constrained::allow_only(SandboxPolicy::DangerFullAccess);
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let first_file = dir.path().join("1.txt");
+        let second_file = dir.path().join("2.txt");
+        let first_file_js = serde_json::to_string(&first_file.to_string_lossy().to_string())?;
+        let second_file_js = serde_json::to_string(&second_file.to_string_lossy().to_string())?;
+        let code = format!(
+            r#"
+const {{ promises: fs }} = await import("fs");
+
+const paths = [{first_file_js}, {second_file_js}];
+for (let i = 0; i < paths.length; i++) {{
+  await fs.writeFile(paths[i], `${{i + 1}}`);
+  if (i + 1 < paths.length) {{
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }}
+}}
+"#
+        );
+
+        let handle = tokio::spawn({
+            let manager = Arc::clone(&manager);
+            let session = Arc::clone(&session);
+            let turn = Arc::clone(&turn);
+            let tracker = Arc::clone(&tracker);
+            async move {
+                manager
+                    .execute(
+                        session,
+                        turn,
+                        tracker,
+                        JsReplArgs {
+                            code,
+                            timeout_ms: Some(15_000),
+                        },
+                    )
+                    .await
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !first_file.exists() {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("first file should be written before interrupt");
+
+        let child = {
+            let guard = manager.kernel.lock().await;
+            let state = guard
+                .as_ref()
+                .expect("kernel should exist while exec is running");
+            Arc::clone(&state.child)
+        };
+
+        handle.abort();
+        assert!(manager.interrupt_turn_exec(&turn.sub_id).await?);
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let exited = {
+                    let mut child = child.lock().await;
+                    child.try_wait()?.is_some()
+                };
+                if exited {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("kernel should exit after interrupt")?;
+
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(first_file.exists());
+        assert!(!second_file.exists());
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "console.log('after interrupt');".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("after interrupt"));
+
         Ok(())
     }
 

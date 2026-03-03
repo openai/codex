@@ -277,6 +277,13 @@ impl Session {
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
 
+        if reason == TurnAbortReason::Interrupted
+            && let Some(manager) = task.turn_context.js_repl.manager_if_initialized()
+            && let Err(err) = manager.interrupt_turn_exec(&task.turn_context.sub_id).await
+        {
+            warn!("failed to interrupt js_repl kernel: {err}");
+        }
+
         if reason == TurnAbortReason::Interrupted {
             let marker = ResponseItem::Message {
                 id: None,
