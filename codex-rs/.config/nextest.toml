@@ -11,3 +11,7 @@ slow-timeout = { period = "1m", terminate-after = 4 }
 [[profile.default.overrides]]
 filter = 'test(approval_matrix_covers_all_modes)'
 slow-timeout = { period = "30s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = 'test(generated_ts_optional_nullable_fields_only_in_params) | test(schema_fixtures_match_generated)'
+slow-timeout = { period = "1m", terminate-after = 2 }
