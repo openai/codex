@@ -49,6 +49,10 @@ impl ToolHandler for PresentationArtifactHandler {
                 | "list_slide_placeholders"
                 | "inspect"
                 | "resolve"
+                | "to_proto"
+                | "get_style"
+                | "describe_styles"
+                | "record_patch"
         )
     }
 
