@@ -158,13 +158,16 @@ async fn run_command_under_sandbox(
             let res = tokio::task::spawn_blocking(move || {
                 if use_elevated {
                     run_windows_sandbox_capture_elevated(
-                        policy_str.as_str(),
-                        &sandbox_cwd,
-                        base_dir.as_path(),
-                        command_vec,
-                        &cwd_clone,
-                        env_map,
-                        None,
+                        codex_windows_sandbox::ElevatedSandboxCaptureRequest {
+                            policy_json_or_preset: policy_str.as_str(),
+                            sandbox_policy_cwd: &sandbox_cwd,
+                            codex_home: base_dir.as_path(),
+                            command: command_vec,
+                            cwd: &cwd_clone,
+                            env_map,
+                            timeout_ms: None,
+                            proxy_enforced: false,
+                        },
                     )
                 } else {
                     run_windows_sandbox_capture(
