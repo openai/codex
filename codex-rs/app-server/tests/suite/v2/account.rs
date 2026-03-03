@@ -42,7 +42,7 @@ use tokio::time::timeout;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 // Helper to create a minimal config.toml for the app server
 #[derive(Default)]

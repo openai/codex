@@ -28,7 +28,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
 
-pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) type WsClient = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
