@@ -399,10 +399,10 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
 fn for_prompt_rewrites_image_generation_calls_when_images_are_supported() {
     let history = create_history_with_items(vec![
         ResponseItem::ImageGenerationCall {
-            id: Some("ig_123".to_string()),
-            status: Some("generating".to_string()),
+            id: "ig_123".to_string(),
+            status: "generating".to_string(),
             revised_prompt: Some("lobster".to_string()),
-            result: Some("Zm9v".to_string()),
+            result: "Zm9v".to_string(),
         },
         ResponseItem::Message {
             id: None,
@@ -453,10 +453,10 @@ fn for_prompt_rewrites_image_generation_calls_when_images_are_unsupported() {
             phase: None,
         },
         ResponseItem::ImageGenerationCall {
-            id: Some("ig_123".to_string()),
-            status: Some("completed".to_string()),
+            id: "ig_123".to_string(),
+            status: "completed".to_string(),
             revised_prompt: Some("lobster".to_string()),
-            result: Some("Zm9v".to_string()),
+            result: "Zm9v".to_string(),
         },
     ]);
 

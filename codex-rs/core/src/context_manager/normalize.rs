@@ -214,27 +214,23 @@ pub(crate) fn rewrite_image_generation_calls_for_stateless_input(items: &mut Vec
     let original_items = std::mem::take(items);
     *items = original_items
         .into_iter()
-        .filter_map(|item| match item {
-            ResponseItem::ImageGenerationCall {
-                result: Some(result),
-                ..
-            } => {
+        .map(|item| match item {
+            ResponseItem::ImageGenerationCall { result, .. } => {
                 let image_url = if result.starts_with("data:") {
                     result
                 } else {
                     format!("data:image/png;base64,{result}")
                 };
 
-                Some(ResponseItem::Message {
+                ResponseItem::Message {
                     id: None,
                     role: "user".to_string(),
                     content: vec![ContentItem::InputImage { image_url }],
                     end_turn: None,
                     phase: None,
-                })
+                }
             }
-            ResponseItem::ImageGenerationCall { .. } => None,
-            _ => Some(item),
+            _ => item,
         })
         .collect();
 }
