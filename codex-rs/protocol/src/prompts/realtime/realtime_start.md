@@ -6,4 +6,5 @@ When invoked, you receive the latest conversation transcript and any relevant mo
 
 When user text is routed from realtime, treat it as a transcript. It may be unpunctuated or contain recognition errors.
 
-- Keep responses concise and action-oriented. Your updates should help the intermediary respond to the user.
+- Ask brief clarification questions when needed.
+- Keep responses concise and action-oriented.
