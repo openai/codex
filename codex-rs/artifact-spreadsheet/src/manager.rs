@@ -109,6 +109,21 @@ impl SpreadsheetArtifactManager {
             "set_row_heights_bulk" => self.set_row_heights_bulk(request),
             "get_row_height" => self.get_row_height(request),
             "cleanup_and_validate_sheet" => self.cleanup_and_validate_sheet(request),
+            "create_text_style" => self.create_text_style(request),
+            "get_text_style" => self.get_text_style(request),
+            "create_fill" => self.create_fill(request),
+            "get_fill" => self.get_fill(request),
+            "create_border" => self.create_border(request),
+            "get_border" => self.get_border(request),
+            "create_number_format" => self.create_number_format(request),
+            "get_number_format" => self.get_number_format(request),
+            "create_cell_format" => self.create_cell_format(request),
+            "get_cell_format" => self.get_cell_format(request),
+            "create_differential_format" => self.create_differential_format(request),
+            "get_differential_format" => self.get_differential_format(request),
+            "get_cell_format_summary" => self.get_cell_format_summary(request),
+            "get_range_format_summary" => self.get_range_format_summary(request),
+            "get_reference" => self.get_reference(request),
             "get_cell" => self.get_cell(request),
             "get_cell_by_indices" => self.get_cell_by_indices(request),
             "get_cell_field" => self.get_cell_field(request),
@@ -312,6 +327,13 @@ impl SpreadsheetArtifactManager {
             .map(|entry| SpreadsheetCellRangeRef::new(sheet.name.clone(), entry));
         response.rendered_text = Some(sheet.to_rendered_text(range.as_ref()));
         response.range = range.as_ref().map(|entry| sheet.get_range_view(entry));
+        response.top_left_style_index = range
+            .as_ref()
+            .map(|entry| sheet.top_left_style_index(entry));
+        response.range_format = range.as_ref().map(|entry| sheet.range_format(entry));
+        response.cell_format_summary = response
+            .top_left_style_index
+            .and_then(|style_index| artifact.cell_format_summary(style_index));
         response.serialized_dict = Some(sheet.to_dict()?);
         Ok(response)
     }
@@ -665,6 +687,417 @@ impl SpreadsheetArtifactManager {
         Ok(response)
     }
 
+    fn create_text_style(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CreateTextStyleArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let style_id = artifact.create_text_style(
+            args.style,
+            args.source_style_id,
+            args.merge_with_existing_components.unwrap_or(false),
+        )?;
+        let style = artifact.get_text_style(style_id).cloned().ok_or_else(|| {
+            SpreadsheetArtifactError::Serialization {
+                message: format!("created text style `{style_id}` was not available"),
+            }
+        })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Created text style `{style_id}`"),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(style_id);
+        response.serialized_dict = Some(to_serialized_value(style)?);
+        Ok(response)
+    }
+
+    fn get_text_style(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: GetStyleArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let style = artifact.get_text_style(args.id).cloned().ok_or_else(|| {
+            SpreadsheetArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("text style `{}` was not found", args.id),
+            }
+        })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Retrieved text style `{}`", args.id),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(args.id);
+        response.serialized_dict = Some(to_serialized_value(style)?);
+        Ok(response)
+    }
+
+    fn create_fill(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CreateFillArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let style_id = artifact.create_fill(
+            args.fill,
+            args.source_fill_id,
+            args.merge_with_existing_components.unwrap_or(false),
+        )?;
+        let fill = artifact.get_fill(style_id).cloned().ok_or_else(|| {
+            SpreadsheetArtifactError::Serialization {
+                message: format!("created fill `{style_id}` was not available"),
+            }
+        })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Created fill `{style_id}`"),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(style_id);
+        response.serialized_dict = Some(to_serialized_value(fill)?);
+        Ok(response)
+    }
+
+    fn get_fill(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: GetStyleArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let fill = artifact.get_fill(args.id).cloned().ok_or_else(|| {
+            SpreadsheetArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("fill `{}` was not found", args.id),
+            }
+        })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Retrieved fill `{}`", args.id),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(args.id);
+        response.serialized_dict = Some(to_serialized_value(fill)?);
+        Ok(response)
+    }
+
+    fn create_border(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CreateBorderArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let style_id = artifact.create_border(
+            args.border,
+            args.source_border_id,
+            args.merge_with_existing_components.unwrap_or(false),
+        )?;
+        let border = artifact.get_border(style_id).cloned().ok_or_else(|| {
+            SpreadsheetArtifactError::Serialization {
+                message: format!("created border `{style_id}` was not available"),
+            }
+        })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Created border `{style_id}`"),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(style_id);
+        response.serialized_dict = Some(to_serialized_value(border)?);
+        Ok(response)
+    }
+
+    fn get_border(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: GetStyleArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let border = artifact.get_border(args.id).cloned().ok_or_else(|| {
+            SpreadsheetArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("border `{}` was not found", args.id),
+            }
+        })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Retrieved border `{}`", args.id),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(args.id);
+        response.serialized_dict = Some(to_serialized_value(border)?);
+        Ok(response)
+    }
+
+    fn create_number_format(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CreateNumberFormatArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let style_id = artifact.create_number_format(
+            args.number_format,
+            args.source_number_format_id,
+            args.merge_with_existing_components.unwrap_or(false),
+        )?;
+        let number_format = artifact
+            .get_number_format(style_id)
+            .cloned()
+            .ok_or_else(|| SpreadsheetArtifactError::Serialization {
+                message: format!("created number format `{style_id}` was not available"),
+            })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Created number format `{style_id}`"),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(style_id);
+        response.serialized_dict = Some(to_serialized_value(number_format)?);
+        Ok(response)
+    }
+
+    fn get_number_format(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: GetStyleArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let number_format = artifact
+            .get_number_format(args.id)
+            .cloned()
+            .ok_or_else(|| SpreadsheetArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("number format `{}` was not found", args.id),
+            })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Retrieved number format `{}`", args.id),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(args.id);
+        response.serialized_dict = Some(to_serialized_value(number_format)?);
+        Ok(response)
+    }
+
+    fn create_cell_format(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CreateCellFormatArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let style_id = artifact.create_cell_format(
+            args.format,
+            args.source_format_id,
+            args.merge_with_existing_components.unwrap_or(false),
+        )?;
+        let format = artifact.get_cell_format(style_id).cloned().ok_or_else(|| {
+            SpreadsheetArtifactError::Serialization {
+                message: format!("created cell format `{style_id}` was not available"),
+            }
+        })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Created cell format `{style_id}`"),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(style_id);
+        response.serialized_dict = Some(to_serialized_value(format)?);
+        response.cell_format_summary = artifact.cell_format_summary(style_id);
+        Ok(response)
+    }
+
+    fn get_cell_format(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: GetStyleArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let format = artifact.get_cell_format(args.id).cloned().ok_or_else(|| {
+            SpreadsheetArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("cell format `{}` was not found", args.id),
+            }
+        })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Retrieved cell format `{}`", args.id),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(args.id);
+        response.serialized_dict = Some(to_serialized_value(format)?);
+        response.cell_format_summary = artifact.cell_format_summary(args.id);
+        Ok(response)
+    }
+
+    fn create_differential_format(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CreateDifferentialFormatArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let style_id = artifact.create_differential_format(args.format);
+        let format = artifact
+            .get_differential_format(style_id)
+            .cloned()
+            .ok_or_else(|| SpreadsheetArtifactError::Serialization {
+                message: format!("created differential format `{style_id}` was not available"),
+            })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Created differential format `{style_id}`"),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(style_id);
+        response.serialized_dict = Some(to_serialized_value(format)?);
+        Ok(response)
+    }
+
+    fn get_differential_format(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: GetStyleArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let format = artifact
+            .get_differential_format(args.id)
+            .cloned()
+            .ok_or_else(|| SpreadsheetArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("differential format `{}` was not found", args.id),
+            })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Retrieved differential format `{}`", args.id),
+            snapshot_for_artifact(artifact),
+        );
+        response.style_id = Some(args.id);
+        response.serialized_dict = Some(to_serialized_value(format)?);
+        Ok(response)
+    }
+
+    fn get_cell_format_summary(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CellAddressArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let cell = sheet.get_cell_view(CellAddress::parse(&args.address)?);
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Retrieved cell format summary for `{}`", args.address),
+            snapshot_for_artifact(artifact),
+        );
+        response.cell_ref = Some(sheet.cell_ref(&args.address)?);
+        response.cell = Some(cell.clone());
+        response.cell_format_summary = artifact.cell_format_summary(cell.style_index);
+        Ok(response)
+    }
+
+    fn get_range_format_summary(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: RangeArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let range = CellRange::parse(&args.range)?;
+        let top_left_style_index = sheet.top_left_style_index(&range);
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Retrieved range format summary for `{}`", args.range),
+            snapshot_for_artifact(artifact),
+        );
+        response.range_ref = Some(SpreadsheetCellRangeRef::new(sheet.name.clone(), &range));
+        response.range_format = Some(sheet.range_format(&range));
+        response.range = Some(sheet.get_range_view(&range));
+        response.top_left_style_index = Some(top_left_style_index);
+        response.cell_format_summary = artifact.cell_format_summary(top_left_style_index);
+        Ok(response)
+    }
+
+    fn get_reference(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: ReferenceArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Resolved reference `{}` on `{}`",
+                args.reference, sheet.name
+            ),
+            snapshot_for_artifact(artifact),
+        );
+        match sheet.reference(&args.reference)? {
+            crate::SpreadsheetSheetReference::Cell { cell_ref } => {
+                let address = cell_ref.cell_address()?;
+                let cell = sheet.get_cell_view(address);
+                response.cell_format_summary = artifact.cell_format_summary(cell.style_index);
+                response.cell = Some(cell);
+                response.raw_cell = sheet.get_raw_cell(address);
+                response.cell_ref = Some(cell_ref);
+            }
+            crate::SpreadsheetSheetReference::Range { range_ref } => {
+                let range = range_ref.range()?;
+                let top_left_style_index = sheet.top_left_style_index(&range);
+                response.range = Some(sheet.get_range_view(&range));
+                response.range_ref = Some(range_ref);
+                response.range_format = Some(sheet.range_format(&range));
+                response.top_left_style_index = Some(top_left_style_index);
+                response.cell_format_summary = artifact.cell_format_summary(top_left_style_index);
+                response.rendered_text = Some(sheet.to_rendered_text(Some(&range)));
+            }
+        }
+        Ok(response)
+    }
+
     fn get_cell(
         &mut self,
         request: SpreadsheetArtifactRequest,
@@ -684,7 +1117,9 @@ impl SpreadsheetArtifactManager {
             format!("Retrieved cell `{}` from `{}`", args.address, sheet.name),
             snapshot_for_artifact(artifact),
         );
+        response.cell_format_summary = artifact.cell_format_summary(cell.style_index);
         response.cell = Some(cell);
+        response.raw_cell = sheet.get_raw_cell(CellAddress::parse(&args.address)?);
         response.cell_ref = Some(sheet.cell_ref(&args.address)?);
         Ok(response)
     }
@@ -714,7 +1149,10 @@ impl SpreadsheetArtifactManager {
             ),
             snapshot_for_artifact(artifact),
         );
-        response.cell = Some(sheet.get_cell_view_by_indices(args.column_index, args.row_index));
+        let cell = sheet.get_cell_view_by_indices(args.column_index, args.row_index);
+        response.cell_format_summary = artifact.cell_format_summary(cell.style_index);
+        response.cell = Some(cell);
+        response.raw_cell = sheet.get_raw_cell(address);
         response.cell_ref = Some(sheet.cell_ref(address.to_a1())?);
         Ok(response)
     }
@@ -798,6 +1236,11 @@ impl SpreadsheetArtifactManager {
             snapshot_for_artifact(artifact),
         );
         response.range = Some(sheet.get_range_view(&range));
+        response.range_ref = Some(SpreadsheetCellRangeRef::new(sheet.name.clone(), &range));
+        response.range_format = Some(sheet.range_format(&range));
+        response.top_left_style_index = Some(sheet.top_left_style_index(&range));
+        response.cell_format_summary =
+            artifact.cell_format_summary(sheet.top_left_style_index(&range));
         response.rendered_text = Some(sheet.to_rendered_text(Some(&range)));
         Ok(response)
     }
@@ -1470,11 +1913,21 @@ pub struct SpreadsheetArtifactResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range_ref: Option<SpreadsheetCellRangeRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub range_format: Option<crate::SpreadsheetRangeFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cell: Option<crate::SpreadsheetCellView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_cell: Option<crate::SpreadsheetCell>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_id: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_field: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<SpreadsheetRangeView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_left_style_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell_format_summary: Option<crate::SpreadsheetCellFormatSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rendered_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1505,9 +1958,14 @@ impl SpreadsheetArtifactResponse {
             sheet_ref: None,
             cell_ref: None,
             range_ref: None,
+            range_format: None,
             cell: None,
+            raw_cell: None,
+            style_id: None,
             cell_field: None,
             range: None,
+            top_left_style_index: None,
+            cell_format_summary: None,
             rendered_text: None,
             row_height: None,
             serialized_dict: None,
@@ -1637,10 +2095,62 @@ struct GetRowHeightArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct CreateTextStyleArgs {
+    style: crate::SpreadsheetTextStyle,
+    source_style_id: Option<u32>,
+    merge_with_existing_components: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateFillArgs {
+    fill: crate::SpreadsheetFill,
+    source_fill_id: Option<u32>,
+    merge_with_existing_components: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateBorderArgs {
+    border: crate::SpreadsheetBorder,
+    source_border_id: Option<u32>,
+    merge_with_existing_components: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateNumberFormatArgs {
+    number_format: crate::SpreadsheetNumberFormat,
+    source_number_format_id: Option<u32>,
+    merge_with_existing_components: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateCellFormatArgs {
+    format: crate::SpreadsheetCellFormat,
+    source_format_id: Option<u32>,
+    merge_with_existing_components: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateDifferentialFormatArgs {
+    format: crate::SpreadsheetDifferentialFormat,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetStyleArgs {
+    id: u32,
+}
+
+#[derive(Debug, Deserialize)]
 struct CellAddressArgs {
     sheet_name: Option<String>,
     sheet_index: Option<u32>,
     address: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReferenceArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    reference: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1902,4 +2412,10 @@ fn resolve_path(cwd: &Path, path: &Path) -> PathBuf {
     } else {
         cwd.join(path)
     }
+}
+
+fn to_serialized_value<T: Serialize>(value: T) -> Result<Value, SpreadsheetArtifactError> {
+    serde_json::to_value(value).map_err(|error| SpreadsheetArtifactError::Serialization {
+        message: error.to_string(),
+    })
 }

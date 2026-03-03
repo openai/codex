@@ -65,6 +65,11 @@ impl TryFrom<Value> for SpreadsheetCellValue {
 
     fn try_from(value: Value) -> Result<Self, SpreadsheetArtifactError> {
         match value {
+            Value::Object(_) => serde_json::from_value(value).map_err(|error| {
+                SpreadsheetArtifactError::Serialization {
+                    message: error.to_string(),
+                }
+            }),
             Value::Bool(value) => Ok(Self::Bool(value)),
             Value::Number(value) => {
                 if let Some(integer) = value.as_i64() {
@@ -337,6 +342,14 @@ impl SpreadsheetCellRangeRef {
         Ok(self.get(sheet)?.data)
     }
 
+    pub fn top_left_style_index(
+        &self,
+        sheet: &SpreadsheetSheet,
+    ) -> Result<u32, SpreadsheetArtifactError> {
+        self.ensure_sheet(sheet)?;
+        Ok(sheet.top_left_style_index(&self.range()?))
+    }
+
     pub fn set_value(
         &self,
         sheet: &mut SpreadsheetSheet,
@@ -418,6 +431,13 @@ impl SpreadsheetCellRangeRef {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SpreadsheetSheetReference {
+    Cell { cell_ref: SpreadsheetCellRef },
+    Range { range_ref: SpreadsheetCellRangeRef },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -684,6 +704,19 @@ impl SpreadsheetSheet {
     ) -> Result<SpreadsheetCellRangeRef, SpreadsheetArtifactError> {
         let range = CellRange::parse(address.as_ref())?;
         Ok(SpreadsheetCellRangeRef::new(self.name.clone(), &range))
+    }
+
+    pub fn reference(
+        &self,
+        address: impl AsRef<str>,
+    ) -> Result<SpreadsheetSheetReference, SpreadsheetArtifactError> {
+        let address = address.as_ref();
+        if let Ok(cell_ref) = self.cell_ref(address) {
+            return Ok(SpreadsheetSheetReference::Cell { cell_ref });
+        }
+        Ok(SpreadsheetSheetReference::Range {
+            range_ref: self.range_ref(address)?,
+        })
     }
 
     pub fn set_column_widths(
@@ -1156,6 +1189,12 @@ impl SpreadsheetSheet {
         self.get_cell(address).cloned()
     }
 
+    pub fn top_left_style_index(&self, range: &CellRange) -> u32 {
+        self.get_cell(range.start)
+            .map(|cell| cell.style_index)
+            .unwrap_or(0)
+    }
+
     pub fn get_range_view(&self, range: &CellRange) -> SpreadsheetRangeView {
         let mut values = Vec::new();
         let mut formulas = Vec::new();
@@ -1307,6 +1346,18 @@ pub struct SpreadsheetArtifact {
     #[serde(default)]
     pub sheets: Vec<SpreadsheetSheet>,
     pub auto_recalculate: bool,
+    #[serde(default)]
+    pub text_styles: BTreeMap<u32, crate::SpreadsheetTextStyle>,
+    #[serde(default)]
+    pub fills: BTreeMap<u32, crate::SpreadsheetFill>,
+    #[serde(default)]
+    pub borders: BTreeMap<u32, crate::SpreadsheetBorder>,
+    #[serde(default)]
+    pub number_formats: BTreeMap<u32, crate::SpreadsheetNumberFormat>,
+    #[serde(default)]
+    pub cell_formats: BTreeMap<u32, crate::SpreadsheetCellFormat>,
+    #[serde(default)]
+    pub differential_formats: BTreeMap<u32, crate::SpreadsheetDifferentialFormat>,
 }
 
 impl SpreadsheetArtifact {
@@ -1316,6 +1367,12 @@ impl SpreadsheetArtifact {
             name,
             sheets: Vec::new(),
             auto_recalculate: false,
+            text_styles: BTreeMap::new(),
+            fills: BTreeMap::new(),
+            borders: BTreeMap::new(),
+            number_formats: BTreeMap::new(),
+            cell_formats: BTreeMap::new(),
+            differential_formats: BTreeMap::new(),
         }
     }
 

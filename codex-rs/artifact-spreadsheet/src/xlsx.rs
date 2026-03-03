@@ -195,6 +195,13 @@ pub(crate) fn import_xlsx(
 
     let workbook_xml = read_zip_entry(&mut archive, "xl/workbook.xml", path)?;
     let workbook_rels = read_zip_entry(&mut archive, "xl/_rels/workbook.xml.rels", path)?;
+    let workbook_name = if archive.by_name("docProps/core.xml").is_ok() {
+        let title =
+            extract_workbook_title(&read_zip_entry(&mut archive, "docProps/core.xml", path)?);
+        (!title.trim().is_empty()).then_some(title)
+    } else {
+        None
+    };
     let shared_strings = if archive.by_name("xl/sharedStrings.xml").is_ok() {
         Some(parse_shared_strings(&read_zip_entry(
             &mut archive,
@@ -226,11 +233,11 @@ pub(crate) fn import_xlsx(
         })
         .collect::<Result<Vec<_>, SpreadsheetArtifactError>>()?;
 
-    let mut artifact = SpreadsheetArtifact::new(
+    let mut artifact = SpreadsheetArtifact::new(workbook_name.or_else(|| {
         path.file_stem()
             .and_then(|value| value.to_str())
-            .map(str::to_string),
-    );
+            .map(str::to_string)
+    }));
     if let Some(artifact_id) = artifact_id {
         artifact.artifact_id = artifact_id;
     }
@@ -800,6 +807,18 @@ fn first_tag_text(xml: &str, tag: &str) -> Option<String> {
     let regex = Regex::new(&format!(r#"(?s)<{tag}\b[^>]*>(.*?)</{tag}>"#)).ok()?;
     let captures = regex.captures(xml)?;
     captures.get(1).map(|value| value.as_str().to_string())
+}
+
+fn extract_workbook_title(xml: &str) -> String {
+    let Ok(regex) =
+        Regex::new(r#"(?s)<(?:[A-Za-z0-9_]+:)?title\b[^>]*>(.*?)</(?:[A-Za-z0-9_]+:)?title>"#)
+    else {
+        return String::new();
+    };
+    regex
+        .captures(xml)
+        .and_then(|captures| captures.get(1).map(|value| xml_unescape(value.as_str())))
+        .unwrap_or_default()
 }
 
 fn all_text_nodes(xml: &str) -> Result<String, SpreadsheetArtifactError> {

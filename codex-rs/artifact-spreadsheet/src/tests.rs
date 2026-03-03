@@ -8,9 +8,16 @@ use crate::SpreadsheetArtifact;
 use crate::SpreadsheetArtifactManager;
 use crate::SpreadsheetArtifactRequest;
 use crate::SpreadsheetCell;
+use crate::SpreadsheetCellFormat;
+use crate::SpreadsheetCellFormatSummary;
 use crate::SpreadsheetCellValue;
 use crate::SpreadsheetFileType;
+use crate::SpreadsheetFill;
+use crate::SpreadsheetFontFace;
+use crate::SpreadsheetNumberFormat;
 use crate::SpreadsheetSheet;
+use crate::SpreadsheetSheetReference;
+use crate::SpreadsheetTextStyle;
 
 #[test]
 fn manager_can_create_edit_recalculate_and_export() -> Result<(), Box<dyn std::error::Error>> {
@@ -551,6 +558,494 @@ fn manager_supports_bulk_sizes_and_row_heights() -> Result<(), Box<dyn std::erro
     assert_eq!(
         restored.row_heights,
         BTreeMap::from([(2, 18.0), (3, 21.0), (5, 25.0)])
+    );
+    Ok(())
+}
+
+#[test]
+fn manager_style_registry_and_format_summaries_work() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = SpreadsheetArtifactManager::default();
+    let created = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Styles" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+
+    manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "create_sheet".to_string(),
+            args: serde_json::json!({ "name": "Sheet1" }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let text_style = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "create_text_style".to_string(),
+            args: serde_json::json!({
+                "style": {
+                    "bold": true,
+                    "italic": true,
+                    "underline": true,
+                    "font_size": 14.0,
+                    "font_color": "#112233",
+                    "text_alignment": "center",
+                    "anchor": "middle",
+                    "vertical_text_orientation": "stacked",
+                    "text_rotation": 90,
+                    "paragraph_spacing": true,
+                    "bottom_inset": 1.0,
+                    "left_inset": 2.0,
+                    "right_inset": 3.0,
+                    "top_inset": 4.0,
+                    "font_family": "IBM Plex Sans",
+                    "font_scheme": "minor",
+                    "typeface": "IBM Plex Sans",
+                    "font_face": {
+                        "font_family": "IBM Plex Sans",
+                        "font_scheme": "minor",
+                        "typeface": "IBM Plex Sans"
+                    }
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let text_style_id = text_style.style_id.expect("text style id");
+
+    let fill = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "create_fill".to_string(),
+            args: serde_json::json!({
+                "fill": {
+                    "solid_fill_color": "#ffeeaa",
+                    "pattern_type": "solid",
+                    "pattern_foreground_color": "#ffeeaa",
+                    "pattern_background_color": "#221100",
+                    "color_transforms": ["tint:0.2"],
+                    "gradient_fill_type": "linear",
+                    "gradient_stops": [
+                        { "position": 0.0, "color": "#ffeeaa" },
+                        { "position": 1.0, "color": "#aa5500" }
+                    ],
+                    "gradient_kind": "linear",
+                    "angle": 45.0,
+                    "scaled": true,
+                    "path_type": "rect",
+                    "fill_rectangle": {
+                        "left": 0.0,
+                        "right": 1.0,
+                        "top": 0.0,
+                        "bottom": 1.0
+                    },
+                    "image_reference": "image://fill"
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let fill_id = fill.style_id.expect("fill id");
+
+    let border = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "create_border".to_string(),
+            args: serde_json::json!({
+                "border": {
+                    "top": { "style": "solid", "color": "#111111" },
+                    "right": { "style": "dashed", "color": "#222222" },
+                    "bottom": { "style": "double", "color": "#333333" },
+                    "left": { "style": "solid", "color": "#444444" }
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let border_id = border.style_id.expect("border id");
+
+    let number_format = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "create_number_format".to_string(),
+            args: serde_json::json!({
+                "number_format": {
+                    "format_id": 4
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let number_format_id = number_format.style_id.expect("number format id");
+
+    let base_format = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "create_cell_format".to_string(),
+            args: serde_json::json!({
+                "format": {
+                    "text_style_id": text_style_id,
+                    "number_format_id": number_format_id,
+                    "alignment": {
+                        "horizontal": "center",
+                        "vertical": "middle"
+                    }
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let base_format_id = base_format.style_id.expect("base format id");
+
+    let derived_format = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "create_cell_format".to_string(),
+            args: serde_json::json!({
+                "format": {
+                    "fill_id": fill_id,
+                    "border_id": border_id,
+                    "wrap_text": true,
+                    "base_cell_style_format_id": base_format_id
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let derived_format_id = derived_format.style_id.expect("derived format id");
+
+    let merged_format = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "create_cell_format".to_string(),
+            args: serde_json::json!({
+                "source_format_id": derived_format_id,
+                "merge_with_existing_components": true,
+                "format": {
+                    "alignment": {
+                        "vertical": "bottom"
+                    }
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let merged_format_id = merged_format.style_id.expect("merged format id");
+
+    let differential_format = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "create_differential_format".to_string(),
+            args: serde_json::json!({
+                "format": {
+                    "fill_id": fill_id,
+                    "wrap_text": true
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let differential_format_id = differential_format.style_id.expect("dxf id");
+
+    manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "set_cell_style".to_string(),
+            args: serde_json::json!({
+                "sheet_name": "Sheet1",
+                "address": "A1",
+                "style_index": merged_format_id
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let summary = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "get_cell_format_summary".to_string(),
+            args: serde_json::json!({
+                "sheet_name": "Sheet1",
+                "address": "A1"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        summary.cell_format_summary,
+        Some(SpreadsheetCellFormatSummary {
+            style_index: merged_format_id,
+            text_style: Some(SpreadsheetTextStyle {
+                bold: Some(true),
+                italic: Some(true),
+                underline: Some(true),
+                font_size: Some(14.0),
+                font_color: Some("#112233".to_string()),
+                text_alignment: Some("center".to_string()),
+                anchor: Some("middle".to_string()),
+                vertical_text_orientation: Some("stacked".to_string()),
+                text_rotation: Some(90),
+                paragraph_spacing: Some(true),
+                bottom_inset: Some(1.0),
+                left_inset: Some(2.0),
+                right_inset: Some(3.0),
+                top_inset: Some(4.0),
+                font_family: Some("IBM Plex Sans".to_string()),
+                font_scheme: Some("minor".to_string()),
+                typeface: Some("IBM Plex Sans".to_string()),
+                font_face: Some(SpreadsheetFontFace {
+                    font_family: Some("IBM Plex Sans".to_string()),
+                    font_scheme: Some("minor".to_string()),
+                    typeface: Some("IBM Plex Sans".to_string()),
+                }),
+            }),
+            fill: Some(SpreadsheetFill {
+                solid_fill_color: Some("#ffeeaa".to_string()),
+                pattern_type: Some("solid".to_string()),
+                pattern_foreground_color: Some("#ffeeaa".to_string()),
+                pattern_background_color: Some("#221100".to_string()),
+                color_transforms: vec!["tint:0.2".to_string()],
+                gradient_fill_type: Some("linear".to_string()),
+                gradient_stops: vec![
+                    crate::SpreadsheetGradientStop {
+                        position: 0.0,
+                        color: "#ffeeaa".to_string(),
+                    },
+                    crate::SpreadsheetGradientStop {
+                        position: 1.0,
+                        color: "#aa5500".to_string(),
+                    },
+                ],
+                gradient_kind: Some("linear".to_string()),
+                angle: Some(45.0),
+                scaled: Some(true),
+                path_type: Some("rect".to_string()),
+                fill_rectangle: Some(crate::SpreadsheetFillRectangle {
+                    left: 0.0,
+                    right: 1.0,
+                    top: 0.0,
+                    bottom: 1.0,
+                }),
+                image_reference: Some("image://fill".to_string()),
+            }),
+            border: Some(crate::SpreadsheetBorder {
+                top: Some(crate::SpreadsheetBorderLine {
+                    style: Some("solid".to_string()),
+                    color: Some("#111111".to_string()),
+                }),
+                right: Some(crate::SpreadsheetBorderLine {
+                    style: Some("dashed".to_string()),
+                    color: Some("#222222".to_string()),
+                }),
+                bottom: Some(crate::SpreadsheetBorderLine {
+                    style: Some("double".to_string()),
+                    color: Some("#333333".to_string()),
+                }),
+                left: Some(crate::SpreadsheetBorderLine {
+                    style: Some("solid".to_string()),
+                    color: Some("#444444".to_string()),
+                }),
+            }),
+            alignment: Some(crate::SpreadsheetAlignment {
+                horizontal: Some("center".to_string()),
+                vertical: Some("bottom".to_string()),
+            }),
+            number_format: Some(SpreadsheetNumberFormat {
+                format_id: Some(4),
+                format_code: Some("#,##0.00".to_string()),
+            }),
+            wrap_text: Some(true),
+        })
+    );
+
+    let retrieved_format = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "get_cell_format".to_string(),
+            args: serde_json::json!({ "id": merged_format_id }),
+        },
+        temp_dir.path(),
+    )?;
+    let retrieved_format: SpreadsheetCellFormat =
+        serde_json::from_value(retrieved_format.serialized_dict.expect("cell format"))?;
+    assert_eq!(
+        retrieved_format,
+        SpreadsheetCellFormat {
+            text_style_id: None,
+            fill_id: Some(fill_id),
+            border_id: Some(border_id),
+            alignment: Some(crate::SpreadsheetAlignment {
+                horizontal: None,
+                vertical: Some("bottom".to_string()),
+            }),
+            number_format_id: None,
+            wrap_text: Some(true),
+            base_cell_style_format_id: Some(base_format_id),
+        }
+    );
+
+    let retrieved_number_format = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "get_number_format".to_string(),
+            args: serde_json::json!({ "id": number_format_id }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        serde_json::from_value::<SpreadsheetNumberFormat>(
+            retrieved_number_format
+                .serialized_dict
+                .expect("number format")
+        )?,
+        SpreadsheetNumberFormat {
+            format_id: Some(4),
+            format_code: Some("#,##0.00".to_string()),
+        }
+    );
+
+    let retrieved_text_style = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "get_text_style".to_string(),
+            args: serde_json::json!({ "id": text_style_id }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        serde_json::from_value::<SpreadsheetTextStyle>(
+            retrieved_text_style.serialized_dict.expect("text style")
+        )?
+        .bold,
+        Some(true)
+    );
+
+    let range_summary = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "get_range_format_summary".to_string(),
+            args: serde_json::json!({
+                "sheet_name": "Sheet1",
+                "range": "A1:B2"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(range_summary.top_left_style_index, Some(merged_format_id));
+    assert_eq!(
+        range_summary
+            .range_format
+            .as_ref()
+            .map(|format| format.range.clone()),
+        Some("A1:B2".to_string())
+    );
+
+    let retrieved_dxf = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "get_differential_format".to_string(),
+            args: serde_json::json!({ "id": differential_format_id }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        serde_json::from_value::<crate::SpreadsheetDifferentialFormat>(
+            retrieved_dxf.serialized_dict.expect("differential format")
+        )?
+        .wrap_text,
+        Some(true)
+    );
+    Ok(())
+}
+
+#[test]
+fn sheet_references_resolve_cells_and_ranges() -> Result<(), Box<dyn std::error::Error>> {
+    let sheet = SpreadsheetSheet::new("Sheet1".to_string());
+    assert_eq!(
+        sheet.reference("A1")?,
+        SpreadsheetSheetReference::Cell {
+            cell_ref: sheet.cell_ref("A1")?,
+        }
+    );
+    assert_eq!(
+        sheet.reference("A1:B2")?,
+        SpreadsheetSheetReference::Range {
+            range_ref: sheet.range_ref("A1:B2")?,
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn manager_get_reference_and_xlsx_import_preserve_workbook_name()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let path = temp_dir.path().join("named.xlsx");
+
+    let mut artifact = SpreadsheetArtifact::new(Some("Named Workbook".to_string()));
+    artifact.create_sheet("Sheet1".to_string())?.set_value(
+        CellAddress::parse("A1")?,
+        Some(SpreadsheetCellValue::Integer(9)),
+    )?;
+    artifact.export(&path)?;
+
+    let restored = SpreadsheetArtifact::from_source_file(&path, None)?;
+    assert_eq!(restored.name, Some("Named Workbook".to_string()));
+
+    let mut manager = SpreadsheetArtifactManager::default();
+    let imported = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: None,
+            action: "read".to_string(),
+            args: serde_json::json!({ "path": path }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = imported.artifact_id;
+
+    let cell_reference = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "get_reference".to_string(),
+            args: serde_json::json!({
+                "sheet_name": "Sheet1",
+                "reference": "A1"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        cell_reference
+            .raw_cell
+            .as_ref()
+            .and_then(|cell| cell.value.clone()),
+        Some(SpreadsheetCellValue::Integer(9))
+    );
+
+    let range_reference = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "get_reference".to_string(),
+            args: serde_json::json!({
+                "sheet_name": "Sheet1",
+                "reference": "A1:B2"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        range_reference
+            .range_ref
+            .as_ref()
+            .map(|range_ref| range_ref.address.clone()),
+        Some("A1:B2".to_string())
     );
     Ok(())
 }

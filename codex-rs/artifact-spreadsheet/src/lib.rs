@@ -3,6 +3,7 @@ mod error;
 mod formula;
 mod manager;
 mod model;
+mod style;
 mod xlsx;
 
 #[cfg(test)]
@@ -12,3 +13,4 @@ pub use address::*;
 pub use error::*;
 pub use manager::*;
 pub use model::*;
+pub use style::*;
