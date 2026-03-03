@@ -174,6 +174,7 @@ pub(super) async fn send_request(
         id: RequestId::Integer(id),
         method: method.to_string(),
         params,
+        trace: None,
     });
     send_jsonrpc(stream, message).await
 }

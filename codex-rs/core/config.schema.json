@@ -313,6 +313,9 @@
             "apps_mcp_gateway": {
               "type": "boolean"
             },
+            "artifact": {
+              "type": "boolean"
+            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -347,6 +350,9 @@
               "type": "boolean"
             },
             "experimental_windows_sandbox": {
+              "type": "boolean"
+            },
+            "fast_mode": {
               "type": "boolean"
             },
             "include_apply_patch_tool": {
@@ -504,6 +510,9 @@
         },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
+        },
+        "service_tier": {
+          "$ref": "#/definitions/ServiceTier"
         },
         "tools_view_image": {
           "type": "boolean"
@@ -1321,6 +1330,12 @@
       },
       "type": "object"
     },
+    "ServiceTier": {
+      "enum": [
+        "fast"
+      ],
+      "type": "string"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -1657,11 +1672,15 @@
       "$ref": "#/definitions/AbsolutePathBuf"
     },
     "experimental_realtime_ws_backend_prompt": {
-      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport backend prompt (the `Op::RealtimeConversation` `/ws` session.create backend_prompt) without changing normal prompts.",
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport instructions (the `Op::RealtimeConversation` `/ws` session.update instructions) without changing normal prompts.",
       "type": "string"
     },
     "experimental_realtime_ws_base_url": {
-      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/ws` connection) without changing normal provider HTTP requests.",
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/v1/realtime` connection) without changing normal provider HTTP requests.",
+      "type": "string"
+    },
+    "experimental_realtime_ws_model": {
+      "description": "Experimental / do not use. Selects the realtime websocket model/snapshot used for the `Op::RealtimeConversation` connection.",
       "type": "string"
     },
     "experimental_use_freeform_apply_patch": {
@@ -1682,6 +1701,9 @@
           "type": "boolean"
         },
         "apps_mcp_gateway": {
+          "type": "boolean"
+        },
+        "artifact": {
           "type": "boolean"
         },
         "child_agents_md": {
@@ -1718,6 +1740,9 @@
           "type": "boolean"
         },
         "experimental_windows_sandbox": {
+          "type": "boolean"
+        },
+        "fast_mode": {
           "type": "boolean"
         },
         "include_apply_patch_tool": {
@@ -2107,6 +2132,14 @@
         }
       ],
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
+    },
+    "service_tier": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ServiceTier"
+        }
+      ],
+      "description": "Optional explicit service tier preference for new turns."
     },
     "shell_environment_policy": {
       "allOf": [

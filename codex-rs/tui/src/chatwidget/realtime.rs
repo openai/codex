@@ -183,12 +183,13 @@ impl ChatWidget {
         ev: RealtimeConversationRealtimeEvent,
     ) {
         match ev.payload {
-            RealtimeEvent::SessionCreated { session_id } => {
+            RealtimeEvent::SessionUpdated { session_id, .. } => {
                 self.realtime_conversation.session_id = Some(session_id);
             }
-            RealtimeEvent::SessionUpdated { .. } => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
             RealtimeEvent::ConversationItemAdded(_item) => {}
+            RealtimeEvent::ConversationItemDone { .. } => {}
+            RealtimeEvent::HandoffRequested(_) => {}
             RealtimeEvent::Error(message) => {
                 self.add_error_message(format!("Realtime voice error: {message}"));
                 self.reset_realtime_conversation_state();

@@ -122,6 +122,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -144,6 +145,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
         })
@@ -221,6 +223,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -243,6 +246,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -348,6 +352,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             model: resumed.session_configured.model.clone(),
             effort: resumed.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
         })
@@ -436,6 +441,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
             model: Some("gpt-5.2".to_string()),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

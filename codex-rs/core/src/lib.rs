@@ -116,6 +116,7 @@ pub use rollout::RolloutRecorder;
 pub use rollout::RolloutRecorderParams;
 pub use rollout::SESSIONS_SUBDIR;
 pub use rollout::SessionMeta;
+pub use rollout::append_thread_name;
 pub use rollout::find_archived_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use rollout::find_conversation_path_by_id_str;
@@ -146,7 +147,6 @@ pub(crate) use codex_shell_command::powershell;
 
 pub use client::ModelClient;
 pub use client::ModelClientSession;
-pub use client::ResponsesWebsocketVersion;
 pub use client::X_CODEX_TURN_METADATA_HEADER;
 pub use client::ws_version_from_features;
 pub use client_common::Prompt;
