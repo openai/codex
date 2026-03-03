@@ -317,10 +317,7 @@ mod job {
             output_schema: Some(output_schema()),
         };
 
-        let mut client_session = session
-            .services
-            .model_client
-            .new_session_with_service_tier(stage_one_context.service_tier);
+        let mut client_session = session.services.model_client.new_session();
         let mut stream = client_session
             .stream(
                 &prompt,
@@ -328,6 +325,7 @@ mod job {
                 &stage_one_context.otel_manager,
                 stage_one_context.reasoning_effort,
                 stage_one_context.reasoning_summary,
+                stage_one_context.service_tier,
                 stage_one_context.turn_metadata_header.as_deref(),
             )
             .await?;

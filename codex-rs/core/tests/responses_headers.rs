@@ -118,6 +118,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
             &otel_manager,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
+            ServiceTier::Standard,
             None,
         )
         .await
@@ -204,7 +205,7 @@ async fn responses_stream_sends_service_tier_when_service_tier_enabled() {
         false,
         None,
     );
-    let mut client_session = client.new_session_with_service_tier(ServiceTier::Fast);
+    let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {
@@ -224,6 +225,7 @@ async fn responses_stream_sends_service_tier_when_service_tier_enabled() {
             &otel_manager,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
+            ServiceTier::Fast,
             None,
         )
         .await
@@ -333,6 +335,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
             &otel_manager,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
+            ServiceTier::Standard,
             None,
         )
         .await
@@ -444,6 +447,7 @@ async fn responses_respects_model_info_overrides_from_config() {
             &otel_manager,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
+            ServiceTier::Standard,
             None,
         )
         .await

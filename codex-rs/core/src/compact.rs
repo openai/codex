@@ -116,10 +116,7 @@ async fn run_compact_task_inner(
 
     let max_retries = turn_context.provider.stream_max_retries();
     let mut retries = 0;
-    let mut client_session = sess
-        .services
-        .model_client
-        .new_session_with_service_tier(turn_context.config.service_tier);
+    let mut client_session = sess.services.model_client.new_session();
     // Reuse one client session so turn-scoped state (sticky routing, websocket append tracking)
     // survives retries within this compact turn.
 
@@ -415,6 +412,7 @@ async fn drain_to_completed(
             &turn_context.otel_manager,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
+            turn_context.config.service_tier,
             turn_metadata_header,
         )
         .await?;

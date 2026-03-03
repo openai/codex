@@ -1,5 +1,7 @@
 use anyhow::Result;
 use codex_core::features::Feature;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::protocol::Op;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -239,6 +241,131 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
     assert_eq!(
         handshake.header("openai-beta"),
         Some(WS_V2_BETA_HEADER_VALUE.to_string())
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_v2_first_turn_uses_updated_fast_tier_after_startup_prewarm() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "fast"),
+            ev_completed("resp-1"),
+        ],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::ResponsesWebsocketsV2);
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    let warmup = server.wait_for_request(0, 0).await.body_json();
+    assert_eq!(warmup["type"].as_str(), Some("response.create"));
+    assert_eq!(warmup["generate"].as_bool(), Some(false));
+    assert_eq!(warmup.get("service_tier"), None);
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: Some(ServiceTier::Fast),
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    test.submit_turn("hello").await?;
+
+    assert_eq!(server.handshakes().len(), 1);
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let first_turn = connection
+        .get(1)
+        .expect("missing first turn request")
+        .body_json();
+
+    assert_eq!(first_turn["type"].as_str(), Some("response.create"));
+    assert_eq!(first_turn["service_tier"].as_str(), Some("priority"));
+    assert_eq!(first_turn.get("previous_response_id"), None);
+    assert!(
+        first_turn
+            .get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "standard"),
+            ev_completed("resp-1"),
+        ],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::ResponsesWebsocketsV2);
+        config.service_tier = ServiceTier::Fast;
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    let warmup = server.wait_for_request(0, 0).await.body_json();
+    assert_eq!(warmup["type"].as_str(), Some("response.create"));
+    assert_eq!(warmup["generate"].as_bool(), Some(false));
+    assert_eq!(warmup["service_tier"].as_str(), Some("priority"));
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: Some(ServiceTier::Standard),
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    test.submit_turn("hello").await?;
+
+    assert_eq!(server.handshakes().len(), 1);
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let first_turn = connection
+        .get(1)
+        .expect("missing first turn request")
+        .body_json();
+
+    assert_eq!(first_turn["type"].as_str(), Some("response.create"));
+    assert_eq!(first_turn.get("service_tier"), None);
+    assert_eq!(first_turn.get("previous_response_id"), None);
+    assert!(
+        first_turn
+            .get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
     );
 
     server.shutdown().await;

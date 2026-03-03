@@ -191,7 +191,6 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
-    service_tier: ServiceTier,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -263,14 +262,9 @@ impl ModelClient {
     /// This constructor does not perform network I/O itself; the session opens a websocket lazily
     /// when the first stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
-        self.new_session_with_service_tier(ServiceTier::Standard)
-    }
-
-    pub fn new_session_with_service_tier(&self, service_tier: ServiceTier) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
-            service_tier,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -499,23 +493,6 @@ impl ModelClient {
             );
         }
         headers
-    }
-}
-
-impl ModelClientSession {
-    /// Reuse the startup-prewarmed websocket connection when the first real turn changes service
-    /// tier, but invalidate request-level reuse state so the next request becomes a fresh
-    /// `response.create`.
-    ///
-    /// This keeps the handshake win from prewarm without leaking stale warmup request state into
-    /// the first user turn.
-    pub fn reset_prewarm_for_service_tier(&mut self, service_tier: ServiceTier) {
-        if self.service_tier == service_tier {
-            return;
-        }
-        self.service_tier = service_tier;
-        self.websocket_session.last_request = None;
-        self.websocket_session.last_response_rx = None;
     }
 }
 
@@ -819,6 +796,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: ServiceTier,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
@@ -849,7 +827,7 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
-                self.service_tier,
+                service_tier,
             )?;
             let client = ApiResponsesClient::new(
                 transport,
@@ -885,6 +863,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: ServiceTier,
         turn_metadata_header: Option<&str>,
         warmup: bool,
     ) -> Result<WebsocketStreamOutcome> {
@@ -904,7 +883,7 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
-                self.service_tier,
+                service_tier,
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: build_ws_client_metadata(turn_metadata_header),
@@ -986,6 +965,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: ServiceTier,
         turn_metadata_header: Option<&str>,
     ) -> Result<()> {
         let Some(ws_version) = self.client.active_ws_version(model_info) else {
@@ -1010,6 +990,7 @@ impl ModelClientSession {
                 otel_manager,
                 effort,
                 summary,
+                service_tier,
                 turn_metadata_header,
                 true,
             )
@@ -1048,6 +1029,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: ServiceTier,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.wire_api;
@@ -1062,6 +1044,7 @@ impl ModelClientSession {
                             otel_manager,
                             effort,
                             summary,
+                            service_tier,
                             turn_metadata_header,
                             false,
                         )
@@ -1080,6 +1063,7 @@ impl ModelClientSession {
                     otel_manager,
                     effort,
                     summary,
+                    service_tier,
                     turn_metadata_header,
                 )
                 .await

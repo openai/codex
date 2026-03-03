@@ -4889,12 +4889,8 @@ pub(crate) async fn run_turn(
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut client_session = prewarmed_client_session.unwrap_or_else(|| {
-        sess.services
-            .model_client
-            .new_session_with_service_tier(turn_context.config.service_tier)
-    });
-    client_session.reset_prewarm_for_service_tier(turn_context.config.service_tier);
+    let mut client_session =
+        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -6136,6 +6132,7 @@ async fn try_run_sampling_request(
             &turn_context.otel_manager,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
+            turn_context.config.service_tier,
             turn_metadata_header,
         )
         .instrument(trace_span!("stream_request"))
