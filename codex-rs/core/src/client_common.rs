@@ -3,7 +3,6 @@ use crate::config::types::Personality;
 use crate::error::Result;
 pub use codex_api::common::ResponseEvent;
 use codex_protocol::models::BaseInstructions;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
 use futures::Stream;
@@ -63,34 +62,6 @@ impl Prompt {
 
         input
     }
-}
-
-pub(crate) fn rewrite_image_generation_calls_for_stateless_input(
-    items: Vec<ResponseItem>,
-) -> Vec<ResponseItem> {
-    items
-        .into_iter()
-        .filter_map(|item| match item {
-            ResponseItem::ImageGenerationCall {
-                result: Some(result),
-                ..
-            } => Some(ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputImage {
-                    image_url: if result.starts_with("data:") {
-                        result
-                    } else {
-                        format!("data:image/png;base64,{result}")
-                    },
-                }],
-                end_turn: None,
-                phase: None,
-            }),
-            ResponseItem::ImageGenerationCall { .. } => None,
-            _ => Some(item),
-        })
-        .collect()
 }
 
 fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
@@ -266,62 +237,10 @@ mod tests {
     use codex_api::common::OpenAiVerbosity;
     use codex_api::common::TextControls;
     use codex_api::create_text_param_for_request;
-    use codex_protocol::models::ContentItem;
     use codex_protocol::models::FunctionCallOutputPayload;
     use pretty_assertions::assert_eq;
 
     use super::*;
-
-    #[test]
-    fn rewrites_image_generation_calls_for_stateless_input() {
-        let input = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "generate a lobster".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::ImageGenerationCall {
-                id: Some("ig_123".to_string()),
-                status: Some("completed".to_string()),
-                revised_prompt: Some("lobster".to_string()),
-                result: Some("Zm9v".to_string()),
-            },
-            ResponseItem::ImageGenerationCall {
-                id: Some("ig_456".to_string()),
-                status: Some("completed".to_string()),
-                revised_prompt: None,
-                result: None,
-            },
-        ];
-
-        assert_eq!(
-            rewrite_image_generation_calls_for_stateless_input(input),
-            vec![
-                ResponseItem::Message {
-                    id: None,
-                    role: "user".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "generate a lobster".to_string(),
-                    }],
-                    end_turn: None,
-                    phase: None,
-                },
-                ResponseItem::Message {
-                    id: None,
-                    role: "user".to_string(),
-                    content: vec![ContentItem::InputImage {
-                        image_url: "data:image/png;base64,Zm9v".to_string(),
-                    }],
-                    end_turn: None,
-                    phase: None,
-                },
-            ]
-        );
-    }
 
     #[test]
     fn serializes_text_verbosity_when_set() {

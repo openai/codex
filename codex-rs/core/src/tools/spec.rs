@@ -49,8 +49,7 @@ pub(crate) struct ToolsConfig {
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
-    pub image_generation_enabled: bool,
-    pub image_generation_supported: bool,
+    pub image_gen_tool: bool,
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub request_permission_enabled: bool,
@@ -88,6 +87,8 @@ impl ToolsConfig {
             features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
         let include_artifact_tools = features.enabled(Feature::Artifact);
+        let include_image_gen_tool =
+            features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
         let include_agent_jobs = include_collab_tools && features.enabled(Feature::Sqlite);
         let request_permission_enabled = features.enabled(Feature::RequestPermissions);
         let shell_command_backend =
@@ -137,8 +138,7 @@ impl ToolsConfig {
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
-            image_generation_enabled: false,
-            image_generation_supported: supports_image_generation(model_info),
+            image_gen_tool: include_image_gen_tool,
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             request_permission_enabled,
@@ -160,11 +160,6 @@ impl ToolsConfig {
 
     pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
         self.allow_login_shell = allow_login_shell;
-        self
-    }
-
-    pub fn with_image_generation_enabled(mut self, image_generation_enabled: bool) -> Self {
-        self.image_generation_enabled = image_generation_enabled;
         self
     }
 }
@@ -1930,7 +1925,7 @@ pub(crate) fn build_specs(
         Some(WebSearchMode::Disabled) | None => {}
     }
 
-    if config.image_generation_enabled && config.image_generation_supported {
+    if config.image_gen_tool {
         builder.push_spec(ToolSpec::ImageGeneration {});
     }
 
@@ -2404,11 +2399,13 @@ mod tests {
         supported_model_info.slug = "custom/gpt-5.2-variant".to_string();
         let mut unsupported_model_info = supported_model_info.clone();
         unsupported_model_info.input_modalities = vec![InputModality::Text];
-        let features = Features::with_defaults();
+        let default_features = Features::with_defaults();
+        let mut image_generation_features = default_features.clone();
+        image_generation_features.enable(Feature::ImageGeneration);
 
         let default_tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &supported_model_info,
-            features: &features,
+            features: &default_features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
         });
@@ -2422,21 +2419,19 @@ mod tests {
 
         let supported_tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &supported_model_info,
-            features: &features,
+            features: &image_generation_features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
-        })
-        .with_image_generation_enabled(true);
+        });
         let (supported_tools, _) = build_specs(&supported_tools_config, None, None, &[]).build();
         assert_contains_tool_names(&supported_tools, &["image_generation"]);
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &unsupported_model_info,
-            features: &features,
+            features: &image_generation_features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
-        })
-        .with_image_generation_enabled(true);
+        });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert!(
             !tools

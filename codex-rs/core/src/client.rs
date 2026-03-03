@@ -89,9 +89,7 @@ use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::client_common::rewrite_image_generation_calls_for_stateless_input;
 use crate::config::Config;
-use crate::context_manager::normalize;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -499,9 +497,7 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
-        let store = provider.is_azure_responses_endpoint();
         let input = prompt.get_formatted_input();
-        let input = Self::prepare_responses_input(store, input, model_info);
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let default_reasoning_effort = model_info.default_reasoning_level;
         let reasoning = if model_info.supports_reasoning_summaries {
@@ -545,7 +541,7 @@ impl ModelClientSession {
             tool_choice: "auto".to_string(),
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
-            store,
+            store: provider.is_azure_responses_endpoint(),
             stream: true,
             include,
             service_tier: match service_tier {
@@ -656,20 +652,6 @@ impl ModelClientSession {
             input: incremental_items,
             ..payload
         })
-    }
-
-    fn prepare_responses_input(
-        store: bool,
-        input: Vec<ResponseItem>,
-        model_info: &ModelInfo,
-    ) -> Vec<ResponseItem> {
-        if store {
-            input
-        } else {
-            let mut input = rewrite_image_generation_calls_for_stateless_input(input);
-            normalize::strip_images_when_unsupported(&model_info.input_modalities, &mut input);
-            input
-        }
     }
 
     /// Opportunistically preconnects a websocket for this turn-scoped client session.

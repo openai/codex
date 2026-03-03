@@ -737,7 +737,6 @@ impl TurnContext {
             session_source: self.session_source.clone(),
         })
         .with_allow_login_shell(self.tools_config.allow_login_shell)
-        .with_image_generation_enabled(features.enabled(Feature::ImageGeneration))
         .with_agent_roles(config.agent_roles.clone());
 
         Self {
@@ -1111,7 +1110,6 @@ impl Session {
             session_source: session_source.clone(),
         })
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
-        .with_image_generation_enabled(per_turn_config.features.enabled(Feature::ImageGeneration))
         .with_agent_roles(per_turn_config.agent_roles.clone());
 
         let cwd = session_configuration.cwd.clone();
