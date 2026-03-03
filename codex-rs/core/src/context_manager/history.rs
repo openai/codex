@@ -344,7 +344,7 @@ impl ContextManager {
         // all outputs must have a corresponding function/tool call
         normalize::remove_orphan_outputs(&mut self.items);
 
-        //rewrite image gen calls to messages so that
+        //rewrite image_gen_calls to messages to support stateless input
         normalize::rewrite_image_generation_calls_for_stateless_input(&mut self.items);
 
         // strip images when model does not support them
