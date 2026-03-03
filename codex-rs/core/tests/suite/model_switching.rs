@@ -60,6 +60,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -75,9 +76,9 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             model: Some(next_model.to_string()),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -94,6 +95,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             model: next_model.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -149,6 +151,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -164,9 +167,9 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             model: Some(next_model.to_string()),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Pragmatic),
-            service_tier: None,
         })
         .await?;
 
@@ -183,6 +186,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             model: next_model.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -223,37 +227,10 @@ async fn service_tier_change_is_applied_on_next_http_turn() -> Result<()> {
 
     let test = test_codex().build(&server).await?;
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            sandbox_policy: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            collaboration_mode: None,
-            personality: None,
-            service_tier: Some(ServiceTier::Fast),
-        })
+    test.submit_turn_with_service_tier("fast turn", ServiceTier::Fast)
         .await?;
-    test.submit_turn("fast turn").await?;
-
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            sandbox_policy: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            collaboration_mode: None,
-            personality: None,
-            service_tier: Some(ServiceTier::Standard),
-        })
+    test.submit_turn_with_service_tier("standard turn", ServiceTier::Standard)
         .await?;
-    test.submit_turn("standard turn").await?;
 
     let requests = resp_mock.requests();
     assert_eq!(requests.len(), 2, "expected two model requests");
@@ -356,6 +333,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -375,6 +353,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             model: text_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -534,6 +513,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             model: large_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -571,9 +551,9 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             model: Some(smaller_model_slug.to_string()),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -590,6 +570,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             model: smaller_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

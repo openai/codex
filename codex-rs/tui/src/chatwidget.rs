@@ -4213,6 +4213,7 @@ impl ChatWidget {
             .personality
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
+        let service_tier = self.fast_mode_enabled().then_some(self.config.service_tier);
         let op = Op::UserTurn {
             items,
             cwd: self.config.cwd.clone(),
@@ -4221,6 +4222,7 @@ impl ChatWidget {
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),
             summary: None,
+            service_tier,
             final_output_json_schema: None,
             collaboration_mode,
             personality,
@@ -6895,6 +6897,7 @@ impl ChatWidget {
     }
 
     fn set_service_tier_selection(&mut self, service_tier: ServiceTier) {
+        self.set_service_tier(service_tier);
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
@@ -6908,8 +6911,6 @@ impl ChatWidget {
                 collaboration_mode: None,
                 personality: None,
             }));
-        self.app_event_tx
-            .send(AppEvent::UpdateServiceTier(service_tier));
         self.app_event_tx
             .send(AppEvent::PersistServiceTierSelection { service_tier });
     }

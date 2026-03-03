@@ -571,7 +571,10 @@ impl ModelClientSession {
             store: provider.is_azure_responses_endpoint(),
             stream: true,
             include,
-            service_tier: service_tier.as_api_service_tier().map(str::to_string),
+            service_tier: match service_tier {
+                ServiceTier::Standard => None,
+                ServiceTier::Fast => Some("priority".to_string()),
+            },
             prompt_cache_key,
             text,
         };

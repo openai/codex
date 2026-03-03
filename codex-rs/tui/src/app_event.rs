@@ -187,9 +187,6 @@ pub(crate) enum AppEvent {
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
 
-    /// Update the current service tier in the running app and widget.
-    UpdateServiceTier(ServiceTier),
-
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
         model: String,

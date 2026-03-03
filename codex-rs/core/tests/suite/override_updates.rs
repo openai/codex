@@ -121,9 +121,9 @@ async fn override_turn_context_without_user_turn_does_not_record_permissions_upd
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
-        service_tier: None,
         })
         .await?;
 
@@ -162,9 +162,9 @@ async fn override_turn_context_without_user_turn_does_not_record_environment_upd
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
-        service_tier: None,
         })
         .await?;
 
@@ -200,9 +200,9 @@ async fn override_turn_context_without_user_turn_does_not_record_collaboration_u
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-        service_tier: None,
         })
         .await?;
 

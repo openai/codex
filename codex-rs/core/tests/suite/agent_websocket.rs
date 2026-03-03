@@ -1,7 +1,6 @@
 use anyhow::Result;
 use codex_core::features::Feature;
 use codex_protocol::config_types::ServiceTier;
-use codex_protocol::protocol::Op;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -271,21 +270,8 @@ async fn websocket_v2_first_turn_uses_updated_fast_tier_after_startup_prewarm() 
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup.get("service_tier"), None);
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            sandbox_policy: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: Some(ServiceTier::Fast),
-            collaboration_mode: None,
-            personality: None,
-        })
+    test.submit_turn_with_service_tier("hello", ServiceTier::Fast)
         .await?;
-    test.submit_turn("hello").await?;
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
@@ -334,21 +320,8 @@ async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Resu
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup["service_tier"].as_str(), Some("priority"));
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            sandbox_policy: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: Some(ServiceTier::Standard),
-            collaboration_mode: None,
-            personality: None,
-        })
+    test.submit_turn_with_service_tier("hello", ServiceTier::Standard)
         .await?;
-    test.submit_turn("hello").await?;
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
@@ -401,37 +374,10 @@ async fn websocket_v2_next_turn_uses_updated_service_tier() -> Result<()> {
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup.get("service_tier"), None);
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            sandbox_policy: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: Some(ServiceTier::Fast),
-            collaboration_mode: None,
-            personality: None,
-        })
+    test.submit_turn_with_service_tier("first", ServiceTier::Fast)
         .await?;
-    test.submit_turn("first").await?;
-
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            sandbox_policy: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: Some(ServiceTier::Standard),
-            collaboration_mode: None,
-            personality: None,
-        })
+    test.submit_turn_with_service_tier("second", ServiceTier::Standard)
         .await?;
-    test.submit_turn("second").await?;
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();

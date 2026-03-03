@@ -2221,10 +2221,6 @@ impl App {
                 self.chat_widget.set_model(&model);
                 self.refresh_status_line();
             }
-            AppEvent::UpdateServiceTier(service_tier) => {
-                self.chat_widget.set_service_tier(service_tier);
-                self.refresh_status_line();
-            }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
                 self.refresh_status_line();
@@ -2663,6 +2659,7 @@ impl App {
                 }
             }
             AppEvent::PersistServiceTierSelection { service_tier } => {
+                self.refresh_status_line();
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)

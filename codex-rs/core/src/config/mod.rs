@@ -186,7 +186,7 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: Option<String>,
 
-    /// Service tier preference for new turns.
+    /// Effective service tier preference for new turns.
     pub service_tier: ServiceTier,
 
     /// Model used specifically for review sessions.
@@ -1184,7 +1184,7 @@ pub struct ConfigToml {
     /// Optionally specify a personality for the model
     pub personality: Option<Personality>,
 
-    /// Service tier preference for new turns.
+    /// Optional explicit service tier preference for new turns.
     pub service_tier: Option<ServiceTier>,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
@@ -1947,10 +1947,14 @@ impl Config {
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(config_profile.model).or(cfg.model);
-        let service_tier = config_profile
-            .service_tier
-            .or(cfg.service_tier)
-            .unwrap_or_default();
+        let service_tier = if features.enabled(Feature::FastMode) {
+            config_profile
+                .service_tier
+                .or(cfg.service_tier)
+                .unwrap_or_default()
+        } else {
+            ServiceTier::Standard
+        };
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();

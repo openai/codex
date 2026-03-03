@@ -192,6 +192,10 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
 
+        /// Optional service tier override for this turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        service_tier: Option<ServiceTier>,
+
         // The JSON schema to use for the final assistant message
         final_output_json_schema: Option<Value>,
 

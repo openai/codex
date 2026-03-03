@@ -567,6 +567,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
                     model: default_model,
                     effort: default_effort,
                     summary: None,
+                    service_tier: None,
                     final_output_json_schema: output_schema,
                     collaboration_mode: None,
                     personality: None,

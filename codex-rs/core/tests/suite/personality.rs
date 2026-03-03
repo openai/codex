@@ -98,6 +98,7 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -144,6 +145,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -197,6 +199,7 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -256,6 +259,7 @@ async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Resul
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -303,6 +307,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -319,9 +324,9 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
-            service_tier: None,
         })
         .await?;
 
@@ -338,6 +343,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -400,6 +406,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -416,9 +423,9 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Pragmatic),
-            service_tier: None,
         })
         .await?;
 
@@ -435,6 +442,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -507,6 +515,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -523,9 +532,9 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Pragmatic),
-            service_tier: None,
         })
         .await?;
 
@@ -542,6 +551,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -652,6 +662,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
             model: remote_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
         })
@@ -764,6 +775,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             model: remote_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -780,9 +792,9 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
-            service_tier: None,
         })
         .await?;
 
@@ -799,6 +811,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             model: remote_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

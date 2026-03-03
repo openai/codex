@@ -125,13 +125,6 @@ pub enum ServiceTier {
 }
 
 impl ServiceTier {
-    pub const fn as_api_service_tier(self) -> Option<&'static str> {
-        match self {
-            Self::Standard => None,
-            Self::Fast => Some("priority"),
-        }
-    }
-
     pub const fn is_fast(self) -> bool {
         matches!(self, Self::Fast)
     }

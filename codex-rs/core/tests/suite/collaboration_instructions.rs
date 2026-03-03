@@ -119,9 +119,9 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -175,6 +175,7 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
                     .model_reasoning_summary
                     .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
             ),
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
@@ -214,9 +215,9 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -265,9 +266,9 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(base_mode),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -287,6 +288,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
                     .model_reasoning_summary
                     .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
             ),
+            service_tier: None,
             collaboration_mode: Some(turn_mode),
             final_output_json_schema: None,
             personality: None,
@@ -333,9 +335,9 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(first_text))),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -359,9 +361,9 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(second_text))),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -414,9 +416,9 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -440,9 +442,9 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -494,12 +496,12 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Default,
                 Some(default_text),
             )),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -523,12 +525,12 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Plan,
                 Some(plan_text),
             )),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -581,12 +583,12 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Default,
                 Some(collab_text),
             )),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -610,12 +612,12 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Default,
                 Some(collab_text),
             )),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -674,9 +676,9 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
@@ -736,6 +738,7 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Default,
                 settings: Settings {
@@ -745,7 +748,6 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
                 },
             }),
             personality: None,
-            service_tier: None,
         })
         .await?;
 
