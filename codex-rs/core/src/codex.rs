@@ -882,6 +882,7 @@ impl SessionConfiguration {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
+            service_tier: self.service_tier,
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             cwd: self.cwd.clone(),
@@ -1556,6 +1557,7 @@ impl Session {
                 thread_name: session_configuration.thread_name.clone(),
                 model: session_configuration.collaboration_mode.model().to_string(),
                 model_provider_id: config.model_provider_id.clone(),
+                service_tier: session_configuration.service_tier,
                 approval_policy: session_configuration.approval_policy.value(),
                 sandbox_policy: session_configuration.sandbox_policy.get().clone(),
                 cwd: session_configuration.cwd.clone(),

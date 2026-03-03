@@ -17,6 +17,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
@@ -392,6 +393,7 @@ pub struct ProfileV2 {
     pub model: Option<String>,
     pub model_provider: Option<String>,
     pub approval_policy: Option<AskForApproval>,
+    pub service_tier: Option<ServiceTier>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
@@ -503,6 +505,7 @@ pub struct Config {
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
+    pub service_tier: Option<ServiceTier>,
     pub analytics: Option<AnalyticsConfig>,
     #[experimental("config/read.apps")]
     #[serde(default)]
@@ -1788,6 +1791,14 @@ pub struct ThreadStartParams {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub service_tier: Option<Option<ServiceTier>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[ts(optional = nullable)]
@@ -1850,6 +1861,7 @@ pub struct ThreadStartResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
+    pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
     pub approval_policy: AskForApproval,
     pub sandbox: SandboxPolicy,
@@ -1891,6 +1903,14 @@ pub struct ThreadResumeParams {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub service_tier: Option<Option<ServiceTier>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[ts(optional = nullable)]
@@ -1919,6 +1939,7 @@ pub struct ThreadResumeResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
+    pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
     pub approval_policy: AskForApproval,
     pub sandbox: SandboxPolicy,
@@ -1951,6 +1972,14 @@ pub struct ThreadForkParams {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub service_tier: Option<Option<ServiceTier>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[ts(optional = nullable)]
@@ -1977,6 +2006,7 @@ pub struct ThreadForkResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
+    pub service_tier: Option<ServiceTier>,
     pub cwd: PathBuf,
     pub approval_policy: AskForApproval,
     pub sandbox: SandboxPolicy,
@@ -2837,6 +2867,15 @@ pub struct TurnStartParams {
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
+    /// Override the service tier for this turn and subsequent turns.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub service_tier: Option<Option<ServiceTier>>,
     /// Override the reasoning effort for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub effort: Option<ReasoningEffort>,
@@ -4565,5 +4604,57 @@ mod tests {
                 "success": true,
             })
         );
+    }
+
+    #[test]
+    fn thread_start_params_preserve_explicit_null_service_tier() {
+        let params: ThreadStartParams = serde_json::from_value(json!({ "serviceTier": null }))
+            .expect("params should deserialize");
+        assert_eq!(params.service_tier, Some(None));
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(
+            serialized.get("serviceTier"),
+            Some(&serde_json::Value::Null)
+        );
+
+        let serialized_without_override =
+            serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
+        assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn turn_start_params_preserve_explicit_null_service_tier() {
+        let params: TurnStartParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "input": [],
+            "serviceTier": null
+        }))
+        .expect("params should deserialize");
+        assert_eq!(params.service_tier, Some(None));
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(
+            serialized.get("serviceTier"),
+            Some(&serde_json::Value::Null)
+        );
+
+        let without_override = TurnStartParams {
+            thread_id: "thread_123".to_string(),
+            input: vec![],
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            model: None,
+            service_tier: None,
+            effort: None,
+            summary: None,
+            output_schema: None,
+            collaboration_mode: None,
+            personality: None,
+        };
+        let serialized_without_override =
+            serde_json::to_value(&without_override).expect("params should serialize");
+        assert_eq!(serialized_without_override.get("serviceTier"), None);
     }
 }

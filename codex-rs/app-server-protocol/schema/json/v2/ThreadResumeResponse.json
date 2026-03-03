@@ -738,6 +738,12 @@
         }
       ]
     },
+    "ServiceTier": {
+      "enum": [
+        "fast"
+      ],
+      "type": "string"
+    },
     "SessionSource": {
       "oneOf": [
         {
@@ -1905,6 +1911,16 @@
     },
     "sandbox": {
       "$ref": "#/definitions/SandboxPolicy"
+    },
+    "serviceTier": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ServiceTier"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "thread": {
       "$ref": "#/definitions/Thread"

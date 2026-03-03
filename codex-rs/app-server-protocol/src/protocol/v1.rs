@@ -5,6 +5,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -419,6 +420,13 @@ pub struct SendUserTurnParams {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     pub model: String,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub service_tier: Option<Option<ServiceTier>>,
     pub effort: Option<ReasoningEffort>,
     pub summary: ReasoningSummary,
     /// Optional JSON Schema used to constrain the final assistant message for this turn.
@@ -428,6 +436,55 @@ pub struct SendUserTurnParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SendUserTurnResponse {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    #[test]
+    fn send_user_turn_params_preserve_explicit_null_service_tier() {
+        let params = SendUserTurnParams {
+            conversation_id: ThreadId::new(),
+            items: vec![],
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: "gpt-4.1".to_string(),
+            service_tier: Some(None),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            output_schema: None,
+        };
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(
+            serialized.get("serviceTier"),
+            Some(&serde_json::Value::Null)
+        );
+
+        let roundtrip: SendUserTurnParams =
+            serde_json::from_value(serialized).expect("params should deserialize");
+        assert_eq!(roundtrip.service_tier, Some(None));
+
+        let without_override = SendUserTurnParams {
+            conversation_id: ThreadId::new(),
+            items: vec![],
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: "gpt-4.1".to_string(),
+            service_tier: None,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            output_schema: None,
+        };
+        let serialized_without_override =
+            serde_json::to_value(&without_override).expect("params should serialize");
+        assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -555,6 +612,7 @@ pub struct LoginChatGptCompleteNotification {
 pub struct SessionConfiguredNotification {
     pub session_id: ThreadId,
     pub model: String,
+    pub service_tier: Option<ServiceTier>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub history_log_id: u64,
     #[ts(type = "number")]

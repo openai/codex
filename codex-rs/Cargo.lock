@@ -1474,6 +1474,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "serde_with",
  "shlex",
  "similar",
  "strum_macros 0.27.2",

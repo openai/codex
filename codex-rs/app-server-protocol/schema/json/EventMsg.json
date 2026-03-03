@@ -1138,6 +1138,16 @@
               ],
               "description": "How to sandbox commands executed in the system"
             },
+            "service_tier": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "session_id": {
               "$ref": "#/definitions/ThreadId"
             },
@@ -5410,6 +5420,12 @@
         }
       ]
     },
+    "ServiceTier": {
+      "enum": [
+        "fast"
+      ],
+      "type": "string"
+    },
     "SessionNetworkProxyRuntime": {
       "properties": {
         "admin_addr": {
@@ -6753,6 +6769,16 @@
             }
           ],
           "description": "How to sandbox commands executed in the system"
+        },
+        "service_tier": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "session_id": {
           "$ref": "#/definitions/ThreadId"

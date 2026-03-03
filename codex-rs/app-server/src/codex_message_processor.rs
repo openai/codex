@@ -2042,6 +2042,7 @@ impl CodexMessageProcessor {
         let ThreadStartParams {
             model,
             model_provider,
+            service_tier,
             cwd,
             approval_policy,
             sandbox,
@@ -2059,6 +2060,7 @@ impl CodexMessageProcessor {
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
+            service_tier,
             cwd,
             approval_policy,
             sandbox,
@@ -2213,6 +2215,7 @@ impl CodexMessageProcessor {
                     thread: thread.clone(),
                     model: config_snapshot.model,
                     model_provider: config_snapshot.model_provider_id,
+                    service_tier: config_snapshot.service_tier,
                     cwd: config_snapshot.cwd,
                     approval_policy: config_snapshot.approval_policy.into(),
                     sandbox: config_snapshot.sandbox_policy.into(),
@@ -2249,6 +2252,7 @@ impl CodexMessageProcessor {
         &self,
         model: Option<String>,
         model_provider: Option<String>,
+        service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
         cwd: Option<String>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         sandbox: Option<SandboxMode>,
@@ -2259,6 +2263,7 @@ impl CodexMessageProcessor {
         ConfigOverrides {
             model,
             model_provider,
+            service_tier,
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
@@ -3060,6 +3065,7 @@ impl CodexMessageProcessor {
             path,
             model,
             model_provider,
+            service_tier,
             cwd,
             approval_policy,
             sandbox,
@@ -3092,6 +3098,7 @@ impl CodexMessageProcessor {
         let typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
+            service_tier,
             cwd,
             approval_policy,
             sandbox,
@@ -3190,6 +3197,7 @@ impl CodexMessageProcessor {
                     thread,
                     model: session_configured.model,
                     model_provider: session_configured.model_provider_id,
+                    service_tier: session_configured.service_tier,
                     cwd: session_configured.cwd,
                     approval_policy: session_configured.approval_policy.into(),
                     sandbox: session_configured.sandbox_policy.into(),
@@ -3497,6 +3505,7 @@ impl CodexMessageProcessor {
             path,
             model,
             model_provider,
+            service_tier,
             cwd,
             approval_policy,
             sandbox,
@@ -3577,6 +3586,7 @@ impl CodexMessageProcessor {
         let typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
+            service_tier,
             cwd,
             approval_policy,
             sandbox,
@@ -3718,6 +3728,7 @@ impl CodexMessageProcessor {
             thread: thread.clone(),
             model: session_configured.model,
             model_provider: session_configured.model_provider_id,
+            service_tier: session_configured.service_tier,
             cwd: session_configured.cwd,
             approval_policy: session_configured.approval_policy.into(),
             sandbox: session_configured.sandbox_policy.into(),
@@ -4626,6 +4637,7 @@ impl CodexMessageProcessor {
                         SessionConfiguredNotification {
                             session_id: session_configured.session_id,
                             model: session_configured.model.clone(),
+                            service_tier: session_configured.service_tier,
                             reasoning_effort: session_configured.reasoning_effort,
                             history_log_id: session_configured.history_log_id,
                             history_entry_count: session_configured.history_entry_count,
@@ -4847,6 +4859,7 @@ impl CodexMessageProcessor {
                 SessionConfiguredNotification {
                     session_id: session_configured.session_id,
                     model: session_configured.model.clone(),
+                    service_tier: session_configured.service_tier,
                     reasoning_effort: session_configured.reasoning_effort,
                     history_log_id: session_configured.history_log_id,
                     history_entry_count: session_configured.history_entry_count,
@@ -5274,6 +5287,7 @@ impl CodexMessageProcessor {
             approval_policy,
             sandbox_policy,
             model,
+            service_tier,
             effort,
             summary,
             output_schema,
@@ -5323,7 +5337,7 @@ impl CodexMessageProcessor {
                 model,
                 effort,
                 summary: Some(summary),
-                service_tier: None,
+                service_tier,
                 final_output_json_schema: output_schema,
                 collaboration_mode: None,
                 personality: None,
@@ -5865,6 +5879,7 @@ impl CodexMessageProcessor {
             || params.approval_policy.is_some()
             || params.sandbox_policy.is_some()
             || params.model.is_some()
+            || params.service_tier.is_some()
             || params.effort.is_some()
             || params.summary.is_some()
             || collaboration_mode.is_some()
@@ -5881,7 +5896,7 @@ impl CodexMessageProcessor {
                     model: params.model,
                     effort: params.effort.map(Some),
                     summary: params.summary,
-                    service_tier: None,
+                    service_tier: params.service_tier,
                     collaboration_mode,
                     personality: params.personality,
                 })
@@ -7153,6 +7168,7 @@ async fn handle_pending_thread_resume_request(
     let ThreadConfigSnapshot {
         model,
         model_provider_id,
+        service_tier,
         approval_policy,
         sandbox_policy,
         cwd,
@@ -7163,6 +7179,7 @@ async fn handle_pending_thread_resume_request(
         thread,
         model,
         model_provider: model_provider_id,
+        service_tier,
         cwd,
         approval_policy: approval_policy.into(),
         sandbox: sandbox_policy.into(),
