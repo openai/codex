@@ -86,7 +86,7 @@ fn remote_realtime_test_codex_builder(
 ) -> TestCodexBuilder {
     let realtime_base_url = realtime_server.uri().to_string();
     test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(CodexAuth::from_api_key("dummy"))
         .with_config(move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
         })
@@ -95,8 +95,8 @@ fn remote_realtime_test_codex_builder(
 async fn start_remote_realtime_server() -> responses::WebSocketTestServer {
     start_websocket_server(vec![vec![
         vec![json!({
-            "type": "session.created",
-            "session": { "id": "sess_remote_compact" }
+            "type": "session.updated",
+            "session": { "id": "sess_remote_compact", "instructions": "backend prompt" }
         })],
         // Keep the websocket open after startup so routed transcript items during the test do not
         // exhaust the scripted responses and mark realtime inactive before the assertions run.
@@ -130,7 +130,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
 
     wait_for_event_match(codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::SessionCreated { session_id },
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
         }) => Some(session_id.clone()),
         _ => None,
     })

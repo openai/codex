@@ -10,6 +10,7 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -220,25 +221,6 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    // `thread/name/set` operates on loaded threads (via ThreadManager). A rollout existing on disk
-    // is not enough; we must `thread/resume` first to load it into the running server.
-    let pre_resume_id = mcp
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: conversation_id.clone(),
-            ..Default::default()
-        })
-        .await?;
-    let pre_resume_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(pre_resume_id)),
-    )
-    .await??;
-    let ThreadResumeResponse {
-        thread: pre_resumed,
-        ..
-    } = to_response::<ThreadResumeResponse>(pre_resume_resp)?;
-    assert_eq!(pre_resumed.id, conversation_id);
-
     // Set a user-facing thread title.
     let new_name = "My renamed thread";
     let set_id = mcp
@@ -253,6 +235,15 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
     )
     .await??;
     let _: ThreadSetNameResponse = to_response::<ThreadSetNameResponse>(set_resp)?;
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/name/updated"),
+    )
+    .await??;
+    let notification: ThreadNameUpdatedNotification =
+        serde_json::from_value(notification.params.expect("thread/name/updated params"))?;
+    assert_eq!(notification.thread_id, conversation_id);
+    assert_eq!(notification.thread_name.as_deref(), Some(new_name));
 
     // Read should now surface `thread.name`, and the wire payload must include `name`.
     let read_id = mcp

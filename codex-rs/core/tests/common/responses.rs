@@ -390,10 +390,15 @@ impl WebSocketRequest {
 
 #[derive(Debug, Clone)]
 pub struct WebSocketHandshake {
+    uri: String,
     headers: Vec<(String, String)>,
 }
 
 impl WebSocketHandshake {
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+
     pub fn header(&self, name: &str) -> Option<String> {
         self.headers
             .iter()
@@ -1223,10 +1228,10 @@ pub async fn start_websocket_server_with_headers(
                             .map(|value| (name.as_str().to_string(), value.to_string()))
                     })
                     .collect();
-                handshake_log
-                    .lock()
-                    .unwrap()
-                    .push(WebSocketHandshake { headers });
+                handshake_log.lock().unwrap().push(WebSocketHandshake {
+                    uri: req.uri().to_string(),
+                    headers,
+                });
 
                 let headers_mut = response.headers_mut();
                 for (name, value) in &response_headers {
