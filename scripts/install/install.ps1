@@ -166,12 +166,16 @@ if (-not (Path-Contains -PathValue $userPath -Entry $installDir)) {
     if ([string]::IsNullOrWhiteSpace($userPath)) {
         $newUserPath = $installDir
     } else {
-        $newUserPath = "$userPath;$installDir"
+        $newUserPath = "$installDir;$userPath"
     }
 
     [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
     if (-not (Path-Contains -PathValue $env:Path -Entry $installDir)) {
-        $env:Path = "$env:Path;$installDir"
+        if ([string]::IsNullOrWhiteSpace($env:Path)) {
+            $env:Path = $installDir
+        } else {
+            $env:Path = "$installDir;$env:Path"
+        }
     }
     Write-Step "PATH updated for future PowerShell sessions."
     $pathNeedsNewShell = $true
