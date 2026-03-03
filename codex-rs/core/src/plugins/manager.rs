@@ -772,21 +772,32 @@ mod tests {
 }"#,
         );
 
-        let config_toml = format!(
-            r#"[features]
-plugins = true
+        let mut root = toml::map::Map::new();
+        let mut features = toml::map::Map::new();
+        features.insert("plugins".to_string(), Value::Boolean(true));
+        root.insert("features".to_string(), Value::Table(features));
 
-[plugins.a]
-path = "{}"
-enabled = true
+        let mut plugins = toml::map::Map::new();
 
-[plugins.b]
-path = "{}"
-enabled = true
-"#,
-            plugin_a_root.display(),
-            plugin_b_root.display()
+        let mut plugin_a = toml::map::Map::new();
+        plugin_a.insert(
+            "path".to_string(),
+            Value::String(plugin_a_root.display().to_string()),
         );
+        plugin_a.insert("enabled".to_string(), Value::Boolean(true));
+        plugins.insert("a".to_string(), Value::Table(plugin_a));
+
+        let mut plugin_b = toml::map::Map::new();
+        plugin_b.insert(
+            "path".to_string(),
+            Value::String(plugin_b_root.display().to_string()),
+        );
+        plugin_b.insert("enabled".to_string(), Value::Boolean(true));
+        plugins.insert("b".to_string(), Value::Table(plugin_b));
+
+        root.insert("plugins".to_string(), Value::Table(plugins));
+        let config_toml =
+            toml::to_string(&Value::Table(root)).expect("plugin test config should serialize");
 
         let outcome = load_plugins_from_config(&config_toml, codex_home.path()).await;
 
