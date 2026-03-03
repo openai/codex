@@ -70,14 +70,17 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn websocket_first_turn_uses_preconnect_and_create() -> Result<()> {
+async fn websocket_first_turn_uses_startup_prewarm_and_create() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_websocket_server(vec![vec![vec![
-        ev_response_created("resp-1"),
-        ev_assistant_message("msg-1", "hello"),
-        ev_completed("resp-1"),
-    ]]])
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello"),
+            ev_completed("resp-1"),
+        ],
+    ]])
     .await;
 
     let mut builder = test_codex();
@@ -90,11 +93,14 @@ async fn websocket_first_turn_uses_preconnect_and_create() -> Result<()> {
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
-    assert_eq!(connection.len(), 1);
-    let turn = connection
+    assert_eq!(connection.len(), 2);
+    let warmup = connection
         .first()
-        .expect("missing turn request")
+        .expect("missing warmup request")
         .body_json();
+    let turn = connection.get(1).expect("missing turn request").body_json();
+    assert_eq!(warmup["type"].as_str(), Some("response.create"));
+    assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert!(
         turn["tools"]
             .as_array()
@@ -108,15 +114,18 @@ async fn websocket_first_turn_uses_preconnect_and_create() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn websocket_first_turn_handles_handshake_delay_with_preconnect() -> Result<()> {
+async fn websocket_first_turn_handles_handshake_delay_with_startup_prewarm() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
-        requests: vec![vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "hello"),
-            ev_completed("resp-1"),
-        ]],
+        requests: vec![
+            vec![ev_response_created("warm-1"), ev_completed("warm-1")],
+            vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "hello"),
+                ev_completed("resp-1"),
+            ],
+        ],
         response_headers: Vec::new(),
         // Delay handshake so turn processing must tolerate websocket startup latency.
         accept_delay: Some(Duration::from_millis(150)),
@@ -133,11 +142,14 @@ async fn websocket_first_turn_handles_handshake_delay_with_preconnect() -> Resul
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
-    assert_eq!(connection.len(), 1);
-    let turn = connection
+    assert_eq!(connection.len(), 2);
+    let warmup = connection
         .first()
-        .expect("missing turn request")
+        .expect("missing warmup request")
         .body_json();
+    let turn = connection.get(1).expect("missing turn request").body_json();
+    assert_eq!(warmup["type"].as_str(), Some("response.create"));
+    assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert!(
         turn["tools"]
             .as_array()

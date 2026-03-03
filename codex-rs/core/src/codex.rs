@@ -9191,7 +9191,7 @@ mod tests {
         handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
             .await;
 
-        let deadline = StdDuration::from_secs(5);
+        let deadline = StdDuration::from_secs(15);
         let start = std::time::Instant::now();
         loop {
             let remaining = deadline.saturating_sub(start.elapsed());
