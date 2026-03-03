@@ -919,6 +919,80 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inbound_handoff_request_uses_all_messages() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &api_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "ok"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![vec![
+        json!({
+            "type": "session.updated",
+            "session": { "id": "sess_inbound_multi", "instructions": "backend prompt" }
+        }),
+        json!({
+            "type": "conversation.handoff.requested",
+            "handoff_id": "handoff_inbound_multi",
+            "item_id": "item_inbound_multi",
+            "input_transcript": "ignored",
+            "messages": [
+                { "role": "assistant", "text": "assistant context" },
+                { "role": "user", "text": "delegated query" },
+                { "role": "assistant", "text": "assist confirm" },
+            ]
+        }),
+    ]]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = response_mock.single_request();
+    let user_texts = request.message_input_texts("user");
+    assert!(
+        user_texts
+            .iter()
+            .any(|text| text == "assistant context\ndelegated query\nassist confirm")
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
