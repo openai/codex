@@ -976,18 +976,17 @@ async fn inbound_handoff_request_uses_all_messages() -> Result<()> {
     .await;
 
     wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::TurnComplete(_)
-        )
+        matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
 
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
-    assert!(user_texts
-        .iter()
-        .any(|text| text == "assistant context\ndelegated query\nassist confirm"));
+    assert!(
+        user_texts
+            .iter()
+            .any(|text| text == "assistant context\ndelegated query\nassist confirm")
+    );
 
     realtime_server.shutdown().await;
     Ok(())

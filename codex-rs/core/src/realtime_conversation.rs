@@ -379,9 +379,9 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .map(|message| message.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    (!messages.is_empty())
-        .then_some(messages)
-        .or_else(|| (!handoff.input_transcript.is_empty()).then(|| handoff.input_transcript.clone()))
+    (!messages.is_empty()).then_some(messages).or_else(|| {
+        (!handoff.input_transcript.is_empty()).then(|| handoff.input_transcript.clone())
+    })
 }
 
 fn realtime_api_key(
