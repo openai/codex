@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use super::SessionTask;
 use super::SessionTaskContext;
+use super::TaskRunOutput;
 use crate::codex::TurnContext;
 use crate::state::TaskKind;
 use async_trait::async_trait;
@@ -23,7 +24,7 @@ impl SessionTask for CompactTask {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         _cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TaskRunOutput {
         let session = session.clone_session();
         let _ = if crate::compact::should_use_remote_compact_task(&ctx.provider) {
             let _ = session.services.otel_manager.counter(
@@ -40,6 +41,7 @@ impl SessionTask for CompactTask {
             );
             crate::compact::run_compact_task(session.clone(), ctx, input).await
         };
-        None
+
+        TaskRunOutput::default()
     }
 }

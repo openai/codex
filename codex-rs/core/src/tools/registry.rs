@@ -9,6 +9,7 @@ use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
+use crate::tools::context::ToolDispatchOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -20,7 +21,6 @@ use codex_hooks::HookResult;
 use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
-use codex_protocol::models::ResponseInputItem;
 use codex_utils_readiness::Readiness;
 use tracing::warn;
 
@@ -53,6 +53,12 @@ pub trait ToolHandler: Send + Sync {
     /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
     /// the final output to return to the model.
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError>;
+
+    /// Classify whether a successful tool output should interrupt the turn after
+    /// persisting the tool result to history/rollout.
+    fn should_interrupt_turn(&self, _output: &ToolOutput) -> bool {
+        false
+    }
 }
 
 pub struct ToolRegistry {
@@ -79,7 +85,7 @@ impl ToolRegistry {
     pub async fn dispatch(
         &self,
         invocation: ToolInvocation,
-    ) -> Result<ResponseInputItem, FunctionCallError> {
+    ) -> Result<ToolDispatchOutput, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
         let otel = invocation.turn.otel_manager.clone();
@@ -155,7 +161,7 @@ impl ToolRegistry {
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
-        let output_cell = tokio::sync::Mutex::new(None);
+        let output_cell = tokio::sync::Mutex::new(None::<(ToolOutput, bool)>);
         let invocation_for_tool = invocation.clone();
 
         let started = Instant::now();
@@ -180,8 +186,10 @@ impl ToolRegistry {
                             Ok(output) => {
                                 let preview = output.log_preview();
                                 let success = output.success_for_logging();
+                                let interrupt_turn = output.interrupt_turn_hint()
+                                    || handler.should_interrupt_turn(&output);
                                 let mut guard = output_cell.lock().await;
-                                *guard = Some(output);
+                                *guard = Some((output, interrupt_turn));
                                 Ok((preview, success))
                             }
                             Err(err) => Err(err),
@@ -213,10 +221,13 @@ impl ToolRegistry {
         match result {
             Ok(_) => {
                 let mut guard = output_cell.lock().await;
-                let output = guard.take().ok_or_else(|| {
+                let (output, interrupt_turn) = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
-                Ok(output.into_response(&call_id_owned, &payload_for_response))
+                Ok(ToolDispatchOutput {
+                    response_input: output.into_response(&call_id_owned, &payload_for_response),
+                    interrupt_turn,
+                })
             }
             Err(err) => Err(err),
         }

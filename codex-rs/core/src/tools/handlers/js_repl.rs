@@ -155,6 +155,7 @@ impl ToolHandler for JsReplHandler {
         };
 
         let content = result.output;
+        let interrupt_turn = result.interrupt_turn;
         let mut items = Vec::with_capacity(result.content_items.len() + 1);
         if !content.is_empty() {
             items.push(FunctionCallOutputContentItem::InputText {
@@ -173,14 +174,24 @@ impl ToolHandler for JsReplHandler {
         )
         .await;
 
-        Ok(ToolOutput::Function {
-            body: if items.is_empty() {
-                FunctionCallOutputBody::Text(content)
-            } else {
-                FunctionCallOutputBody::ContentItems(items)
-            },
-            success: Some(true),
-        })
+        let body = if items.is_empty() {
+            FunctionCallOutputBody::Text(content)
+        } else {
+            FunctionCallOutputBody::ContentItems(items)
+        };
+
+        if interrupt_turn {
+            Ok(ToolOutput::FunctionWithControl {
+                body,
+                success: Some(true),
+                interrupt_turn: true,
+            })
+        } else {
+            Ok(ToolOutput::Function {
+                body,
+                success: Some(true),
+            })
+        }
     }
 }
 
