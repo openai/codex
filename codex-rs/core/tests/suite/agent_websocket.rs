@@ -4,8 +4,6 @@ use codex_protocol::config_types::ServiceTier;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-#[allow(unused_imports)]
-use core_test_support::responses::ev_done_with_id;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_shell_command_call;
 use core_test_support::responses::start_websocket_server;
@@ -242,7 +240,7 @@ async fn websocket_v2_first_turn_uses_updated_fast_tier_after_startup_prewarm() 
     skip_if_no_network!(Ok(()));
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "fast"),
@@ -291,7 +289,7 @@ async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Resu
     skip_if_no_network!(Ok(()));
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "standard"),
@@ -340,7 +338,7 @@ async fn websocket_v2_next_turn_uses_updated_service_tier() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "fast"),

@@ -582,11 +582,6 @@ pub fn ev_completed(id: &str) -> Value {
     })
 }
 
-/// Compatibility alias while upstream tests finish migrating to `ev_completed`.
-pub fn ev_done_with_id(id: &str) -> Value {
-    ev_completed(id)
-}
-
 /// Convenience: SSE event for a created response with a specific id.
 pub fn ev_response_created(id: &str) -> Value {
     serde_json::json!({
