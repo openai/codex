@@ -161,6 +161,8 @@ export type { RealtimeConversationClosedEvent } from "./RealtimeConversationClos
 export type { RealtimeConversationRealtimeEvent } from "./RealtimeConversationRealtimeEvent";
 export type { RealtimeConversationStartedEvent } from "./RealtimeConversationStartedEvent";
 export type { RealtimeEvent } from "./RealtimeEvent";
+export type { RealtimeHandoffMessage } from "./RealtimeHandoffMessage";
+export type { RealtimeHandoffRequested } from "./RealtimeHandoffRequested";
 export type { ReasoningContentDeltaEvent } from "./ReasoningContentDeltaEvent";
 export type { ReasoningEffort } from "./ReasoningEffort";
 export type { ReasoningItem } from "./ReasoningItem";

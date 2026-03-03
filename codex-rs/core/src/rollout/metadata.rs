@@ -129,6 +129,13 @@ pub(crate) async fn extract_metadata_from_rollout(
     }
     Ok(ExtractionOutcome {
         metadata,
+        memory_mode: items.iter().rev().find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
+            RolloutItem::ResponseItem(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::EventMsg(_) => None,
+        }),
         parse_errors,
     })
 }
@@ -272,6 +279,7 @@ pub(crate) async fn backfill_sessions(
                         );
                     }
                     let mut metadata = outcome.metadata;
+                    let memory_mode = outcome.memory_mode.unwrap_or_else(|| "enabled".to_string());
                     if rollout.archived && metadata.archived_at.is_none() {
                         let fallback_archived_at = metadata.updated_at;
                         metadata.archived_at = file_modified_time_utc(&rollout.path)
@@ -282,6 +290,17 @@ pub(crate) async fn backfill_sessions(
                         stats.failed = stats.failed.saturating_add(1);
                         warn!("failed to upsert rollout {}: {err}", rollout.path.display());
                     } else {
+                        if let Err(err) = runtime
+                            .set_thread_memory_mode(metadata.id, memory_mode.as_str())
+                            .await
+                        {
+                            stats.failed = stats.failed.saturating_add(1);
+                            warn!(
+                                "failed to restore memory mode for {}: {err}",
+                                rollout.path.display()
+                            );
+                            continue;
+                        }
                         stats.upserted = stats.upserted.saturating_add(1);
                         if let Ok(meta_line) =
                             rollout::list::read_session_meta_line(&rollout.path).await
@@ -519,6 +538,7 @@ mod tests {
             model_provider: Some("openai".to_string()),
             base_instructions: None,
             dynamic_tools: None,
+            memory_mode: None,
         };
         let session_meta_line = SessionMetaLine {
             meta: session_meta,
@@ -543,7 +563,69 @@ mod tests {
         expected.updated_at = file_modified_time_utc(&path).await.expect("mtime");
 
         assert_eq!(outcome.metadata, expected);
+        assert_eq!(outcome.memory_mode, None);
         assert_eq!(outcome.parse_errors, 0);
+    }
+
+    #[tokio::test]
+    async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
+        let dir = tempdir().expect("tempdir");
+        let uuid = Uuid::new_v4();
+        let id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+        let path = dir
+            .path()
+            .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
+
+        let session_meta = SessionMeta {
+            id,
+            forked_from_id: None,
+            timestamp: "2026-01-27T12:34:56Z".to_string(),
+            cwd: dir.path().to_path_buf(),
+            originator: "cli".to_string(),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::default(),
+            agent_nickname: None,
+            agent_role: None,
+            model_provider: Some("openai".to_string()),
+            base_instructions: None,
+            dynamic_tools: None,
+            memory_mode: None,
+        };
+        let polluted_meta = SessionMeta {
+            memory_mode: Some("polluted".to_string()),
+            ..session_meta.clone()
+        };
+        let lines = vec![
+            RolloutLine {
+                timestamp: "2026-01-27T12:34:56Z".to_string(),
+                item: RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: session_meta,
+                    git: None,
+                }),
+            },
+            RolloutLine {
+                timestamp: "2026-01-27T12:35:00Z".to_string(),
+                item: RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: polluted_meta,
+                    git: None,
+                }),
+            },
+        ];
+        let mut file = File::create(&path).expect("create rollout");
+        for line in lines {
+            writeln!(
+                file,
+                "{}",
+                serde_json::to_string(&line).expect("serialize rollout line")
+            )
+            .expect("write rollout line");
+        }
+
+        let outcome = extract_metadata_from_rollout(&path, "openai", None)
+            .await
+            .expect("extract");
+
+        assert_eq!(outcome.memory_mode.as_deref(), Some("polluted"));
     }
 
     #[test]
@@ -669,6 +751,7 @@ mod tests {
             model_provider: Some("test-provider".to_string()),
             base_instructions: None,
             dynamic_tools: None,
+            memory_mode: None,
         };
         let session_meta_line = SessionMetaLine {
             meta: session_meta,

@@ -1228,7 +1228,7 @@ mod tests {
             "spawn_agent",
             function_payload(json!({
                 "message": "await this command",
-                "agent_type": "awaiter"
+                "agent_type": "explorer"
             })),
         );
         let output = MultiAgentHandler

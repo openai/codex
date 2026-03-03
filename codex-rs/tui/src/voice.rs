@@ -27,6 +27,10 @@ use tracing::error;
 use tracing::info;
 use tracing::trace;
 
+const AUDIO_MODEL: &str = "gpt-4o-mini-transcribe";
+const MODEL_AUDIO_SAMPLE_RATE: u32 = 24_000;
+const MODEL_AUDIO_CHANNELS: u16 = 1;
+
 struct TranscriptionAuthContext {
     mode: AuthMode,
     bearer_token: String,
@@ -268,9 +272,7 @@ fn select_default_input_device_and_config()
     let device = host
         .default_input_device()
         .ok_or_else(|| "no input audio device available".to_string())?;
-    let config = device
-        .default_input_config()
-        .map_err(|e| format!("failed to get default input config: {e}"))?;
+    let config = crate::audio_device::preferred_input_config(&device)?;
     Ok((device, config))
 }
 
@@ -395,20 +397,35 @@ fn send_realtime_audio_chunk(
         return;
     }
 
+    let samples = if sample_rate == MODEL_AUDIO_SAMPLE_RATE && channels == MODEL_AUDIO_CHANNELS {
+        samples
+    } else {
+        convert_pcm16(
+            &samples,
+            sample_rate,
+            channels,
+            MODEL_AUDIO_SAMPLE_RATE,
+            MODEL_AUDIO_CHANNELS,
+        )
+    };
+    if samples.is_empty() {
+        return;
+    }
+
     let mut bytes = Vec::with_capacity(samples.len() * 2);
     for sample in &samples {
         bytes.extend_from_slice(&sample.to_le_bytes());
     }
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let samples_per_channel = (samples.len() / usize::from(channels)) as u32;
+    let samples_per_channel = (samples.len() / usize::from(MODEL_AUDIO_CHANNELS)) as u32;
 
     tx.send(AppEvent::CodexOp(Op::RealtimeConversationAudio(
         ConversationAudioParams {
             frame: RealtimeAudioFrame {
                 data: encoded,
-                sample_rate,
-                num_channels: channels,
+                sample_rate: MODEL_AUDIO_SAMPLE_RATE,
+                num_channels: MODEL_AUDIO_CHANNELS,
                 samples_per_channel: Some(samples_per_channel),
             },
         },
@@ -505,7 +522,7 @@ impl RealtimeAudioPlayer {
         for pair in raw_bytes.chunks_exact(2) {
             pcm.push(i16::from_le_bytes([pair[0], pair[1]]));
         }
-        let converted = convert_pcm16_for_output(
+        let converted = convert_pcm16(
             &pcm,
             frame.sample_rate,
             frame.num_channels,
@@ -598,7 +615,7 @@ fn fill_output_u16(output: &mut [u16], queue: &Arc<Mutex<VecDeque<i16>>>) {
     output.fill(32768);
 }
 
-fn convert_pcm16_for_output(
+fn convert_pcm16(
     input: &[i16],
     input_sample_rate: u32,
     input_channels: u16,
@@ -672,10 +689,29 @@ fn clip_duration_seconds(audio: &RecordedAudio) -> f32 {
 }
 
 fn encode_wav_normalized(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
+    let converted;
+    let (channels, sample_rate, segment) =
+        if audio.channels == MODEL_AUDIO_CHANNELS && audio.sample_rate == MODEL_AUDIO_SAMPLE_RATE {
+            (audio.channels, audio.sample_rate, audio.data.as_slice())
+        } else {
+            converted = convert_pcm16(
+                &audio.data,
+                audio.sample_rate,
+                audio.channels,
+                MODEL_AUDIO_SAMPLE_RATE,
+                MODEL_AUDIO_CHANNELS,
+            );
+            (
+                MODEL_AUDIO_CHANNELS,
+                MODEL_AUDIO_SAMPLE_RATE,
+                converted.as_slice(),
+            )
+        };
+
     let mut wav_bytes: Vec<u8> = Vec::new();
     let spec = WavSpec {
-        channels: audio.channels,
-        sample_rate: audio.sample_rate,
+        channels,
+        sample_rate,
         bits_per_sample: 16,
         sample_format: SampleFormat::Int,
     };
@@ -684,7 +720,6 @@ fn encode_wav_normalized(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
         WavWriter::new(&mut cursor, spec).map_err(|_| "failed to create wav writer".to_string())?;
 
     // Simple peak normalization with headroom to improve audibility on quiet inputs.
-    let segment = &audio.data[..];
     let mut peak: i16 = 0;
     for &s in segment {
         let a = s.unsigned_abs();
@@ -782,7 +817,7 @@ async fn transcribe_bytes(
                 .mime_str("audio/wav")
                 .map_err(|e| format!("failed to set mime: {e}"))?;
             let mut form = reqwest::multipart::Form::new()
-                .text("model", "gpt-4o-transcribe")
+                .text("model", AUDIO_MODEL)
                 .part("file", part);
             if let Some(context) = context {
                 form = form.text("prompt", context);
@@ -832,5 +867,42 @@ async fn transcribe_bytes(
         Err("empty transcription result".to_string())
     } else {
         Ok(text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RecordedAudio;
+    use super::convert_pcm16;
+    use super::encode_wav_normalized;
+    use pretty_assertions::assert_eq;
+    use std::io::Cursor;
+
+    #[test]
+    fn convert_pcm16_downmixes_and_resamples_for_model_input() {
+        let input = vec![100, 300, 200, 400, 500, 700, 600, 800];
+        let converted = convert_pcm16(&input, 48_000, 2, 24_000, 1);
+        assert_eq!(converted, vec![200, 700]);
+    }
+
+    #[test]
+    fn encode_wav_normalized_outputs_24khz_mono_audio() {
+        let audio = RecordedAudio {
+            data: vec![100, 300, 200, 400, 500, 700, 600, 800],
+            sample_rate: 48_000,
+            channels: 2,
+        };
+
+        let wav = encode_wav_normalized(&audio).expect("wav should encode");
+        let reader = hound::WavReader::new(Cursor::new(wav)).expect("wav should parse");
+        let spec = reader.spec();
+        let samples = reader
+            .into_samples::<i16>()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("samples should decode");
+
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.sample_rate, 24_000);
+        assert_eq!(samples, vec![8_426, 29_490]);
     }
 }

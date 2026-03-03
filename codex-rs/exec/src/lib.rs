@@ -74,6 +74,8 @@ use codex_core::default_client::set_default_originator;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 
+const DEFAULT_ANALYTICS_ENABLED: bool = true;
+
 enum InitialOperation {
     UserTurn {
         items: Vec<UserInput>,
@@ -316,7 +318,12 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
+        codex_core::otel_init::build_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            None,
+            DEFAULT_ANALYTICS_ENABLED,
+        )
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
@@ -926,6 +933,11 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn exec_defaults_analytics_to_enabled() {
+        assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
+    }
 
     #[test]
     fn builds_uncommitted_review_request() {

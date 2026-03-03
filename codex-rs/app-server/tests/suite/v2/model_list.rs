@@ -31,6 +31,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
             model_link: upgrade.model_link.clone(),
             migration_markdown: upgrade.migration_markdown.clone(),
         }),
+        availability_nux: preset.availability_nux.clone().map(Into::into),
         display_name: preset.display_name.clone(),
         description: preset.description.clone(),
         hidden: !preset.show_in_picker,
@@ -131,50 +132,6 @@ async fn list_models_includes_hidden_models() -> Result<()> {
 
     assert!(items.iter().any(|item| item.hidden));
     assert!(next_cursor.is_none());
-    Ok(())
-}
-
-#[tokio::test]
-async fn list_models_returns_upgrade_info_metadata() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    write_models_cache(codex_home.path())?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(100),
-            cursor: None,
-            include_hidden: Some(true),
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
-    let ModelListResponse { data: items, .. } = to_response::<ModelListResponse>(response)?;
-
-    let item = items
-        .iter()
-        .find(|item| item.upgrade_info.is_some())
-        .expect("expected at least one model with upgrade info");
-    let upgrade_info = item
-        .upgrade_info
-        .as_ref()
-        .expect("expected upgrade info to be populated");
-
-    assert_eq!(item.upgrade.as_ref(), Some(&upgrade_info.model));
-    assert!(!upgrade_info.model.is_empty());
-    assert!(
-        upgrade_info.upgrade_copy.is_some()
-            || upgrade_info.model_link.is_some()
-            || upgrade_info.migration_markdown.is_some()
-    );
-
     Ok(())
 }
 

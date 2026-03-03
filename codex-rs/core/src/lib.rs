@@ -57,6 +57,7 @@ mod message_history;
 mod model_provider_info;
 pub mod path_utils;
 pub mod personality_migration;
+pub mod plugins;
 mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;
@@ -115,6 +116,7 @@ pub use rollout::RolloutRecorder;
 pub use rollout::RolloutRecorderParams;
 pub use rollout::SESSIONS_SUBDIR;
 pub use rollout::SessionMeta;
+pub use rollout::append_thread_name;
 pub use rollout::find_archived_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use rollout::find_conversation_path_by_id_str;

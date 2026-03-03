@@ -193,7 +193,7 @@ async fn claim_startup_jobs(
 async fn build_request_context(session: &Arc<Session>, config: &Config) -> RequestContext {
     let model_name = config
         .memories
-        .phase_1_model
+        .extract_model
         .clone()
         .unwrap_or(phase_one::MODEL.to_string());
     let model = session

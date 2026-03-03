@@ -362,7 +362,7 @@ async fn summarize_context_three_requests_and_instructions() {
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    // Verify rollout contains regular sampling TurnContext entries and a Compacted entry.
+    // Verify rollout contains user-turn TurnContext entries and a Compacted entry.
     println!("rollout path: {}", rollout_path.display());
     let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
         panic!(
@@ -393,9 +393,9 @@ async fn summarize_context_three_requests_and_instructions() {
         }
     }
 
-    assert!(
-        regular_turn_context_count == 2,
-        "expected two regular sampling TurnContext entries in rollout"
+    assert_eq!(
+        regular_turn_context_count, 2,
+        "rollout should contain one TurnContext entry per real user turn"
     );
     assert!(
         saw_compacted_summary,
@@ -2080,9 +2080,9 @@ async fn auto_compact_persists_rollout_entries() {
         }
     }
 
-    assert!(
-        turn_context_count >= 2,
-        "expected at least two turn context entries, got {turn_context_count}"
+    assert_eq!(
+        turn_context_count, 3,
+        "rollout should contain one TurnContext entry per real user turn"
     );
 }
 

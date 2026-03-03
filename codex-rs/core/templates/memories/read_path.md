@@ -48,13 +48,75 @@ Quick-pass budget:
 During execution: if you hit repeated errors, confusing behavior, or suspect
 relevant prior context, redo the quick memory pass.
 
-When to update memory:
+How to decide whether to verify memory:
+
+- Consider both risk of drift and verification effort.
+- If a fact is likely to drift and is cheap to verify, verify it before
+  answering.
+- If a fact is likely to drift but verification is expensive, slow, or
+  disruptive, it is acceptable to answer from memory in an interactive turn,
+  but you should say that it is memory-derived, note that it may be stale, and
+  consider offering to refresh it live.
+- If a fact is lower-drift and cheap to verify, use judgment: verification is
+  more important when the fact is central to the answer or especially easy to
+  confirm.
+- If a fact is lower-drift and expensive to verify, it is usually fine to
+  answer from memory directly.
+
+When answering from memory without current verification:
+
+- If you rely on memory for a fact that you did not verify in the current turn,
+  say so briefly in the final answer.
+- If that fact is plausibly drift-prone or comes from an older note, older
+  snapshot, or prior run summary, say that it may be stale or outdated.
+- If live verification was skipped and a refresh would be useful in the
+  interactive context, consider offering to verify or refresh it live.
+- Do not present unverified memory-derived facts as confirmed-current.
+- For interactive requests, prefer a short refresh offer over silently doing
+  expensive verification that the user did not ask for.
+- When the unverified fact is about prior results, commands, timing, or an
+  older snapshot, a concrete refresh offer can be especially helpful.
+
+When to update memory (automatic, same turn; required):
 
 - Treat memory as guidance, not truth: if memory conflicts with current repo
   state, tool outputs, environment, or user feedback, current evidence wins.
-- If you discover stale/misleading memory, update memory files accordingly.
-- When user explicitly asks to remember/update memory, revise memory_summary.md
-  and/or MEMORY.md.
+- Memory is writable. You are authorized to edit {{ base_path }}/MEMORY.md and
+  {{ base_path }}/memory_summary.md when stale guidance is detected.
+- If any memory fact conflicts with current evidence (repo state, tool output,
+  or user correction), you MUST update memory in the same turn. Do not wait for
+  a separate user prompt.
+- If you detect stale memory, updating MEMORY.md is part of task completion,
+  not optional cleanup.
+- A final answer without the required MEMORY.md edit is incorrect.
+- A memory entry can be partially stale: if the broad guidance is still useful
+  but a stored detail is outdated (for example line numbers, exact paths, exact
+  commands, or exact model/version strings), you should keep using current
+  evidence in your answer and update the stale detail in MEMORY.md.
+- Correcting only the answer is not enough when you have identified a stale
+  stored detail in memory.
+- If memory contains a broad point that is still right but any concrete stored
+  detail is wrong or outdated, the memory is stale and MEMORY.md should be
+  corrected in the same turn after you verify the replacement.
+- Required behavior after detecting stale memory:
+  1. Verify the correct replacement using local evidence.
+  2. Continue the task using current evidence; do not rely on stale memory.
+  3. Edit memory files later in the same turn, before your final response:
+     - Always update {{ base_path }}/MEMORY.md.
+     - Update {{ base_path }}/memory_summary.md only if the correction affects
+       reusable guidance and you have complete local file context for a
+       targeted edit.
+  4. Read back the changed MEMORY.md lines to confirm the update.
+  5. Finalize the task after the memory updates are written.
+- Do not finish the turn until the stale memory is corrected or you have
+  determined the correction is ambiguous.
+- If you verified a contradiction and did not edit MEMORY.md, the task is
+  incomplete.
+- Only ask a clarifying question instead of editing when the replacement is
+  ambiguous (multiple plausible targets with low confidence and no single
+  verified replacement from local evidence).
+- When user explicitly asks to remember something or update the memory, revise
+  the files accordingly.
 
 Memory citation requirements:
 

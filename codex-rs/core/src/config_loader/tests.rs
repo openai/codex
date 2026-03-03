@@ -5,6 +5,7 @@ use crate::config::ConfigOverrides;
 use crate::config::ConfigToml;
 use crate::config::ConstraintError;
 use crate::config::ProjectConfig;
+use crate::config_loader::CloudRequirementsLoadError;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLoadError;
@@ -576,7 +577,7 @@ allowed_approval_policies = ["on-request"]
             ..LoaderOverrides::default()
         },
         CloudRequirementsLoader::new(async {
-            Some(ConfigRequirementsToml {
+            Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
@@ -584,7 +585,7 @@ allowed_approval_policies = ["on-request"]
                 rules: None,
                 enforce_residency: None,
                 network: None,
-            })
+            }))
         }),
     )
     .await?;
@@ -671,7 +672,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         network: None,
     };
     let expected = requirements.clone();
-    let cloud_requirements = CloudRequirementsLoader::new(async move { Some(requirements) });
+    let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
 
     let layers = load_config_layers_state(
         &codex_home,
@@ -698,6 +699,31 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
             requirement_source: RequirementSource::CloudRequirements,
         })
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_layers_fails_when_cloud_requirements_loader_fails() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let err = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::new(async {
+            Err(CloudRequirementsLoadError::new("cloud requirements failed"))
+        }),
+    )
+    .await
+    .expect_err("cloud requirements failure should fail closed");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    assert!(err.to_string().contains("cloud requirements failed"));
 
     Ok(())
 }
@@ -1089,6 +1115,91 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn cli_override_can_update_project_local_mcp_server_when_project_is_trusted()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    let dot_codex = project_root.join(".codex");
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::create_dir_all(&dot_codex).await?;
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        dot_codex.join(CONFIG_TOML_FILE),
+        r#"
+[mcp_servers.sentry]
+url = "https://mcp.sentry.dev/mcp"
+enabled = false
+"#,
+    )
+    .await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .cli_overrides(vec![(
+            "mcp_servers.sentry.enabled".to_string(),
+            TomlValue::Boolean(true),
+        )])
+        .fallback_cwd(Some(nested))
+        .build()
+        .await?;
+
+    let server = config
+        .mcp_servers
+        .get()
+        .get("sentry")
+        .expect("trusted project MCP server should load");
+    assert!(server.enabled);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_override_for_disabled_project_local_mcp_server_returns_invalid_transport()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    let dot_codex = project_root.join(".codex");
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::create_dir_all(&dot_codex).await?;
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        dot_codex.join(CONFIG_TOML_FILE),
+        r#"
+[mcp_servers.sentry]
+url = "https://mcp.sentry.dev/mcp"
+enabled = false
+"#,
+    )
+    .await?;
+
+    let err = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .cli_overrides(vec![(
+            "mcp_servers.sentry.enabled".to_string(),
+            TomlValue::Boolean(true),
+        )])
+        .fallback_cwd(Some(nested))
+        .build()
+        .await
+        .expect_err("untrusted project layer should not provide MCP transport");
+
+    assert!(
+        err.to_string().contains("invalid transport")
+            && err.to_string().contains("mcp_servers.sentry"),
+        "unexpected error: {err}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
@@ -1390,6 +1501,7 @@ prefix_rules = [
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["rm"]),
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             }
@@ -1415,6 +1527,7 @@ prefix_rules = [
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "status"]),
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 }],
             }
@@ -1426,6 +1539,7 @@ prefix_rules = [
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["hg", "status"]),
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 }],
             }
@@ -1509,6 +1623,7 @@ prefix_rules = []
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             }
@@ -1547,6 +1662,7 @@ prefix_rules = []
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             }
@@ -1561,6 +1677,7 @@ prefix_rules = []
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["git".to_string(), "push".to_string()],
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 }],
             }

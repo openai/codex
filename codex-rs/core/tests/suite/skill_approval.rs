@@ -2,8 +2,6 @@
 #![cfg(unix)]
 
 use anyhow::Result;
-use codex_core::config::Config;
-use codex_core::features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -13,18 +11,28 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::zsh_fork::build_zsh_fork_test;
+use core_test_support::zsh_fork::restrictive_workspace_write_policy;
+use core_test_support::zsh_fork::zsh_fork_runtime;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+
+fn absolute_path(path: &Path) -> AbsolutePathBuf {
+    match AbsolutePathBuf::try_from(path) {
+        Ok(path) => path,
+        Err(err) => panic!("absolute path: {err}"),
+    }
+}
 
 fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
     let metadata_dir = home.join("skills").join(name).join("agents");
@@ -107,116 +115,6 @@ description: {name} skill
     permissions.set_mode(0o755);
     fs::set_permissions(&script_path, permissions)?;
     Ok(script_path)
-}
-
-fn find_test_zsh_path() -> Result<Option<PathBuf>> {
-    use core_test_support::fetch_dotslash_file;
-
-    let repo_root = codex_utils_cargo_bin::repo_root()?;
-    let dotslash_zsh = repo_root.join("codex-rs/app-server/tests/suite/zsh");
-    if !dotslash_zsh.is_file() {
-        eprintln!(
-            "skipping zsh-fork skill test: shared zsh DotSlash file not found at {}",
-            dotslash_zsh.display()
-        );
-        return Ok(None);
-    }
-
-    match fetch_dotslash_file(&dotslash_zsh, None) {
-        Ok(path) => Ok(Some(path)),
-        Err(error) => {
-            eprintln!("skipping zsh-fork skill test: failed to fetch zsh via dotslash: {error:#}");
-            Ok(None)
-        }
-    }
-}
-
-fn supports_exec_wrapper_intercept(zsh_path: &Path) -> bool {
-    let status = std::process::Command::new(zsh_path)
-        .arg("-fc")
-        .arg("/usr/bin/true")
-        .env("EXEC_WRAPPER", "/usr/bin/false")
-        .status();
-    match status {
-        Ok(status) => !status.success(),
-        Err(_) => false,
-    }
-}
-
-#[derive(Clone)]
-struct ZshForkRuntime {
-    zsh_path: PathBuf,
-    main_execve_wrapper_exe: PathBuf,
-}
-
-impl ZshForkRuntime {
-    fn apply_to_config(
-        &self,
-        config: &mut Config,
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
-    ) {
-        use codex_config::Constrained;
-
-        config.features.enable(Feature::ShellTool);
-        config.features.enable(Feature::ShellZshFork);
-        config.zsh_path = Some(self.zsh_path.clone());
-        config.main_execve_wrapper_exe = Some(self.main_execve_wrapper_exe.clone());
-        config.permissions.allow_login_shell = false;
-        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy);
-    }
-}
-
-fn restrictive_workspace_write_policy() -> SandboxPolicy {
-    SandboxPolicy::WorkspaceWrite {
-        writable_roots: Vec::new(),
-        read_only_access: Default::default(),
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    }
-}
-
-fn zsh_fork_runtime(test_name: &str) -> Result<Option<ZshForkRuntime>> {
-    let Some(zsh_path) = find_test_zsh_path()? else {
-        return Ok(None);
-    };
-    if !supports_exec_wrapper_intercept(&zsh_path) {
-        eprintln!(
-            "skipping {test_name}: zsh does not support EXEC_WRAPPER intercepts ({})",
-            zsh_path.display()
-        );
-        return Ok(None);
-    }
-    let Ok(main_execve_wrapper_exe) = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")
-    else {
-        eprintln!("skipping {test_name}: unable to resolve `codex-execve-wrapper` binary");
-        return Ok(None);
-    };
-
-    Ok(Some(ZshForkRuntime {
-        zsh_path,
-        main_execve_wrapper_exe,
-    }))
-}
-
-async fn build_zsh_fork_test<F>(
-    server: &wiremock::MockServer,
-    runtime: ZshForkRuntime,
-    approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
-    pre_build_hook: F,
-) -> Result<TestCodex>
-where
-    F: FnOnce(&Path) + Send + 'static,
-{
-    let mut builder = test_codex()
-        .with_pre_build_hook(pre_build_hook)
-        .with_config(move |config| {
-            runtime.apply_to_config(config, approval_policy, sandbox_policy);
-        });
-    builder.build(server).await
 }
 
 fn skill_script_command(test: &TestCodex, script_name: &str) -> Result<(String, String)> {
@@ -330,8 +228,14 @@ permissions:
         approval.additional_permissions,
         Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
-                read: Some(vec![PathBuf::from("./data")]),
-                write: Some(vec![PathBuf::from("./output")]),
+                read: Some(vec![absolute_path(
+                    &test.codex_home_path().join("skills/mbolin-test-skill/data"),
+                )]),
+                write: Some(vec![absolute_path(
+                    &test
+                        .codex_home_path()
+                        .join("skills/mbolin-test-skill/output"),
+                )]),
             }),
             ..Default::default()
         })
@@ -590,7 +494,7 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
         Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
                 read: None,
-                write: Some(vec![allowed_dir.clone()]),
+                write: Some(vec![absolute_path(&allowed_dir)]),
             }),
             ..Default::default()
         })

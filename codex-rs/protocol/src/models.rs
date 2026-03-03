@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 
 use codex_utils_image::load_and_resize_to_fit;
 use serde::Deserialize;
@@ -15,11 +14,14 @@ use crate::protocol::AskForApproval;
 use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
 use crate::protocol::NetworkAccess;
+use crate::protocol::REALTIME_CONVERSATION_CLOSE_TAG;
+use crate::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
 use codex_execpolicy::Policy;
 use codex_git::GhostCommit;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
@@ -54,8 +56,8 @@ impl SandboxPermissions {
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct FileSystemPermissions {
-    pub read: Option<Vec<PathBuf>>,
-    pub write: Option<Vec<PathBuf>>,
+    pub read: Option<Vec<AbsolutePathBuf>>,
+    pub write: Option<Vec<AbsolutePathBuf>>,
 }
 
 impl FileSystemPermissions {
@@ -340,6 +342,9 @@ const SANDBOX_MODE_WORKSPACE_WRITE: &str =
     include_str!("prompts/permissions/sandbox_mode/workspace_write.md");
 const SANDBOX_MODE_READ_ONLY: &str = include_str!("prompts/permissions/sandbox_mode/read_only.md");
 
+const REALTIME_START_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_start.md");
+const REALTIME_END_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_end.md");
+
 impl DeveloperInstructions {
     pub fn new<T: Into<String>>(text: T) -> Self {
         Self { text: text.into() }
@@ -406,6 +411,20 @@ impl DeveloperInstructions {
     pub fn model_switch_message(model_instructions: String) -> Self {
         DeveloperInstructions::new(format!(
             "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{model_instructions}\n</model_switch>"
+        ))
+    }
+
+    pub fn realtime_start_message() -> Self {
+        DeveloperInstructions::new(format!(
+            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
+            REALTIME_START_INSTRUCTIONS.trim()
+        ))
+    }
+
+    pub fn realtime_end_message(reason: &str) -> Self {
+        DeveloperInstructions::new(format!(
+            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n\nReason: {reason}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
+            REALTIME_END_INSTRUCTIONS.trim()
         ))
     }
 

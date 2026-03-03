@@ -521,9 +521,6 @@ pub(crate) mod errors {
                 SandboxTransformError::SeatbeltUnavailable => CodexErr::UnsupportedOperation(
                     "seatbelt sandbox is only available on macOS".to_string(),
                 ),
-                SandboxTransformError::InvalidAdditionalPermissionsPath(path) => {
-                    CodexErr::InvalidRequest(format!("invalid additional_permissions path: {path}"))
-                }
             }
         }
     }

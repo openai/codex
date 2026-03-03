@@ -69,6 +69,7 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         visibility: ModelVisibility::None,
         supported_in_api: true,
         priority: 99,
+        availability_nux: None,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
         model_messages: local_personality_messages_for_slug(slug),

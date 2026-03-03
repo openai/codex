@@ -38,7 +38,7 @@ struct AgentLabel<'a> {
 
 pub(crate) fn agent_picker_status_dot_spans(is_closed: bool) -> Vec<Span<'static>> {
     let dot = if is_closed {
-        "•".dark_gray()
+        "•".into()
     } else {
         "•".green()
     };
@@ -283,16 +283,16 @@ fn agent_label_spans(agent: AgentLabel<'_>) -> Vec<Span<'static>> {
     let role = agent.role.map(str::trim).filter(|role| !role.is_empty());
 
     if let Some(nickname) = nickname {
-        spans.push(Span::from(nickname.to_string()).light_blue().bold());
+        spans.push(Span::from(nickname.to_string()).cyan().bold());
     } else if let Some(thread_id) = agent.thread_id {
-        spans.push(Span::from(thread_id.to_string()).dim());
+        spans.push(Span::from(thread_id.to_string()).cyan());
     } else {
-        spans.push(Span::from("agent").dim());
+        spans.push(Span::from("agent").cyan());
     }
 
     if let Some(role) = role {
         spans.push(Span::from(" ").dim());
-        spans.push(Span::from(format!("[{role}]")).dim());
+        spans.push(Span::from(format!("[{role}]")));
     }
 
     spans
@@ -346,7 +346,7 @@ fn wait_complete_lines(
     agent_statuses: &[CollabAgentStatusEntry],
 ) -> Vec<Line<'static>> {
     if statuses.is_empty() && agent_statuses.is_empty() {
-        return vec![Line::from(Span::from("No agents completed yet").dim())];
+        return vec![Line::from(Span::from("No agents completed yet"))];
     }
 
     let entries = if agent_statuses.is_empty() {
@@ -409,7 +409,7 @@ fn status_summary_line(status: &AgentStatus) -> Line<'static> {
 
 fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
     match status {
-        AgentStatus::PendingInit => vec![Span::from("Pending init").dim()],
+        AgentStatus::PendingInit => vec![Span::from("Pending init").cyan()],
         AgentStatus::Running => vec![Span::from("Running").cyan().bold()],
         AgentStatus::Completed(message) => {
             let mut spans = vec![Span::from("Completed").green()];
@@ -433,11 +433,11 @@ fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
             );
             if !error_preview.is_empty() {
                 spans.push(Span::from(" - ").dim());
-                spans.push(Span::from(error_preview).dim());
+                spans.push(Span::from(error_preview));
             }
             spans
         }
-        AgentStatus::Shutdown => vec![Span::from("Shutdown").dim()],
+        AgentStatus::Shutdown => vec![Span::from("Shutdown")],
         AgentStatus::NotFound => vec![Span::from("Not found").red()],
     }
 }
@@ -553,10 +553,11 @@ mod tests {
         let lines = cell.display_lines(200);
         let title = &lines[0];
         assert_eq!(title.spans[2].content.as_ref(), "Robie");
-        assert_eq!(title.spans[2].style.fg, Some(Color::LightBlue));
+        assert_eq!(title.spans[2].style.fg, Some(Color::Cyan));
         assert!(title.spans[2].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(title.spans[4].content.as_ref(), "[explorer]");
-        assert!(title.spans[4].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(title.spans[4].style.fg, None);
+        assert!(!title.spans[4].style.add_modifier.contains(Modifier::DIM));
     }
 
     fn cell_to_text(cell: &PlainHistoryCell) -> String {

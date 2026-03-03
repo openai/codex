@@ -403,6 +403,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 default_reasoning_summary: ReasoningSummary::Auto,
                 support_verbosity: false,
                 default_verbosity: None,
+                availability_nux: None,
                 apply_patch_tool_type: None,
                 truncation_policy: TruncationPolicyConfig::bytes(10_000),
                 supports_parallel_tool_calls: false,

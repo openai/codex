@@ -2,6 +2,8 @@ use super::CoreShellActionProvider;
 #[cfg(target_os = "macos")]
 use super::CoreShellCommandExecutor;
 use super::ParsedShellCommand;
+use super::commands_for_intercepted_exec_policy;
+use super::evaluate_intercepted_exec_policy;
 use super::extract_shell_script;
 use super::join_program_and_argv;
 use super::map_exec_result;
@@ -12,14 +14,16 @@ use crate::config::Permissions;
 #[cfg(target_os = "macos")]
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::exec::SandboxType;
-#[cfg(target_os = "macos")]
 use crate::protocol::AskForApproval;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
-#[cfg(target_os = "macos")]
 use crate::sandboxing::SandboxPermissions;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+use codex_execpolicy::Decision;
+use codex_execpolicy::Evaluation;
+use codex_execpolicy::PolicyParser;
+use codex_execpolicy::RuleMatch;
 #[cfg(target_os = "macos")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
@@ -38,6 +42,22 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
+
+fn host_absolute_path(segments: &[&str]) -> String {
+    let mut path = if cfg!(windows) {
+        PathBuf::from(r"C:\")
+    } else {
+        PathBuf::from("/")
+    };
+    for segment in segments {
+        path.push(segment);
+    }
+    path.to_string_lossy().into_owned()
+}
+
+fn starlark_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
 
 #[test]
 fn extract_shell_script_preserves_login_flag() {
@@ -128,6 +148,24 @@ fn join_program_and_argv_replaces_original_argv_zero() {
 }
 
 #[test]
+fn commands_for_intercepted_exec_policy_parses_plain_shell_wrappers() {
+    let program = AbsolutePathBuf::try_from(host_absolute_path(&["bin", "bash"])).unwrap();
+    let candidate_commands = commands_for_intercepted_exec_policy(
+        &program,
+        &["not-bash".into(), "-lc".into(), "git status && pwd".into()],
+    );
+
+    assert_eq!(
+        candidate_commands.commands,
+        vec![
+            vec!["git".to_string(), "status".to_string()],
+            vec!["pwd".to_string()],
+        ]
+    );
+    assert!(!candidate_commands.used_complex_parsing);
+}
+
+#[test]
 fn map_exec_result_preserves_stdout_and_stderr() {
     let out = map_exec_result(
         SandboxType::None,
@@ -152,7 +190,9 @@ fn shell_request_escalation_execution_is_explicit() {
     let requested_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: None,
-            write: Some(vec![PathBuf::from("./output")]),
+            write: Some(vec![
+                AbsolutePathBuf::from_absolute_path("/tmp/output").unwrap(),
+            ]),
         }),
         ..Default::default()
     };
@@ -200,6 +240,171 @@ fn shell_request_escalation_execution_is_explicit() {
             },
         )),
     );
+}
+
+#[test]
+fn evaluate_intercepted_exec_policy_uses_wrapper_command_when_shell_wrapper_parsing_disabled() {
+    let policy_src = r#"prefix_rule(pattern = ["npm", "publish"], decision = "prompt")"#;
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src).unwrap();
+    let policy = parser.build();
+    let program = AbsolutePathBuf::try_from(host_absolute_path(&["bin", "zsh"])).unwrap();
+
+    let enable_intercepted_exec_policy_shell_wrapper_parsing = false;
+    let evaluation = evaluate_intercepted_exec_policy(
+        &policy,
+        &program,
+        &[
+            "zsh".to_string(),
+            "-lc".to_string(),
+            "npm publish".to_string(),
+        ],
+        AskForApproval::OnRequest,
+        &SandboxPolicy::new_read_only_policy(),
+        SandboxPermissions::UseDefault,
+        enable_intercepted_exec_policy_shell_wrapper_parsing,
+    );
+
+    assert!(
+        matches!(
+            evaluation.matched_rules.as_slice(),
+            [RuleMatch::HeuristicsRuleMatch { command, decision: Decision::Allow }]
+                if command == &vec![
+                    program.to_string_lossy().to_string(),
+                    "-lc".to_string(),
+                    "npm publish".to_string(),
+                ]
+        ),
+        r#"This is allowed because when shell wrapper parsing is disabled,
+the policy evaluation does not try to parse the shell command and instead
+matches the whole command line with the resolved program path, which in this
+case is `/bin/zsh` followed by some arguments.
+
+Because there is no policy rule for `/bin/zsh` or `zsh`, the decision is to
+allow the command and let the sandbox be responsible for enforcing any
+restrictions.
+
+That said, if /bin/zsh is the zsh-fork, then the execve wrapper should
+ultimately intercept the `npm publish` command and apply the policy rules to it.
+"#
+    );
+}
+
+#[test]
+fn evaluate_intercepted_exec_policy_matches_inner_shell_commands_when_enabled() {
+    let policy_src = r#"prefix_rule(pattern = ["npm", "publish"], decision = "prompt")"#;
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src).unwrap();
+    let policy = parser.build();
+    let program = AbsolutePathBuf::try_from(host_absolute_path(&["bin", "bash"])).unwrap();
+
+    let enable_intercepted_exec_policy_shell_wrapper_parsing = true;
+    let evaluation = evaluate_intercepted_exec_policy(
+        &policy,
+        &program,
+        &[
+            "bash".to_string(),
+            "-lc".to_string(),
+            "npm publish".to_string(),
+        ],
+        AskForApproval::OnRequest,
+        &SandboxPolicy::new_read_only_policy(),
+        SandboxPermissions::UseDefault,
+        enable_intercepted_exec_policy_shell_wrapper_parsing,
+    );
+
+    assert_eq!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec!["npm".to_string(), "publish".to_string()],
+                decision: Decision::Prompt,
+                resolved_program: None,
+                justification: None,
+            }],
+        }
+    );
+}
+
+#[test]
+fn intercepted_exec_policy_uses_host_executable_mappings() {
+    let git_path = host_absolute_path(&["usr", "bin", "git"]);
+    let git_path_literal = starlark_string(&git_path);
+    let policy_src = format!(
+        r#"
+prefix_rule(pattern = ["git", "status"], decision = "prompt")
+host_executable(name = "git", paths = ["{git_path_literal}"])
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", &policy_src).unwrap();
+    let policy = parser.build();
+    let program = AbsolutePathBuf::try_from(git_path).unwrap();
+
+    let evaluation = evaluate_intercepted_exec_policy(
+        &policy,
+        &program,
+        &["git".to_string(), "status".to_string()],
+        AskForApproval::OnRequest,
+        &SandboxPolicy::new_read_only_policy(),
+        SandboxPermissions::UseDefault,
+        false,
+    );
+
+    assert_eq!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec!["git".to_string(), "status".to_string()],
+                decision: Decision::Prompt,
+                resolved_program: Some(program),
+                justification: None,
+            }],
+        }
+    );
+    assert!(CoreShellActionProvider::decision_driven_by_policy(
+        &evaluation.matched_rules,
+        evaluation.decision
+    ));
+}
+
+#[test]
+fn intercepted_exec_policy_rejects_disallowed_host_executable_mapping() {
+    let allowed_git = host_absolute_path(&["usr", "bin", "git"]);
+    let other_git = host_absolute_path(&["opt", "homebrew", "bin", "git"]);
+    let allowed_git_literal = starlark_string(&allowed_git);
+    let policy_src = format!(
+        r#"
+prefix_rule(pattern = ["git", "status"], decision = "prompt")
+host_executable(name = "git", paths = ["{allowed_git_literal}"])
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", &policy_src).unwrap();
+    let policy = parser.build();
+    let program = AbsolutePathBuf::try_from(other_git.clone()).unwrap();
+
+    let evaluation = evaluate_intercepted_exec_policy(
+        &policy,
+        &program,
+        &["git".to_string(), "status".to_string()],
+        AskForApproval::OnRequest,
+        &SandboxPolicy::new_read_only_policy(),
+        SandboxPermissions::UseDefault,
+        false,
+    );
+
+    assert!(matches!(
+        evaluation.matched_rules.as_slice(),
+        [RuleMatch::HeuristicsRuleMatch { command, .. }]
+            if command == &vec![other_git, "status".to_string()]
+    ));
+    assert!(!CoreShellActionProvider::decision_driven_by_policy(
+        &evaluation.matched_rules,
+        evaluation.decision
+    ));
 }
 
 #[cfg(target_os = "macos")]

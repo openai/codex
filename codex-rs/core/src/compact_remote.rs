@@ -13,7 +13,6 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
-use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
@@ -27,15 +26,8 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
-    previous_user_turn_model: Option<&str>,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(
-        &sess,
-        &turn_context,
-        initial_context_injection,
-        previous_user_turn_model,
-    )
-    .await?;
+    run_remote_compact_task_inner(&sess, &turn_context, initial_context_injection).await?;
     Ok(())
 }
 
@@ -50,28 +42,16 @@ pub(crate) async fn run_remote_compact_task(
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(
-        &sess,
-        &turn_context,
-        InitialContextInjection::DoNotInject,
-        None,
-    )
-    .await
+    run_remote_compact_task_inner(&sess, &turn_context, InitialContextInjection::DoNotInject).await
 }
 
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
-    previous_user_turn_model: Option<&str>,
 ) -> CodexResult<()> {
-    if let Err(err) = run_remote_compact_task_inner_impl(
-        sess,
-        turn_context,
-        initial_context_injection,
-        previous_user_turn_model,
-    )
-    .await
+    if let Err(err) =
+        run_remote_compact_task_inner_impl(sess, turn_context, initial_context_injection).await
     {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
@@ -86,7 +66,6 @@ async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
-    previous_user_turn_model: Option<&str>,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
@@ -148,7 +127,6 @@ async fn run_remote_compact_task_inner_impl(
         turn_context.as_ref(),
         new_history,
         initial_context_injection,
-        previous_user_turn_model,
     )
     .await;
 
@@ -159,16 +137,13 @@ async fn run_remote_compact_task_inner_impl(
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
-    sess.replace_history(new_history.clone(), reference_context_item)
-        .await;
-    sess.recompute_token_usage(turn_context).await;
-
     let compacted_item = CompactedItem {
         message: String::new(),
-        replacement_history: Some(new_history),
+        replacement_history: Some(new_history.clone()),
     };
-    sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
+    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
+    sess.recompute_token_usage(turn_context).await;
 
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
@@ -180,7 +155,6 @@ pub(crate) async fn process_compacted_history(
     turn_context: &TurnContext,
     mut compacted_history: Vec<ResponseItem>,
     initial_context_injection: InitialContextInjection,
-    previous_user_turn_model: Option<&str>,
 ) -> Vec<ResponseItem> {
     // Mid-turn compaction is the only path that must inject initial context above the last user
     // message in the replacement history. Pre-turn compaction instead injects context after the
@@ -189,8 +163,7 @@ pub(crate) async fn process_compacted_history(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
-        sess.build_initial_context(turn_context, previous_user_turn_model)
-            .await
+        sess.build_initial_context(turn_context).await
     } else {
         Vec::new()
     };

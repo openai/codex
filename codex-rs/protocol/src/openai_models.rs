@@ -99,6 +99,11 @@ pub struct ModelUpgrade {
     pub migration_markdown: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct ModelAvailabilityNux {
+    pub message: String,
+}
+
 /// Metadata describing a Codex-supported model.
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ModelPreset {
@@ -123,6 +128,8 @@ pub struct ModelPreset {
     pub upgrade: Option<ModelUpgrade>,
     /// Whether this preset should appear in the picker UI.
     pub show_in_picker: bool,
+    /// Availability NUX shown when this preset becomes accessible to the user.
+    pub availability_nux: Option<ModelAvailabilityNux>,
     /// whether this model is supported in the api
     pub supported_in_api: bool,
     /// Input modalities accepted when composing user turns for this preset.
@@ -225,6 +232,7 @@ pub struct ModelInfo {
     pub visibility: ModelVisibility,
     pub supported_in_api: bool,
     pub priority: i32,
+    pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -410,6 +418,7 @@ impl From<ModelInfo> for ModelPreset {
                 migration_markdown: Some(upgrade.migration_markdown.clone()),
             }),
             show_in_picker: info.visibility == ModelVisibility::List,
+            availability_nux: info.availability_nux,
             supported_in_api: info.supported_in_api,
             input_modalities: info.input_modalities,
         }
@@ -495,6 +504,7 @@ mod tests {
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
+            availability_nux: None,
             upgrade: None,
             base_instructions: "base".to_string(),
             model_messages: spec,
@@ -667,5 +677,58 @@ mod tests {
             Some(String::new())
         );
         assert_eq!(personality_variables.get_personality_message(None), None);
+    }
+
+    #[test]
+    fn model_info_defaults_availability_nux_to_none_when_omitted() {
+        let model: ModelInfo = serde_json::from_value(serde_json::json!({
+            "slug": "test-model",
+            "display_name": "Test Model",
+            "description": null,
+            "supported_reasoning_levels": [],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "supported_in_api": true,
+            "priority": 1,
+            "upgrade": null,
+            "base_instructions": "base",
+            "model_messages": null,
+            "supports_reasoning_summaries": false,
+            "default_reasoning_summary": "auto",
+            "support_verbosity": false,
+            "default_verbosity": null,
+            "apply_patch_tool_type": null,
+            "truncation_policy": {
+                "mode": "bytes",
+                "limit": 10000
+            },
+            "supports_parallel_tool_calls": false,
+            "context_window": null,
+            "auto_compact_token_limit": null,
+            "effective_context_window_percent": 95,
+            "experimental_supported_tools": [],
+            "input_modalities": ["text", "image"],
+            "prefer_websockets": false
+        }))
+        .expect("deserialize model info");
+
+        assert_eq!(model.availability_nux, None);
+    }
+
+    #[test]
+    fn model_preset_preserves_availability_nux() {
+        let preset = ModelPreset::from(ModelInfo {
+            availability_nux: Some(ModelAvailabilityNux {
+                message: "Try Spark.".to_string(),
+            }),
+            ..test_model(None)
+        });
+
+        assert_eq!(
+            preset.availability_nux,
+            Some(ModelAvailabilityNux {
+                message: "Try Spark.".to_string(),
+            })
+        );
     }
 }

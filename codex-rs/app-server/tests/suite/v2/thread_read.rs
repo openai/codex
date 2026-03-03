@@ -10,6 +10,7 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -78,6 +79,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
     assert_eq!(thread.id, conversation_id);
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
+    assert!(!thread.ephemeral, "stored rollouts should not be ephemeral");
     assert!(thread.path.as_ref().expect("thread path").is_absolute());
     assert_eq!(thread.cwd, PathBuf::from("/"));
     assert_eq!(thread.cli_version, "0.0.0");
@@ -219,25 +221,6 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    // `thread/name/set` operates on loaded threads (via ThreadManager). A rollout existing on disk
-    // is not enough; we must `thread/resume` first to load it into the running server.
-    let pre_resume_id = mcp
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: conversation_id.clone(),
-            ..Default::default()
-        })
-        .await?;
-    let pre_resume_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(pre_resume_id)),
-    )
-    .await??;
-    let ThreadResumeResponse {
-        thread: pre_resumed,
-        ..
-    } = to_response::<ThreadResumeResponse>(pre_resume_resp)?;
-    assert_eq!(pre_resumed.id, conversation_id);
-
     // Set a user-facing thread title.
     let new_name = "My renamed thread";
     let set_id = mcp
@@ -252,6 +235,15 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
     )
     .await??;
     let _: ThreadSetNameResponse = to_response::<ThreadSetNameResponse>(set_resp)?;
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/name/updated"),
+    )
+    .await??;
+    let notification: ThreadNameUpdatedNotification =
+        serde_json::from_value(notification.params.expect("thread/name/updated params"))?;
+    assert_eq!(notification.thread_id, conversation_id);
+    assert_eq!(notification.thread_name.as_deref(), Some(new_name));
 
     // Read should now surface `thread.name`, and the wire payload must include `name`.
     let read_id = mcp
@@ -277,6 +269,11 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
         thread_json.get("name").and_then(Value::as_str),
         Some(new_name),
         "thread/read must serialize `thread.name` on the wire"
+    );
+    assert_eq!(
+        thread_json.get("ephemeral").and_then(Value::as_bool),
+        Some(false),
+        "thread/read must serialize `thread.ephemeral` on the wire"
     );
 
     // List should also surface the name.
@@ -317,6 +314,11 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
         Some(new_name),
         "thread/list must serialize `thread.name` on the wire"
     );
+    assert_eq!(
+        listed_json.get("ephemeral").and_then(Value::as_bool),
+        Some(false),
+        "thread/list must serialize `thread.ephemeral` on the wire"
+    );
 
     // Resume should also surface the name.
     let resume_id = mcp
@@ -344,6 +346,11 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
         resumed_json.get("name").and_then(Value::as_str),
         Some(new_name),
         "thread/resume must serialize `thread.name` on the wire"
+    );
+    assert_eq!(
+        resumed_json.get("ephemeral").and_then(Value::as_bool),
+        Some(false),
+        "thread/resume must serialize `thread.ephemeral` on the wire"
     );
 
     Ok(())

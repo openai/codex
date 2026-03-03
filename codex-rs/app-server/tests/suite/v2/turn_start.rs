@@ -22,12 +22,14 @@ use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::TextElement;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
@@ -1071,6 +1073,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         panic!("expected CommandExecutionRequestApproval request");
     };
     assert_eq!(params.item_id, "call1");
+    let resolved_request_id = request_id.clone();
 
     // Approve and wait for task completion
     mcp.send_response(
@@ -1080,16 +1083,31 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         })?,
     )
     .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    let mut saw_resolved = false;
+    loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        match notification.method.as_str() {
+            "serverRequest/resolved" => {
+                let resolved: ServerRequestResolvedNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .clone()
+                        .expect("serverRequest/resolved params"),
+                )?;
+                assert_eq!(resolved.thread_id, thread.id);
+                assert_eq!(resolved.request_id, resolved_request_id);
+                saw_resolved = true;
+            }
+            "turn/completed" => {
+                assert!(saw_resolved, "serverRequest/resolved should arrive first");
+                break;
+            }
+            _ => {}
+        }
+    }
 
     // Second turn with approval_policy=never should not elicit approval
     let second_turn_id = mcp
@@ -1527,6 +1545,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     assert_eq!(params.item_id, "patch-call");
     assert_eq!(params.thread_id, thread.id);
     assert_eq!(params.turn_id, turn.id);
+    let resolved_request_id = request_id.clone();
     let expected_readme_path = workspace.join("README.md");
     let expected_readme_path = expected_readme_path.to_string_lossy().into_owned();
     pretty_assertions::assert_eq!(
@@ -1545,18 +1564,49 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         })?,
     )
     .await?;
-
-    let output_delta_notif = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/fileChange/outputDelta"),
-    )
-    .await??;
-    let output_delta: FileChangeOutputDeltaNotification = serde_json::from_value(
-        output_delta_notif
-            .params
-            .clone()
-            .expect("item/fileChange/outputDelta params"),
-    )?;
+    let mut saw_resolved = false;
+    let mut output_delta: Option<FileChangeOutputDeltaNotification> = None;
+    let mut completed_file_change: Option<ThreadItem> = None;
+    while !(output_delta.is_some() && completed_file_change.is_some()) {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        match notification.method.as_str() {
+            "serverRequest/resolved" => {
+                let resolved: ServerRequestResolvedNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .clone()
+                        .expect("serverRequest/resolved params"),
+                )?;
+                assert_eq!(resolved.thread_id, thread.id);
+                assert_eq!(resolved.request_id, resolved_request_id);
+                saw_resolved = true;
+            }
+            "item/fileChange/outputDelta" => {
+                assert!(saw_resolved, "serverRequest/resolved should arrive first");
+                let notification: FileChangeOutputDeltaNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .clone()
+                        .expect("item/fileChange/outputDelta params"),
+                )?;
+                output_delta = Some(notification);
+            }
+            "item/completed" => {
+                let completed: ItemCompletedNotification = serde_json::from_value(
+                    notification.params.clone().expect("item/completed params"),
+                )?;
+                if let ThreadItem::FileChange { .. } = completed.item {
+                    assert!(saw_resolved, "serverRequest/resolved should arrive first");
+                    completed_file_change = Some(completed.item);
+                }
+            }
+            _ => {}
+        }
+    }
+    let output_delta = output_delta.expect("file change output delta should be observed");
     assert_eq!(output_delta.thread_id, thread.id);
     assert_eq!(output_delta.turn_id, turn.id);
     assert_eq!(output_delta.item_id, "patch-call");
@@ -1566,37 +1616,22 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         output_delta.delta
     );
 
-    let completed_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
-        loop {
-            let completed_notif = mcp
-                .read_stream_until_notification_message("item/completed")
-                .await?;
-            let completed: ItemCompletedNotification = serde_json::from_value(
-                completed_notif
-                    .params
-                    .clone()
-                    .expect("item/completed params"),
-            )?;
-            if let ThreadItem::FileChange { .. } = completed.item {
-                return Ok::<ThreadItem, anyhow::Error>(completed.item);
-            }
-        }
-    })
-    .await??;
+    let completed_file_change =
+        completed_file_change.expect("file change completion should be observed");
     let ThreadItem::FileChange { ref id, status, .. } = completed_file_change else {
         unreachable!("loop ensures we break on file change items");
     };
     assert_eq!(id, "patch-call");
     assert_eq!(status, PatchApplyStatus::Completed);
 
+    let readme_contents = std::fs::read_to_string(expected_readme_path)?;
+    assert_eq!(readme_contents, "new line\n");
+
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("codex/event/task_complete"),
     )
     .await??;
-
-    let readme_contents = std::fs::read_to_string(expected_readme_path)?;
-    assert_eq!(readme_contents, "new line\n");
 
     Ok(())
 }

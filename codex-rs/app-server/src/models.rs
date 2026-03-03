@@ -32,6 +32,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
             model_link: upgrade.model_link.clone(),
             migration_markdown: upgrade.migration_markdown.clone(),
         }),
+        availability_nux: preset.availability_nux.map(Into::into),
         display_name: preset.display_name.to_string(),
         description: preset.description.to_string(),
         hidden: !preset.show_in_picker,

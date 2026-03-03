@@ -18,6 +18,22 @@ use codex_core::error::Result;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
 
+/// Linux "platform defaults" that keep common system binaries and dynamic
+/// libraries readable when `ReadOnlyAccess::Restricted` requests them.
+///
+/// These are intentionally system-level paths only (plus Nix store roots) so
+/// `include_platform_defaults` does not silently widen access to user data.
+const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/etc",
+    "/lib",
+    "/lib64",
+    "/nix/store",
+    "/run/current-system/sw",
+];
+
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BwrapOptions {
@@ -134,7 +150,8 @@ fn create_bwrap_flags(
 /// Build the bubblewrap filesystem mounts for a given sandbox policy.
 ///
 /// The mount order is important:
-/// 1. `--ro-bind / /` makes the entire filesystem read-only.
+/// 1. Full-read policies use `--ro-bind / /`; restricted-read policies start
+///    from `--tmpfs /` and layer scoped `--ro-bind` mounts.
 /// 2. `--dev /dev` mounts a minimal writable `/dev` with standard device nodes
 ///    (including `/dev/urandom`) even under a read-only root.
 /// 3. `--bind <root> <root>` re-enables writes for allowed roots, including
@@ -142,28 +159,69 @@ fn create_bwrap_flags(
 /// 4. `--ro-bind <subpath> <subpath>` re-applies read-only protections under
 ///    those writable roots so protected subpaths win.
 fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<Vec<String>> {
-    if !sandbox_policy.has_full_disk_read_access() {
-        return Err(CodexErr::UnsupportedOperation(
-            "Restricted read-only access is not yet supported by the Linux bubblewrap backend."
-                .to_string(),
-        ));
-    }
-
     let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
     ensure_mount_targets_exist(&writable_roots)?;
 
-    // Read-only root, then mount a minimal device tree.
-    // In bubblewrap (`bubblewrap.c`, `SETUP_MOUNT_DEV`), `--dev /dev` creates
-    // the standard minimal nodes: null, zero, full, random, urandom, and tty.
-    // `/dev` must be mounted before writable roots so explicit `/dev/*`
-    // writable binds remain visible.
-    let mut args = vec![
-        "--ro-bind".to_string(),
-        "/".to_string(),
-        "/".to_string(),
-        "--dev".to_string(),
-        "/dev".to_string(),
-    ];
+    let mut args = if sandbox_policy.has_full_disk_read_access() {
+        // Read-only root, then mount a minimal device tree.
+        // In bubblewrap (`bubblewrap.c`, `SETUP_MOUNT_DEV`), `--dev /dev`
+        // creates the standard minimal nodes: null, zero, full, random,
+        // urandom, and tty. `/dev` must be mounted before writable roots so
+        // explicit `/dev/*` writable binds remain visible.
+        vec![
+            "--ro-bind".to_string(),
+            "/".to_string(),
+            "/".to_string(),
+            "--dev".to_string(),
+            "/dev".to_string(),
+        ]
+    } else {
+        // Start from an empty filesystem and add only the approved readable
+        // roots plus a minimal `/dev`.
+        let mut args = vec![
+            "--tmpfs".to_string(),
+            "/".to_string(),
+            "--dev".to_string(),
+            "/dev".to_string(),
+        ];
+
+        let mut readable_roots: BTreeSet<PathBuf> = sandbox_policy
+            .get_readable_roots_with_cwd(cwd)
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        if sandbox_policy.include_platform_defaults() {
+            readable_roots.extend(
+                LINUX_PLATFORM_DEFAULT_READ_ROOTS
+                    .iter()
+                    .map(|path| PathBuf::from(*path))
+                    .filter(|path| path.exists()),
+            );
+        }
+
+        // A restricted policy can still explicitly request `/`, which is
+        // semantically equivalent to broad read access.
+        if readable_roots.iter().any(|root| root == Path::new("/")) {
+            args = vec![
+                "--ro-bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
+                "--dev".to_string(),
+                "/dev".to_string(),
+            ];
+        } else {
+            for root in readable_roots {
+                if !root.exists() {
+                    continue;
+                }
+                args.push("--ro-bind".to_string());
+                args.push(path_to_string(&root));
+                args.push(path_to_string(&root));
+            }
+        }
+
+        args
+    };
 
     for writable_root in &writable_roots {
         let root = writable_root.root.as_path();
@@ -322,9 +380,11 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[test]
     fn full_disk_write_full_network_returns_unwrapped_command() {
@@ -402,5 +462,61 @@ mod tests {
                 "/".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn restricted_read_only_uses_scoped_read_roots_instead_of_erroring() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let readable_root = temp_dir.path().join("readable");
+        std::fs::create_dir(&readable_root).expect("create readable root");
+
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![
+                    AbsolutePathBuf::try_from(readable_root.as_path())
+                        .expect("absolute readable root"),
+                ],
+            },
+        };
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+
+        assert_eq!(args[0..4], ["--tmpfs", "/", "--dev", "/dev"]);
+
+        let readable_root_str = path_to_string(&readable_root);
+        assert!(args.windows(3).any(|window| {
+            window
+                == [
+                    "--ro-bind",
+                    readable_root_str.as_str(),
+                    readable_root_str.as_str(),
+                ]
+        }));
+    }
+
+    #[test]
+    fn restricted_read_only_with_platform_defaults_includes_usr_when_present() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                readable_roots: Vec::new(),
+            },
+        };
+
+        // `ReadOnlyAccess::Restricted` always includes `cwd` as a readable
+        // root. Using `"/"` here would intentionally collapse to broad read
+        // access, so use a non-root cwd to exercise the restricted path.
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+
+        assert!(args.starts_with(&["--tmpfs".to_string(), "/".to_string()]));
+
+        if Path::new("/usr").exists() {
+            assert!(
+                args.windows(3)
+                    .any(|window| window == ["--ro-bind", "/usr", "/usr"])
+            );
+        }
     }
 }
