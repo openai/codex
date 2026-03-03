@@ -390,6 +390,9 @@ pub async fn reconcile_rollout(
     let mut metadata = outcome.metadata;
     let memory_mode = outcome.memory_mode.unwrap_or_else(|| "enabled".to_string());
     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
+    if let Ok(Some(existing_metadata)) = ctx.get_thread(metadata.id).await {
+        metadata.prefer_existing_git_info(&existing_metadata);
+    }
     match archived_only {
         Some(true) if metadata.archived_at.is_none() => {
             metadata.archived_at = Some(metadata.updated_at);

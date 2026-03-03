@@ -448,6 +448,9 @@ ON CONFLICT(thread_id, position) DO NOTHING
         for item in items {
             apply_rollout_item(&mut metadata, item, &self.default_provider);
         }
+        if let Some(existing_metadata) = existing_metadata.as_ref() {
+            metadata.prefer_existing_git_info(existing_metadata);
+        }
         if let Some(updated_at) = file_modified_time_utc(builder.rollout_path.as_path()).await {
             metadata.updated_at = updated_at;
         }
@@ -646,6 +649,7 @@ mod tests {
     use super::*;
     use crate::runtime::test_support::test_thread_metadata;
     use crate::runtime::test_support::unique_temp_dir;
+    use codex_protocol::protocol::GitInfo;
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
@@ -740,6 +744,70 @@ mod tests {
             .await
             .expect("memory mode should load");
         assert_eq!(memory_mode.as_deref(), Some("polluted"));
+    }
+
+    #[tokio::test]
+    async fn apply_rollout_items_preserves_existing_git_branch_and_fills_missing_git_fields() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000457").expect("valid thread id");
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        metadata.git_branch = Some("sqlite-branch".to_string());
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("initial upsert should succeed");
+
+        let created_at = metadata.created_at.to_rfc3339();
+        let builder = ThreadMetadataBuilder::new(
+            thread_id,
+            metadata.rollout_path.clone(),
+            metadata.created_at,
+            SessionSource::Cli,
+        );
+        let items = vec![RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                forked_from_id: None,
+                timestamp: created_at,
+                cwd: PathBuf::new(),
+                originator: String::new(),
+                cli_version: String::new(),
+                source: SessionSource::Cli,
+                agent_nickname: None,
+                agent_role: None,
+                model_provider: None,
+                base_instructions: None,
+                dynamic_tools: None,
+                memory_mode: None,
+            },
+            git: Some(GitInfo {
+                commit_hash: Some("rollout-sha".to_string()),
+                branch: Some("rollout-branch".to_string()),
+                repository_url: Some("git@example.com:openai/codex.git".to_string()),
+            }),
+        })];
+
+        runtime
+            .apply_rollout_items(&builder, &items, None, None)
+            .await
+            .expect("apply_rollout_items should succeed");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.git_sha.as_deref(), Some("rollout-sha"));
+        assert_eq!(persisted.git_branch.as_deref(), Some("sqlite-branch"));
+        assert_eq!(
+            persisted.git_origin_url.as_deref(),
+            Some("git@example.com:openai/codex.git")
+        );
     }
 
     #[tokio::test]
