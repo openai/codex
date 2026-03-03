@@ -596,34 +596,3 @@ impl InputItem {
         }
     }
 }
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-/// Deprecated in favor of AccountLoginCompletedNotification.
-pub struct LoginChatGptCompleteNotification {
-    #[schemars(with = "String")]
-    pub login_id: Uuid,
-    pub success: bool,
-    pub error: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionConfiguredNotification {
-    pub session_id: ThreadId,
-    pub model: String,
-    pub service_tier: Option<ServiceTier>,
-    pub reasoning_effort: Option<ReasoningEffort>,
-    pub history_log_id: u64,
-    #[ts(type = "number")]
-    pub history_entry_count: usize,
-    pub initial_messages: Option<Vec<EventMsg>>,
-    pub rollout_path: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-/// Deprecated notification. Use AccountUpdatedNotification instead.
-pub struct AuthStatusChangeNotification {
-    pub auth_method: Option<AuthMode>,
-}

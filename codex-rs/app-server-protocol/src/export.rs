@@ -45,36 +45,9 @@ const SPECIAL_DEFINITIONS: &[&str] = &[
     "ServerRequest",
 ];
 const FLAT_V2_SHARED_DEFINITIONS: &[&str] = &["ClientRequest", "EventMsg", "ServerNotification"];
-const V1_CLIENT_REQUEST_METHODS: &[&str] = &[
-    "newConversation",
-    "getConversationSummary",
-    "listConversations",
-    "resumeConversation",
-    "forkConversation",
-    "archiveConversation",
-    "sendUserMessage",
-    "sendUserTurn",
-    "interruptConversation",
-    "addConversationListener",
-    "removeConversationListener",
-    "gitDiffToRemote",
-    "loginApiKey",
-    "loginChatGpt",
-    "cancelLoginChatGpt",
-    "logoutChatGpt",
-    "getAuthStatus",
-    "getUserSavedConfig",
-    "setDefaultModel",
-    "getUserAgent",
-    "userInfo",
-    "execOneOffCommand",
-];
-const EXCLUDED_SERVER_NOTIFICATION_METHODS_FOR_JSON: &[&str] = &[
-    "authStatusChange",
-    "loginChatGptComplete",
-    "sessionConfigured",
-    "rawResponseItem/completed",
-];
+const V1_CLIENT_REQUEST_METHODS: &[&str] =
+    &["getConversationSummary", "gitDiffToRemote", "getAuthStatus"];
+const EXCLUDED_SERVER_NOTIFICATION_METHODS_FOR_JSON: &[&str] = &["rawResponseItem/completed"];
 
 #[derive(Clone)]
 pub struct GeneratedSchema {

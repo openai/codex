@@ -2073,7 +2073,9 @@ pub struct ThreadSetNameResponse {}
 #[ts(export_to = "v2/")]
 pub struct ThreadMetadataUpdateParams {
     pub thread_id: String,
-    /// Patch the stored Git metadata for this thread. Only non-null fields are updated.
+    /// Patch the stored Git metadata for this thread.
+    /// Omit a field to leave it unchanged, set it to `null` to clear it, or
+    /// provide a string to replace the stored value.
     #[ts(optional = nullable)]
     pub git_info: Option<ThreadMetadataGitInfoUpdateParams>,
 }
@@ -2082,54 +2084,36 @@ pub struct ThreadMetadataUpdateParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadMetadataGitInfoUpdateParams {
+    /// Omit to leave the stored commit unchanged, set to `null` to clear it,
+    /// or provide a non-empty string to replace it.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        serialize_with = "optional_nullable_string::serialize",
-        deserialize_with = "optional_nullable_string::deserialize"
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        deserialize_with = "super::serde_helpers::deserialize_double_option"
     )]
     #[ts(optional = nullable, type = "string | null")]
     pub sha: Option<Option<String>>,
+    /// Omit to leave the stored branch unchanged, set to `null` to clear it,
+    /// or provide a non-empty string to replace it.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        serialize_with = "optional_nullable_string::serialize",
-        deserialize_with = "optional_nullable_string::deserialize"
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        deserialize_with = "super::serde_helpers::deserialize_double_option"
     )]
     #[ts(optional = nullable, type = "string | null")]
     pub branch: Option<Option<String>>,
+    /// Omit to leave the stored origin URL unchanged, set to `null` to clear it,
+    /// or provide a non-empty string to replace it.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        serialize_with = "optional_nullable_string::serialize",
-        deserialize_with = "optional_nullable_string::deserialize"
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        deserialize_with = "super::serde_helpers::deserialize_double_option"
     )]
     #[ts(optional = nullable, type = "string | null")]
     pub origin_url: Option<Option<String>>,
-}
-
-mod optional_nullable_string {
-    use serde::Deserialize;
-    use serde::Deserializer;
-    use serde::Serializer;
-
-    pub fn serialize<S>(value: &Option<Option<String>>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match value {
-            Some(Some(value)) => serializer.serialize_str(value),
-            Some(None) => serializer.serialize_none(),
-            None => unreachable!("skip_serializing_if omits missing patch fields"),
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Option::<String>::deserialize(deserializer).map(Some)
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

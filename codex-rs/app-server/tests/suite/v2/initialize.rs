@@ -22,11 +22,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = if cfg!(windows) {
-    std::time::Duration::from_secs(20)
-} else {
-    std::time::Duration::from_secs(10)
-};
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
 async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
@@ -195,32 +191,10 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
-    let notify_file = codex_home.path().join("notify.json");
-    let notify_config = if cfg!(windows) {
-        let notify_script = codex_home.path().join("notify.ps1");
-        std::fs::write(
-            &notify_script,
-            r#"$payloadPath = Join-Path $PSScriptRoot "notify.json"
-$tmpPath = "$payloadPath.tmp"
-Set-Content -Path $tmpPath -Value $args[-1] -Encoding utf8NoBOM
-Move-Item -Force $tmpPath $payloadPath
-"#,
-        )?;
-        format!(
-            "notify = [{}, {}, {}]",
-            toml_basic_string("pwsh"),
-            toml_basic_string("-File"),
-            toml_basic_string(
-                notify_script
-                    .to_str()
-                    .expect("notify script path should be valid UTF-8")
-            )
-        )
-    } else {
-        let notify_script = codex_home.path().join("notify.py");
-        std::fs::write(
-            &notify_script,
-            r#"from pathlib import Path
+    let notify_script = codex_home.path().join("notify.py");
+    std::fs::write(
+        &notify_script,
+        r#"from pathlib import Path
 import sys
 
 payload_path = Path(__file__).with_name("notify.json")
@@ -228,18 +202,20 @@ tmp_path = payload_path.with_suffix(".json.tmp")
 tmp_path.write_text(sys.argv[-1], encoding="utf-8")
 tmp_path.replace(payload_path)
 "#,
-        )?;
-        format!(
-            "notify = [{}, {}]",
-            toml_basic_string("python3"),
-            toml_basic_string(
-                notify_script
-                    .to_str()
-                    .expect("notify script path should be valid UTF-8")
-            )
-        )
-    };
-    create_config_toml_with_extra(codex_home.path(), &server.uri(), "never", &notify_config)?;
+    )?;
+    let notify_file = codex_home.path().join("notify.json");
+    let notify_script = notify_script
+        .to_str()
+        .expect("notify script path should be valid UTF-8");
+    create_config_toml_with_extra(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &format!(
+            "notify = [\"python3\", {}]",
+            toml_basic_string(notify_script)
+        ),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(
