@@ -85,11 +85,10 @@ pub fn ensure_offline_proxy_allowlist(
                 ))
             })?;
 
-            // Remove the legacy overlapping allow rule. We now enforce proxy-only egress with
-            // non-overlapping block rules so behavior does not depend on firewall rule precedence.
-            remove_rule_if_present(&rules, OFFLINE_PROXY_ALLOW_RULE_NAME, log)?;
-
             if allow_local_binding {
+                // Remove the legacy overlapping allow rule before returning to the local-binding
+                // mode so stale proxy exceptions do not linger.
+                remove_rule_if_present(&rules, OFFLINE_PROXY_ALLOW_RULE_NAME, log)?;
                 remove_rule_if_present(&rules, OFFLINE_BLOCK_LOOPBACK_UDP_RULE_NAME, log)?;
                 remove_rule_if_present(&rules, OFFLINE_BLOCK_LOOPBACK_TCP_RULE_NAME, log)?;
                 return Ok(());
@@ -109,6 +108,26 @@ pub fn ensure_offline_proxy_allowlist(
                 log,
             )?;
 
+            // Install a broad TCP loopback block before narrowing it to the allowed proxy port
+            // complement. If the narrowing update fails, the sandbox remains fail-closed.
+            ensure_block_rule(
+                &rules,
+                &BlockRuleSpec {
+                    internal_name: OFFLINE_BLOCK_LOOPBACK_TCP_RULE_NAME,
+                    friendly_desc: OFFLINE_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY,
+                    protocol: NET_FW_IP_PROTOCOL_TCP.0,
+                    local_user_spec: &local_user_spec,
+                    offline_sid,
+                    remote_addresses: Some(LOOPBACK_REMOTE_ADDRESSES),
+                    remote_ports: None,
+                },
+                log,
+            )?;
+
+            // Remove the legacy overlapping allow rule only after the explicit block rules are in
+            // place so transitions back to proxy-only mode do not fail open.
+            remove_rule_if_present(&rules, OFFLINE_PROXY_ALLOW_RULE_NAME, log)?;
+
             if let Some(blocked_remote_ports) = blocked_loopback_tcp_remote_ports(proxy_ports) {
                 ensure_block_rule(
                     &rules,
@@ -123,8 +142,6 @@ pub fn ensure_offline_proxy_allowlist(
                     },
                     log,
                 )?;
-            } else {
-                remove_rule_if_present(&rules, OFFLINE_BLOCK_LOOPBACK_TCP_RULE_NAME, log)?;
             }
             Ok(())
         })()
@@ -293,24 +310,22 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
                 format!("SetProtocol failed: {err:?}"),
             ))
         })?;
-        if let Some(remote_addresses) = spec.remote_addresses {
-            rule.SetRemoteAddresses(&BSTR::from(remote_addresses))
-                .map_err(|err| {
-                    anyhow::Error::new(SetupFailure::new(
-                        SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                        format!("SetRemoteAddresses failed: {err:?}"),
-                    ))
-                })?;
-        }
-        if let Some(remote_ports) = spec.remote_ports {
-            rule.SetRemotePorts(&BSTR::from(remote_ports))
-                .map_err(|err| {
-                    anyhow::Error::new(SetupFailure::new(
-                        SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                        format!("SetRemotePorts failed: {err:?}"),
-                    ))
-                })?;
-        }
+        let remote_addresses = spec.remote_addresses.unwrap_or("*");
+        rule.SetRemoteAddresses(&BSTR::from(remote_addresses))
+            .map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                    format!("SetRemoteAddresses failed: {err:?}"),
+                ))
+            })?;
+        let remote_ports = spec.remote_ports.unwrap_or("*");
+        rule.SetRemotePorts(&BSTR::from(remote_ports))
+            .map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                    format!("SetRemotePorts failed: {err:?}"),
+                ))
+            })?;
         rule.SetLocalUserAuthorizedList(&BSTR::from(spec.local_user_spec))
             .map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(

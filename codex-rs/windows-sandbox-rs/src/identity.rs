@@ -140,7 +140,7 @@ pub fn require_logon_sandbox_creds(
     let needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
     let uses_offline_identity = proxy_enforced || !policy.has_full_network_access();
     let desired_offline_proxy_settings =
-        offline_proxy_settings_from_env(env_map, proxy_enforced);
+        offline_proxy_settings_from_env(env_map, uses_offline_identity);
     // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.

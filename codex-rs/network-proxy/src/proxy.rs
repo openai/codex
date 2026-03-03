@@ -255,24 +255,45 @@ fn reserve_windows_managed_listeners(
     socks_addr: SocketAddr,
     reserve_socks_listener: bool,
 ) -> Result<(StdTcpListener, Option<StdTcpListener>, StdTcpListener)> {
-    let http_listener = reserve_loopback_listener(http_addr)
-        .with_context(|| format!("reserve HTTP proxy listener on {http_addr}"))?;
+    let http_addr = windows_managed_loopback_addr(http_addr);
+    let socks_addr = windows_managed_loopback_addr(socks_addr);
+
+    match try_reserve_windows_managed_listeners(http_addr, socks_addr, reserve_socks_listener) {
+        Ok(listeners) => Ok(listeners),
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
+            warn!("managed Windows proxy ports are busy; falling back to ephemeral loopback ports");
+            reserve_loopback_ephemeral_listeners(reserve_socks_listener)
+                .context("reserve fallback loopback proxy listeners")
+        }
+        Err(err) => Err(err).context("reserve Windows managed proxy listeners"),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn try_reserve_windows_managed_listeners(
+    http_addr: SocketAddr,
+    socks_addr: SocketAddr,
+    reserve_socks_listener: bool,
+) -> std::io::Result<(StdTcpListener, Option<StdTcpListener>, StdTcpListener)> {
+    let http_listener = StdTcpListener::bind(http_addr)?;
     let socks_listener = if reserve_socks_listener {
-        Some(
-            reserve_loopback_listener(socks_addr)
-                .with_context(|| format!("reserve SOCKS5 proxy listener on {socks_addr}"))?,
-        )
+        Some(StdTcpListener::bind(socks_addr)?)
     } else {
         None
     };
-    let admin_listener =
-        reserve_loopback_ephemeral_listener().context("reserve admin API listener")?;
+    let admin_listener = StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))?;
     Ok((http_listener, socks_listener, admin_listener))
 }
 
 #[cfg(target_os = "windows")]
-fn reserve_loopback_listener(addr: SocketAddr) -> Result<StdTcpListener> {
-    StdTcpListener::bind(addr).with_context(|| format!("bind loopback port {addr}"))
+fn windows_managed_loopback_addr(addr: SocketAddr) -> SocketAddr {
+    if !addr.ip().is_loopback() {
+        warn!(
+            "managed Windows proxies must bind to loopback; clamping {addr} to 127.0.0.1:{}",
+            addr.port()
+        );
+    }
+    SocketAddr::from(([127, 0, 0, 1], addr.port()))
 }
 
 fn reserve_loopback_ephemeral_listener() -> Result<StdTcpListener> {
@@ -786,6 +807,38 @@ mod tests {
                 .take_socks()
                 .is_none()
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_managed_loopback_addr_clamps_non_loopback_inputs() {
+        assert_eq!(
+            windows_managed_loopback_addr("0.0.0.0:3128".parse::<SocketAddr>().unwrap()),
+            "127.0.0.1:3128".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            windows_managed_loopback_addr("[::]:8081".parse::<SocketAddr>().unwrap()),
+            "127.0.0.1:8081".parse::<SocketAddr>().unwrap()
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn reserve_windows_managed_listeners_falls_back_when_http_port_is_busy() {
+        let occupied = StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+        let busy_port = occupied.local_addr().unwrap().port();
+
+        let (http_listener, socks_listener, admin_listener) = reserve_windows_managed_listeners(
+            SocketAddr::from(([127, 0, 0, 1], busy_port)),
+            SocketAddr::from(([127, 0, 0, 1], 48081)),
+            false,
+        )
+        .unwrap();
+
+        assert!(socks_listener.is_none());
+        assert!(http_listener.local_addr().unwrap().ip().is_loopback());
+        assert_ne!(http_listener.local_addr().unwrap().port(), busy_port);
+        assert!(admin_listener.local_addr().unwrap().ip().is_loopback());
     }
 
     #[test]

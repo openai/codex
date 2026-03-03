@@ -137,7 +137,8 @@ fn run_setup_refresh_inner(
         read_roots_override,
         write_roots_override,
     );
-    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, proxy_enforced);
+    let uses_offline_identity = proxy_enforced || !policy.has_full_network_access();
+    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, uses_offline_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -380,9 +381,9 @@ const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
 
 pub(crate) fn offline_proxy_settings_from_env(
     env_map: &HashMap<String, String>,
-    proxy_enforced: bool,
+    uses_offline_identity: bool,
 ) -> OfflineProxySettings {
-    if !proxy_enforced {
+    if !uses_offline_identity {
         return OfflineProxySettings {
             proxy_ports: vec![],
             allow_local_binding: false,
@@ -634,7 +635,8 @@ pub fn run_elevated_setup(
         read_roots_override,
         write_roots_override,
     );
-    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, proxy_enforced);
+    let uses_offline_identity = proxy_enforced || !policy.has_full_network_access();
+    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, uses_offline_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -762,7 +764,7 @@ mod tests {
     }
 
     #[test]
-    fn offline_proxy_settings_ignore_proxy_env_when_managed_proxy_disabled() {
+    fn offline_proxy_settings_ignore_proxy_env_when_online_identity_selected() {
         let mut env = HashMap::new();
         env.insert(
             "HTTP_PROXY".to_string(),
@@ -783,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn offline_proxy_settings_capture_proxy_ports_and_local_binding() {
+    fn offline_proxy_settings_capture_proxy_ports_and_local_binding_for_offline_identity() {
         let mut env = HashMap::new();
         env.insert(
             "HTTP_PROXY".to_string(),
