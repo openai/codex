@@ -27,13 +27,16 @@ use ppt_rs::generator::Connector;
 use ppt_rs::generator::ConnectorLine;
 use ppt_rs::generator::ConnectorType;
 use ppt_rs::generator::LineDash;
+use ppt_rs::generator::generate_image_content_type;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Cursor;
 use std::io::Read;
+use std::io::Seek;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -265,7 +268,8 @@ impl PresentationArtifactManager {
                 message: error.to_string(),
             }
         })?;
-        let document = PresentationDocument::from_ppt_rs(imported);
+        let mut document = PresentationDocument::from_ppt_rs(imported);
+        import_pptx_images(&path, &mut document, &request.action)?;
         let artifact_id = document.artifact_id.clone();
         let slide_count = document.slides.len();
         let snapshot = snapshot_for_document(&document);
@@ -1238,6 +1242,9 @@ impl PresentationArtifactManager {
                 payload: image_payload,
                 fit_mode,
                 crop,
+                rotation_degrees: args.rotation,
+                flip_horizontal: args.flip_horizontal.unwrap_or(false),
+                flip_vertical: args.flip_vertical.unwrap_or(false),
                 lock_aspect_ratio,
                 alt_text: args.alt,
                 prompt: args.prompt,
@@ -1308,6 +1315,15 @@ impl PresentationArtifactManager {
         image.payload = image_payload;
         image.fit_mode = fit_mode;
         image.crop = crop;
+        if let Some(rotation) = args.rotation {
+            image.rotation_degrees = Some(rotation);
+        }
+        if let Some(flip_horizontal) = args.flip_horizontal {
+            image.flip_horizontal = flip_horizontal;
+        }
+        if let Some(flip_vertical) = args.flip_vertical {
+            image.flip_vertical = flip_vertical;
+        }
         image.lock_aspect_ratio = lock_aspect_ratio;
         image.alt_text = args.alt;
         image.prompt = args.prompt;
@@ -1736,7 +1752,11 @@ impl PresentationArtifactManager {
                 if let Some(fill) = fill.clone() {
                     text.fill = Some(fill);
                 }
-                if args.stroke.is_some() || args.rotation.is_some() {
+                if args.stroke.is_some()
+                    || args.rotation.is_some()
+                    || args.flip_horizontal.is_some()
+                    || args.flip_vertical.is_some()
+                {
                     return Err(PresentationArtifactError::UnsupportedFeature {
                         action: request.action,
                         message:
@@ -1755,6 +1775,14 @@ impl PresentationArtifactManager {
                 if let Some(stroke) = stroke {
                     shape.stroke = Some(stroke);
                 }
+                if args.flip_horizontal.is_some() || args.flip_vertical.is_some() {
+                    return Err(PresentationArtifactError::UnsupportedFeature {
+                        action: request.action,
+                        message:
+                            "shape elements support `position`, `fill`, `stroke`, `rotation`, and `z_order` updates"
+                                .to_string(),
+                    });
+                }
                 if let Some(rotation) = args.rotation {
                     shape.rotation_degrees = Some(rotation);
                 }
@@ -1762,6 +1790,8 @@ impl PresentationArtifactManager {
             PresentationElement::Connector(connector) => {
                 if args.fill.is_some()
                     || args.rotation.is_some()
+                    || args.flip_horizontal.is_some()
+                    || args.flip_vertical.is_some()
                     || args.fit.is_some()
                     || args.crop.is_some()
                     || args.lock_aspect_ratio.is_some()
@@ -1797,11 +1827,11 @@ impl PresentationArtifactManager {
                 }
             }
             PresentationElement::Image(image) => {
-                if args.fill.is_some() || args.stroke.is_some() || args.rotation.is_some() {
+                if args.fill.is_some() || args.stroke.is_some() {
                     return Err(PresentationArtifactError::UnsupportedFeature {
                         action: request.action,
                         message:
-                            "image elements support only `position`, `fit`, `crop`, `lock_aspect_ratio`, and `z_order` updates"
+                            "image elements support only `position`, `fit`, `crop`, `rotation`, `flip_horizontal`, `flip_vertical`, `lock_aspect_ratio`, and `z_order` updates"
                                 .to_string(),
                     });
                 }
@@ -1817,12 +1847,26 @@ impl PresentationArtifactManager {
                 if let Some(crop) = args.crop {
                     image.crop = Some(normalize_image_crop(crop, &request.action)?);
                 }
+                if let Some(rotation) = args.rotation {
+                    image.rotation_degrees = Some(rotation);
+                }
+                if let Some(flip_horizontal) = args.flip_horizontal {
+                    image.flip_horizontal = flip_horizontal;
+                }
+                if let Some(flip_vertical) = args.flip_vertical {
+                    image.flip_vertical = flip_vertical;
+                }
                 if let Some(lock_aspect_ratio) = args.lock_aspect_ratio {
                     image.lock_aspect_ratio = lock_aspect_ratio;
                 }
             }
             PresentationElement::Table(table) => {
-                if args.fill.is_some() || args.stroke.is_some() || args.rotation.is_some() {
+                if args.fill.is_some()
+                    || args.stroke.is_some()
+                    || args.rotation.is_some()
+                    || args.flip_horizontal.is_some()
+                    || args.flip_vertical.is_some()
+                {
                     return Err(PresentationArtifactError::UnsupportedFeature {
                         action: request.action,
                         message: "table elements support only `position` and `z_order` updates"
@@ -1834,7 +1878,12 @@ impl PresentationArtifactManager {
                 }
             }
             PresentationElement::Chart(chart) => {
-                if args.fill.is_some() || args.stroke.is_some() || args.rotation.is_some() {
+                if args.fill.is_some()
+                    || args.stroke.is_some()
+                    || args.rotation.is_some()
+                    || args.flip_horizontal.is_some()
+                    || args.flip_vertical.is_some()
+                {
                     return Err(PresentationArtifactError::UnsupportedFeature {
                         action: request.action,
                         message: "chart elements support only `position` and `z_order` updates"
@@ -2709,6 +2758,279 @@ struct PresentationSlide {
     elements: Vec<PresentationElement>,
 }
 
+struct ImportedPicture {
+    relationship_id: String,
+    frame: Rect,
+    crop: Option<ImageCrop>,
+    alt_text: Option<String>,
+    rotation_degrees: Option<i32>,
+    flip_horizontal: bool,
+    flip_vertical: bool,
+    lock_aspect_ratio: bool,
+}
+
+fn import_pptx_images(
+    path: &Path,
+    document: &mut PresentationDocument,
+    action: &str,
+) -> Result<(), PresentationArtifactError> {
+    let file =
+        std::fs::File::open(path).map_err(|error| PresentationArtifactError::ImportFailed {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|error| PresentationArtifactError::ImportFailed {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    for slide_index in 0..document.slides.len() {
+        let slide_number = slide_index + 1;
+        let slide_xml_path = format!("ppt/slides/slide{slide_number}.xml");
+        let Some(slide_xml) =
+            zip_entry_string_if_exists(&mut archive, &slide_xml_path).map_err(|message| {
+                PresentationArtifactError::ImportFailed {
+                    path: path.to_path_buf(),
+                    message,
+                }
+            })?
+        else {
+            continue;
+        };
+        let pictures = parse_imported_pictures(&slide_xml);
+        if pictures.is_empty() {
+            continue;
+        }
+        let relationships = zip_entry_string_if_exists(
+            &mut archive,
+            &format!("ppt/slides/_rels/slide{slide_number}.xml.rels"),
+        )
+        .map_err(|message| PresentationArtifactError::ImportFailed {
+            path: path.to_path_buf(),
+            message,
+        })?
+        .map(|xml| parse_slide_image_relationship_targets(&xml))
+        .unwrap_or_default();
+        let mut imported_images = Vec::new();
+        for picture in pictures {
+            let Some(target) = relationships.get(&picture.relationship_id) else {
+                continue;
+            };
+            let media_path = resolve_zip_relative_path(&slide_xml_path, target);
+            let Some(bytes) =
+                zip_entry_bytes_if_exists(&mut archive, &media_path).map_err(|message| {
+                    PresentationArtifactError::ImportFailed {
+                        path: path.to_path_buf(),
+                        message,
+                    }
+                })?
+            else {
+                continue;
+            };
+            let Some(filename) = Path::new(&media_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let Ok(payload) = build_image_payload(bytes, filename, action) else {
+                continue;
+            };
+            imported_images.push(ImageElement {
+                element_id: document.next_element_id(),
+                frame: picture.frame,
+                payload: Some(payload),
+                fit_mode: ImageFitMode::Stretch,
+                crop: picture.crop,
+                rotation_degrees: picture.rotation_degrees,
+                flip_horizontal: picture.flip_horizontal,
+                flip_vertical: picture.flip_vertical,
+                lock_aspect_ratio: picture.lock_aspect_ratio,
+                alt_text: picture.alt_text,
+                prompt: None,
+                is_placeholder: false,
+                z_order: 0,
+            });
+        }
+        let slide = &mut document.slides[slide_index];
+        for mut image in imported_images {
+            image.z_order = slide.elements.len();
+            slide.elements.push(PresentationElement::Image(image));
+        }
+    }
+    Ok(())
+}
+
+fn zip_entry_string_if_exists<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    path: &str,
+) -> Result<Option<String>, String> {
+    let Some(bytes) = zip_entry_bytes_if_exists(archive, path)? else {
+        return Ok(None);
+    };
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| format!("zip entry `{path}` is not valid UTF-8: {error}"))
+}
+
+fn zip_entry_bytes_if_exists<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    path: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    match archive.by_name(path) {
+        Ok(mut entry) => {
+            let mut bytes = Vec::new();
+            entry
+                .read_to_end(&mut bytes)
+                .map_err(|error| format!("failed to read zip entry `{path}`: {error}"))?;
+            Ok(Some(bytes))
+        }
+        Err(zip::result::ZipError::FileNotFound) => Ok(None),
+        Err(error) => Err(format!("failed to open zip entry `{path}`: {error}")),
+    }
+}
+
+fn parse_imported_pictures(slide_xml: &str) -> Vec<ImportedPicture> {
+    let mut pictures = Vec::new();
+    let mut remaining = slide_xml;
+    while let Some(start) = remaining.find("<p:pic>") {
+        let block_start = start;
+        let Some(block_end_offset) = remaining[block_start..].find("</p:pic>") else {
+            break;
+        };
+        let block_end = block_start + block_end_offset + "</p:pic>".len();
+        let block = &remaining[block_start..block_end];
+        remaining = &remaining[block_end..];
+
+        let Some(relationship_id) = xml_tag_attribute(block, "<a:blip", "r:embed") else {
+            continue;
+        };
+        let Some(x) = xml_tag_attribute(block, "<a:off", "x").and_then(|value| value.parse().ok())
+        else {
+            continue;
+        };
+        let Some(y) = xml_tag_attribute(block, "<a:off", "y").and_then(|value| value.parse().ok())
+        else {
+            continue;
+        };
+        let Some(width) =
+            xml_tag_attribute(block, "<a:ext", "cx").and_then(|value| value.parse().ok())
+        else {
+            continue;
+        };
+        let Some(height) =
+            xml_tag_attribute(block, "<a:ext", "cy").and_then(|value| value.parse().ok())
+        else {
+            continue;
+        };
+        pictures.push(ImportedPicture {
+            relationship_id,
+            frame: Rect::from_emu(x, y, width, height),
+            crop: xml_tag_attribute(block, "<a:srcRect", "l").map(|left| {
+                (
+                    left.parse::<f64>().unwrap_or(0.0) / 100_000.0,
+                    xml_tag_attribute(block, "<a:srcRect", "t")
+                        .and_then(|value| value.parse::<f64>().ok())
+                        .unwrap_or(0.0)
+                        / 100_000.0,
+                    xml_tag_attribute(block, "<a:srcRect", "r")
+                        .and_then(|value| value.parse::<f64>().ok())
+                        .unwrap_or(0.0)
+                        / 100_000.0,
+                    xml_tag_attribute(block, "<a:srcRect", "b")
+                        .and_then(|value| value.parse::<f64>().ok())
+                        .unwrap_or(0.0)
+                        / 100_000.0,
+                )
+            }),
+            alt_text: xml_tag_attribute(block, "<p:cNvPr", "descr"),
+            rotation_degrees: xml_tag_attribute(block, "<a:xfrm", "rot")
+                .and_then(|value| value.parse::<i64>().ok())
+                .map(|rotation| (rotation as f64 / 60_000.0).round() as i32),
+            flip_horizontal: xml_tag_attribute(block, "<a:xfrm", "flipH").as_deref() == Some("1"),
+            flip_vertical: xml_tag_attribute(block, "<a:xfrm", "flipV").as_deref() == Some("1"),
+            lock_aspect_ratio: xml_tag_attribute(block, "<a:picLocks", "noChangeAspect").as_deref()
+                != Some("0"),
+        });
+    }
+    pictures
+}
+
+fn parse_slide_image_relationship_targets(rels_xml: &str) -> HashMap<String, String> {
+    let mut relationships = HashMap::new();
+    let mut remaining = rels_xml;
+    while let Some(start) = remaining.find("<Relationship ") {
+        let tag_start = start;
+        let Some(tag_end_offset) = remaining[tag_start..].find("/>") else {
+            break;
+        };
+        let tag_end = tag_start + tag_end_offset + 2;
+        let tag = &remaining[tag_start..tag_end];
+        remaining = &remaining[tag_end..];
+        if xml_attribute(tag, "Type").as_deref()
+            != Some("http://schemas.openxmlformats.org/officeDocument/2006/relationships/image")
+        {
+            continue;
+        }
+        let (Some(id), Some(target)) = (xml_attribute(tag, "Id"), xml_attribute(tag, "Target"))
+        else {
+            continue;
+        };
+        relationships.insert(id, target);
+    }
+    relationships
+}
+
+fn resolve_zip_relative_path(base_path: &str, target: &str) -> String {
+    let mut components = Path::new(base_path)
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value.to_string_lossy().to_string()),
+            std::path::Component::CurDir => None,
+            std::path::Component::ParentDir => None,
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => None,
+        })
+        .collect::<Vec<_>>();
+    for component in Path::new(target).components() {
+        match component {
+            std::path::Component::Normal(value) => {
+                components.push(value.to_string_lossy().to_string())
+            }
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                components.clear();
+            }
+        }
+    }
+    components.join("/")
+}
+
+fn xml_tag_attribute(xml: &str, tag_start: &str, attribute: &str) -> Option<String> {
+    let start = xml.find(tag_start)?;
+    let tag = &xml[start..start + xml[start..].find('>')?];
+    xml_attribute(tag, attribute)
+}
+
+fn xml_attribute(tag: &str, attribute: &str) -> Option<String> {
+    let pattern = format!(r#"{attribute}=""#);
+    let start = tag.find(&pattern)? + pattern.len();
+    let end = start + tag[start..].find('"')?;
+    Some(
+        tag[start..end]
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&"),
+    )
+}
+
 impl PresentationSlide {
     fn to_ppt_rs(&self, slide_size: Rect) -> SlideContent {
         let mut content = SlideContent::new("").layout(SlideLayout::Blank);
@@ -2834,16 +3156,18 @@ impl PresentationSlide {
                         }
                         content = content.add_image(ppt_image);
                     } else {
-                        content = content.add_shape(
-                            Shape::new(
-                                ShapeType::Rectangle,
-                                points_to_emu(image.frame.left),
-                                points_to_emu(image.frame.top),
-                                points_to_emu(image.frame.width),
-                                points_to_emu(image.frame.height),
-                            )
-                            .with_text(image.prompt.as_deref().unwrap_or("Image placeholder")),
-                        );
+                        let mut placeholder = Shape::new(
+                            ShapeType::Rectangle,
+                            points_to_emu(image.frame.left),
+                            points_to_emu(image.frame.top),
+                            points_to_emu(image.frame.width),
+                            points_to_emu(image.frame.height),
+                        )
+                        .with_text(image.prompt.as_deref().unwrap_or("Image placeholder"));
+                        if let Some(rotation) = image.rotation_degrees {
+                            placeholder = placeholder.with_rotation(rotation);
+                        }
+                        content = content.add_shape(placeholder);
                     }
                 }
                 PresentationElement::Table(table) => {
@@ -3013,6 +3337,9 @@ pub(crate) struct ImageElement {
     pub(crate) payload: Option<ImagePayload>,
     pub(crate) fit_mode: ImageFitMode,
     pub(crate) crop: Option<ImageCrop>,
+    pub(crate) rotation_degrees: Option<i32>,
+    pub(crate) flip_horizontal: bool,
+    pub(crate) flip_vertical: bool,
     pub(crate) lock_aspect_ratio: bool,
     pub(crate) alt_text: Option<String>,
     pub(crate) prompt: Option<String>,
@@ -3601,6 +3928,9 @@ struct AddImageArgs {
     position: PositionArgs,
     fit: Option<ImageFitMode>,
     crop: Option<ImageCropArgs>,
+    rotation: Option<i32>,
+    flip_horizontal: Option<bool>,
+    flip_vertical: Option<bool>,
     lock_aspect_ratio: Option<bool>,
     alt: Option<String>,
     prompt: Option<String>,
@@ -3707,6 +4037,8 @@ struct UpdateShapeStyleArgs {
     fill: Option<String>,
     stroke: Option<StrokeArgs>,
     rotation: Option<i32>,
+    flip_horizontal: Option<bool>,
+    flip_vertical: Option<bool>,
     fit: Option<ImageFitMode>,
     crop: Option<ImageCropArgs>,
     lock_aspect_ratio: Option<bool>,
@@ -3726,6 +4058,9 @@ struct ReplaceImageArgs {
     uri: Option<String>,
     fit: Option<ImageFitMode>,
     crop: Option<ImageCropArgs>,
+    rotation: Option<i32>,
+    flip_horizontal: Option<bool>,
+    flip_vertical: Option<bool>,
     lock_aspect_ratio: Option<bool>,
     alt: Option<String>,
     prompt: Option<String>,
@@ -4647,6 +4982,9 @@ fn inspect_document(
                         "alt": image.alt_text,
                         "prompt": image.prompt,
                         "fit": format!("{:?}", image.fit_mode),
+                        "rotation": image.rotation_degrees,
+                        "flipHorizontal": image.flip_horizontal,
+                        "flipVertical": image.flip_vertical,
                         "crop": image.crop.map(|(left, top, right, bottom)| serde_json::json!({
                             "left": left,
                             "top": top,
@@ -4825,6 +5163,9 @@ fn resolve_anchor(
                     "alt": image.alt_text,
                     "prompt": image.prompt,
                     "fit": format!("{:?}", image.fit_mode),
+                    "rotation": image.rotation_degrees,
+                    "flipHorizontal": image.flip_horizontal,
+                    "flipVertical": image.flip_vertical,
                     "crop": image.crop.map(|(left, top, right, bottom)| serde_json::json!({
                         "left": left,
                         "top": top,
@@ -4909,6 +5250,174 @@ fn build_pptx_bytes(document: &PresentationDocument, action: &str) -> Result<Vec
     patch_pptx_package(bytes, document).map_err(|error| format!("{action}: {error}"))
 }
 
+struct SlideImageAsset {
+    xml: String,
+    relationship_xml: String,
+    media_path: String,
+    media_bytes: Vec<u8>,
+    extension: String,
+}
+
+fn normalized_image_extension(format: &str) -> String {
+    match format.to_ascii_lowercase().as_str() {
+        "jpeg" => "jpg".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn image_relationship_xml(relationship_id: &str, target: &str) -> String {
+    format!(
+        r#"<Relationship Id="{relationship_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="{}"/>"#,
+        ppt_rs::escape_xml(target)
+    )
+}
+
+fn image_picture_xml(
+    image: &ImageElement,
+    shape_id: usize,
+    relationship_id: &str,
+    frame: Rect,
+    crop: Option<ImageCrop>,
+) -> String {
+    let blip_fill = if let Some((crop_left, crop_top, crop_right, crop_bottom)) = crop {
+        format!(
+            r#"<p:blipFill>
+<a:blip r:embed="{relationship_id}"/>
+<a:srcRect l="{}" t="{}" r="{}" b="{}"/>
+<a:stretch>
+<a:fillRect/>
+</a:stretch>
+</p:blipFill>"#,
+            (crop_left * 100_000.0).round() as u32,
+            (crop_top * 100_000.0).round() as u32,
+            (crop_right * 100_000.0).round() as u32,
+            (crop_bottom * 100_000.0).round() as u32,
+        )
+    } else {
+        format!(
+            r#"<p:blipFill>
+<a:blip r:embed="{relationship_id}"/>
+<a:stretch>
+<a:fillRect/>
+</a:stretch>
+</p:blipFill>"#
+        )
+    };
+    let descr = image
+        .alt_text
+        .as_deref()
+        .map(|alt| format!(r#" descr="{}""#, ppt_rs::escape_xml(alt)))
+        .unwrap_or_default();
+    let no_change_aspect = if image.lock_aspect_ratio { 1 } else { 0 };
+    let rotation = image
+        .rotation_degrees
+        .map(|rotation| format!(r#" rot="{}""#, i64::from(rotation) * 60_000))
+        .unwrap_or_default();
+    let flip_horizontal = if image.flip_horizontal {
+        r#" flipH="1""#
+    } else {
+        ""
+    };
+    let flip_vertical = if image.flip_vertical {
+        r#" flipV="1""#
+    } else {
+        ""
+    };
+    format!(
+        r#"<p:pic>
+<p:nvPicPr>
+<p:cNvPr id="{shape_id}" name="Picture {shape_id}"{descr}/>
+<p:cNvPicPr>
+<a:picLocks noChangeAspect="{no_change_aspect}"/>
+</p:cNvPicPr>
+<p:nvPr/>
+</p:nvPicPr>
+{blip_fill}
+<p:spPr>
+<a:xfrm{rotation}{flip_horizontal}{flip_vertical}>
+<a:off x="{}" y="{}"/>
+<a:ext cx="{}" cy="{}"/>
+</a:xfrm>
+<a:prstGeom prst="rect">
+<a:avLst/>
+</a:prstGeom>
+</p:spPr>
+</p:pic>"#,
+        points_to_emu(frame.left),
+        points_to_emu(frame.top),
+        points_to_emu(frame.width),
+        points_to_emu(frame.height),
+    )
+}
+
+fn slide_image_assets(
+    slide: &PresentationSlide,
+    next_media_index: &mut usize,
+) -> Vec<SlideImageAsset> {
+    let mut ordered = slide.elements.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|element| element.z_order());
+    let shape_count = ordered
+        .iter()
+        .filter(|element| {
+            matches!(
+                element,
+                PresentationElement::Text(_)
+                    | PresentationElement::Shape(_)
+                    | PresentationElement::Image(ImageElement { payload: None, .. })
+            )
+        })
+        .count()
+        + usize::from(slide.background_fill.is_some());
+    let mut image_index = 0_usize;
+    let mut assets = Vec::new();
+    for element in ordered {
+        let PresentationElement::Image(image) = element else {
+            continue;
+        };
+        let Some(payload) = &image.payload else {
+            continue;
+        };
+        let (left, top, width, height, fitted_crop) = if image.fit_mode != ImageFitMode::Stretch {
+            fit_image(image)
+        } else {
+            (
+                image.frame.left,
+                image.frame.top,
+                image.frame.width,
+                image.frame.height,
+                None,
+            )
+        };
+        image_index += 1;
+        let relationship_id = format!("rIdImage{image_index}");
+        let extension = normalized_image_extension(&payload.format);
+        let media_name = format!("image{next_media_index}.{extension}");
+        *next_media_index += 1;
+        assets.push(SlideImageAsset {
+            xml: image_picture_xml(
+                image,
+                20 + shape_count + image_index - 1,
+                &relationship_id,
+                Rect {
+                    left,
+                    top,
+                    width,
+                    height,
+                },
+                image.crop.or(fitted_crop),
+            ),
+            relationship_xml: image_relationship_xml(
+                &relationship_id,
+                &format!("../media/{media_name}"),
+            ),
+            media_path: format!("ppt/media/{media_name}"),
+            media_bytes: payload.bytes.clone(),
+            extension,
+        });
+    }
+    assets
+}
+
 fn patch_pptx_package(
     source_bytes: Vec<u8>,
     document: &PresentationDocument,
@@ -4916,15 +5425,29 @@ fn patch_pptx_package(
     let mut archive =
         ZipArchive::new(Cursor::new(source_bytes)).map_err(|error| error.to_string())?;
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
-    let mut pending_slide_relationships = document
-        .slides
-        .iter()
-        .enumerate()
-        .filter_map(|(slide_index, slide)| {
-            let relationships = slide_hyperlink_relationships(slide);
-            (!relationships.is_empty()).then_some((slide_index + 1, relationships))
-        })
-        .collect::<HashMap<_, _>>();
+    let mut next_media_index = 1_usize;
+    let mut pending_slide_relationships = HashMap::new();
+    let mut pending_slide_images = HashMap::new();
+    let mut pending_media = Vec::new();
+    let mut image_extensions = BTreeSet::new();
+    for (slide_index, slide) in document.slides.iter().enumerate() {
+        let slide_number = slide_index + 1;
+        let images = slide_image_assets(slide, &mut next_media_index);
+        let mut relationships = slide_hyperlink_relationships(slide);
+        relationships.extend(images.iter().map(|image| image.relationship_xml.clone()));
+        if !relationships.is_empty() {
+            pending_slide_relationships.insert(slide_number, relationships);
+        }
+        if !images.is_empty() {
+            image_extensions.extend(images.iter().map(|image| image.extension.clone()));
+            pending_media.extend(
+                images
+                    .iter()
+                    .map(|image| (image.media_path.clone(), image.media_bytes.clone())),
+            );
+            pending_slide_images.insert(slide_number, images);
+        }
+    }
 
     for index in 0..archive.len() {
         let mut file = archive.by_index(index).map_err(|error| error.to_string())?;
@@ -4939,6 +5462,12 @@ fn patch_pptx_package(
         writer
             .start_file(&name, options)
             .map_err(|error| error.to_string())?;
+        if name == "[Content_Types].xml" {
+            writer
+                .write_all(update_content_types_xml(bytes, &image_extensions)?.as_bytes())
+                .map_err(|error| error.to_string())?;
+            continue;
+        }
         if name == "ppt/presentation.xml" {
             writer
                 .write_all(
@@ -4949,7 +5478,17 @@ fn patch_pptx_package(
         }
         if let Some(slide_number) = parse_slide_xml_path(&name) {
             writer
-                .write_all(update_slide_xml(bytes, &document.slides[slide_number - 1])?.as_bytes())
+                .write_all(
+                    update_slide_xml(
+                        bytes,
+                        &document.slides[slide_number - 1],
+                        pending_slide_images
+                            .get(&slide_number)
+                            .map(std::vec::Vec::as_slice)
+                            .unwrap_or(&[]),
+                    )?
+                    .as_bytes(),
+                )
                 .map_err(|error| error.to_string())?;
             continue;
         }
@@ -4975,6 +5514,15 @@ fn patch_pptx_package(
             .map_err(|error| error.to_string())?;
         writer
             .write_all(slide_relationships_xml(&relationships).as_bytes())
+            .map_err(|error| error.to_string())?;
+    }
+
+    for (path, bytes) in pending_media {
+        writer
+            .start_file(path, SimpleFileOptions::default())
+            .map_err(|error| error.to_string())?;
+        writer
+            .write_all(&bytes)
             .map_err(|error| error.to_string())?;
     }
 
@@ -5081,8 +5629,41 @@ fn slide_relationships_xml(relationships: &[String]) -> String {
     )
 }
 
-fn update_slide_xml(existing_bytes: Vec<u8>, slide: &PresentationSlide) -> Result<String, String> {
+fn update_content_types_xml(
+    existing_bytes: Vec<u8>,
+    image_extensions: &BTreeSet<String>,
+) -> Result<String, String> {
     let existing = String::from_utf8(existing_bytes).map_err(|error| error.to_string())?;
+    if image_extensions.is_empty() {
+        return Ok(existing);
+    }
+    let existing_lower = existing.to_ascii_lowercase();
+    let additions = image_extensions
+        .iter()
+        .filter(|extension| {
+            !existing_lower.contains(&format!(
+                r#"extension="{}""#,
+                extension.to_ascii_lowercase()
+            ))
+        })
+        .map(|extension| generate_image_content_type(extension))
+        .collect::<Vec<_>>();
+    if additions.is_empty() {
+        return Ok(existing);
+    }
+    existing
+        .contains("</Types>")
+        .then(|| existing.replace("</Types>", &format!("{}\n</Types>", additions.join("\n"))))
+        .ok_or_else(|| "content types xml is missing a closing `</Types>`".to_string())
+}
+
+fn update_slide_xml(
+    existing_bytes: Vec<u8>,
+    slide: &PresentationSlide,
+    slide_images: &[SlideImageAsset],
+) -> Result<String, String> {
+    let existing = String::from_utf8(existing_bytes).map_err(|error| error.to_string())?;
+    let existing = replace_image_placeholders(existing, slide_images)?;
     let table_xml = slide_table_xml(slide);
     if table_xml.is_empty() {
         return Ok(existing);
@@ -5091,6 +5672,38 @@ fn update_slide_xml(existing_bytes: Vec<u8>, slide: &PresentationSlide) -> Resul
         .contains("</p:spTree>")
         .then(|| existing.replace("</p:spTree>", &format!("{table_xml}\n</p:spTree>")))
         .ok_or_else(|| "slide xml is missing a closing `</p:spTree>`".to_string())
+}
+
+fn replace_image_placeholders(
+    existing: String,
+    slide_images: &[SlideImageAsset],
+) -> Result<String, String> {
+    if slide_images.is_empty() {
+        return Ok(existing);
+    }
+    let mut updated = String::with_capacity(existing.len());
+    let mut remaining = existing.as_str();
+    for image in slide_images {
+        let marker = remaining
+            .find("name=\"Image Placeholder: ")
+            .ok_or_else(|| {
+                "slide xml is missing an image placeholder block for exported images".to_string()
+            })?;
+        let start = remaining[..marker].rfind("<p:sp>").ok_or_else(|| {
+            "slide xml is missing an opening `<p:sp>` for image placeholder".to_string()
+        })?;
+        let end = remaining[marker..]
+            .find("</p:sp>")
+            .map(|offset| marker + offset + "</p:sp>".len())
+            .ok_or_else(|| {
+                "slide xml is missing a closing `</p:sp>` for image placeholder".to_string()
+            })?;
+        updated.push_str(&remaining[..start]);
+        updated.push_str(&image.xml);
+        remaining = &remaining[end..];
+    }
+    updated.push_str(remaining);
+    Ok(updated)
 }
 
 fn slide_table_xml(slide: &PresentationSlide) -> String {

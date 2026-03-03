@@ -95,7 +95,9 @@ Image placeholders can be prompt-only. `add_image` accepts `prompt` without `pat
 
 Remote images are supported. `add_image` and `replace_image` accept `uri` in addition to local `path` and `data_url`.
 
-Image edits can target inspect/resolve anchors like `im/element_3`, and `update_shape_style` now accepts image `fit`, `crop`, and `lock_aspect_ratio` updates.
+Image edits can target inspect/resolve anchors like `im/element_3`, and `update_shape_style` now accepts image `fit`, `crop`, `rotation`, `flip_horizontal`, `flip_vertical`, and `lock_aspect_ratio` updates.
+
+`add_image` and `replace_image` also accept optional `rotation`, `flip_horizontal`, and `flip_vertical` fields for image transforms.
 
 `update_shape_style.position` accepts partial updates, so you can move or resize an element without resending the full rect.
 

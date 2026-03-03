@@ -14,6 +14,12 @@ fn zip_entry_text(
     Ok(text)
 }
 
+fn zip_entry_names(path: &std::path::Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let file = std::fs::File::open(path)?;
+    let archive = zip::ZipArchive::new(file)?;
+    Ok(archive.file_names().map(str::to_owned).collect())
+}
+
 #[test]
 fn manager_can_create_add_text_and_export() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::tempdir()?;
@@ -176,6 +182,209 @@ fn custom_slide_size_is_written_to_exported_pptx() -> Result<(), Box<dyn std::er
 }
 
 #[test]
+fn exported_images_are_real_pictures_with_media_parts() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let source_path = temp_dir.path().join("source.png");
+    image::RgbaImage::from_pixel(24, 16, image::Rgba([0x20, 0x90, 0xD0, 0xFF]))
+        .save(&source_path)?;
+
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Image Export" }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id.clone()),
+            action: "add_image".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "path": "source.png",
+                "position": { "left": 36, "top": 48, "width": 144, "height": 96 },
+                "rotation": 15,
+                "flip_horizontal": true,
+                "alt": "Company logo"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let export_path = temp_dir.path().join("images.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let pptx_path = temp_dir.path().join("images.pptx");
+    let slide_xml = zip_entry_text(&pptx_path, "ppt/slides/slide1.xml")?;
+    let rels_xml = zip_entry_text(&pptx_path, "ppt/slides/_rels/slide1.xml.rels")?;
+    let content_types_xml = zip_entry_text(&pptx_path, "[Content_Types].xml")?;
+    let entry_names = zip_entry_names(&pptx_path)?;
+
+    assert!(slide_xml.contains("<p:pic>"));
+    assert!(slide_xml.contains(r#"descr="Company logo""#));
+    assert!(slide_xml.contains(r#"r:embed="rIdImage1""#));
+    assert!(slide_xml.contains(r#"<a:xfrm rot="900000" flipH="1">"#));
+    assert!(!slide_xml.contains("Image Placeholder:"));
+    assert!(rels_xml.contains("relationships/image"));
+    assert!(rels_xml.contains(r#"Target="../media/image1.png""#));
+    assert!(content_types_xml.contains(r#"Extension="png" ContentType="image/png""#));
+    assert!(entry_names.contains(&"ppt/media/image1.png".to_string()));
+    Ok(())
+}
+
+#[test]
+fn imported_pptx_surfaces_image_elements() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let source_path = temp_dir.path().join("import-source.png");
+    image::RgbaImage::from_pixel(20, 20, image::Rgba([0xD0, 0x60, 0x20, 0xFF]))
+        .save(&source_path)?;
+
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Image Import" }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id.clone()),
+            action: "add_image".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "path": "import-source.png",
+                "position": { "left": 40, "top": 52, "width": 120, "height": 120 },
+                "crop": { "left": 0.1, "top": 0.0, "right": 0.05, "bottom": 0.0 },
+                "rotation": -10,
+                "flip_horizontal": true,
+                "flip_vertical": true,
+                "lock_aspect_ratio": true,
+                "alt": "Imported logo"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let export_path = temp_dir.path().join("image-import-roundtrip.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let imported = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "import_pptx".to_string(),
+            args: serde_json::json!({ "path": "image-import-roundtrip.pptx" }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        imported
+            .artifact_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.slides.first())
+            .map(|slide| slide.element_types.clone()),
+        Some(vec!["image".to_string()])
+    );
+    let image_anchor = imported
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .map(|id| format!("im/{id}"))
+        .expect("image anchor");
+    let resolved = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(imported.artifact_id),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": image_anchor }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("alt"))
+            .and_then(serde_json::Value::as_str),
+        Some("Imported logo")
+    );
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("rotation"))
+            .and_then(serde_json::Value::as_i64),
+        Some(-10)
+    );
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("flipHorizontal"))
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("flipVertical"))
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("lockAspectRatio"))
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("crop"))
+            .and_then(|crop| crop.get("left"))
+            .and_then(serde_json::Value::as_f64),
+        Some(0.1)
+    );
+    Ok(())
+}
+
+#[test]
 fn image_fit_contain_preserves_aspect_ratio() {
     let image = ImageElement {
         element_id: "element_1".to_string(),
@@ -193,6 +402,9 @@ fn image_fit_contain_preserves_aspect_ratio() {
         }),
         fit_mode: ImageFitMode::Contain,
         crop: None,
+        rotation_degrees: None,
+        flip_horizontal: false,
+        flip_vertical: false,
         lock_aspect_ratio: true,
         alt_text: None,
         prompt: None,
@@ -1023,6 +1235,8 @@ fn image_placeholders_and_anchor_updates_work() -> Result<(), Box<dyn std::error
                 "element_id": image_anchor,
                 "fit": "cover",
                 "crop": { "left": 0.1, "top": 0.0, "right": 0.1, "bottom": 0.0 },
+                "rotation": 12,
+                "flip_horizontal": true,
                 "lock_aspect_ratio": true
             }),
         },
@@ -1053,6 +1267,22 @@ fn image_placeholders_and_anchor_updates_work() -> Result<(), Box<dyn std::error
             .get("lockAspectRatio")
             .and_then(serde_json::Value::as_bool),
         Some(true)
+    );
+    assert_eq!(
+        record.get("rotation").and_then(serde_json::Value::as_i64),
+        Some(12)
+    );
+    assert_eq!(
+        record
+            .get("flipHorizontal")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        record
+            .get("flipVertical")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
     );
     Ok(())
 }
