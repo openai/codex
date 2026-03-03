@@ -146,6 +146,7 @@ pub(crate) struct ConnectionSessionState {
 pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) arg0_paths: Arg0DispatchPaths,
+    pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) config: Arc<Config>,
     pub(crate) single_client_mode: bool,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
@@ -162,6 +163,7 @@ impl MessageProcessor {
         let MessageProcessorArgs {
             outgoing,
             arg0_paths,
+            auth_manager,
             config,
             single_client_mode,
             cli_overrides,
@@ -170,12 +172,6 @@ impl MessageProcessor {
             feedback,
             config_warnings,
         } = args;
-        let auth_manager = AuthManager::shared(
-            config.codex_home.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
-        auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));

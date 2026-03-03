@@ -274,6 +274,7 @@ impl CloudRequirementsService {
             return Ok(None);
         };
         if !auth.is_chatgpt_auth()
+            || auth.is_external_chatgpt_tokens()
             || !matches!(
                 auth.account_plan_type(),
                 Some(PlanType::Business | PlanType::Enterprise)
@@ -659,6 +660,42 @@ mod tests {
         auth_manager_with_plan_and_identity(plan_type, Some("user-12345"), Some("account-12345"))
     }
 
+    fn auth_manager_with_external_chatgpt_tokens(plan_type: &str) -> Arc<AuthManager> {
+        let tmp = tempdir().expect("tempdir");
+        let header = json!({ "alg": "none", "typ": "JWT" });
+        let auth_payload = json!({
+            "chatgpt_plan_type": plan_type,
+            "chatgpt_user_id": "user-12345",
+            "user_id": "user-12345",
+        });
+        let payload = json!({
+            "email": "user@example.com",
+            "https://api.openai.com/auth": auth_payload,
+        });
+        let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header"));
+        let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("payload"));
+        let signature_b64 = URL_SAFE_NO_PAD.encode(b"sig");
+        let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+
+        let auth_json = json!({
+            "auth_mode": "chatgptAuthTokens",
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "id_token": fake_jwt,
+                "access_token": "test-access-token",
+                "refresh_token": "",
+                "account_id": "account-12345",
+            },
+            "last_refresh": "2025-01-01T00:00:00Z",
+        });
+        write_auth_json(tmp.path(), auth_json).expect("write auth");
+        Arc::new(AuthManager::new(
+            tmp.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ))
+    }
+
     fn parse_for_fetch(contents: Option<&str>) -> Option<ConfigRequirementsToml> {
         contents.and_then(|contents| parse_cloud_requirements(contents).ok().flatten())
     }
@@ -724,6 +761,21 @@ mod tests {
         let service = CloudRequirementsService::new(
             auth_manager,
             Arc::new(StaticFetcher { contents: None }),
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        );
+        let result = service.fetch().await;
+        assert_eq!(result, Ok(None));
+    }
+
+    #[tokio::test]
+    async fn fetch_cloud_requirements_skips_external_chatgpt_tokens_auth() {
+        let codex_home = tempdir().expect("tempdir");
+        let service = CloudRequirementsService::new(
+            auth_manager_with_external_chatgpt_tokens("enterprise"),
+            Arc::new(StaticFetcher {
+                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
+            }),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
