@@ -43,6 +43,11 @@
 //! - Prunes local attached images so only placeholders that survive expansion are sent.
 //! - Preserves remote image URLs as separate attachments even when text is empty.
 //!
+//! When these paths clear the visible textarea after a successful submit or slash-command
+//! dispatch, they intentionally preserve the textarea kill buffer. That lets users `Ctrl+K` part
+//! of a draft, perform a composer action such as changing reasoning level, and then `Ctrl+Y` the
+//! killed text back into the now-empty draft.
+//!
 //! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
 //! and attachment pruning, and clears pending paste state on success.
 //! Slash commands with arguments (like `/plan` and `/review`) reuse the same preparation path so
