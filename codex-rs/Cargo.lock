@@ -1559,6 +1559,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-artifact-spreadsheet"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uuid",
+ "zip 2.4.2",
+]
+
+[[package]]
 name = "codex-async-utils"
 version = "0.0.0"
 dependencies = [
