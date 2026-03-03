@@ -1,11 +1,5 @@
 use std::collections::HashMap;
-use std::fs;
-use std::io;
-use std::path::Path;
-use std::path::PathBuf;
 
-use tempfile::Builder;
-use tempfile::TempDir;
 use url::Url;
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
@@ -31,23 +25,16 @@ pub struct FeedbackDiagnostic {
     pub details: Vec<String>,
 }
 
-pub struct FeedbackDiagnosticsAttachment {
-    _dir: TempDir,
-    path: PathBuf,
-}
-
-impl FeedbackDiagnosticsAttachment {
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
 impl FeedbackDiagnostics {
+    pub fn new(diagnostics: Vec<FeedbackDiagnostic>) -> Self {
+        Self { diagnostics }
+    }
+
     pub fn collect_from_env() -> Self {
         Self::collect_from_pairs(std::env::vars())
     }
 
-    pub fn collect_from_pairs<I, K, V>(pairs: I) -> Self
+    fn collect_from_pairs<I, K, V>(pairs: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: Into<String>,
@@ -125,20 +112,6 @@ impl FeedbackDiagnostics {
 
         Some(lines.join("\n"))
     }
-
-    pub fn write_temp_attachment(&self) -> io::Result<Option<FeedbackDiagnosticsAttachment>> {
-        let Some(text) = self.attachment_text() else {
-            return Ok(None);
-        };
-
-        let dir = Builder::new()
-            .prefix("codex-connectivity-diagnostics-")
-            .tempdir()?;
-        let path = dir.path().join(FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME);
-        fs::write(&path, text)?;
-
-        Ok(Some(FeedbackDiagnosticsAttachment { _dir: dir, path }))
-    }
 }
 
 pub fn sanitize_url_for_display(raw: &str) -> Option<String> {
@@ -167,12 +140,8 @@ fn sanitize_proxy_value(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
-    use std::fs;
-
     use pretty_assertions::assert_eq;
 
-    use super::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
     use super::FeedbackDiagnostic;
     use super::FeedbackDiagnostics;
     use super::sanitize_url_for_display;
@@ -211,21 +180,12 @@ mod tests {
             }
         );
 
-        let attachment = diagnostics
-            .write_temp_attachment()
-            .expect("attachment should be written")
-            .expect("attachment should be present");
-        let contents =
-            fs::read_to_string(attachment.path()).expect("attachment should be readable");
-
         assert_eq!(
-            attachment.path().file_name(),
-            Some(OsStr::new(FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME))
-        );
-        assert_eq!(
-            contents,
+            diagnostics.attachment_text(),
+            Some(
             "Connectivity diagnostics\n\n- Proxy environment variables are set and may affect connectivity.\n  - http_proxy = http://proxy.example.com:8080\n  - HTTPS_PROXY = https://secure-proxy.example.com\n  - all_proxy = socks5h://all-proxy.example.com:1080\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1"
                 .to_string()
+            )
         );
     }
 
@@ -240,12 +200,6 @@ mod tests {
         ] {
             assert_eq!(diagnostics, FeedbackDiagnostics::default());
             assert_eq!(diagnostics.attachment_text(), None);
-            assert!(
-                diagnostics
-                    .write_temp_attachment()
-                    .expect("empty diagnostics should not write attachment")
-                    .is_none()
-            );
         }
     }
 

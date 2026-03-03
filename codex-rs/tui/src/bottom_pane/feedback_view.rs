@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use codex_feedback::feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 use codex_feedback::feedback_diagnostics::FeedbackDiagnostics;
-use codex_feedback::feedback_diagnostics::FeedbackDiagnosticsAttachment;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -51,9 +50,8 @@ pub(crate) enum FeedbackAudience {
 /// both logs and rollout with classification + metadata.
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
-    snapshot: codex_feedback::CodexLogSnapshot,
+    snapshot: codex_feedback::FeedbackSnapshot,
     rollout_path: Option<PathBuf>,
-    diagnostics: FeedbackDiagnostics,
     app_event_tx: AppEventSender,
     include_logs: bool,
     feedback_audience: FeedbackAudience,
@@ -64,17 +62,11 @@ pub(crate) struct FeedbackNoteView {
     complete: bool,
 }
 
-struct PreparedFeedbackAttachments {
-    attachment_paths: Vec<PathBuf>,
-    _diagnostics_attachment: Option<FeedbackDiagnosticsAttachment>,
-}
-
 impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
-        snapshot: codex_feedback::CodexLogSnapshot,
+        snapshot: codex_feedback::FeedbackSnapshot,
         rollout_path: Option<PathBuf>,
-        diagnostics: FeedbackDiagnostics,
         app_event_tx: AppEventSender,
         include_logs: bool,
         feedback_audience: FeedbackAudience,
@@ -83,7 +75,6 @@ impl FeedbackNoteView {
             category,
             snapshot,
             rollout_path,
-            diagnostics,
             app_event_tx,
             include_logs,
             feedback_audience,
@@ -100,7 +91,11 @@ impl FeedbackNoteView {
         } else {
             Some(note.as_str())
         };
-        let attachments = self.prepare_feedback_attachments();
+        let attachment_paths = if self.include_logs {
+            self.rollout_path.iter().cloned().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let classification = feedback_classification(self.category);
 
         let mut thread_id = self.snapshot.thread_id.clone();
@@ -109,7 +104,7 @@ impl FeedbackNoteView {
             classification,
             reason_opt,
             self.include_logs,
-            &attachments.attachment_paths,
+            &attachment_paths,
             Some(SessionSource::Cli),
             None,
         );
@@ -350,7 +345,10 @@ impl FeedbackNoteView {
     fn intro_lines(&self, width: u16) -> Vec<Line<'static>> {
         let (title, _) = feedback_title_and_placeholder(self.category);
         let mut lines = vec![Line::from(vec![gutter(), title.bold()])];
-        if should_show_feedback_connectivity_details(self.category, &self.diagnostics) {
+        if should_show_feedback_connectivity_details(
+            self.category,
+            self.snapshot.feedback_diagnostics(),
+        ) {
             lines.push(Line::from(vec![gutter()]));
             lines.push(Line::from(vec![
                 gutter(),
@@ -371,7 +369,7 @@ impl FeedbackNoteView {
             .subsequent_indent(Line::from(vec![gutter(), "      ".into()]));
         let mut lines = Vec::new();
 
-        for diagnostic in self.diagnostics.diagnostics() {
+        for diagnostic in self.snapshot.feedback_diagnostics().diagnostics() {
             lines.extend(word_wrap_lines(
                 [Line::from(diagnostic.headline.clone())],
                 headline_options.clone(),
@@ -385,35 +383,6 @@ impl FeedbackNoteView {
         }
 
         lines
-    }
-
-    fn prepare_feedback_attachments(&self) -> PreparedFeedbackAttachments {
-        let mut attachment_paths = if self.include_logs {
-            self.rollout_path.iter().cloned().collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        let diagnostics_attachment = if self.include_logs
-            && should_show_feedback_connectivity_details(self.category, &self.diagnostics)
-        {
-            match self.diagnostics.write_temp_attachment() {
-                Ok(attachment) => attachment,
-                Err(err) => {
-                    tracing::warn!(error = %err, "failed to write diagnostics attachment");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        if let Some(attachment) = diagnostics_attachment.as_ref() {
-            attachment_paths.push(attachment.path().to_path_buf());
-        }
-
-        PreparedFeedbackAttachments {
-            attachment_paths,
-            _diagnostics_attachment: diagnostics_attachment,
-        }
     }
 }
 
@@ -652,8 +621,8 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
+    use codex_feedback::feedback_diagnostics::FeedbackDiagnostic;
     use pretty_assertions::assert_eq;
-    use std::ffi::OsStr;
 
     fn render(view: &FeedbackNoteView, width: u16) -> String {
         let height = view.desired_height(width);
@@ -693,7 +662,6 @@ mod tests {
             category,
             snapshot,
             None,
-            FeedbackDiagnostics::default(),
             tx,
             true,
             FeedbackAudience::External,
@@ -739,16 +707,24 @@ mod tests {
     fn feedback_view_with_connectivity_diagnostics() {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
-        let diagnostics = FeedbackDiagnostics::collect_from_pairs([
-            ("HTTP_PROXY", "proxy.example.com:8080"),
-            ("OPENAI_BASE_URL", "https://example.com/v1"),
+        let diagnostics = FeedbackDiagnostics::new(vec![
+            FeedbackDiagnostic {
+                headline: "Proxy environment variables are set and may affect connectivity."
+                    .to_string(),
+                details: vec!["HTTP_PROXY = http://proxy.example.com:8080".to_string()],
+            },
+            FeedbackDiagnostic {
+                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
+            },
         ]);
+        let snapshot = codex_feedback::CodexFeedback::new()
+            .snapshot(None)
+            .with_feedback_diagnostics(diagnostics);
         let view = FeedbackNoteView::new(
             FeedbackCategory::Bug,
             snapshot,
             None,
-            diagnostics,
             tx,
             false,
             FeedbackAudience::External,
@@ -760,8 +736,11 @@ mod tests {
 
     #[test]
     fn should_show_feedback_connectivity_details_only_for_non_good_result_with_diagnostics() {
-        let diagnostics =
-            FeedbackDiagnostics::collect_from_pairs([("HTTP_PROXY", "proxy.example.com:8080")]);
+        let diagnostics = FeedbackDiagnostics::new(vec![FeedbackDiagnostic {
+            headline: "Proxy environment variables are set and may affect connectivity."
+                .to_string(),
+            details: vec!["HTTP_PROXY = http://proxy.example.com:8080".to_string()],
+        }]);
 
         assert_eq!(
             should_show_feedback_connectivity_details(FeedbackCategory::Bug, &diagnostics),
@@ -781,48 +760,32 @@ mod tests {
     }
 
     #[test]
-    fn prepare_feedback_attachments_only_includes_diagnostics_when_logs_are_enabled() {
-        let diagnostics = FeedbackDiagnostics::collect_from_pairs([(
-            "OPENAI_BASE_URL",
-            "https://example.com/v1",
-        )]);
-        let make_view = |category, include_logs| {
+    fn feedback_snapshot_override_controls_connectivity_details() {
+        let diagnostics = FeedbackDiagnostics::new(vec![FeedbackDiagnostic {
+            headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+            details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
+        }]);
+        let make_view = |category| {
             let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
             let tx = AppEventSender::new(tx_raw);
-            let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
+            let snapshot = codex_feedback::CodexFeedback::new()
+                .snapshot(None)
+                .with_feedback_diagnostics(diagnostics.clone());
             FeedbackNoteView::new(
                 category,
                 snapshot,
                 None,
-                diagnostics.clone(),
                 tx,
-                include_logs,
+                true,
                 FeedbackAudience::External,
             )
         };
 
-        let without_logs = make_view(FeedbackCategory::Other, false).prepare_feedback_attachments();
-        assert_eq!(without_logs.attachment_paths, Vec::<PathBuf>::new());
-        assert!(without_logs._diagnostics_attachment.is_none());
-
-        let with_logs = make_view(FeedbackCategory::Other, true).prepare_feedback_attachments();
-        assert_eq!(with_logs.attachment_paths.len(), 1);
-        assert_eq!(
-            with_logs.attachment_paths[0].file_name(),
-            Some(OsStr::new(FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME))
-        );
+        assert!(render(&make_view(FeedbackCategory::Bug), 60).contains("Connectivity diagnostics"));
         assert!(
-            with_logs._diagnostics_attachment.is_some(),
-            "diagnostics attachment should stay alive until upload completes"
+            !render(&make_view(FeedbackCategory::GoodResult), 60)
+                .contains("Connectivity diagnostics")
         );
-
-        let good_result_with_logs =
-            make_view(FeedbackCategory::GoodResult, true).prepare_feedback_attachments();
-        assert_eq!(
-            good_result_with_logs.attachment_paths,
-            Vec::<PathBuf>::new()
-        );
-        assert!(good_result_with_logs._diagnostics_attachment.is_none());
     }
 
     #[test]

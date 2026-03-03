@@ -13,6 +13,8 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
+use feedback_diagnostics::FeedbackDiagnostics;
 use tracing::Event;
 use tracing::Level;
 use tracing::field::Visit;
@@ -90,7 +92,7 @@ impl CodexFeedback {
         .with_filter(Targets::new().with_target(FEEDBACK_TAGS_TARGET, Level::TRACE))
     }
 
-    pub fn snapshot(&self, session_id: Option<ThreadId>) -> CodexLogSnapshot {
+    pub fn snapshot(&self, session_id: Option<ThreadId>) -> FeedbackSnapshot {
         let bytes = {
             let guard = self.inner.ring.lock().expect("mutex poisoned");
             guard.snapshot_bytes()
@@ -99,9 +101,10 @@ impl CodexFeedback {
             let guard = self.inner.tags.lock().expect("mutex poisoned");
             guard.clone()
         };
-        CodexLogSnapshot {
+        FeedbackSnapshot {
             bytes,
             tags,
+            feedback_diagnostics: FeedbackDiagnostics::collect_from_env(),
             thread_id: session_id
                 .map(|id| id.to_string())
                 .unwrap_or("no-active-thread-".to_string() + &ThreadId::new().to_string()),
@@ -201,15 +204,25 @@ impl RingBuffer {
     }
 }
 
-pub struct CodexLogSnapshot {
+pub struct FeedbackSnapshot {
     bytes: Vec<u8>,
     tags: BTreeMap<String, String>,
+    feedback_diagnostics: FeedbackDiagnostics,
     pub thread_id: String,
 }
 
-impl CodexLogSnapshot {
+impl FeedbackSnapshot {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    pub fn feedback_diagnostics(&self) -> &FeedbackDiagnostics {
+        &self.feedback_diagnostics
+    }
+
+    pub fn with_feedback_diagnostics(mut self, feedback_diagnostics: FeedbackDiagnostics) -> Self {
+        self.feedback_diagnostics = feedback_diagnostics;
+        self
     }
 
     pub fn save_to_temp_file(&self) -> io::Result<PathBuf> {
@@ -226,7 +239,7 @@ impl CodexLogSnapshot {
         classification: &str,
         reason: Option<&str>,
         include_logs: bool,
-        extra_log_files: &[PathBuf],
+        extra_attachment_paths: &[PathBuf],
         session_source: Option<SessionSource>,
         logs_override: Option<Vec<u8>>,
     ) -> Result<()> {
@@ -320,7 +333,19 @@ impl CodexLogSnapshot {
             }));
         }
 
-        for path in extra_log_files {
+        if include_logs
+            && classification != "good_result"
+            && let Some(text) = self.feedback_diagnostics.attachment_text()
+        {
+            envelope.add_item(EnvelopeItem::Attachment(Attachment {
+                buffer: text.into_bytes(),
+                filename: FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME.to_string(),
+                content_type: Some("text/plain".to_string()),
+                ty: None,
+            }));
+        }
+
+        for path in extra_attachment_paths {
             let data = match fs::read(path) {
                 Ok(data) => data,
                 Err(err) => {
