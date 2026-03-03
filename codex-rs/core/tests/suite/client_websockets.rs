@@ -1566,8 +1566,7 @@ async fn stream_until_complete(
     harness: &WebsocketTestHarness,
     prompt: &Prompt,
 ) {
-    stream_until_complete_with_service_tier(client_session, harness, prompt, None)
-        .await;
+    stream_until_complete_with_service_tier(client_session, harness, prompt, None).await;
 }
 
 async fn stream_until_complete_with_service_tier(

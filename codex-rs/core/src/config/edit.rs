@@ -28,9 +28,7 @@ pub enum ConfigEdit {
         effort: Option<ReasoningEffort>,
     },
     /// Update the service tier preference for future turns.
-    SetServiceTier {
-        service_tier: Option<ServiceTier>,
-    },
+    SetServiceTier { service_tier: Option<ServiceTier> },
     /// Update the active (or default) model personality.
     SetModelPersonality { personality: Option<Personality> },
     /// Toggle the acknowledgement flag under `[notice]`.

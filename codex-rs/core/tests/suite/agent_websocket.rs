@@ -320,8 +320,7 @@ async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Resu
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup["service_tier"].as_str(), Some("priority"));
 
-    test.submit_turn_with_service_tier("hello", None)
-        .await?;
+    test.submit_turn_with_service_tier("hello", None).await?;
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
@@ -376,8 +375,7 @@ async fn websocket_v2_next_turn_uses_updated_service_tier() -> Result<()> {
 
     test.submit_turn_with_service_tier("first", Some(ServiceTier::Fast))
         .await?;
-    test.submit_turn_with_service_tier("second", None)
-        .await?;
+    test.submit_turn_with_service_tier("second", None).await?;
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
