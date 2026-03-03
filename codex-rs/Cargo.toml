@@ -354,6 +354,7 @@ ignored = [
     "openssl-sys",
     "codex-utils-readiness",
     "codex-secrets",
+    "codex-artifact-spreadsheet"
 ]
 
 [profile.release]
