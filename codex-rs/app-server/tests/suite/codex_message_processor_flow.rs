@@ -196,6 +196,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         );
         return Ok(());
     }
+    let python = if cfg!(windows) { "python" } else { "python3" };
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
@@ -207,7 +208,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     let responses = vec![
         create_shell_command_sse_response(
             vec![
-                "python3".to_string(),
+                python.to_string(),
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
@@ -218,7 +219,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         create_final_assistant_message_sse_response("done 1")?,
         create_shell_command_sse_response(
             vec![
-                "python3".to_string(),
+                python.to_string(),
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
@@ -299,11 +300,11 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             conversation_id,
             call_id: "call1".to_string(),
             approval_id: None,
-            command: format_with_current_shell("python3 -c 'print(42)'"),
+            command: format_with_current_shell(&format!("{python} -c 'print(42)'")),
             cwd: working_directory.clone(),
             reason: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
-                cmd: "python3 -c 'print(42)'".to_string()
+                cmd: format!("{python} -c 'print(42)'")
             }],
         },
         params

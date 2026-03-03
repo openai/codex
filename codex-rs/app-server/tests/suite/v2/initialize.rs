@@ -191,6 +191,7 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
+    let python = if cfg!(windows) { "python" } else { "python3" };
     let notify_script = codex_home.path().join("notify.py");
     std::fs::write(
         &notify_script,
@@ -212,7 +213,8 @@ tmp_path.replace(payload_path)
         &server.uri(),
         "never",
         &format!(
-            "notify = [\"python3\", {}]",
+            "notify = [{}, {}]",
+            toml_basic_string(python),
             toml_basic_string(notify_script)
         ),
     )?;
