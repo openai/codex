@@ -1997,8 +1997,10 @@ dependencies = [
  "codex-protocol",
  "pretty_assertions",
  "sentry",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

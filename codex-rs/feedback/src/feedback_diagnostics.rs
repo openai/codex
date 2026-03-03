@@ -167,9 +167,10 @@ fn sanitize_proxy_value(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
     use std::ffi::OsStr;
     use std::fs;
+
+    use pretty_assertions::assert_eq;
 
     use super::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
     use super::FeedbackDiagnostic;

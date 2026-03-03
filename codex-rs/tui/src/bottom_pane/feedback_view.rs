@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 
-use codex_core::feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
-use codex_core::feedback_diagnostics::FeedbackDiagnostics;
-use codex_core::feedback_diagnostics::FeedbackDiagnosticsAttachment;
+use codex_feedback::feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
+use codex_feedback::feedback_diagnostics::FeedbackDiagnostics;
+use codex_feedback::feedback_diagnostics::FeedbackDiagnosticsAttachment;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
