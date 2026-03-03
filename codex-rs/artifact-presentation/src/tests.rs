@@ -405,7 +405,7 @@ fn active_slide_can_be_set_and_tracks_reorders() -> Result<(), Box<dyn std::erro
     );
     let after_delete = manager.execute(
         PresentationArtifactRequest {
-            artifact_id: Some(deleted.artifact_id.clone()),
+            artifact_id: Some(deleted.artifact_id),
             action: "list_slides".to_string(),
             args: serde_json::json!({}),
         },
