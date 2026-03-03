@@ -2616,7 +2616,7 @@ impl CodexMessageProcessor {
         };
 
         let git_sha = match sha {
-            Some(sha) => {
+            Some(Some(sha)) => {
                 let sha = sha.trim().to_string();
                 if sha.is_empty() {
                     self.send_invalid_request_error(
@@ -2626,12 +2626,13 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
-                Some(sha)
+                Some(Some(sha))
             }
+            Some(None) => Some(None),
             None => None,
         };
         let git_branch = match branch {
-            Some(branch) => {
+            Some(Some(branch)) => {
                 let branch = branch.trim().to_string();
                 if branch.is_empty() {
                     self.send_invalid_request_error(
@@ -2641,12 +2642,13 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
-                Some(branch)
+                Some(Some(branch))
             }
+            Some(None) => Some(None),
             None => None,
         };
         let git_origin_url = match origin_url {
-            Some(origin_url) => {
+            Some(Some(origin_url)) => {
                 let origin_url = origin_url.trim().to_string();
                 if origin_url.is_empty() {
                     self.send_invalid_request_error(
@@ -2656,17 +2658,18 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
-                Some(origin_url)
+                Some(Some(origin_url))
             }
+            Some(None) => Some(None),
             None => None,
         };
 
         let updated = match state_db_ctx
             .update_thread_git_info(
                 thread_uuid,
-                git_sha.as_deref(),
-                git_branch.as_deref(),
-                git_origin_url.as_deref(),
+                git_sha.as_ref().map(|value| value.as_deref()),
+                git_branch.as_ref().map(|value| value.as_deref()),
+                git_origin_url.as_ref().map(|value| value.as_deref()),
             )
             .await
         {

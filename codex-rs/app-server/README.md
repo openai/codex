@@ -326,7 +326,7 @@ Use `thread/read` to fetch a stored thread by id without resuming it. Pass `incl
 
 ### Example: Update stored thread metadata
 
-Use `thread/metadata/update` to patch sqlite-backed metadata for a thread without resuming it. Today this supports persisted `gitInfo`; only provided fields are updated.
+Use `thread/metadata/update` to patch sqlite-backed metadata for a thread without resuming it. Today this supports persisted `gitInfo`; omitted fields are left unchanged, while explicit `null` clears a stored value.
 
 ```json
 { "method": "thread/metadata/update", "id": 24, "params": {
@@ -337,6 +337,17 @@ Use `thread/metadata/update` to patch sqlite-backed metadata for a thread withou
     "thread": {
         "id": "thr_123",
         "gitInfo": { "sha": null, "branch": "feature/sidebar-pr", "originUrl": null }
+    }
+} }
+
+{ "method": "thread/metadata/update", "id": 25, "params": {
+    "threadId": "thr_123",
+    "gitInfo": { "branch": null }
+} }
+{ "id": 25, "result": {
+    "thread": {
+        "id": "thr_123",
+        "gitInfo": null
     }
 } }
 ```

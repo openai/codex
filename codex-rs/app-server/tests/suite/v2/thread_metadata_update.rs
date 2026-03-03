@@ -20,6 +20,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_core::state_db::reconcile_rollout;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::GitInfo as RolloutGitInfo;
 use codex_state::StateRuntime;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -57,7 +58,7 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
             thread_id: thread.id.clone(),
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
-                branch: Some("feature/sidebar-pr".to_string()),
+                branch: Some(Some("feature/sidebar-pr".to_string())),
                 origin_url: None,
             }),
         })
@@ -191,7 +192,7 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_stored_thread() -
             thread_id: thread_id.clone(),
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
-                branch: Some("feature/stored-thread".to_string()),
+                branch: Some(Some("feature/stored-thread".to_string())),
                 origin_url: None,
             }),
         })
@@ -271,7 +272,7 @@ async fn thread_metadata_update_repairs_loaded_thread_without_resetting_summary(
             thread_id: thread_id.clone(),
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
-                branch: Some("feature/loaded-thread".to_string()),
+                branch: Some(Some("feature/loaded-thread".to_string())),
                 origin_url: None,
             }),
         })
@@ -295,6 +296,68 @@ async fn thread_metadata_update_repairs_loaded_thread_without_resetting_summary(
             origin_url: None,
         })
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-07T09-15-00",
+        "2025-01-07T09:15:00Z",
+        "Thread preview",
+        Some("mock_provider"),
+        Some(RolloutGitInfo {
+            commit_hash: Some("abc123".to_string()),
+            branch: Some("feature/sidebar-pr".to_string()),
+            repository_url: Some("git@example.com:openai/codex.git".to_string()),
+        }),
+    )?;
+    let _state_db = init_state_db(codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread_id.clone(),
+            git_info: Some(ThreadMetadataGitInfoUpdateParams {
+                sha: Some(None),
+                branch: Some(None),
+                origin_url: Some(None),
+            }),
+        })
+        .await?;
+    let update_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+    let ThreadMetadataUpdateResponse { thread: updated } =
+        to_response::<ThreadMetadataUpdateResponse>(update_resp)?;
+
+    assert_eq!(updated.id, thread_id.clone());
+    assert_eq!(updated.git_info, None);
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id,
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse { thread: read } = to_response::<ThreadReadResponse>(read_resp)?;
+
+    assert_eq!(read.git_info, None);
 
     Ok(())
 }

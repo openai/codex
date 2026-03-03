@@ -2052,12 +2052,54 @@ pub struct ThreadMetadataUpdateParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadMetadataGitInfoUpdateParams {
-    #[ts(optional = nullable)]
-    pub sha: Option<String>,
-    #[ts(optional = nullable)]
-    pub branch: Option<String>,
-    #[ts(optional = nullable)]
-    pub origin_url: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "optional_nullable_string::serialize",
+        deserialize_with = "optional_nullable_string::deserialize"
+    )]
+    #[ts(optional = nullable, type = "string | null")]
+    pub sha: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "optional_nullable_string::serialize",
+        deserialize_with = "optional_nullable_string::deserialize"
+    )]
+    #[ts(optional = nullable, type = "string | null")]
+    pub branch: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "optional_nullable_string::serialize",
+        deserialize_with = "optional_nullable_string::deserialize"
+    )]
+    #[ts(optional = nullable, type = "string | null")]
+    pub origin_url: Option<Option<String>>,
+}
+
+mod optional_nullable_string {
+    use serde::Deserialize;
+    use serde::Deserializer;
+    use serde::Serializer;
+
+    pub fn serialize<S>(value: &Option<Option<String>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(Some(value)) => serializer.serialize_str(value),
+            Some(None) => serializer.serialize_none(),
+            None => unreachable!("skip_serializing_if omits missing patch fields"),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer).map(Some)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

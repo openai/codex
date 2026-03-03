@@ -223,9 +223,9 @@ FROM threads
     pub async fn update_thread_git_info(
         &self,
         thread_id: ThreadId,
-        git_sha: Option<&str>,
-        git_branch: Option<&str>,
-        git_origin_url: Option<&str>,
+        git_sha: Option<Option<&str>>,
+        git_branch: Option<Option<&str>>,
+        git_origin_url: Option<Option<&str>>,
     ) -> anyhow::Result<bool> {
         let result = sqlx::query(
             r#"
@@ -238,11 +238,11 @@ WHERE id = ?
             "#,
         )
         .bind(git_sha.is_some())
-        .bind(git_sha)
+        .bind(git_sha.flatten())
         .bind(git_branch.is_some())
-        .bind(git_branch)
+        .bind(git_branch.flatten())
         .bind(git_origin_url.is_some())
-        .bind(git_origin_url)
+        .bind(git_origin_url.flatten())
         .bind(thread_id.to_string())
         .execute(self.pool.as_ref())
         .await?;
@@ -716,9 +716,9 @@ mod tests {
         let updated = runtime
             .update_thread_git_info(
                 thread_id,
-                Some("abc123"),
-                Some("feature/branch"),
-                Some("git@example.com:openai/codex.git"),
+                Some(Some("abc123")),
+                Some(Some("feature/branch")),
+                Some(Some("git@example.com:openai/codex.git")),
             )
             .await
             .expect("git info update should succeed");
@@ -741,5 +741,39 @@ mod tests {
             persisted.git_origin_url.as_deref(),
             Some("git@example.com:openai/codex.git")
         );
+    }
+
+    #[tokio::test]
+    async fn update_thread_git_info_can_clear_fields() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000790").expect("valid thread id");
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        metadata.git_sha = Some("abc123".to_string());
+        metadata.git_branch = Some("feature/branch".to_string());
+        metadata.git_origin_url = Some("git@example.com:openai/codex.git".to_string());
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("initial upsert should succeed");
+
+        let updated = runtime
+            .update_thread_git_info(thread_id, Some(None), Some(None), Some(None))
+            .await
+            .expect("git info clear should succeed");
+        assert!(updated, "git info clear should touch the thread row");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.git_sha, None);
+        assert_eq!(persisted.git_branch, None);
+        assert_eq!(persisted.git_origin_url, None);
     }
 }
