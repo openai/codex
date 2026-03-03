@@ -9,7 +9,6 @@ use crate::CellAddress;
 use crate::CellRange;
 use crate::SpreadsheetArtifact;
 use crate::SpreadsheetArtifactError;
-use crate::SpreadsheetCellValue;
 use crate::SpreadsheetSheet;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -154,7 +153,12 @@ fn render_viewport(
     let base = range
         .cloned()
         .or_else(|| sheet.minimum_range())
-        .unwrap_or_else(|| CellRange::from_start_end(CellAddress { column: 1, row: 1 }, CellAddress { column: 1, row: 1 }));
+        .unwrap_or_else(|| {
+            CellRange::from_start_end(
+                CellAddress { column: 1, row: 1 },
+                CellAddress { column: 1, row: 1 },
+            )
+        });
     let Some(center) = center else {
         return Ok(base);
     };
@@ -169,7 +173,10 @@ fn render_viewport(
 
     let half_columns = visible_columns / 2;
     let half_rows = visible_rows / 2;
-    let start_column = center.column.saturating_sub(half_columns).max(base.start.column);
+    let start_column = center
+        .column
+        .saturating_sub(half_columns)
+        .max(base.start.column);
     let start_row = center.row.saturating_sub(half_rows).max(base.start.row);
     let end_column = (start_column + visible_columns.saturating_sub(1)).min(base.end.column);
     let end_row = (start_row + visible_rows.saturating_sub(1)).min(base.end.row);
@@ -312,9 +319,7 @@ fn workbook_output_paths(
         }
         return sheets
             .iter()
-            .map(|sheet| {
-                output_path.join(format!("{}.html", sanitize_file_component(&sheet.name)))
-            })
+            .map(|sheet| output_path.join(format!("{}.html", sanitize_file_component(&sheet.name))))
             .collect();
     }
     sheets

@@ -322,7 +322,8 @@ impl SpreadsheetArtifactManager {
             args.sheet_name.as_deref(),
             args.sheet_index.map(|value| value as usize),
         )?;
-        let rendered = artifact.render_sheet_preview(cwd, sheet, &render_options_from_args(args)?)?;
+        let rendered =
+            artifact.render_sheet_preview(cwd, sheet, &render_options_from_args(args)?)?;
         let mut response = SpreadsheetArtifactResponse::new(
             artifact_id,
             request.action,
@@ -349,10 +350,13 @@ impl SpreadsheetArtifactManager {
             args.sheet_name.as_deref(),
             args.sheet_index.map(|value| value as usize),
         )?;
-        let range_text = args.range.ok_or_else(|| SpreadsheetArtifactError::InvalidArgs {
-            action: request.action.clone(),
-            message: "range is required".to_string(),
-        })?;
+        let range_text =
+            args.range
+                .clone()
+                .ok_or_else(|| SpreadsheetArtifactError::InvalidArgs {
+                    action: request.action.clone(),
+                    message: "range is required".to_string(),
+                })?;
         let range = CellRange::parse(&range_text)?;
         let rendered =
             artifact.render_range_preview(cwd, sheet, &range, &render_options_from_args(args)?)?;

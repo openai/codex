@@ -171,7 +171,9 @@ fn render_options_write_deterministic_html_previews() -> Result<(), Box<dyn std:
     let mut artifact = SpreadsheetArtifact::new(Some("Preview".to_string()));
     artifact.create_sheet("Sheet 1".to_string())?;
     {
-        let sheet = artifact.get_sheet_mut(Some("Sheet 1"), None).expect("sheet");
+        let sheet = artifact
+            .get_sheet_mut(Some("Sheet 1"), None)
+            .expect("sheet");
         sheet.set_value(
             CellAddress::parse("A1")?,
             Some(SpreadsheetCellValue::String("Name".to_string())),
@@ -1111,6 +1113,116 @@ fn manager_get_reference_and_xlsx_import_preserve_workbook_name()
             .as_ref()
             .map(|range_ref| range_ref.address.clone()),
         Some("A1:B2".to_string())
+    );
+    Ok(())
+}
+
+#[test]
+fn manager_render_actions_support_workbook_sheet_and_range()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = SpreadsheetArtifactManager::default();
+    let created = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Render" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+
+    manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "create_sheet".to_string(),
+            args: serde_json::json!({ "name": "Sheet1" }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "set_range_values".to_string(),
+            args: serde_json::json!({
+                "sheet_name": "Sheet1",
+                "range": "A1:C4",
+                "values": [
+                    ["h1", "h2", "h3"],
+                    ["a", 1, 2],
+                    ["b", 3, 4],
+                    ["c", 5, 6]
+                ]
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let workbook = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "render_workbook".to_string(),
+            args: serde_json::json!({
+                "output_path": temp_dir.path().join("workbook-previews"),
+                "include_headers": false
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(workbook.exported_paths.len(), 1);
+    assert!(workbook.exported_paths[0].exists());
+
+    let sheet = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "render_sheet".to_string(),
+            args: serde_json::json!({
+                "sheet_name": "Sheet1",
+                "output_path": temp_dir.path().join("sheet-preview.html"),
+                "center_address": "B3",
+                "width": 220,
+                "height": 90,
+                "scale": 1.5,
+                "performance_mode": true
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(sheet.exported_paths.len(), 1);
+    assert!(sheet.exported_paths[0].exists());
+    assert!(
+        sheet
+            .rendered_html
+            .as_ref()
+            .is_some_and(|html| html.contains("data-performance-mode=\"true\""))
+    );
+
+    let range = manager.execute(
+        SpreadsheetArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "render_range".to_string(),
+            args: serde_json::json!({
+                "sheet_name": "Sheet1",
+                "range": "A2:C4",
+                "output_path": temp_dir.path().join("range-preview.html"),
+                "include_headers": true
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(range.exported_paths.len(), 1);
+    assert_eq!(
+        range
+            .range_ref
+            .as_ref()
+            .map(|range_ref| range_ref.address.clone()),
+        Some("A2:C4".to_string())
+    );
+    assert!(
+        range
+            .rendered_html
+            .as_ref()
+            .is_some_and(|html| html.contains("<th>A</th>"))
     );
     Ok(())
 }
