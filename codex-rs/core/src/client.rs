@@ -521,7 +521,7 @@ impl ModelClientSession {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        service_tier: ServiceTier,
+        service_tier: Option<ServiceTier>,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
@@ -572,8 +572,8 @@ impl ModelClientSession {
             stream: true,
             include,
             service_tier: match service_tier {
-                ServiceTier::Standard => None,
-                ServiceTier::Fast => Some("priority".to_string()),
+                Some(ServiceTier::Fast) => Some("priority".to_string()),
+                _ => None,
             },
             prompt_cache_key,
             text,
@@ -799,7 +799,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        service_tier: ServiceTier,
+        service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
@@ -866,7 +866,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        service_tier: ServiceTier,
+        service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
         warmup: bool,
     ) -> Result<WebsocketStreamOutcome> {
@@ -968,7 +968,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        service_tier: ServiceTier,
+        service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<()> {
         let Some(ws_version) = self.client.active_ws_version(model_info) else {
@@ -1032,7 +1032,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        service_tier: ServiceTier,
+        service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.wire_api;

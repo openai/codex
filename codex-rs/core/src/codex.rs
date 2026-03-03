@@ -825,7 +825,7 @@ pub(crate) struct SessionConfiguration {
 
     collaboration_mode: CollaborationMode,
     model_reasoning_summary: Option<ReasoningSummaryConfig>,
-    service_tier: ServiceTier,
+    service_tier: Option<ServiceTier>,
 
     /// Developer instructions that supplement the base instructions.
     developer_instructions: Option<String>,
@@ -933,7 +933,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
-    pub(crate) service_tier: Option<ServiceTier>,
+    pub(crate) service_tier: Option<Option<ServiceTier>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
@@ -7710,7 +7710,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            service_tier: ServiceTier::Standard,
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -7805,7 +7805,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            service_tier: ServiceTier::Standard,
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -8119,7 +8119,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            service_tier: ServiceTier::Standard,
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -8175,7 +8175,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            service_tier: ServiceTier::Standard,
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -8267,7 +8267,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            service_tier: ServiceTier::Standard,
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -8436,7 +8436,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            service_tier: ServiceTier::Standard,
+            service_tier: None,
             personality: config.personality,
             base_instructions: config
                 .base_instructions

@@ -286,7 +286,7 @@ impl TestCodex {
     pub async fn submit_turn_with_service_tier(
         &self,
         prompt: &str,
-        service_tier: ServiceTier,
+        service_tier: Option<ServiceTier>,
     ) -> Result<()> {
         self.submit_turn_with_context(
             prompt,
@@ -312,7 +312,7 @@ impl TestCodex {
         prompt: &str,
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
-        service_tier: Option<ServiceTier>,
+        service_tier: Option<Option<ServiceTier>>,
     ) -> Result<()> {
         let session_model = self.session_configured.model.clone();
         self.codex

@@ -113,21 +113,13 @@ pub enum WebSearchMode {
     Live,
 }
 
-#[derive(
-    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS, Default,
-)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum ServiceTier {
-    #[default]
+    /// Legacy compatibility value for older local config files.
     Standard,
     Fast,
-}
-
-impl ServiceTier {
-    pub const fn is_fast(self) -> bool {
-        matches!(self, Self::Fast)
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]

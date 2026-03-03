@@ -140,7 +140,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await
@@ -221,7 +221,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await
@@ -259,7 +259,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await
@@ -271,7 +271,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await
@@ -324,7 +324,7 @@ async fn responses_websocket_prewarm_uses_v2_when_model_prefers_websockets_and_f
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await
@@ -698,7 +698,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await
@@ -770,7 +770,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await
@@ -1062,7 +1062,7 @@ async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
         &mut client_session,
         &harness,
         &prompt_one,
-        ServiceTier::Standard,
+        None,
         Some(first_turn_metadata),
     )
     .await;
@@ -1070,7 +1070,7 @@ async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
         &mut client_session,
         &harness,
         &prompt_two,
-        ServiceTier::Standard,
+        None,
         Some(enriched_turn_metadata),
     )
     .await;
@@ -1333,7 +1333,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await
@@ -1566,7 +1566,7 @@ async fn stream_until_complete(
     harness: &WebsocketTestHarness,
     prompt: &Prompt,
 ) {
-    stream_until_complete_with_service_tier(client_session, harness, prompt, ServiceTier::Standard)
+    stream_until_complete_with_service_tier(client_session, harness, prompt, None)
         .await;
 }
 
@@ -1574,7 +1574,7 @@ async fn stream_until_complete_with_service_tier(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
     prompt: &Prompt,
-    service_tier: ServiceTier,
+    service_tier: Option<ServiceTier>,
 ) {
     stream_until_complete_with_turn_metadata(client_session, harness, prompt, service_tier, None)
         .await;
@@ -1584,7 +1584,7 @@ async fn stream_until_complete_with_turn_metadata(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
     prompt: &Prompt,
-    service_tier: ServiceTier,
+    service_tier: Option<ServiceTier>,
     turn_metadata_header: Option<&str>,
 ) {
     let mut stream = client_session

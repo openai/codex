@@ -3611,10 +3611,10 @@ impl ChatWidget {
                 self.open_model_popup();
             }
             SlashCommand::Fast => {
-                let next_tier = if self.config.service_tier.is_fast() {
-                    ServiceTier::Standard
+                let next_tier = if self.config.service_tier.is_some() {
+                    None
                 } else {
-                    ServiceTier::Fast
+                    Some(ServiceTier::Fast)
                 };
                 self.set_service_tier_selection(next_tier);
             }
@@ -3903,10 +3903,10 @@ impl ChatWidget {
                     return;
                 }
                 match trimmed.to_ascii_lowercase().as_str() {
-                    "on" => self.set_service_tier_selection(ServiceTier::Fast),
-                    "off" => self.set_service_tier_selection(ServiceTier::Standard),
+                    "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
+                    "off" => self.set_service_tier_selection(None),
                     "status" => {
-                        let status = if self.config.service_tier.is_fast() {
+                        let status = if self.config.service_tier.is_some() {
                             "on"
                         } else {
                             "off"
@@ -6902,11 +6902,11 @@ impl ChatWidget {
     }
 
     /// Set Fast mode in the widget's config copy.
-    pub(crate) fn set_service_tier(&mut self, service_tier: ServiceTier) {
+    pub(crate) fn set_service_tier(&mut self, service_tier: Option<ServiceTier>) {
         self.config.service_tier = service_tier;
     }
 
-    pub(crate) fn current_service_tier(&self) -> ServiceTier {
+    pub(crate) fn current_service_tier(&self) -> Option<ServiceTier> {
         self.config.service_tier
     }
 
@@ -6943,7 +6943,7 @@ impl ChatWidget {
         self.refresh_model_display();
     }
 
-    fn set_service_tier_selection(&mut self, service_tier: ServiceTier) {
+    fn set_service_tier_selection(&mut self, service_tier: Option<ServiceTier>) {
         self.set_service_tier(service_tier);
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {

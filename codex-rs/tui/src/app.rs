@@ -2684,7 +2684,7 @@ impl App {
                     .await
                 {
                     Ok(()) => {
-                        let status = if service_tier.is_fast() { "on" } else { "off" };
+                        let status = if service_tier.is_some() { "on" } else { "off" };
                         let mut message = format!("Fast mode set to {status}");
                         if let Some(profile) = profile {
                             message.push_str(" for ");
@@ -4963,13 +4963,13 @@ mod tests {
     async fn fresh_session_config_uses_current_service_tier() {
         let mut app = make_test_app().await;
         app.chat_widget
-            .set_service_tier(codex_protocol::config_types::ServiceTier::Fast);
+            .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
 
         let config = app.fresh_session_config();
 
         assert_eq!(
             config.service_tier,
-            codex_protocol::config_types::ServiceTier::Fast
+            Some(codex_protocol::config_types::ServiceTier::Fast)
         );
     }
 

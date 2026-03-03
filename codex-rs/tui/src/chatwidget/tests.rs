@@ -6532,7 +6532,7 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
         events.iter().any(|event| matches!(
             event,
             AppEvent::CodexOp(Op::OverrideTurnContext {
-                service_tier: Some(ServiceTier::Fast),
+                service_tier: Some(Some(ServiceTier::Fast)),
                 ..
             })
         )),
@@ -6542,7 +6542,7 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
         events.iter().any(|event| matches!(
             event,
             AppEvent::PersistServiceTierSelection {
-                service_tier: ServiceTier::Fast,
+                service_tier: Some(ServiceTier::Fast),
             }
         )),
         "expected fast-mode persistence app event; events: {events:?}"
@@ -6568,7 +6568,7 @@ async fn user_turn_carries_service_tier_after_fast_toggle() {
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            service_tier: Some(ServiceTier::Fast),
+            service_tier: Some(Some(ServiceTier::Fast)),
             ..
         } => {}
         other => panic!("expected Op::UserTurn with fast service tier, got {other:?}"),

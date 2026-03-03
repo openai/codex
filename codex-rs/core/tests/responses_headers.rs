@@ -12,7 +12,6 @@ use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
@@ -118,7 +117,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
             &otel_manager,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await
@@ -231,7 +230,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
             &otel_manager,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await
@@ -343,7 +342,7 @@ async fn responses_respects_model_info_overrides_from_config() {
             &otel_manager,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await

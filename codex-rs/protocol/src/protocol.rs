@@ -225,8 +225,12 @@ pub enum Op {
         summary: Option<ReasoningSummaryConfig>,
 
         /// Optional service tier override for this turn.
+        ///
+        /// Use `Some(Some(_))` to set a specific tier for this turn, `Some(None)` to
+        /// explicitly clear the tier for this turn, or `None` to keep the existing
+        /// session preference.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        service_tier: Option<ServiceTier>,
+        service_tier: Option<Option<ServiceTier>>,
 
         // The JSON schema to use for the final assistant message
         final_output_json_schema: Option<Value>,
@@ -281,8 +285,11 @@ pub enum Op {
         summary: Option<ReasoningSummaryConfig>,
 
         /// Updated service tier preference for future turns.
+        ///
+        /// Use `Some(Some(_))` to set a specific tier, `Some(None)` to clear the
+        /// preference, or `None` to leave the existing value unchanged.
         #[serde(skip_serializing_if = "Option::is_none")]
-        service_tier: Option<ServiceTier>,
+        service_tier: Option<Option<ServiceTier>>,
 
         /// EXPERIMENTAL - set a pre-set collaboration mode.
         /// Takes precedence over model, effort, and developer instructions if set.

@@ -227,9 +227,9 @@ async fn service_tier_change_is_applied_on_next_http_turn() -> Result<()> {
 
     let test = test_codex().build(&server).await?;
 
-    test.submit_turn_with_service_tier("fast turn", ServiceTier::Fast)
+    test.submit_turn_with_service_tier("fast turn", Some(ServiceTier::Fast))
         .await?;
-    test.submit_turn_with_service_tier("standard turn", ServiceTier::Standard)
+    test.submit_turn_with_service_tier("standard turn", None)
         .await?;
 
     let requests = resp_mock.requests();

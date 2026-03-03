@@ -187,7 +187,7 @@ pub struct Config {
     pub model: Option<String>,
 
     /// Effective service tier preference for new turns.
-    pub service_tier: ServiceTier,
+    pub service_tier: Option<ServiceTier>,
 
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
@@ -1959,9 +1959,9 @@ impl Config {
             config_profile
                 .service_tier
                 .or(cfg.service_tier)
-                .unwrap_or_default()
+                .filter(|tier| matches!(tier, ServiceTier::Fast))
         } else {
-            ServiceTier::Standard
+            None
         };
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
@@ -4894,7 +4894,7 @@ model_verbosity = "high"
                 review_model: None,
                 model_context_window: None,
                 model_auto_compact_token_limit: None,
-                service_tier: ServiceTier::Standard,
+                service_tier: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 permissions: Permissions {
@@ -5024,7 +5024,7 @@ model_verbosity = "high"
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
-            service_tier: ServiceTier::Standard,
+            service_tier: None,
             model_provider_id: "openai-custom".to_string(),
             model_provider: fixture.openai_custom_provider.clone(),
             permissions: Permissions {
@@ -5152,7 +5152,7 @@ model_verbosity = "high"
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
-            service_tier: ServiceTier::Standard,
+            service_tier: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {
@@ -5266,7 +5266,7 @@ model_verbosity = "high"
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
-            service_tier: ServiceTier::Standard,
+            service_tier: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {
@@ -5651,6 +5651,33 @@ trust_level = "untrusted"
                 "Expected WorkspaceWrite for untrusted project, got {resolution:?}"
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_standard_service_tier_loads_as_default_none() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = toml::from_str::<ConfigToml>(
+            r#"
+service_tier = "standard"
+
+[features]
+fast_mode = true
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(codex_home.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.service_tier, None);
 
         Ok(())
     }

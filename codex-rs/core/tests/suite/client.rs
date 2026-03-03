@@ -19,7 +19,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ContentItem;
@@ -1720,7 +1719,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             &otel_manager,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
-            ServiceTier::Standard,
+            None,
             None,
         )
         .await
