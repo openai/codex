@@ -72,11 +72,13 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -1040,7 +1042,7 @@ impl App {
         }
     }
 
-    async fn submit_op_to_thread(&mut self, thread_id: ThreadId, op: Op) {
+    async fn submit_op_to_thread(&mut self, thread_id: ThreadId, op: Op) -> bool {
         let replay_state_op =
             ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
         let submitted = if self.active_thread_id == Some(thread_id) {
@@ -1068,6 +1070,48 @@ impl App {
         if submitted && let Some(op) = replay_state_op.as_ref() {
             self.note_thread_outbound_op(thread_id, op).await;
             self.refresh_pending_thread_approvals().await;
+        }
+        submitted
+    }
+
+    async fn reject_patch_approval_with_notes(
+        &mut self,
+        thread_id: ThreadId,
+        approval_id: String,
+        text: String,
+    ) {
+        let denied = self
+            .submit_op_to_thread(
+                thread_id,
+                Op::PatchApproval {
+                    id: approval_id,
+                    decision: ReviewDecision::Denied,
+                },
+            )
+            .await;
+        if !denied {
+            return;
+        }
+
+        let steered = self
+            .submit_op_to_thread(
+                thread_id,
+                Op::UserInput {
+                    items: vec![UserInput::Text {
+                        text: text.clone(),
+                        text_elements: Vec::new(),
+                    }],
+                    final_output_json_schema: None,
+                },
+            )
+            .await;
+        if steered && self.active_thread_id == Some(thread_id) {
+            self.chat_widget.render_submitted_user_message(
+                text,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
         }
     }
 
@@ -2173,7 +2217,15 @@ impl App {
                 }
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
-                self.submit_op_to_thread(thread_id, op).await;
+                let _ = self.submit_op_to_thread(thread_id, op).await;
+            }
+            AppEvent::RejectPatchApprovalWithNotes {
+                thread_id,
+                approval_id,
+                text,
+            } => {
+                self.reject_patch_approval_with_notes(thread_id, approval_id, text)
+                    .await;
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane

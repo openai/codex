@@ -2185,6 +2185,12 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_patch_apply_declined() -> PlainHistoryCell {
+    PlainHistoryCell {
+        lines: vec![vec!["• ".dim(), "Accepting revision".bold()].into()],
+    }
+}
+
 pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistoryCell {
     let display_path = display_path_for(&path, cwd);
 

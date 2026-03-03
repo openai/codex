@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 6996
 expression: terminal.backend().vt100().screen().contents()
 ---
 
@@ -15,6 +16,6 @@ expression: terminal.backend().vt100().screen().contents()
 
 › 1. Yes, proceed (y)
   2. Yes, and don't ask again for these files (a)
-  3. No, and tell Codex what to do differently (esc)
+  3. No, and tell Codex what to do differently (tab)
 
   Press enter to confirm or esc to cancel

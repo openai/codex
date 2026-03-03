@@ -2612,10 +2612,14 @@ impl ChatWidget {
         &mut self,
         event: codex_protocol::protocol::PatchApplyEndEvent,
     ) {
-        // If the patch was successful, just let the "Edited" block stand.
-        // Otherwise, add a failure block.
-        if !event.success {
-            self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
+        match event.status {
+            codex_protocol::protocol::PatchApplyStatus::Completed => {}
+            codex_protocol::protocol::PatchApplyStatus::Failed => {
+                self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
+            }
+            codex_protocol::protocol::PatchApplyStatus::Declined => {
+                self.add_to_history(history_cell::new_patch_apply_declined());
+            }
         }
         // Mark that actual work was done (patch applied)
         self.had_work_activity = true;
@@ -4292,12 +4296,26 @@ impl ChatWidget {
                 });
         }
 
-        // Show replayable user content in conversation history.
+        let local_image_paths = local_images
+            .into_iter()
+            .map(|img| img.path)
+            .collect::<Vec<_>>();
+        self.render_submitted_user_message(
+            text,
+            text_elements,
+            local_image_paths,
+            remote_image_urls,
+        );
+    }
+
+    pub(crate) fn render_submitted_user_message(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        remote_image_urls: Vec<String>,
+    ) {
         if !text.is_empty() {
-            let local_image_paths = local_images
-                .into_iter()
-                .map(|img| img.path)
-                .collect::<Vec<_>>();
             self.last_rendered_user_message_event =
                 Some(Self::rendered_user_message_event_from_parts(
                     text.clone(),

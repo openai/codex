@@ -38,6 +38,13 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
+mod patch_ui;
+
+use patch_ui::PATCH_REJECT_OPTION_INDEX;
+use patch_ui::PatchFocus;
+use patch_ui::PatchLayout;
+use patch_ui::PatchOverlayState;
+
 /// Request coming from the agent that needs user approval.
 #[derive(Clone, Debug)]
 pub(crate) enum ApprovalRequest {
@@ -93,6 +100,7 @@ pub(crate) struct ApprovalOverlay {
     app_event_tx: AppEventSender,
     list: ListSelectionView,
     options: Vec<ApprovalOption>,
+    patch_state: Option<PatchOverlayState>,
     current_complete: bool,
     done: bool,
     features: Features,
@@ -106,6 +114,7 @@ impl ApprovalOverlay {
             app_event_tx: app_event_tx.clone(),
             list: ListSelectionView::new(Default::default(), app_event_tx),
             options: Vec::new(),
+            patch_state: None,
             current_complete: false,
             done: false,
             features,
@@ -122,6 +131,8 @@ impl ApprovalOverlay {
         self.current_complete = false;
         let header = build_header(&request);
         let (options, params) = Self::build_options(&request, header, &self.features);
+        self.patch_state = matches!(request, ApprovalRequest::ApplyPatch { .. })
+            .then(|| PatchOverlayState::new(&self.app_event_tx));
         self.current_request = Some(request);
         self.options = options;
         self.list = ListSelectionView::new(params, self.app_event_tx.clone());
@@ -196,9 +207,13 @@ impl ApprovalOverlay {
         if self.current_complete {
             return;
         }
-        let Some(option) = self.options.get(actual_idx) else {
+        let Some(option) = self.options.get(actual_idx).cloned() else {
             return;
         };
+        if matches!(option.decision, ApprovalDecision::PatchRejectWithNotes) {
+            self.open_patch_notes();
+            return;
+        }
         if let Some(request) = self.current_request.as_ref() {
             match (request, &option.decision) {
                 (ApprovalRequest::Exec { id, command, .. }, ApprovalDecision::Review(decision)) => {
@@ -223,6 +238,51 @@ impl ApprovalOverlay {
 
         self.current_complete = true;
         self.advance_queue();
+    }
+
+    fn patch_state(&self) -> Option<&PatchOverlayState> {
+        self.patch_state.as_ref()
+    }
+
+    fn patch_state_mut(&mut self) -> Option<&mut PatchOverlayState> {
+        self.patch_state.as_mut()
+    }
+
+    fn patch_selected_index(&self) -> Option<usize> {
+        self.patch_state()
+            .and_then(|_| self.list.scroll_state().selected_idx)
+    }
+
+    fn patch_note_text(&self) -> String {
+        self.patch_state()
+            .map(PatchOverlayState::note_text)
+            .unwrap_or_default()
+    }
+
+    fn patch_layout(&self, width: u16) -> Option<PatchLayout> {
+        self.current_request.as_ref().and_then(|request| {
+            PatchLayout::new(
+                request,
+                &self.options,
+                self.list.scroll_state(),
+                self.patch_state(),
+                width,
+            )
+        })
+    }
+
+    fn open_patch_notes(&mut self) {
+        if self.options.len() <= PATCH_REJECT_OPTION_INDEX {
+            return;
+        }
+        self.list
+            .set_selected_visible_index(PATCH_REJECT_OPTION_INDEX);
+        if let Some(state) = self.patch_state_mut() {
+            state.notes_visible = true;
+            state.focus = PatchFocus::Notes;
+            state.note_submit_attempted = false;
+            state.composer.move_cursor_to_end();
+        }
     }
 
     fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
@@ -292,7 +352,7 @@ impl ApprovalOverlay {
         }
     }
 
-    fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
+    fn try_handle_global_shortcut(&mut self, key_event: &KeyEvent) -> bool {
         match key_event {
             KeyEvent {
                 kind: KeyEventKind::Press,
@@ -325,28 +385,136 @@ impl ApprovalOverlay {
                     false
                 }
             }
-            e => {
-                if let Some(idx) = self
-                    .options
-                    .iter()
-                    .position(|opt| opt.shortcuts().any(|s| s.is_press(*e)))
-                {
-                    self.apply_selection(idx);
-                    true
-                } else {
-                    false
+            _ => false,
+        }
+    }
+
+    fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
+        if self.try_handle_global_shortcut(key_event) {
+            return true;
+        }
+        if self
+            .patch_state()
+            .is_some_and(PatchOverlayState::focus_is_notes)
+        {
+            return false;
+        }
+        self.options
+            .iter()
+            .position(|opt| {
+                opt.shortcuts()
+                    .any(|shortcut| shortcut.is_press(*key_event))
+            })
+            .map(|idx| self.apply_selection(idx))
+            .is_some()
+    }
+
+    fn sync_patch_state_with_list_selection(&mut self) {
+        let selected_idx = self.patch_selected_index();
+        if let Some(state) = self.patch_state_mut() {
+            if selected_idx != Some(PATCH_REJECT_OPTION_INDEX) {
+                state.notes_visible = false;
+            }
+            state.note_submit_attempted = false;
+        }
+    }
+
+    fn handle_patch_notes_key_event(&mut self, key_event: KeyEvent) -> bool {
+        if key_event.kind == KeyEventKind::Release {
+            return true;
+        }
+        if self.done || self.current_complete {
+            return true;
+        }
+        if !self
+            .patch_state()
+            .is_some_and(PatchOverlayState::focus_is_notes)
+        {
+            return false;
+        }
+        if self.try_handle_global_shortcut(&key_event) {
+            return true;
+        }
+
+        if matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+        ) {
+            if let Some(state) = self.patch_state_mut() {
+                state.focus = PatchFocus::Options;
+                state.note_submit_attempted = false;
+            }
+            return true;
+        }
+        if matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+        ) {
+            let text = self.patch_note_text();
+            if text.trim().is_empty() {
+                if let Some(state) = self.patch_state_mut() {
+                    state.note_submit_attempted = true;
                 }
+                return true;
+            }
+            if let Some(ApprovalRequest::ApplyPatch { thread_id, id, .. }) =
+                self.current_request.as_ref()
+            {
+                self.app_event_tx
+                    .send(AppEvent::RejectPatchApprovalWithNotes {
+                        thread_id: *thread_id,
+                        approval_id: id.clone(),
+                        text,
+                    });
+                self.current_complete = true;
+                self.advance_queue();
+            }
+            return true;
+        }
+        if let Some(state) = self.patch_state_mut() {
+            let _ = state.composer.handle_key_event(key_event);
+            if !state.composer.current_text_with_pending().trim().is_empty() {
+                state.note_submit_attempted = false;
             }
         }
+        true
     }
 }
 
 impl BottomPaneView for ApprovalOverlay {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.handle_patch_notes_key_event(key_event) {
+            return;
+        }
+        if matches!(
+            self.current_request,
+            Some(ApprovalRequest::ApplyPatch { .. })
+        ) && matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+        ) {
+            self.open_patch_notes();
+            return;
+        }
         if self.try_handle_shortcut(&key_event) {
             return;
         }
         self.list.handle_key_event(key_event);
+        if self.patch_state().is_some() {
+            self.sync_patch_state_with_list_selection();
+        }
         if let Some(idx) = self.list.take_last_selected_index() {
             self.apply_selection(idx);
         }
@@ -395,19 +563,62 @@ impl BottomPaneView for ApprovalOverlay {
         self.enqueue_request(request);
         None
     }
+
+    fn handle_paste(&mut self, pasted: String) -> bool {
+        if pasted.is_empty()
+            || !matches!(
+                self.current_request,
+                Some(ApprovalRequest::ApplyPatch { .. })
+            )
+        {
+            return false;
+        }
+        self.open_patch_notes();
+        self.patch_state_mut()
+            .map(|state| {
+                state.note_submit_attempted = false;
+                state.composer.handle_paste(pasted)
+            })
+            .unwrap_or(false)
+    }
+
+    fn flush_paste_burst_if_due(&mut self) -> bool {
+        self.patch_state_mut()
+            .map(|state| state.composer.flush_paste_burst_if_due())
+            .unwrap_or(false)
+    }
+
+    fn is_in_paste_burst(&self) -> bool {
+        self.patch_state()
+            .is_some_and(|state| state.composer.is_in_paste_burst())
+    }
 }
 
 impl Renderable for ApprovalOverlay {
     fn desired_height(&self, width: u16) -> u16 {
-        self.list.desired_height(width)
+        self.patch_layout(width).map_or_else(
+            || self.list.desired_height(width),
+            |layout| layout.total_height(),
+        )
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.list.render(area, buf);
+        let Some(layout) = self.patch_layout(area.width) else {
+            self.list.render(area, buf);
+            return;
+        };
+        layout.render(area, self.patch_state(), buf);
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.list.cursor_pos(area)
+        let Some(state) = self.patch_state() else {
+            return self.list.cursor_pos(area);
+        };
+        if !state.focus_is_notes() || !state.notes_visible(self.patch_selected_index()) {
+            return self.list.cursor_pos(area);
+        }
+        self.patch_layout(area.width)
+            .and_then(|layout| layout.cursor_pos(area, state))
     }
 }
 
@@ -529,6 +740,7 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
 enum ApprovalDecision {
     Review(ReviewDecision),
     McpElicitation(ElicitationAction),
+    PatchRejectWithNotes,
 }
 
 #[derive(Clone)]
@@ -683,8 +895,8 @@ fn patch_options() -> Vec<ApprovalOption> {
         },
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),
-            decision: ApprovalDecision::Review(ReviewDecision::Abort),
-            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+            decision: ApprovalDecision::PatchRejectWithNotes,
+            display_shortcut: Some(key_hint::plain(KeyCode::Tab)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
     ]

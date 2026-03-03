@@ -80,6 +80,13 @@ pub(crate) enum AppEvent {
         op: codex_protocol::protocol::Op,
     },
 
+    /// Reject a patch approval without interrupting the turn, then steer the same thread.
+    RejectPatchApprovalWithNotes {
+        thread_id: ThreadId,
+        approval_id: String,
+        text: String,
+    },
+
     /// Forward an event from a non-primary thread into the app-level thread router.
     ThreadEvent {
         thread_id: ThreadId,

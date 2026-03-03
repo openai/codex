@@ -476,6 +476,26 @@ impl ListSelectionView {
         self.last_selected_actual_idx.take()
     }
 
+    pub(crate) fn scroll_state(&self) -> ScrollState {
+        self.state
+    }
+
+    pub(crate) fn set_selected_visible_index(&mut self, idx: usize) {
+        let before = self.selected_actual_idx();
+        let len = self.visible_len();
+        if len == 0 {
+            self.state.reset();
+            return;
+        }
+        self.state.selected_idx = Some(idx.min(len - 1));
+        let visible = Self::max_visible_rows(len);
+        self.state.clamp_selection(len);
+        self.state.ensure_visible(len, visible);
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
+    }
+
     fn rows_width(total_width: u16) -> u16 {
         total_width.saturating_sub(2)
     }
