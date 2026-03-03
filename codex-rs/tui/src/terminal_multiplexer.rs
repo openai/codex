@@ -3,6 +3,8 @@ use codex_core::terminal::Multiplexer;
 use codex_core::terminal::terminal_info;
 use codex_protocol::ThreadId;
 use shlex::try_join;
+use std::fs;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -14,14 +16,42 @@ pub(crate) struct MultiplexerSpawnConfig {
 }
 
 fn codex_executable() -> PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("codex"))
+    std::env::current_exe()
+        .map(|path| resolve_codex_executable(&path))
+        .unwrap_or_else(|_| PathBuf::from("codex"))
 }
 
-fn resume_command_parts(exe: &Path, thread_id: &ThreadId) -> Vec<String> {
+fn resolve_codex_executable(current_exe: &Path) -> PathBuf {
+    let Some(file_name) = current_exe.file_name().and_then(|name| name.to_str()) else {
+        return PathBuf::from("codex");
+    };
+    if !file_name.starts_with("codex-tui") {
+        return current_exe.to_path_buf();
+    }
+
+    let sibling = if let Some((_, extension)) = file_name.rsplit_once('.') {
+        current_exe.with_file_name(format!("codex.{extension}"))
+    } else {
+        current_exe.with_file_name("codex")
+    };
+    if sibling.is_file() {
+        sibling
+    } else {
+        PathBuf::from("codex")
+    }
+}
+
+fn resume_command_parts(
+    exe: &Path,
+    thread_id: &ThreadId,
+    runtime_overrides_path: &Path,
+) -> Vec<String> {
     vec![
         exe.display().to_string(),
         "resume".to_string(),
         thread_id.to_string(),
+        "--runtime-overrides".to_string(),
+        runtime_overrides_path.display().to_string(),
     ]
 }
 
@@ -86,9 +116,10 @@ fn fork_spawn_config(
     multiplexer: &Multiplexer,
     exe: &Path,
     thread_id: &ThreadId,
+    runtime_overrides_path: &Path,
     placement: Option<ForkPanePlacement>,
 ) -> MultiplexerSpawnConfig {
-    let resume_command = resume_command_parts(exe, thread_id);
+    let resume_command = resume_command_parts(exe, thread_id, runtime_overrides_path);
     match multiplexer {
         Multiplexer::Zellij {} => MultiplexerSpawnConfig {
             program: "zellij",
@@ -138,21 +169,97 @@ pub(crate) fn validate_fork_placement(placement: Option<ForkPanePlacement>) -> R
 pub(crate) async fn spawn_fork_in_new_pane(
     multiplexer: &Multiplexer,
     thread_id: &ThreadId,
+    runtime_overrides_path: &Path,
     placement: Option<ForkPanePlacement>,
 ) -> Result<&'static str, String> {
     let exe = codex_executable();
-    let config = fork_spawn_config(multiplexer, &exe, thread_id, placement);
+    let config = fork_spawn_config(
+        multiplexer,
+        &exe,
+        thread_id,
+        runtime_overrides_path,
+        placement,
+    );
     let MultiplexerSpawnConfig {
         program,
         args,
         description,
     } = config;
-    let status = tokio::task::spawn_blocking(move || Command::new(program).args(args).status())
-        .await
-        .map_err(|err| format!("failed to spawn {program} pane: {err}"))?;
+    let status = match tokio::task::spawn_blocking(move || {
+        Command::new(program).args(args).status()
+    })
+    .await
+    {
+        Ok(status) => status,
+        Err(err) => {
+            cleanup_runtime_overrides(runtime_overrides_path);
+            return Err(format!("failed to spawn {program} pane: {err}"));
+        }
+    };
     match status {
         Ok(status) if status.success() => Ok(description),
-        Ok(status) => Err(format!("{program} exited with status {status}")),
-        Err(err) => Err(format!("failed to run {program}: {err}")),
+        Ok(status) => {
+            cleanup_runtime_overrides(runtime_overrides_path);
+            Err(format!("{program} exited with status {status}"))
+        }
+        Err(err) => {
+            cleanup_runtime_overrides(runtime_overrides_path);
+            Err(format!("failed to run {program}: {err}"))
+        }
+    }
+}
+
+fn cleanup_runtime_overrides(path: &Path) {
+    if let Err(err) = fs::remove_file(path)
+        && err.kind() != io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %path.display(), error = %err, "failed to remove runtime overrides");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn resolve_codex_executable_rewrites_codex_tui_to_sibling_codex() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let current_exe = tmp.path().join("codex-tui");
+        let sibling_codex = tmp.path().join("codex");
+        std::fs::write(&sibling_codex, "").expect("write sibling codex");
+
+        let resolved = resolve_codex_executable(&current_exe);
+
+        assert_eq!(resolved, sibling_codex);
+    }
+
+    #[test]
+    fn resolve_codex_executable_keeps_non_tui_binary() {
+        let current_exe = PathBuf::from("/tmp/codex");
+
+        let resolved = resolve_codex_executable(&current_exe);
+
+        assert_eq!(resolved, current_exe);
+    }
+
+    #[test]
+    fn resume_command_parts_include_runtime_overrides() {
+        let exe = PathBuf::from("/tmp/codex");
+        let thread_id = ThreadId::new();
+        let runtime_overrides_path = PathBuf::from("/tmp/runtime-overrides.json");
+
+        let command = resume_command_parts(&exe, &thread_id, &runtime_overrides_path);
+
+        assert_eq!(
+            command,
+            vec![
+                "/tmp/codex".to_string(),
+                "resume".to_string(),
+                thread_id.to_string(),
+                "--runtime-overrides".to_string(),
+                "/tmp/runtime-overrides.json".to_string(),
+            ]
+        );
     }
 }

@@ -1,8 +1,8 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
-use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_event::ForkPanePlacement;
+use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -45,6 +45,7 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_core::codex::SessionSettingsUpdate;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -98,6 +99,8 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::fs;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -115,6 +118,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
+use uuid::Uuid;
 
 mod pending_interactive_replay;
 
@@ -1425,8 +1429,8 @@ impl App {
     }
 
     fn fresh_session_config(&self) -> Config {
-        let mut config = self.config.clone();
-        config.service_tier = self.chat_widget.current_service_tier();
+        let mut config = self.chat_widget.config_ref().clone();
+        config.model = Some(self.chat_widget.current_model().to_string());
         config
     }
 
@@ -1444,16 +1448,62 @@ impl App {
         let Some(multiplexer) = terminal_info.multiplexer.as_ref() else {
             return false;
         };
-        let description =
-            match spawn_fork_in_new_pane(multiplexer, &forked_thread_id, placement).await {
-                Ok(description) => description,
-                Err(err) => {
-                    self.chat_widget.add_error_message(format!(
-                        "Forked session created but failed to open a new pane: {err}"
-                    ));
-                    return false;
-                }
-            };
+        let thread_snapshot = forked_thread.config_snapshot().await;
+        let current_collaboration_mode = self.chat_widget.current_collaboration_mode();
+        let runtime_overrides = SessionSettingsUpdate {
+            cwd: Some(thread_snapshot.cwd.clone()),
+            approval_policy: Some(thread_snapshot.approval_policy),
+            sandbox_policy: Some(thread_snapshot.sandbox_policy.clone()),
+            windows_sandbox_level: None,
+            collaboration_mode: Some(CollaborationMode {
+                mode: self.chat_widget.active_collaboration_mode_kind(),
+                settings: Settings {
+                    model: thread_snapshot.model.clone(),
+                    reasoning_effort: thread_snapshot.reasoning_effort,
+                    developer_instructions: current_collaboration_mode
+                        .settings
+                        .developer_instructions
+                        .clone(),
+                },
+            }),
+            reasoning_summary: None,
+            service_tier: Some(self.chat_widget.current_service_tier()),
+            final_output_json_schema: None,
+            personality: thread_snapshot.personality,
+            app_server_client_name: None,
+        };
+        let runtime_overrides_path = match (|| -> io::Result<PathBuf> {
+            let overrides_dir = self.config.codex_home.join("tmp").join("runtime-overrides");
+            fs::create_dir_all(&overrides_dir)?;
+            let path = overrides_dir.join(format!("{}.json", Uuid::new_v4()));
+            let contents = serde_json::to_vec(&runtime_overrides).map_err(io::Error::other)?;
+            fs::write(&path, contents)?;
+            Ok(path)
+        })() {
+            Ok(path) => path,
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Forked session created but failed to prepare runtime overrides: {err}"
+                ));
+                return false;
+            }
+        };
+        let description = match spawn_fork_in_new_pane(
+            multiplexer,
+            &forked_thread_id,
+            &runtime_overrides_path,
+            placement,
+        )
+        .await
+        {
+            Ok(description) => description,
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Forked session created but failed to open a new pane: {err}"
+                ));
+                return false;
+            }
+        };
 
         self.suppressed_thread_created.insert(forked_thread_id);
         if let Err(err) = forked_thread.submit(Op::Shutdown).await {
@@ -5036,13 +5086,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fresh_session_config_uses_current_service_tier() {
+    async fn fresh_session_config_uses_live_chat_widget_state() {
         let mut app = make_test_app().await;
+        app.chat_widget.set_model("gpt-test");
         app.chat_widget
             .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
 
         let config = app.fresh_session_config();
 
+        assert_eq!(config.model.as_deref(), Some("gpt-test"));
         assert_eq!(
             config.service_tier,
             Some(codex_protocol::config_types::ServiceTier::Fast)
