@@ -35,11 +35,8 @@ const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginApp {
-    pub alias: String,
-    pub connector_id: String,
-}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AppConnectorId(pub String);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedPlugin {
@@ -49,7 +46,7 @@ pub struct LoadedPlugin {
     pub enabled: bool,
     pub skill_roots: Vec<PathBuf>,
     pub mcp_servers: HashMap<String, McpServerConfig>,
-    pub apps: Vec<PluginApp>,
+    pub apps: Vec<AppConnectorId>,
     pub error: Option<String>,
 }
 
@@ -89,14 +86,14 @@ impl PluginLoadOutcome {
         mcp_servers
     }
 
-    pub fn effective_apps(&self) -> Vec<PluginApp> {
+    pub fn effective_apps(&self) -> Vec<AppConnectorId> {
         let mut apps = Vec::new();
         let mut seen_connector_ids = std::collections::HashSet::new();
 
         for plugin in self.plugins.iter().filter(|plugin| plugin.is_active()) {
-            for app in &plugin.apps {
-                if seen_connector_ids.insert(app.connector_id.clone()) {
-                    apps.push(app.clone());
+            for connector_id in &plugin.apps {
+                if seen_connector_ids.insert(connector_id.clone()) {
+                    apps.push(connector_id.clone());
                 }
             }
         }
@@ -404,7 +401,7 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-fn load_apps_from_file(plugin_root: &Path, app_config_path: &Path) -> Vec<PluginApp> {
+fn load_apps_from_file(plugin_root: &Path, app_config_path: &Path) -> Vec<AppConnectorId> {
     let Ok(contents) = fs::read_to_string(app_config_path) else {
         return Vec::new();
     };
@@ -419,23 +416,19 @@ fn load_apps_from_file(plugin_root: &Path, app_config_path: &Path) -> Vec<Plugin
         }
     };
 
-    let mut apps: Vec<(String, PluginAppConfig)> = parsed.apps.into_iter().collect();
-    apps.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    let mut apps: Vec<PluginAppConfig> = parsed.apps.into_values().collect();
+    apps.sort_unstable_by(|left, right| left.id.cmp(&right.id));
 
     apps.into_iter()
-        .filter_map(|(alias, app)| {
+        .filter_map(|app| {
             if app.id.trim().is_empty() {
                 warn!(
                     plugin = %plugin_root.display(),
-                    alias,
                     "plugin app config is missing an app id"
                 );
                 None
             } else {
-                Some(PluginApp {
-                    alias,
-                    connector_id: app.id,
-                })
+                Some(AppConnectorId(app.id))
             }
         })
         .collect()
@@ -669,10 +662,7 @@ mod tests {
                         oauth_resource: None,
                     },
                 )]),
-                apps: vec![PluginApp {
-                    alias: "example".to_string(),
-                    connector_id: "connector_example".to_string(),
-                }],
+                apps: vec![AppConnectorId("connector_example".to_string())],
                 error: None,
             }]
         );
@@ -683,10 +673,7 @@ mod tests {
         assert_eq!(outcome.effective_mcp_servers().len(), 1);
         assert_eq!(
             outcome.effective_apps(),
-            vec![PluginApp {
-                alias: "example".to_string(),
-                connector_id: "connector_example".to_string(),
-            }]
+            vec![AppConnectorId("connector_example".to_string())]
         );
     }
 
@@ -804,14 +791,8 @@ mod tests {
         assert_eq!(
             outcome.effective_apps(),
             vec![
-                PluginApp {
-                    alias: "example".to_string(),
-                    connector_id: "connector_example".to_string(),
-                },
-                PluginApp {
-                    alias: "gmail".to_string(),
-                    connector_id: "connector_gmail".to_string(),
-                },
+                AppConnectorId("connector_example".to_string()),
+                AppConnectorId("connector_gmail".to_string()),
             ]
         );
     }

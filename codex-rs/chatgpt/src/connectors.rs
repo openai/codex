@@ -199,7 +199,7 @@ fn write_cached_all_connectors(cache_key: AllConnectorsCacheKey, connectors: &[A
     });
 }
 
-fn plugin_apps_for_config(config: &Config) -> Vec<codex_core::plugins::PluginApp> {
+fn plugin_apps_for_config(config: &Config) -> Vec<codex_core::plugins::AppConnectorId> {
     PluginsManager::new(config.codex_home.clone())
         .plugins_for_config(config)
         .effective_apps()

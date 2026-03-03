@@ -2,8 +2,8 @@ mod manager;
 mod manifest;
 mod store;
 
+pub use manager::AppConnectorId;
 pub use manager::LoadedPlugin;
-pub use manager::PluginApp;
 pub use manager::PluginInstallError;
 pub use manager::PluginLoadOutcome;
 pub use manager::PluginsManager;

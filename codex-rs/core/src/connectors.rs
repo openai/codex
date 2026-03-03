@@ -30,7 +30,7 @@ use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
-use crate::plugins::PluginApp;
+use crate::plugins::AppConnectorId;
 use crate::token_data::TokenData;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -355,16 +355,34 @@ pub fn merge_connectors(
     merged
 }
 
-pub fn merge_plugin_apps(connectors: Vec<AppInfo>, plugin_apps: Vec<PluginApp>) -> Vec<AppInfo> {
-    let plugin_connectors = plugin_apps
-        .into_iter()
-        .map(plugin_app_to_app_info)
-        .collect::<Vec<_>>();
-    merge_connectors(plugin_connectors, connectors)
+pub fn merge_plugin_apps(
+    connectors: Vec<AppInfo>,
+    plugin_apps: Vec<AppConnectorId>,
+) -> Vec<AppInfo> {
+    let mut merged = connectors;
+    let mut connector_ids = merged
+        .iter()
+        .map(|connector| connector.id.clone())
+        .collect::<HashSet<_>>();
+
+    for connector_id in plugin_apps {
+        if connector_ids.insert(connector_id.0.clone()) {
+            merged.push(plugin_app_to_app_info(connector_id));
+        }
+    }
+
+    merged.sort_by(|left, right| {
+        right
+            .is_accessible
+            .cmp(&left.is_accessible)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    merged
 }
 
 pub fn merge_plugin_apps_with_accessible(
-    plugin_apps: Vec<PluginApp>,
+    plugin_apps: Vec<AppConnectorId>,
     accessible_connectors: Vec<AppInfo>,
 ) -> Vec<AppInfo> {
     let accessible_connector_ids: HashSet<&str> = accessible_connectors
@@ -373,7 +391,7 @@ pub fn merge_plugin_apps_with_accessible(
         .collect();
     let plugin_connectors = plugin_apps
         .into_iter()
-        .filter(|app| accessible_connector_ids.contains(app.connector_id.as_str()))
+        .filter(|connector_id| accessible_connector_ids.contains(connector_id.0.as_str()))
         .map(plugin_app_to_app_info)
         .collect::<Vec<_>>();
     merge_connectors(plugin_connectors, accessible_connectors)
@@ -601,14 +619,12 @@ where
     accessible
 }
 
-fn plugin_app_to_app_info(plugin_app: PluginApp) -> AppInfo {
-    let connector_id = plugin_app.connector_id;
-    let name = if plugin_app.alias.trim().is_empty() {
-        connector_id.clone()
-    } else {
-        plugin_app.alias
-    };
-
+fn plugin_app_to_app_info(connector_id: AppConnectorId) -> AppInfo {
+    // Leave the placeholder name as the connector id so merge_connectors() can
+    // replace it with canonical app metadata from directory fetches or
+    // connector_name values from codex_apps tool discovery.
+    let connector_id = connector_id.0;
+    let name = connector_id.clone();
     AppInfo {
         id: connector_id.clone(),
         name: name.clone(),
