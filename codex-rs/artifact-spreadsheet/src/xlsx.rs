@@ -325,9 +325,10 @@ fn parse_sheet(
     let mut sheet = SpreadsheetSheet::new(name.to_string());
 
     if let Some(sheet_view) = first_tag_attributes(xml, "sheetView")
-        && let Some(show_grid_lines) = extract_attribute(&sheet_view, "showGridLines") {
-            sheet.show_grid_lines = show_grid_lines != "0";
-        }
+        && let Some(show_grid_lines) = extract_attribute(&sheet_view, "showGridLines")
+    {
+        sheet.show_grid_lines = show_grid_lines != "0";
+    }
     if let Some(format_pr) = first_tag_attributes(xml, "sheetFormatPr") {
         sheet.default_row_height = extract_attribute(&format_pr, "defaultRowHeight")
             .and_then(|value| value.parse::<f64>().ok());

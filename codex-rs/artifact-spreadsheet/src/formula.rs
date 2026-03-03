@@ -76,9 +76,10 @@ pub(crate) fn recalculate_workbook(artifact: &mut SpreadsheetArtifact) {
 
     for (sheet_index, address, value) in updates {
         if let Some(sheet) = artifact.sheets.get_mut(sheet_index)
-            && let Some(cell) = sheet.cells.get_mut(&address) {
-                cell.value = value;
-            }
+            && let Some(cell) = sheet.cells.get_mut(&address)
+        {
+            cell.value = value;
+        }
     }
 }
 
