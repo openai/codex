@@ -102,6 +102,7 @@ impl FeedbackNoteView {
             self.include_logs,
             &log_file_paths,
             Some(SessionSource::Cli),
+            None,
         );
 
         match result {

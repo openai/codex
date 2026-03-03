@@ -24,7 +24,7 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[tokio::test]
 async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {

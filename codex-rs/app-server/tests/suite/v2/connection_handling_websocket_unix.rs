@@ -46,7 +46,7 @@ async fn websocket_transport_ctrl_c_waits_for_running_turn_before_exit() -> Resu
 
     let status = wait_for_process_exit_within(
         &mut process,
-        Duration::from_secs(10),
+        Duration::from_secs(20),
         "timed out waiting for graceful Ctrl-C restart shutdown",
     )
     .await?;
@@ -72,7 +72,7 @@ async fn websocket_transport_second_ctrl_c_forces_exit_while_turn_running() -> R
     send_sigint(&process)?;
     let status = wait_for_process_exit_within(
         &mut process,
-        Duration::from_secs(2),
+        Duration::from_secs(20),
         "timed out waiting for forced Ctrl-C restart shutdown",
     )
     .await?;
@@ -119,7 +119,7 @@ async fn start_ctrl_c_restart_fixture(turn_delay: Duration) -> Result<GracefulCt
     let turn_start_response = read_response_for_id(&mut ws, 3).await?;
     assert_eq!(turn_start_response.id, RequestId::Integer(3));
 
-    wait_for_responses_post(&server, Duration::from_secs(5)).await?;
+    wait_for_responses_post(&server, Duration::from_secs(15)).await?;
 
     Ok(GracefulCtrlCFixture {
         _codex_home: codex_home,

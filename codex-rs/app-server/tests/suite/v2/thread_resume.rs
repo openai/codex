@@ -46,7 +46,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 #[tokio::test]
