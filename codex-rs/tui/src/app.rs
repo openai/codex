@@ -1366,6 +1366,7 @@ impl App {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
         let model = self.chat_widget.current_model().to_string();
+        let config = self.fresh_session_config();
         let summary = session_summary(
             self.chat_widget.token_usage(),
             self.chat_widget.thread_id(),
@@ -1376,7 +1377,7 @@ impl App {
             tracing::warn!(error = %err, "failed to close all threads");
         }
         let init = crate::chatwidget::ChatWidgetInit {
-            config: self.config.clone(),
+            config,
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             // New sessions start without prefilled message content.
@@ -1403,6 +1404,12 @@ impl App {
             self.chat_widget.add_plain_history_lines(lines);
         }
         tui.frame_requester().schedule_frame();
+    }
+
+    fn fresh_session_config(&self) -> Config {
+        let mut config = self.config.clone();
+        config.service_tier = self.chat_widget.current_service_tier();
+        config
     }
 
     async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -4894,6 +4901,20 @@ mod tests {
         assert_eq!(
             app.chat_widget.config_ref().tui_theme.as_deref(),
             Some("dracula")
+        );
+    }
+
+    #[tokio::test]
+    async fn fresh_session_config_uses_current_service_tier() {
+        let mut app = make_test_app().await;
+        app.chat_widget
+            .set_service_tier(codex_protocol::config_types::ServiceTier::Fast);
+
+        let config = app.fresh_session_config();
+
+        assert_eq!(
+            config.service_tier,
+            codex_protocol::config_types::ServiceTier::Fast
         );
     }
 

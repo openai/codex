@@ -6863,6 +6863,10 @@ impl ChatWidget {
         self.config.service_tier = service_tier;
     }
 
+    pub(crate) fn current_service_tier(&self) -> ServiceTier {
+        self.config.service_tier
+    }
+
     fn fast_mode_enabled(&self) -> bool {
         self.config.features.enabled(Feature::FastMode)
     }
