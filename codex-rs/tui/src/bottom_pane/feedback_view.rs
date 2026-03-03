@@ -634,7 +634,6 @@ pub(crate) fn feedback_upload_consent_params(
             },
             super::SelectionItem {
                 name: "No".to_string(),
-                description: Some("Send feedback without any attached files.".to_string()),
                 actions: vec![no_action],
                 dismiss_on_select: true,
                 ..Default::default()
