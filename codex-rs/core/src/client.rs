@@ -580,8 +580,9 @@ impl ModelClientSession {
         last_response: Option<&LastResponse>,
         allow_empty_delta: bool,
     ) -> Option<Vec<ResponseItem>> {
-        // Checks whether the current request is an incremental append to the previous request.
-        // We only append when non-input request fields are unchanged and `input` is a strict
+        // Checks whether the current request is an incremental extension of the previous request.
+        // We only reuse an incremental input delta when non-input request fields are unchanged and
+        // `input` is a strict
         // extension of the previous known input. Server-returned output items are treated as part
         // of the baseline so we do not resend them.
         let previous_request = self.websocket_session.last_request.as_ref()?;
@@ -630,7 +631,8 @@ impl ModelClientSession {
         let Some(last_response) = self.get_last_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
-        let Some(append_items) = self.get_incremental_items(request, Some(&last_response), true)
+        let Some(incremental_items) =
+            self.get_incremental_items(request, Some(&last_response), true)
         else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
@@ -642,7 +644,7 @@ impl ModelClientSession {
 
         ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
             previous_response_id: Some(last_response.response_id),
-            input: append_items,
+            input: incremental_items,
             ..payload
         })
     }
@@ -1110,7 +1112,6 @@ where
                 Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
-                    can_append,
                 }) => {
                     if let Some(usage) = &token_usage {
                         otel_manager.sse_event_completed(
@@ -1131,7 +1132,6 @@ where
                         .send(Ok(ResponseEvent::Completed {
                             response_id,
                             token_usage,
-                            can_append,
                         }))
                         .await
                         .is_err()

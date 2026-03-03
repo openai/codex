@@ -30,7 +30,6 @@ use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_done_with_id;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
@@ -122,7 +121,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
     ]])
     .await;
@@ -239,7 +238,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
     ]])
     .await;
@@ -400,7 +399,7 @@ async fn responses_websocket_v2_requests_use_v2_when_model_prefers_websockets() 
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -449,7 +448,7 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -493,7 +492,7 @@ async fn responses_websocket_v2_wins_when_both_features_enabled() {
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -966,14 +965,14 @@ async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_appends_on_prefix() {
+async fn responses_websocket_uses_incremental_create_on_prefix() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -1004,21 +1003,21 @@ async fn responses_websocket_appends_on_prefix() {
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input[2..]).expect("serialize append items")
+        serde_json::to_value(&prompt_two.input[2..]).expect("serialize incremental items")
     );
 
     server.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
+async fn responses_websocket_forwards_turn_metadata_on_initial_and_incremental_create() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -1083,7 +1082,7 @@ async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_uses_previous_response_id_when_prefix_even_if_cannot_append() {
+async fn responses_websocket_uses_previous_response_id_when_prefix_after_completed() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
@@ -1199,7 +1198,7 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])

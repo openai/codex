@@ -3,7 +3,6 @@ use codex_core::features::Feature;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_done_with_id;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_shell_command_call;
 use core_test_support::responses::start_websocket_server;
@@ -25,7 +24,7 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
         vec![
             ev_response_created("resp-1"),
             ev_shell_command_call(call_id, "echo websocket"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![
             ev_response_created("resp-2"),
@@ -156,7 +155,7 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
 
     let call_id = "shell-command-call";
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-1"),
             ev_shell_command_call(call_id, "echo websocket"),

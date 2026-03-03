@@ -67,8 +67,6 @@ pub enum ResponseEvent {
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
-        /// Whether the client can append more items to a long-running websocket response.
-        can_append: bool,
     },
     OutputTextDelta(String),
     ReasoningSummaryDelta {
