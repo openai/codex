@@ -546,21 +546,20 @@ fn json_object_to_env_toml_table(
 ) -> toml::map::Map<String, TomlValue> {
     let mut table = toml::map::Map::new();
     for (key, value) in object {
-        table.insert(
-            key.clone(),
-            TomlValue::String(json_env_value_to_string(value)),
-        );
+        if let Some(value) = json_env_value_to_string(value) {
+            table.insert(key.clone(), TomlValue::String(value));
+        }
     }
     table
 }
 
-fn json_env_value_to_string(value: &JsonValue) -> String {
+fn json_env_value_to_string(value: &JsonValue) -> Option<String> {
     match value {
-        JsonValue::String(value) => value.clone(),
-        JsonValue::Null => "null".to_string(),
-        JsonValue::Bool(value) => value.to_string(),
-        JsonValue::Number(value) => value.to_string(),
-        JsonValue::Array(_) | JsonValue::Object(_) => value.to_string(),
+        JsonValue::String(value) => Some(value.clone()),
+        JsonValue::Null => None,
+        JsonValue::Bool(value) => Some(value.to_string()),
+        JsonValue::Number(value) => Some(value.to_string()),
+        JsonValue::Array(_) | JsonValue::Object(_) => None,
     }
 }
 
@@ -737,7 +736,7 @@ mod tests {
         fs::create_dir_all(claude_home.join("skills").join("skill-a")).expect("create skills");
         fs::write(
             claude_home.join("settings.json"),
-            r#"{"model":"claude","permissions":{"ask":["git push"]},"env":{"FOO":"bar","CI":false,"MAX_RETRIES":3,"MY_TEAM":"codex"},"sandbox":{"enabled":true,"network":{"allowLocalBinding":true}}}"#,
+            r#"{"model":"claude","permissions":{"ask":["git push"]},"env":{"FOO":"bar","CI":false,"MAX_RETRIES":3,"MY_TEAM":"codex","IGNORED":null,"LIST":["a","b"],"MAP":{"x":1}},"sandbox":{"enabled":true,"network":{"allowLocalBinding":true}}}"#,
         )
         .expect("write settings");
         fs::write(
