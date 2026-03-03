@@ -154,6 +154,7 @@ pub(crate) async fn run_codex_thread_one_shot(
                     .send(Submission {
                         id: "shutdown".to_string(),
                         op: Op::Shutdown {},
+                        trace: None,
                     })
                     .await;
                 child_cancel.cancel();
@@ -299,7 +300,11 @@ async fn forward_ops(
 ) {
     loop {
         let op: Op = match rx_ops.recv().or_cancel(&cancel_token_ops).await {
-            Ok(Ok(Submission { id: _, op })) => op,
+            Ok(Ok(Submission {
+                id: _,
+                op,
+                trace: _,
+            })) => op,
             Ok(Err(_)) | Err(_) => break,
         };
         let _ = codex.submit(op).await;

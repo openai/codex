@@ -82,6 +82,9 @@ pub struct Submission {
     pub id: String,
     /// Payload
     pub op: Op,
+    /// Optional W3C trace carrier propagated across async submission handoffs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<W3cTraceContext>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
