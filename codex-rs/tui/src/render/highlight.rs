@@ -1020,7 +1020,7 @@ mod tests {
             font_style: FontStyle::empty(),
         };
         let rt = convert_style(syn);
-        assert_eq!(rt.fg, Some(RtColor::Indexed(0x9a)));
+        assert!(matches!(rt.fg, Some(RtColor::Indexed(0x9a))));
     }
 
     #[test]
@@ -1062,7 +1062,7 @@ mod tests {
             font_style: FontStyle::empty(),
         };
         let rt = convert_style(syn);
-        assert_eq!(rt.fg, Some(RtColor::Rgb(10, 20, 30)));
+        assert!(matches!(rt.fg, Some(RtColor::Rgb(10, 20, 30))));
     }
 
     #[test]
