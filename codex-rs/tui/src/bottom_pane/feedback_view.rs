@@ -111,6 +111,7 @@ impl FeedbackNoteView {
             self.include_logs,
             &attachments.attachment_paths,
             Some(SessionSource::Cli),
+            None,
         );
 
         match result {

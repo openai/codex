@@ -31,8 +31,6 @@ use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_done;
-use core_test_support::responses::ev_done_with_id;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
@@ -50,7 +48,6 @@ use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
-const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 
 struct WebsocketTestHarness {
@@ -89,7 +86,7 @@ async fn responses_websocket_streams_request() {
     let handshake = server.single_handshake();
     assert_eq!(
         handshake.header(OPENAI_BETA_HEADER),
-        Some(OPENAI_BETA_RESPONSES_WEBSOCKETS.to_string())
+        Some(WS_V2_BETA_HEADER_VALUE.to_string())
     );
 
     server.shutdown().await;
@@ -125,7 +122,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
     ]])
     .await;
@@ -244,7 +241,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
     ]])
     .await;
@@ -344,13 +341,6 @@ async fn responses_websocket_prewarm_uses_v2_when_model_prefers_websockets_and_f
             .map(str::trim)
             .any(|value| value == WS_V2_BETA_HEADER_VALUE)
     );
-    assert!(
-        !openai_beta_header
-            .split(',')
-            .map(str::trim)
-            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
-    );
-
     stream_until_complete(&mut client_session, &harness, &prompt).await;
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
@@ -404,13 +394,6 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
             .map(str::trim)
             .any(|value| value == WS_V2_BETA_HEADER_VALUE)
     );
-    assert!(
-        !openai_beta_header
-            .split(',')
-            .map(str::trim)
-            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
-    );
-
     server.shutdown().await;
 }
 
@@ -422,7 +405,7 @@ async fn responses_websocket_v2_requests_use_v2_when_model_prefers_websockets() 
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -460,13 +443,6 @@ async fn responses_websocket_v2_requests_use_v2_when_model_prefers_websockets() 
             .map(str::trim)
             .any(|value| value == WS_V2_BETA_HEADER_VALUE)
     );
-    assert!(
-        !openai_beta_header
-            .split(',')
-            .map(str::trim)
-            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
-    );
-
     server.shutdown().await;
 }
 
@@ -478,7 +454,7 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -522,7 +498,7 @@ async fn responses_websocket_v2_wins_when_both_features_enabled() {
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -560,13 +536,6 @@ async fn responses_websocket_v2_wins_when_both_features_enabled() {
             .map(str::trim)
             .any(|value| value == WS_V2_BETA_HEADER_VALUE)
     );
-    assert!(
-        !openai_beta_header
-            .split(',')
-            .map(str::trim)
-            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
-    );
-
     server.shutdown().await;
 }
 
@@ -835,7 +804,14 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
         }
     });
 
-    let server = start_websocket_server(vec![vec![vec![usage_limit_error]]]).await;
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-prewarm"),
+            ev_completed("resp-prewarm"),
+        ],
+        vec![usage_limit_error],
+    ]])
+    .await;
     let mut builder = test_codex().with_config(|config| {
         config.model_provider.request_max_retries = Some(0);
         config.model_provider.stream_max_retries = Some(0);
@@ -913,7 +889,14 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
         }
     });
 
-    let server = start_websocket_server(vec![vec![vec![invalid_request_error]]]).await;
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-prewarm"),
+            ev_completed("resp-prewarm"),
+        ],
+        vec![invalid_request_error],
+    ]])
+    .await;
     let mut builder = test_codex().with_config(|config| {
         config.model_provider.request_max_retries = Some(0);
         config.model_provider.stream_max_retries = Some(0);
@@ -990,14 +973,14 @@ async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_appends_on_prefix() {
+async fn responses_websocket_uses_incremental_create_on_prefix() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done(),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -1024,24 +1007,25 @@ async fn responses_websocket_appends_on_prefix() {
     assert_eq!(first["model"].as_str(), Some(MODEL));
     assert_eq!(first["stream"], serde_json::Value::Bool(true));
     assert_eq!(first["input"].as_array().map(Vec::len), Some(1));
-    let expected_append = serde_json::json!({
-        "type": "response.append",
-        "input": serde_json::to_value(&prompt_two.input[2..]).expect("serialize append items"),
-    });
-    assert_eq!(second, expected_append);
+    assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
+    assert_eq!(
+        second["input"],
+        serde_json::to_value(&prompt_two.input[2..]).expect("serialize incremental items")
+    );
 
     server.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
+async fn responses_websocket_forwards_turn_metadata_on_initial_and_incremental_create() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done(),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -1085,7 +1069,8 @@ async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
         first["client_metadata"]["x-codex-turn-metadata"].as_str(),
         Some(first_turn_metadata)
     );
-    assert_eq!(second["type"].as_str(), Some("response.append"));
+    assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["client_metadata"]["x-codex-turn-metadata"].as_str(),
         Some(enriched_turn_metadata)
@@ -1107,7 +1092,7 @@ async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_creates_on_prefix_when_previous_completion_cannot_append() {
+async fn responses_websocket_uses_previous_response_id_when_prefix_after_completed() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
@@ -1137,9 +1122,10 @@ async fn responses_websocket_creates_on_prefix_when_previous_completion_cannot_a
     let second = connection.get(1).expect("missing request").body_json();
 
     assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input).expect("serialize full input")
+        serde_json::to_value(&prompt_two.input[2..]).expect("serialize incremental input")
     );
 
     server.shutdown().await;
@@ -1222,7 +1208,7 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -1409,13 +1395,6 @@ async fn responses_websocket_v2_sets_openai_beta_header() {
             .map(str::trim)
             .any(|value| value == WS_V2_BETA_HEADER_VALUE)
     );
-    assert!(
-        !openai_beta_header
-            .split(',')
-            .map(str::trim)
-            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
-    );
-
     server.shutdown().await;
 }
 

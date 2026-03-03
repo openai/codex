@@ -147,7 +147,6 @@ pub(crate) use codex_shell_command::powershell;
 
 pub use client::ModelClient;
 pub use client::ModelClientSession;
-pub use client::ResponsesWebsocketVersion;
 pub use client::X_CODEX_TURN_METADATA_HEADER;
 pub use client::ws_version_from_features;
 pub use client_common::Prompt;

@@ -5,7 +5,7 @@
       "properties": {
         "read": {
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "type": [
             "array",
@@ -14,7 +14,7 @@
         },
         "write": {
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "type": [
             "array",
@@ -1382,7 +1382,7 @@
         "thread_id": {
           "allOf": [
             {
-              "$ref": "#/definitions/ThreadId"
+              "$ref": "#/definitions/v2/ThreadId"
             }
           ],
           "description": "Thread ID of the receiver/new agent."
@@ -1420,7 +1420,7 @@
         "thread_id": {
           "allOf": [
             {
-              "$ref": "#/definitions/ThreadId"
+              "$ref": "#/definitions/v2/ThreadId"
             }
           ],
           "description": "Thread ID of the receiver/new agent."
@@ -4732,7 +4732,7 @@
       "properties": {
         "read": {
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "type": [
             "array",
@@ -4741,7 +4741,7 @@
         },
         "write": {
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "type": [
             "array",
@@ -7131,7 +7131,7 @@
           "properties": {
             "content": {
               "items": {
-                "$ref": "#/definitions/UserInput"
+                "$ref": "#/definitions/v2/UserInput"
               },
               "type": "array"
             },
@@ -7169,7 +7169,7 @@
             "phase": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/MessagePhase"
+                  "$ref": "#/definitions/v2/MessagePhase"
                 },
                 {
                   "type": "null"
@@ -7254,7 +7254,7 @@
         {
           "properties": {
             "action": {
-              "$ref": "#/definitions/WebSearchAction"
+              "$ref": "#/definitions/v2/WebSearchAction"
             },
             "id": {
               "type": "string"
