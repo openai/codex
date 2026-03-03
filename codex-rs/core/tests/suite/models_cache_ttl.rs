@@ -100,6 +100,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

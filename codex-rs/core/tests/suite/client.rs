@@ -1128,6 +1128,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
                     .model_reasoning_summary
                     .unwrap_or(ReasoningSummary::Auto),
             ),
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
@@ -1240,6 +1241,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
             model: session_configured.model,
             effort: None,
             summary: Some(ReasoningSummary::Concise),
+            service_tier: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
@@ -1717,6 +1719,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             &otel_manager,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
+            None,
             None,
         )
         .await

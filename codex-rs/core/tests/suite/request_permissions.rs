@@ -135,6 +135,7 @@ async fn submit_turn(
             model: session_model,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

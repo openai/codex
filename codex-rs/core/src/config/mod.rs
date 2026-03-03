@@ -62,6 +62,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
@@ -184,6 +185,9 @@ pub struct Config {
 
     /// Optional override of model selection.
     pub model: Option<String>,
+
+    /// Effective service tier preference for new turns.
+    pub service_tier: Option<ServiceTier>,
 
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
@@ -1184,6 +1188,9 @@ pub struct ConfigToml {
     /// Optionally specify a personality for the model
     pub personality: Option<Personality>,
 
+    /// Optional explicit service tier preference for new turns.
+    pub service_tier: Option<ServiceTier>,
+
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
@@ -1558,6 +1565,7 @@ pub struct ConfigOverrides {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub model_provider: Option<String>,
+    pub service_tier: Option<Option<ServiceTier>>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
@@ -1688,6 +1696,7 @@ impl Config {
             approval_policy: approval_policy_override,
             sandbox_mode,
             model_provider,
+            service_tier: service_tier_override,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
@@ -1948,6 +1957,16 @@ impl Config {
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(config_profile.model).or(cfg.model);
+        let service_tier = if features.enabled(Feature::FastMode) {
+            service_tier_override.unwrap_or_else(|| {
+                config_profile
+                    .service_tier
+                    .or(cfg.service_tier)
+                    .filter(|tier| matches!(tier, ServiceTier::Fast))
+            })
+        } else {
+            None
+        };
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
@@ -2094,6 +2113,7 @@ impl Config {
 
         let config = Self {
             model,
+            service_tier,
             review_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
@@ -4878,6 +4898,7 @@ model_verbosity = "high"
                 review_model: None,
                 model_context_window: None,
                 model_auto_compact_token_limit: None,
+                service_tier: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 permissions: Permissions {
@@ -5007,6 +5028,7 @@ model_verbosity = "high"
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
+            service_tier: None,
             model_provider_id: "openai-custom".to_string(),
             model_provider: fixture.openai_custom_provider.clone(),
             permissions: Permissions {
@@ -5134,6 +5156,7 @@ model_verbosity = "high"
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
+            service_tier: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {
@@ -5247,6 +5270,7 @@ model_verbosity = "high"
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
+            service_tier: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {

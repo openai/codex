@@ -67,6 +67,7 @@ async fn submit_turn_with_policies(
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
