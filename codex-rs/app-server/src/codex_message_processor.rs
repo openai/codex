@@ -2479,7 +2479,7 @@ impl CodexMessageProcessor {
         };
 
         match state_db_ctx.get_thread(thread_uuid).await {
-            Ok(Some(metadata)) => metadata,
+            Ok(Some(_metadata)) => {}
             Ok(None) => {
                 if let Some(thread) = loaded_thread.as_ref() {
                     let Some(rollout_path) = thread.rollout_path() else {
@@ -2493,70 +2493,55 @@ impl CodexMessageProcessor {
                         return;
                     };
 
-                    if tokio::fs::try_exists(rollout_path.as_path())
-                        .await
-                        .unwrap_or(false)
-                    {
-                        reconcile_rollout(
-                            Some(&state_db_ctx),
-                            rollout_path.as_path(),
-                            self.config.model_provider_id.as_str(),
-                            None,
-                            &[],
-                            None,
-                            None,
-                        )
-                        .await;
+                    reconcile_rollout(
+                        Some(&state_db_ctx),
+                        rollout_path.as_path(),
+                        self.config.model_provider_id.as_str(),
+                        None,
+                        &[],
+                        None,
+                        None,
+                    )
+                    .await;
 
-                        match state_db_ctx.get_thread(thread_uuid).await {
-                            Ok(Some(metadata)) => metadata,
-                            Ok(None) => {
+                    match state_db_ctx.get_thread(thread_uuid).await {
+                        Ok(Some(_metadata)) => {}
+                        Ok(None) => {
+                            let config_snapshot = thread.config_snapshot().await;
+                            let model_provider = config_snapshot.model_provider_id.clone();
+                            let mut builder = ThreadMetadataBuilder::new(
+                                thread_uuid,
+                                rollout_path,
+                                Utc::now(),
+                                config_snapshot.session_source.clone(),
+                            );
+                            builder.model_provider = Some(model_provider.clone());
+                            builder.cwd = config_snapshot.cwd.clone();
+                            builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
+                            builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
+                            builder.approval_mode = config_snapshot.approval_policy;
+                            let metadata = builder.build(model_provider.as_str());
+                            if let Err(err) = state_db_ctx.upsert_thread(&metadata).await {
                                 self.send_internal_error(
                                     request_id,
                                     format!(
-                                        "failed to create thread metadata from rollout for {thread_uuid}"
-                                    ),
-                                )
-                                .await;
-                                return;
-                            }
-                            Err(err) => {
-                                self.send_internal_error(
-                                    request_id,
-                                    format!(
-                                        "failed to load reconciled thread metadata for {thread_uuid}: {err}"
+                                        "failed to create thread metadata for {thread_uuid}: {err}"
                                     ),
                                 )
                                 .await;
                                 return;
                             }
                         }
-                    } else {
-                        let config_snapshot = thread.config_snapshot().await;
-                        let model_provider = config_snapshot.model_provider_id.clone();
-                        let mut builder = ThreadMetadataBuilder::new(
-                            thread_uuid,
-                            rollout_path,
-                            Utc::now(),
-                            config_snapshot.session_source.clone(),
-                        );
-                        builder.model_provider = Some(model_provider.clone());
-                        builder.cwd = config_snapshot.cwd.clone();
-                        builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
-                        builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
-                        builder.approval_mode = config_snapshot.approval_policy;
-                        let metadata = builder.build(model_provider.as_str());
-                        if let Err(err) = state_db_ctx.upsert_thread(&metadata).await {
+                        Err(err) => {
                             self.send_internal_error(
                                 request_id,
                                 format!(
-                                    "failed to create thread metadata for {thread_uuid}: {err}"
+                                    "failed to load reconciled thread metadata for {thread_uuid}: {err}"
                                 ),
                             )
                             .await;
                             return;
                         }
-                        metadata
                     }
                 } else {
                     let rollout_path = match find_thread_path_by_id_str(
@@ -2596,7 +2581,7 @@ impl CodexMessageProcessor {
                     .await;
 
                     match state_db_ctx.get_thread(thread_uuid).await {
-                        Ok(Some(metadata)) => metadata,
+                        Ok(Some(_metadata)) => {}
                         Ok(None) => {
                             self.send_internal_error(
                                 request_id,
