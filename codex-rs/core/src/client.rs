@@ -61,6 +61,7 @@ use codex_otel::OtelManager;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -493,6 +494,7 @@ impl ModelClientSession {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: Option<ServiceTier>,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
@@ -542,6 +544,10 @@ impl ModelClientSession {
             store: provider.is_azure_responses_endpoint(),
             stream: true,
             include,
+            service_tier: match service_tier {
+                Some(ServiceTier::Fast) => Some("priority".to_string()),
+                _ => None,
+            },
             prompt_cache_key,
             text,
         };
@@ -748,6 +754,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
@@ -778,6 +785,7 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
+                service_tier,
             )?;
             let client = ApiResponsesClient::new(
                 transport,
@@ -812,6 +820,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
         warmup: bool,
     ) -> Result<WebsocketStreamOutcome> {
@@ -831,6 +840,7 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
+                service_tier,
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: build_ws_client_metadata(turn_metadata_header),
@@ -911,6 +921,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<()> {
         if !self.client.responses_websocket_enabled(model_info) {
@@ -927,6 +938,7 @@ impl ModelClientSession {
                 otel_manager,
                 effort,
                 summary,
+                service_tier,
                 turn_metadata_header,
                 true,
             )
@@ -965,6 +977,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.wire_api;
@@ -978,6 +991,7 @@ impl ModelClientSession {
                             otel_manager,
                             effort,
                             summary,
+                            service_tier,
                             turn_metadata_header,
                             false,
                         )
@@ -996,6 +1010,7 @@ impl ModelClientSession {
                     otel_manager,
                     effort,
                     summary,
+                    service_tier,
                     turn_metadata_header,
                 )
                 .await

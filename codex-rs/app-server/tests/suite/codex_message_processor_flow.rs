@@ -36,7 +36,7 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
@@ -337,6 +337,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            service_tier: None,
             output_schema: None,
         })
         .await?;
@@ -453,6 +454,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             model: model.clone(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            service_tier: None,
             output_schema: None,
         })
         .await?;
@@ -481,6 +483,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             model: model.clone(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            service_tier: None,
             output_schema: None,
         })
         .await?;

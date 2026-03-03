@@ -138,6 +138,7 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
             model: session_model,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(CollaborationMode {
                 mode,
                 settings: Settings {
@@ -254,6 +255,7 @@ where
             model: session_model,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })

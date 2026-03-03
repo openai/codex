@@ -1,5 +1,14 @@
 load("//:defs.bzl", "codex_rust_crate")
 
+filegroup(
+    name = "model_availability_nux_fixtures",
+    srcs = [
+        "models.json",
+        "tests/cli_responses_fixture.sse",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 codex_rust_crate(
     name = "core",
     crate_name = "codex_core",

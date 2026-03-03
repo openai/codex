@@ -92,6 +92,13 @@ pub struct FileSearchOptions {
     pub exclude: Vec<String>,
     pub threads: NonZero<usize>,
     pub compute_indices: bool,
+    /// Toggle ignore-file processing in the walker.
+    ///
+    /// When enabled, `.gitignore` files are scoped by
+    /// `WalkBuilder::require_git(true)`, so they are honored only when the
+    /// traversed path is inside a git repository. When disabled, the walker
+    /// turns off `.gitignore`, git-global/exclude rules, `.ignore`, and
+    /// parent-directory ignore scanning.
     pub respect_gitignore: bool,
 }
 
@@ -379,6 +386,18 @@ fn get_file_path<'a>(path: &'a Path, search_directories: &[PathBuf]) -> Option<(
     rel_path.to_str().map(|p| (root_idx, p))
 }
 
+/// Walks the search directories and feeds discovered file paths into `nucleo`
+/// via the injector.
+///
+/// The walker uses `require_git(true)` to match git's own ignore semantics:
+/// git never reads `.gitignore` files from directories above the repository
+/// root. Without this flag, the `ignore` crate reads `.gitignore` files from
+/// *all* ancestor directories—a deliberate divergence from git intended for
+/// non-git use cases—allowing a broad parent ignore (e.g. `~/.gitignore`
+/// containing `*`) to silently suppress every file in the walk.
+///
+/// When `respect_gitignore` is `false`, all git-related ignore processing is
+/// disabled regardless of this flag.
 fn walker_worker(
     inner: Arc<SessionInner>,
     override_matcher: Option<ignore::overrides::Override>,
@@ -399,8 +418,9 @@ fn walker_worker(
         .hidden(false)
         // Follow symlinks to search their contents.
         .follow_links(true)
-        // Don't require git to be present to apply to apply git-related ignore rules.
-        .require_git(false);
+        // Keep ignore behavior aligned with git repositories: only apply
+        // gitignore rules when a git context exists.
+        .require_git(true);
     if !inner.respect_gitignore {
         walk_builder
             .git_ignore(false)
@@ -965,5 +985,152 @@ mod tests {
         let results = result.expect("run ok");
         assert_eq!(results.matches, Vec::new());
         assert_eq!(results.total_match_count, 0);
+    }
+
+    /// Regression test for #3493: a parent directory's `.gitignore` with `*`
+    /// must not suppress files discovered inside a child "repo" directory.
+    ///
+    /// The fixture intentionally omits `git init` so that no `.git` directory
+    /// exists. With `require_git(true)`, the walker skips all gitignore
+    /// processing, making the parent's broad ignore harmless.
+    #[test]
+    fn parent_gitignore_outside_repo_does_not_hide_repo_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("home");
+        let repo = parent.join("repo");
+        fs::create_dir_all(repo.join(".vscode")).unwrap();
+
+        fs::write(parent.join(".gitignore"), "*\n!.gitignore\n").unwrap();
+        fs::write(
+            repo.join(".gitignore"),
+            ".vscode/*\n!.vscode/\n!.vscode/settings.json\n!package.json\n",
+        )
+        .unwrap();
+        fs::write(repo.join("package.json"), "{ \"name\": \"demo\" }\n").unwrap();
+        fs::write(repo.join(".vscode/settings.json"), "{ \"editor\": true }\n").unwrap();
+
+        let respect_results = run(
+            "package",
+            vec![repo.clone()],
+            FileSearchOptions {
+                limit: NonZero::new(20).unwrap(),
+                exclude: Vec::new(),
+                threads: NonZero::new(2).unwrap(),
+                compute_indices: false,
+                respect_gitignore: true,
+            },
+            None,
+        )
+        .expect("run ok");
+        assert!(
+            respect_results
+                .matches
+                .iter()
+                .any(|m| m.path.as_path() == Path::new("package.json"))
+        );
+
+        let nested_file_results = run(
+            "settings",
+            vec![repo],
+            FileSearchOptions {
+                limit: NonZero::new(20).unwrap(),
+                exclude: Vec::new(),
+                threads: NonZero::new(2).unwrap(),
+                compute_indices: false,
+                respect_gitignore: true,
+            },
+            None,
+        )
+        .expect("run ok");
+        assert!(
+            nested_file_results
+                .matches
+                .iter()
+                .any(|m| m.path.as_path() == Path::new(".vscode/settings.json"))
+        );
+    }
+
+    #[test]
+    fn git_repo_still_respects_local_gitignore_when_enabled() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("home");
+        let repo = parent.join("repo");
+        fs::create_dir_all(repo.join(".vscode")).unwrap();
+
+        fs::write(parent.join(".gitignore"), "*\n!.gitignore\n").unwrap();
+        fs::write(
+            repo.join(".gitignore"),
+            ".vscode/*\n!.vscode/\n!.vscode/settings.json\n!package.json\n",
+        )
+        .unwrap();
+        fs::write(repo.join("package.json"), "{ \"name\": \"demo\" }\n").unwrap();
+        fs::write(repo.join(".vscode/settings.json"), "{ \"editor\": true }\n").unwrap();
+        fs::write(
+            repo.join(".vscode/extensions.json"),
+            "{ \"extensions\": [] }\n",
+        )
+        .unwrap();
+
+        fs::create_dir_all(repo.join(".git")).unwrap();
+
+        let package_results = run(
+            "package",
+            vec![repo.clone()],
+            FileSearchOptions {
+                limit: NonZero::new(20).unwrap(),
+                exclude: Vec::new(),
+                threads: NonZero::new(2).unwrap(),
+                compute_indices: false,
+                respect_gitignore: true,
+            },
+            None,
+        )
+        .expect("run ok");
+        assert!(
+            package_results
+                .matches
+                .iter()
+                .any(|m| m.path.as_path() == Path::new("package.json"))
+        );
+
+        let ignored_results = run(
+            "extensions.json",
+            vec![repo.clone()],
+            FileSearchOptions {
+                limit: NonZero::new(20).unwrap(),
+                exclude: Vec::new(),
+                threads: NonZero::new(2).unwrap(),
+                compute_indices: false,
+                respect_gitignore: true,
+            },
+            None,
+        )
+        .expect("run ok");
+        assert!(
+            !ignored_results
+                .matches
+                .iter()
+                .any(|m| m.path.as_path() == Path::new(".vscode/extensions.json"))
+        );
+
+        let whitelisted_results = run(
+            "settings.json",
+            vec![repo],
+            FileSearchOptions {
+                limit: NonZero::new(20).unwrap(),
+                exclude: Vec::new(),
+                threads: NonZero::new(2).unwrap(),
+                compute_indices: false,
+                respect_gitignore: true,
+            },
+            None,
+        )
+        .expect("run ok");
+        assert!(
+            whitelisted_results
+                .matches
+                .iter()
+                .any(|m| m.path.as_path() == Path::new(".vscode/settings.json"))
+        );
     }
 }

@@ -744,6 +744,7 @@ mod tests {
             id: codex_app_server_protocol::RequestId::Integer(7),
             method: "config/read".to_string(),
             params: Some(json!({ "includeLayers": false })),
+            trace: None,
         });
         assert!(
             enqueue_incoming_message(&transport_event_tx, &writer_tx, connection_id, request).await
@@ -885,6 +886,7 @@ mod tests {
             id: codex_app_server_protocol::RequestId::Integer(7),
             method: "config/read".to_string(),
             params: Some(json!({ "includeLayers": false })),
+            trace: None,
         });
 
         let enqueue_result = tokio::time::timeout(

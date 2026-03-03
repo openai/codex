@@ -6,10 +6,11 @@ import type { InputItem } from "./InputItem";
 import type { ReasoningEffort } from "./ReasoningEffort";
 import type { ReasoningSummary } from "./ReasoningSummary";
 import type { SandboxPolicy } from "./SandboxPolicy";
+import type { ServiceTier } from "./ServiceTier";
 import type { ThreadId } from "./ThreadId";
 import type { JsonValue } from "./serde_json/JsonValue";
 
-export type SendUserTurnParams = { conversationId: ThreadId, items: Array<InputItem>, cwd: string, approvalPolicy: AskForApproval, sandboxPolicy: SandboxPolicy, model: string, effort: ReasoningEffort | null, summary: ReasoningSummary, 
+export type SendUserTurnParams = { conversationId: ThreadId, items: Array<InputItem>, cwd: string, approvalPolicy: AskForApproval, sandboxPolicy: SandboxPolicy, model: string, serviceTier?: ServiceTier | null | null, effort: ReasoningEffort | null, summary: ReasoningSummary, 
 /**
  * Optional JSON Schema used to constrain the final assistant message for this turn.
  */

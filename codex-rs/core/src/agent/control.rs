@@ -7,6 +7,7 @@ use crate::find_thread_path_by_id_str;
 use crate::rollout::RolloutRecorder;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
+use crate::shell_snapshot::ShellSnapshot;
 use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
@@ -83,6 +84,9 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let inherited_shell_snapshot = self
+            .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
+            .await;
         let session_source = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -161,6 +165,7 @@ impl AgentControl {
                             self.clone(),
                             session_source,
                             false,
+                            inherited_shell_snapshot,
                         )
                         .await?
                 } else {
@@ -171,6 +176,7 @@ impl AgentControl {
                             session_source,
                             false,
                             None,
+                            inherited_shell_snapshot,
                         )
                         .await?
                 }
@@ -235,6 +241,9 @@ impl AgentControl {
             other => other,
         };
         let notification_source = session_source.clone();
+        let inherited_shell_snapshot = self
+            .inherited_shell_snapshot_for_source(&state, Some(&session_source))
+            .await;
         let rollout_path =
             find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
                 .await?
@@ -246,6 +255,7 @@ impl AgentControl {
                 rollout_path,
                 self.clone(),
                 session_source,
+                inherited_shell_snapshot,
             )
             .await?;
         reservation.commit(resumed_thread.thread_id);
@@ -395,18 +405,20 @@ impl AgentControl {
         };
         let control = self.clone();
         tokio::spawn(async move {
-            let mut status_rx = match control.subscribe_status(child_thread_id).await {
-                Ok(rx) => rx,
-                Err(_) => return,
-            };
-            let mut status = status_rx.borrow().clone();
-            while !is_final(&status) {
-                if status_rx.changed().await.is_err() {
-                    status = control.get_status(child_thread_id).await;
-                    break;
+            let status = match control.subscribe_status(child_thread_id).await {
+                Ok(mut status_rx) => {
+                    let mut status = status_rx.borrow().clone();
+                    while !is_final(&status) {
+                        if status_rx.changed().await.is_err() {
+                            status = control.get_status(child_thread_id).await;
+                            break;
+                        }
+                        status = status_rx.borrow().clone();
+                    }
+                    status
                 }
-                status = status_rx.borrow().clone();
-            }
+                Err(_) => control.get_status(child_thread_id).await,
+            };
             if !is_final(&status) {
                 return;
             }
@@ -430,6 +442,22 @@ impl AgentControl {
         self.manager
             .upgrade()
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))
+    }
+
+    async fn inherited_shell_snapshot_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+    ) -> Option<Arc<ShellSnapshot>> {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return None;
+        };
+
+        let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
+        parent_thread.codex.session.user_shell().shell_snapshot()
     }
 }
 #[cfg(test)]
@@ -1268,6 +1296,44 @@ mod tests {
             .expect("child shutdown should submit");
 
         assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
+    }
+
+    #[tokio::test]
+    async fn completion_watcher_notifies_parent_when_child_is_missing() {
+        let harness = AgentControlHarness::new().await;
+        let (parent_thread_id, parent_thread) = harness.start_thread().await;
+        let child_thread_id = ThreadId::new();
+
+        harness.control.maybe_start_completion_watcher(
+            child_thread_id,
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+        );
+
+        assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
+
+        let history_items = parent_thread
+            .codex
+            .session
+            .clone_history()
+            .await
+            .raw_items()
+            .to_vec();
+        assert_eq!(
+            history_contains_text(
+                &history_items,
+                &format!("\"agent_id\":\"{child_thread_id}\"")
+            ),
+            true
+        );
+        assert_eq!(
+            history_contains_text(&history_items, "\"status\":\"not_found\""),
+            true
+        );
     }
 
     #[tokio::test]

@@ -23,7 +23,7 @@ use tokio::time::sleep_until;
 use tracing::warn;
 
 use crate::config::Config;
-use crate::skills::loader::skill_roots_from_layer_stack_with_agents;
+use crate::skills::SkillsManager;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileWatcherEvent {
@@ -143,12 +143,16 @@ impl FileWatcher {
         self.tx.subscribe()
     }
 
-    pub(crate) fn register_config(self: &Arc<Self>, config: &Config) -> WatchRegistration {
-        let deduped_roots: HashSet<PathBuf> =
-            skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd)
-                .into_iter()
-                .map(|root| root.path)
-                .collect();
+    pub(crate) fn register_config(
+        self: &Arc<Self>,
+        config: &Config,
+        skills_manager: &SkillsManager,
+    ) -> WatchRegistration {
+        let deduped_roots: HashSet<PathBuf> = skills_manager
+            .skill_roots_for_config(config)
+            .into_iter()
+            .map(|root| root.path)
+            .collect();
         let mut registered_roots: Vec<PathBuf> = deduped_roots.into_iter().collect();
         registered_roots.sort_unstable_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
         for root in &registered_roots {

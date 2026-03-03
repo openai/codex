@@ -52,6 +52,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod app_server_tracing;
 mod bespoke_event_handling;
 mod codex_message_processor;
 mod config_api;
@@ -447,7 +448,7 @@ pub async fn run_main_with_transport(
     let otel = codex_core::otel_init::build_provider(
         &config,
         env!("CARGO_PKG_VERSION"),
-        Some("codex_app_server"),
+        Some("codex-app-server"),
         default_analytics_enabled,
     )
     .map_err(|e| {
@@ -557,7 +558,6 @@ pub async fn run_main_with_transport(
             outgoing: outgoing_message_sender,
             arg0_paths,
             config: Arc::new(config),
-            single_client_mode,
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
@@ -675,6 +675,7 @@ pub async fn run_main_with_transport(
                                             .process_request(
                                                 connection_id,
                                                 request,
+                                                transport,
                                                 &mut connection_state.session,
                                                 &connection_state.outbound_initialized,
                                             )

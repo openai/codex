@@ -161,6 +161,7 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
             model: session_configured.model.clone(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

@@ -157,7 +157,7 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     Some(codex_state::Anchor { ts, id })
 }
 
-fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
+pub(crate) fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
     normalize_for_path_comparison(cwd).unwrap_or_else(|_| cwd.to_path_buf())
 }
 
@@ -337,6 +337,19 @@ pub async fn persist_dynamic_tools(
     }
 }
 
+pub async fn mark_thread_memory_mode_polluted(
+    context: Option<&codex_state::StateRuntime>,
+    thread_id: ThreadId,
+    stage: &str,
+) {
+    let Some(ctx) = context else {
+        return;
+    };
+    if let Err(err) = ctx.mark_thread_memory_mode_polluted(thread_id).await {
+        warn!("state db mark_thread_memory_mode_polluted failed during {stage}: {err}");
+    }
+}
+
 /// Reconcile rollout items into SQLite, falling back to scanning the rollout file.
 pub async fn reconcile_rollout(
     context: Option<&codex_state::StateRuntime>,
@@ -375,6 +388,7 @@ pub async fn reconcile_rollout(
             }
         };
     let mut metadata = outcome.metadata;
+    let memory_mode = outcome.memory_mode.unwrap_or_else(|| "enabled".to_string());
     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
     match archived_only {
         Some(true) if metadata.archived_at.is_none() => {
@@ -388,6 +402,16 @@ pub async fn reconcile_rollout(
     if let Err(err) = ctx.upsert_thread(&metadata).await {
         warn!(
             "state db reconcile_rollout upsert failed {}: {err}",
+            rollout_path.display()
+        );
+        return;
+    }
+    if let Err(err) = ctx
+        .set_thread_memory_mode(metadata.id, memory_mode.as_str())
+        .await
+    {
+        warn!(
+            "state db reconcile_rollout memory_mode update failed {}: {err}",
             rollout_path.display()
         );
         return;

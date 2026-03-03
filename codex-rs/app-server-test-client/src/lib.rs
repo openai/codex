@@ -15,6 +15,7 @@ use std::process::Command;
 use std::process::Stdio;
 use std::thread;
 use std::time::Duration;
+use std::time::SystemTime;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -71,6 +72,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::W3cTraceContext;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -104,6 +106,8 @@ const NOTIFICATIONS_TO_OPT_OUT: &[&str] = &[
     "item/reasoning/summaryTextDelta",
     "item/reasoning/textDelta",
 ];
+const APP_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const APP_SERVER_GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Minimal launcher that initializes the Codex app-server and logs the handshake.
 #[derive(Parser)]
@@ -188,6 +192,10 @@ enum CliCommand {
         /// Existing thread id to resume.
         thread_id: String,
     },
+    /// Initialize the app-server and dump all inbound messages until interrupted.
+    ///
+    /// This command does not auto-exit; stop it with SIGINT/SIGTERM/SIGKILL.
+    Watch,
     /// Start a V2 turn that elicits an ExecCommand approval.
     #[command(name = "trigger-cmd-approval")]
     TriggerCmdApproval {
@@ -290,6 +298,11 @@ pub fn run() -> Result<()> {
             ensure_dynamic_tools_unused(&dynamic_tools, "thread-resume")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
             thread_resume_follow(&endpoint, &config_overrides, thread_id)
+        }
+        CliCommand::Watch => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "watch")?;
+            let endpoint = resolve_endpoint(codex_bin, url)?;
+            watch(&endpoint, &config_overrides)
         }
         CliCommand::TriggerCmdApproval { user_message } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
@@ -489,25 +502,26 @@ fn send_message(
     config_overrides: &[String],
     user_message: String,
 ) -> Result<()> {
-    let mut client = CodexClient::connect(endpoint, config_overrides)?;
+    with_client(endpoint, config_overrides, |client| {
+        let initialize = client.initialize()?;
+        println!("< initialize response: {initialize:?}");
 
-    let initialize = client.initialize()?;
-    println!("< initialize response: {initialize:?}");
+        let conversation = client.start_thread()?;
+        println!("< newConversation response: {conversation:?}");
 
-    let conversation = client.start_thread()?;
-    println!("< newConversation response: {conversation:?}");
+        let subscription = client.add_conversation_listener(&conversation.conversation_id)?;
+        println!("< addConversationListener response: {subscription:?}");
 
-    let subscription = client.add_conversation_listener(&conversation.conversation_id)?;
-    println!("< addConversationListener response: {subscription:?}");
+        let send_response =
+            client.send_user_message(&conversation.conversation_id, &user_message)?;
+        println!("< sendUserMessage response: {send_response:?}");
 
-    let send_response = client.send_user_message(&conversation.conversation_id, &user_message)?;
-    println!("< sendUserMessage response: {send_response:?}");
+        client.stream_conversation(&conversation.conversation_id)?;
 
-    client.stream_conversation(&conversation.conversation_id)?;
+        client.remove_thread_listener(subscription.subscription_id)?;
 
-    client.remove_thread_listener(subscription.subscription_id)?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 pub fn send_message_v2(
@@ -565,82 +579,85 @@ fn trigger_zsh_fork_multi_cmd_approval(
     let default_prompt = "Run this exact command using shell command execution without rewriting or splitting it: /usr/bin/true && /usr/bin/true";
     let message = user_message.unwrap_or_else(|| default_prompt.to_string());
 
-    let mut client = CodexClient::connect(endpoint, config_overrides)?;
-    let initialize = client.initialize()?;
-    println!("< initialize response: {initialize:?}");
+    with_client(endpoint, config_overrides, |client| {
+        let initialize = client.initialize()?;
+        println!("< initialize response: {initialize:?}");
 
-    let thread_response = client.thread_start(ThreadStartParams {
-        dynamic_tools: dynamic_tools.clone(),
-        ..Default::default()
-    })?;
-    println!("< thread/start response: {thread_response:?}");
+        let thread_response = client.thread_start(ThreadStartParams {
+            dynamic_tools: dynamic_tools.clone(),
+            ..Default::default()
+        })?;
+        println!("< thread/start response: {thread_response:?}");
 
-    client.command_approval_behavior = match abort_on {
-        Some(index) => CommandApprovalBehavior::AbortOn(index),
-        None => CommandApprovalBehavior::AlwaysAccept,
-    };
-    client.command_approval_count = 0;
-    client.command_approval_item_ids.clear();
-    client.command_execution_statuses.clear();
-    client.last_turn_status = None;
+        client.command_approval_behavior = match abort_on {
+            Some(index) => CommandApprovalBehavior::AbortOn(index),
+            None => CommandApprovalBehavior::AlwaysAccept,
+        };
+        client.command_approval_count = 0;
+        client.command_approval_item_ids.clear();
+        client.command_execution_statuses.clear();
+        client.last_turn_status = None;
 
-    let mut turn_params = TurnStartParams {
-        thread_id: thread_response.thread.id.clone(),
-        input: vec![V2UserInput::Text {
-            text: message,
-            text_elements: Vec::new(),
-        }],
-        ..Default::default()
-    };
-    turn_params.approval_policy = Some(AskForApproval::OnRequest);
-    turn_params.sandbox_policy = Some(SandboxPolicy::ReadOnly {
-        access: ReadOnlyAccess::FullAccess,
-    });
+        let mut turn_params = TurnStartParams {
+            thread_id: thread_response.thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: message,
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        turn_params.approval_policy = Some(AskForApproval::OnRequest);
+        turn_params.sandbox_policy = Some(SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+        });
 
-    let turn_response = client.turn_start(turn_params)?;
-    println!("< turn/start response: {turn_response:?}");
-    client.stream_turn(&thread_response.thread.id, &turn_response.turn.id)?;
+        let turn_response = client.turn_start(turn_params)?;
+        println!("< turn/start response: {turn_response:?}");
+        client.stream_turn(&thread_response.thread.id, &turn_response.turn.id)?;
 
-    if client.command_approval_count < min_approvals {
-        bail!(
-            "expected at least {min_approvals} command approvals, got {}",
-            client.command_approval_count
-        );
-    }
-    let mut approvals_per_item = std::collections::BTreeMap::new();
-    for item_id in &client.command_approval_item_ids {
-        *approvals_per_item.entry(item_id.clone()).or_insert(0usize) += 1;
-    }
-    let max_approvals_for_one_item = approvals_per_item.values().copied().max().unwrap_or(0);
-    if max_approvals_for_one_item < min_approvals {
-        bail!(
-            "expected at least {min_approvals} approvals for one command item, got max {max_approvals_for_one_item} with map {approvals_per_item:?}"
-        );
-    }
-
-    let last_command_status = client.command_execution_statuses.last();
-    if abort_on.is_none() {
-        if last_command_status != Some(&CommandExecutionStatus::Completed) {
-            bail!("expected completed command execution, got {last_command_status:?}");
-        }
-        if client.last_turn_status != Some(TurnStatus::Completed) {
+        if client.command_approval_count < min_approvals {
             bail!(
-                "expected completed turn in all-accept flow, got {:?}",
-                client.last_turn_status
+                "expected at least {min_approvals} command approvals, got {}",
+                client.command_approval_count
             );
         }
-    } else if last_command_status == Some(&CommandExecutionStatus::Completed) {
-        bail!(
-            "expected non-completed command execution in mixed approval/decline flow, got {last_command_status:?}"
+        let mut approvals_per_item = std::collections::BTreeMap::new();
+        for item_id in &client.command_approval_item_ids {
+            *approvals_per_item.entry(item_id.clone()).or_insert(0usize) += 1;
+        }
+        let max_approvals_for_one_item = approvals_per_item.values().copied().max().unwrap_or(0);
+        if max_approvals_for_one_item < min_approvals {
+            bail!(
+                "expected at least {min_approvals} approvals for one command item, got max {max_approvals_for_one_item} with map {approvals_per_item:?}"
+            );
+        }
+
+        let last_command_status = client.command_execution_statuses.last();
+        if abort_on.is_none() {
+            if last_command_status != Some(&CommandExecutionStatus::Completed) {
+                bail!("expected completed command execution, got {last_command_status:?}");
+            }
+            if client.last_turn_status != Some(TurnStatus::Completed) {
+                bail!(
+                    "expected completed turn in all-accept flow, got {:?}",
+                    client.last_turn_status
+                );
+            }
+        } else if last_command_status == Some(&CommandExecutionStatus::Completed) {
+            bail!(
+                "expected non-completed command execution in mixed approval/decline flow, got {last_command_status:?}"
+            );
+        }
+
+        println!(
+            "[zsh-fork multi-approval summary] approvals={}, approvals_per_item={approvals_per_item:?}, command_statuses={:?}, turn_status={:?}",
+            client.command_approval_count,
+            client.command_execution_statuses,
+            client.last_turn_status
         );
-    }
 
-    println!(
-        "[zsh-fork multi-approval summary] approvals={}, approvals_per_item={approvals_per_item:?}, command_statuses={:?}, turn_status={:?}",
-        client.command_approval_count, client.command_execution_statuses, client.last_turn_status
-    );
-
-    Ok(())
+        Ok(())
+    })
 }
 
 fn resume_message_v2(
@@ -652,30 +669,30 @@ fn resume_message_v2(
 ) -> Result<()> {
     ensure_dynamic_tools_unused(dynamic_tools, "resume-message-v2")?;
 
-    let mut client = CodexClient::connect(endpoint, config_overrides)?;
+    with_client(endpoint, config_overrides, |client| {
+        let initialize = client.initialize()?;
+        println!("< initialize response: {initialize:?}");
 
-    let initialize = client.initialize()?;
-    println!("< initialize response: {initialize:?}");
+        let resume_response = client.thread_resume(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })?;
+        println!("< thread/resume response: {resume_response:?}");
 
-    let resume_response = client.thread_resume(ThreadResumeParams {
-        thread_id,
-        ..Default::default()
-    })?;
-    println!("< thread/resume response: {resume_response:?}");
+        let turn_response = client.turn_start(TurnStartParams {
+            thread_id: resume_response.thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: user_message,
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })?;
+        println!("< turn/start response: {turn_response:?}");
 
-    let turn_response = client.turn_start(TurnStartParams {
-        thread_id: resume_response.thread.id.clone(),
-        input: vec![V2UserInput::Text {
-            text: user_message,
-            text_elements: Vec::new(),
-        }],
-        ..Default::default()
-    })?;
-    println!("< turn/start response: {turn_response:?}");
+        client.stream_turn(&resume_response.thread.id, &turn_response.turn.id)?;
 
-    client.stream_turn(&resume_response.thread.id, &turn_response.turn.id)?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 fn thread_resume_follow(
@@ -694,6 +711,16 @@ fn thread_resume_follow(
     })?;
     println!("< thread/resume response: {resume_response:?}");
     println!("< streaming notifications until process is terminated");
+
+    client.stream_notifications_forever()
+}
+
+fn watch(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
+    let mut client = CodexClient::connect(endpoint, config_overrides)?;
+
+    let initialize = client.initialize()?;
+    println!("< initialize response: {initialize:?}");
+    println!("< streaming inbound messages until process is terminated");
 
     client.stream_notifications_forever()
 }
@@ -768,34 +795,34 @@ fn send_message_v2_with_policies(
     sandbox_policy: Option<SandboxPolicy>,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
-    let mut client = CodexClient::connect(endpoint, config_overrides)?;
+    with_client(endpoint, config_overrides, |client| {
+        let initialize = client.initialize_with_experimental_api(experimental_api)?;
+        println!("< initialize response: {initialize:?}");
 
-    let initialize = client.initialize_with_experimental_api(experimental_api)?;
-    println!("< initialize response: {initialize:?}");
+        let thread_response = client.thread_start(ThreadStartParams {
+            dynamic_tools: dynamic_tools.clone(),
+            ..Default::default()
+        })?;
+        println!("< thread/start response: {thread_response:?}");
+        let mut turn_params = TurnStartParams {
+            thread_id: thread_response.thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: user_message,
+                // Test client sends plain text without UI element ranges.
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        turn_params.approval_policy = approval_policy;
+        turn_params.sandbox_policy = sandbox_policy;
 
-    let thread_response = client.thread_start(ThreadStartParams {
-        dynamic_tools: dynamic_tools.clone(),
-        ..Default::default()
-    })?;
-    println!("< thread/start response: {thread_response:?}");
-    let mut turn_params = TurnStartParams {
-        thread_id: thread_response.thread.id.clone(),
-        input: vec![V2UserInput::Text {
-            text: user_message,
-            // Test client sends plain text without UI element ranges.
-            text_elements: Vec::new(),
-        }],
-        ..Default::default()
-    };
-    turn_params.approval_policy = approval_policy;
-    turn_params.sandbox_policy = sandbox_policy;
+        let turn_response = client.turn_start(turn_params)?;
+        println!("< turn/start response: {turn_response:?}");
 
-    let turn_response = client.turn_start(turn_params)?;
-    println!("< turn/start response: {turn_response:?}");
+        client.stream_turn(&thread_response.thread.id, &turn_response.turn.id)?;
 
-    client.stream_turn(&thread_response.thread.id, &turn_response.turn.id)?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 fn send_follow_up_v2(
@@ -805,119 +832,130 @@ fn send_follow_up_v2(
     follow_up_message: String,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
-    let mut client = CodexClient::connect(endpoint, config_overrides)?;
+    with_client(endpoint, config_overrides, |client| {
+        let initialize = client.initialize()?;
+        println!("< initialize response: {initialize:?}");
 
-    let initialize = client.initialize()?;
-    println!("< initialize response: {initialize:?}");
+        let thread_response = client.thread_start(ThreadStartParams {
+            dynamic_tools: dynamic_tools.clone(),
+            ..Default::default()
+        })?;
+        println!("< thread/start response: {thread_response:?}");
 
-    let thread_response = client.thread_start(ThreadStartParams {
-        dynamic_tools: dynamic_tools.clone(),
-        ..Default::default()
-    })?;
-    println!("< thread/start response: {thread_response:?}");
+        let first_turn_params = TurnStartParams {
+            thread_id: thread_response.thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: first_message,
+                // Test client sends plain text without UI element ranges.
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        let first_turn_response = client.turn_start(first_turn_params)?;
+        println!("< turn/start response (initial): {first_turn_response:?}");
+        client.stream_turn(&thread_response.thread.id, &first_turn_response.turn.id)?;
 
-    let first_turn_params = TurnStartParams {
-        thread_id: thread_response.thread.id.clone(),
-        input: vec![V2UserInput::Text {
-            text: first_message,
-            // Test client sends plain text without UI element ranges.
-            text_elements: Vec::new(),
-        }],
-        ..Default::default()
-    };
-    let first_turn_response = client.turn_start(first_turn_params)?;
-    println!("< turn/start response (initial): {first_turn_response:?}");
-    client.stream_turn(&thread_response.thread.id, &first_turn_response.turn.id)?;
+        let follow_up_params = TurnStartParams {
+            thread_id: thread_response.thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: follow_up_message,
+                // Test client sends plain text without UI element ranges.
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        let follow_up_response = client.turn_start(follow_up_params)?;
+        println!("< turn/start response (follow-up): {follow_up_response:?}");
+        client.stream_turn(&thread_response.thread.id, &follow_up_response.turn.id)?;
 
-    let follow_up_params = TurnStartParams {
-        thread_id: thread_response.thread.id.clone(),
-        input: vec![V2UserInput::Text {
-            text: follow_up_message,
-            // Test client sends plain text without UI element ranges.
-            text_elements: Vec::new(),
-        }],
-        ..Default::default()
-    };
-    let follow_up_response = client.turn_start(follow_up_params)?;
-    println!("< turn/start response (follow-up): {follow_up_response:?}");
-    client.stream_turn(&thread_response.thread.id, &follow_up_response.turn.id)?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 fn test_login(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
-    let mut client = CodexClient::connect(endpoint, config_overrides)?;
+    with_client(endpoint, config_overrides, |client| {
+        let initialize = client.initialize()?;
+        println!("< initialize response: {initialize:?}");
 
-    let initialize = client.initialize()?;
-    println!("< initialize response: {initialize:?}");
-
-    let login_response = client.login_chat_gpt()?;
-    println!("< loginChatGpt response: {login_response:?}");
-    println!(
-        "Open the following URL in your browser to continue:\n{}",
-        login_response.auth_url
-    );
-
-    let completion = client.wait_for_login_completion(&login_response.login_id)?;
-    println!("< loginChatGptComplete notification: {completion:?}");
-
-    if completion.success {
-        println!("Login succeeded.");
-        Ok(())
-    } else {
-        bail!(
-            "login failed: {}",
-            completion
-                .error
-                .as_deref()
-                .unwrap_or("unknown error from loginChatGptComplete")
+        let login_response = client.login_chat_gpt()?;
+        println!("< loginChatGpt response: {login_response:?}");
+        println!(
+            "Open the following URL in your browser to continue:\n{}",
+            login_response.auth_url
         );
-    }
+
+        let completion = client.wait_for_login_completion(&login_response.login_id)?;
+        println!("< loginChatGptComplete notification: {completion:?}");
+
+        if completion.success {
+            println!("Login succeeded.");
+            Ok(())
+        } else {
+            bail!(
+                "login failed: {}",
+                completion
+                    .error
+                    .as_deref()
+                    .unwrap_or("unknown error from loginChatGptComplete")
+            );
+        }
+    })
 }
 
 fn get_account_rate_limits(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
-    let mut client = CodexClient::connect(endpoint, config_overrides)?;
+    with_client(endpoint, config_overrides, |client| {
+        let initialize = client.initialize()?;
+        println!("< initialize response: {initialize:?}");
 
-    let initialize = client.initialize()?;
-    println!("< initialize response: {initialize:?}");
+        let response = client.get_account_rate_limits()?;
+        println!("< account/rateLimits/read response: {response:?}");
 
-    let response = client.get_account_rate_limits()?;
-    println!("< account/rateLimits/read response: {response:?}");
-
-    Ok(())
+        Ok(())
+    })
 }
 
 fn model_list(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
-    let mut client = CodexClient::connect(endpoint, config_overrides)?;
+    with_client(endpoint, config_overrides, |client| {
+        let initialize = client.initialize()?;
+        println!("< initialize response: {initialize:?}");
 
-    let initialize = client.initialize()?;
-    println!("< initialize response: {initialize:?}");
+        let response = client.model_list(ModelListParams::default())?;
+        println!("< model/list response: {response:?}");
 
-    let response = client.model_list(ModelListParams::default())?;
-    println!("< model/list response: {response:?}");
-
-    Ok(())
+        Ok(())
+    })
 }
 
 fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u32) -> Result<()> {
+    with_client(endpoint, config_overrides, |client| {
+        let initialize = client.initialize()?;
+        println!("< initialize response: {initialize:?}");
+
+        let response = client.thread_list(ThreadListParams {
+            cursor: None,
+            limit: Some(limit),
+            sort_key: None,
+            model_providers: None,
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            search_term: None,
+        })?;
+        println!("< thread/list response: {response:?}");
+
+        Ok(())
+    })
+}
+
+fn with_client<T>(
+    endpoint: &Endpoint,
+    config_overrides: &[String],
+    f: impl FnOnce(&mut CodexClient) -> Result<T>,
+) -> Result<T> {
     let mut client = CodexClient::connect(endpoint, config_overrides)?;
-
-    let initialize = client.initialize()?;
-    println!("< initialize response: {initialize:?}");
-
-    let response = client.thread_list(ThreadListParams {
-        cursor: None,
-        limit: Some(limit),
-        sort_key: None,
-        model_providers: None,
-        source_kinds: None,
-        archived: None,
-        cwd: None,
-        search_term: None,
-    })?;
-    println!("< thread/list response: {response:?}");
-
-    Ok(())
+    let result = f(&mut client);
+    client.print_trace_summary();
+    result
 }
 
 fn ensure_dynamic_tools_unused(
@@ -974,6 +1012,8 @@ struct CodexClient {
     command_approval_item_ids: Vec<String>,
     command_execution_statuses: Vec<CommandExecutionStatus>,
     last_turn_status: Option<TurnStatus>,
+    trace_id: String,
+    trace_root_span_id: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1033,6 +1073,8 @@ impl CodexClient {
             command_approval_item_ids: Vec::new(),
             command_execution_statuses: Vec::new(),
             last_turn_status: None,
+            trace_id: generate_trace_id(),
+            trace_root_span_id: generate_parent_span_id(),
         })
     }
 
@@ -1054,6 +1096,8 @@ impl CodexClient {
             command_approval_item_ids: Vec::new(),
             command_execution_statuses: Vec::new(),
             last_turn_status: None,
+            trace_id: generate_trace_id(),
+            trace_root_span_id: generate_parent_span_id(),
         })
     }
 
@@ -1419,10 +1463,30 @@ impl CodexClient {
     }
 
     fn write_request(&mut self, request: &ClientRequest) -> Result<()> {
-        let request_json = serde_json::to_string(request)?;
-        let request_pretty = serde_json::to_string_pretty(request)?;
+        let request = self.jsonrpc_request_with_trace(request)?;
+        let request_json = serde_json::to_string(&request)?;
+        let request_pretty = serde_json::to_string_pretty(&request)?;
         print_multiline_with_prefix("> ", &request_pretty);
         self.write_payload(&request_json)
+    }
+
+    fn jsonrpc_request_with_trace(&self, request: &ClientRequest) -> Result<JSONRPCRequest> {
+        let request_value = serde_json::to_value(request)?;
+        let mut request: JSONRPCRequest = serde_json::from_value(request_value)
+            .context("client request was not a valid JSON-RPC request")?;
+        request.trace = Some(W3cTraceContext {
+            traceparent: Some(format!(
+                "00-{}-{}-01",
+                self.trace_id, self.trace_root_span_id
+            )),
+            tracestate: None,
+        });
+        Ok(request)
+    }
+
+    fn print_trace_summary(&self) {
+        println!("\n[Datadog trace]");
+        println!("go/trace/{}\n", self.trace_id);
     }
 
     fn wait_for_response<T>(&mut self, request_id: RequestId, method: &str) -> Result<T>
@@ -1690,6 +1754,15 @@ impl CodexClient {
     }
 }
 
+fn generate_trace_id() -> String {
+    Uuid::new_v4().simple().to_string()
+}
+
+fn generate_parent_span_id() -> String {
+    let uuid = Uuid::new_v4().simple().to_string();
+    uuid[..16].to_string()
+}
+
 fn print_multiline_with_prefix(prefix: &str, payload: &str) {
     for line in payload.lines() {
         println!("{prefix}{line}");
@@ -1709,11 +1782,18 @@ impl Drop for CodexClient {
             return;
         }
 
-        thread::sleep(Duration::from_millis(100));
+        let deadline = SystemTime::now() + APP_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT;
+        loop {
+            if let Ok(Some(status)) = child.try_wait() {
+                println!("[codex app-server exited: {status}]");
+                return;
+            }
 
-        if let Ok(Some(status)) = child.try_wait() {
-            println!("[codex app-server exited: {status}]");
-            return;
+            if SystemTime::now() >= deadline {
+                break;
+            }
+
+            thread::sleep(APP_SERVER_GRACEFUL_SHUTDOWN_POLL_INTERVAL);
         }
 
         let _ = child.kill();

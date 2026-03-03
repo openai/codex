@@ -43,6 +43,11 @@
 //! - Prunes local attached images so only placeholders that survive expansion are sent.
 //! - Preserves remote image URLs as separate attachments even when text is empty.
 //!
+//! When these paths clear the visible textarea after a successful submit or slash-command
+//! dispatch, they intentionally preserve the textarea kill buffer. That lets users `Ctrl+K` part
+//! of a draft, perform a composer action such as changing reasoning level, and then `Ctrl+Y` the
+//! killed text back into the now-empty draft.
+//!
 //! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
 //! and attachment pruning, and clears pending paste state on success.
 //! Slash commands with arguments (like `/plan` and `/review`) reuse the same preparation path so
@@ -173,6 +178,7 @@ use super::paste_burst::PasteBurst;
 use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
 use super::slash_commands;
+use super::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::expand_custom_prompt;
 use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
@@ -393,6 +399,7 @@ pub(crate) struct ChatComposer {
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     connectors_enabled: bool,
+    fast_command_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
@@ -424,6 +431,18 @@ enum ActivePopup {
 const FOOTER_SPACING_HEIGHT: u16 = 0;
 
 impl ChatComposer {
+    fn builtin_command_flags(&self) -> BuiltinCommandFlags {
+        BuiltinCommandFlags {
+            collaboration_modes_enabled: self.collaboration_modes_enabled,
+            connectors_enabled: self.connectors_enabled,
+            fast_command_enabled: self.fast_command_enabled,
+            personality_command_enabled: self.personality_command_enabled,
+            realtime_conversation_enabled: self.realtime_conversation_enabled,
+            audio_device_selection_enabled: self.audio_device_selection_enabled,
+            allow_elevate_sandbox: self.windows_degraded_sandbox_active,
+        }
+    }
+
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,
@@ -499,6 +518,7 @@ impl ChatComposer {
             config,
             collaboration_mode_indicator: None,
             connectors_enabled: false,
+            fast_command_enabled: false,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
@@ -562,6 +582,10 @@ impl ChatComposer {
 
     pub fn set_connectors_enabled(&mut self, enabled: bool) {
         self.connectors_enabled = enabled;
+    }
+
+    pub fn set_fast_command_enabled(&mut self, enabled: bool) {
+        self.fast_command_enabled = enabled;
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -2085,16 +2109,10 @@ impl ChatComposer {
             path.to_string()
         };
 
-        // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
-        let mut new_text =
-            String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
-        new_text.push_str(&text[..start_idx]);
-        new_text.push_str(&inserted);
-        new_text.push(' ');
-        new_text.push_str(&text[end_idx..]);
-
-        // Path replacement is plain text; rebuild without carrying elements.
-        self.textarea.set_text_clearing_elements(&new_text);
+        // Replace just the active `@token` so unrelated text elements, such as
+        // large-paste placeholders, remain atomic and can still expand on submit.
+        self.textarea
+            .replace_range(start_idx..end_idx, &format!("{inserted} "));
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
     }
@@ -2263,16 +2281,9 @@ impl ChatComposer {
         {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
-                let is_builtin = slash_commands::find_builtin_command(
-                    name,
-                    self.collaboration_modes_enabled,
-                    self.connectors_enabled,
-                    self.personality_command_enabled,
-                    self.realtime_conversation_enabled,
-                    self.audio_device_selection_enabled,
-                    self.windows_degraded_sandbox_active,
-                )
-                .is_some();
+                let is_builtin =
+                    slash_commands::find_builtin_command(name, self.builtin_command_flags())
+                        .is_some();
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                 let is_known_prompt = name
                     .strip_prefix(&prompt_prefix)
@@ -2480,15 +2491,8 @@ impl ChatComposer {
         let first_line = self.textarea.text().lines().next().unwrap_or("");
         if let Some((name, rest, _rest_offset)) = parse_slash_name(first_line)
             && rest.is_empty()
-            && let Some(cmd) = slash_commands::find_builtin_command(
-                name,
-                self.collaboration_modes_enabled,
-                self.connectors_enabled,
-                self.personality_command_enabled,
-                self.realtime_conversation_enabled,
-                self.audio_device_selection_enabled,
-                self.windows_degraded_sandbox_active,
-            )
+            && let Some(cmd) =
+                slash_commands::find_builtin_command(name, self.builtin_command_flags())
         {
             if self.reject_slash_command_if_unavailable(cmd) {
                 return Some(InputResult::None);
@@ -2516,15 +2520,7 @@ impl ChatComposer {
             return None;
         }
 
-        let cmd = slash_commands::find_builtin_command(
-            name,
-            self.collaboration_modes_enabled,
-            self.connectors_enabled,
-            self.personality_command_enabled,
-            self.realtime_conversation_enabled,
-            self.audio_device_selection_enabled,
-            self.windows_degraded_sandbox_active,
-        )?;
+        let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags())?;
 
         if !cmd.supports_inline_args() {
             return None;
@@ -3336,16 +3332,8 @@ impl ChatComposer {
     }
 
     fn is_known_slash_name(&self, name: &str) -> bool {
-        let is_builtin = slash_commands::find_builtin_command(
-            name,
-            self.collaboration_modes_enabled,
-            self.connectors_enabled,
-            self.personality_command_enabled,
-            self.realtime_conversation_enabled,
-            self.audio_device_selection_enabled,
-            self.windows_degraded_sandbox_active,
-        )
-        .is_some();
+        let is_builtin =
+            slash_commands::find_builtin_command(name, self.builtin_command_flags()).is_some();
         if is_builtin {
             return true;
         }
@@ -3399,15 +3387,7 @@ impl ChatComposer {
             return rest_after_name.is_empty();
         }
 
-        if slash_commands::has_builtin_prefix(
-            name,
-            self.collaboration_modes_enabled,
-            self.connectors_enabled,
-            self.personality_command_enabled,
-            self.realtime_conversation_enabled,
-            self.audio_device_selection_enabled,
-            self.windows_degraded_sandbox_active,
-        ) {
+        if slash_commands::has_builtin_prefix(name, self.builtin_command_flags()) {
             return true;
         }
 
@@ -3458,6 +3438,7 @@ impl ChatComposer {
                 if is_editing_slash_command_name {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
                     let connectors_enabled = self.connectors_enabled;
+                    let fast_command_enabled = self.fast_command_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
                     let audio_device_selection_enabled = self.audio_device_selection_enabled;
@@ -3466,6 +3447,7 @@ impl ChatComposer {
                         CommandPopupFlags {
                             collaboration_modes_enabled,
                             connectors_enabled,
+                            fast_command_enabled,
                             personality_command_enabled,
                             realtime_conversation_enabled,
                             audio_device_selection_enabled,
@@ -4114,10 +4096,10 @@ impl ChatComposer {
                     !footer_props.is_task_running && self.collaboration_mode_indicator.is_some();
                 let show_shortcuts_hint = match footer_props.mode {
                     FooterMode::ComposerEmpty => !self.is_in_paste_burst(),
+                    FooterMode::ComposerHasDraft => false,
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ShortcutOverlay
-                    | FooterMode::EscHint
-                    | FooterMode::ComposerHasDraft => false,
+                    | FooterMode::EscHint => false,
                 };
                 let show_queue_hint = match footer_props.mode {
                     FooterMode::ComposerHasDraft => footer_props.is_task_running,
@@ -4147,10 +4129,13 @@ impl ChatComposer {
                     .as_ref()
                     .map(|line| line.clone().dim());
                 let status_line_candidate = footer_props.status_line_enabled
-                    && matches!(
-                        footer_props.mode,
-                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-                    );
+                    && match footer_props.mode {
+                        FooterMode::ComposerEmpty => true,
+                        FooterMode::ComposerHasDraft => !footer_props.is_task_running,
+                        FooterMode::QuitShortcutReminder
+                        | FooterMode::ShortcutOverlay
+                        | FooterMode::EscHint => false,
+                    };
                 let mut truncated_status_line = if status_line_candidate {
                     status_line.as_ref().map(|line| {
                         truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
@@ -4216,7 +4201,7 @@ impl ChatComposer {
                     can_show_left_with_context(hint_rect, left_width, right_width);
                 let has_override =
                     self.footer_flash_visible() || self.footer_hint_override.is_some();
-                let single_line_layout = if has_override {
+                let single_line_layout = if has_override || status_line_active {
                     None
                 } else {
                     match footer_props.mode {
@@ -6392,6 +6377,78 @@ mod tests {
     }
 
     #[test]
+    fn kill_buffer_persists_after_submit() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        composer.textarea.insert_str("restore me");
+        composer.textarea.set_cursor(0);
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        assert!(composer.textarea.is_empty());
+
+        composer.textarea.insert_str("hello");
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+        assert!(composer.textarea.is_empty());
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert_eq!(composer.textarea.text(), "restore me");
+    }
+
+    #[test]
+    fn kill_buffer_persists_after_slash_command_dispatch() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.textarea.insert_str("restore me");
+        composer.textarea.set_cursor(0);
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        assert!(composer.textarea.is_empty());
+
+        composer.textarea.insert_str("/diff");
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Command(cmd) => {
+                assert_eq!(cmd.command(), "diff");
+            }
+            _ => panic!("expected Command result for '/diff'"),
+        }
+        assert!(composer.textarea.is_empty());
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert_eq!(composer.textarea.text(), "restore me");
+    }
+
+    #[test]
     fn slash_command_disabled_while_task_running_keeps_text() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -6928,6 +6985,61 @@ mod tests {
                 );
             }
             _ => panic!("expected CommandWithArgs for /plan with args"),
+        }
+    }
+
+    #[test]
+    fn file_completion_preserves_large_paste_placeholder_elements() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        let placeholder = format!("[Pasted Content {} chars]", large.chars().count());
+
+        composer.handle_paste(large.clone());
+        composer.insert_str(" @ma");
+        composer.on_file_search_result(
+            "ma".to_string(),
+            vec![FileMatch {
+                score: 1,
+                path: PathBuf::from("src/main.rs"),
+                root: PathBuf::from("/tmp"),
+                indices: None,
+            }],
+        );
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        let text = composer.textarea.text().to_string();
+        assert_eq!(text, format!("{placeholder} src/main.rs "));
+        let elements = composer.textarea.text_elements();
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].placeholder(&text), Some(placeholder.as_str()));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                assert_eq!(text, format!("{large} src/main.rs"));
+                assert!(text_elements.is_empty());
+            }
+            _ => panic!("expected Submitted"),
         }
     }
 

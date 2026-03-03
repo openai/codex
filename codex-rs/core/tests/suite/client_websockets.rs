@@ -16,6 +16,7 @@ use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -137,6 +138,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
             harness.effort,
             harness.summary,
             None,
+            None,
         )
         .await
         .expect("websocket prewarm failed");
@@ -217,6 +219,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
             harness.effort,
             harness.summary,
             None,
+            None,
         )
         .await
         .expect("websocket stream failed");
@@ -254,6 +257,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             harness.effort,
             harness.summary,
             None,
+            None,
         )
         .await
         .expect("websocket prewarm failed");
@@ -264,6 +268,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             &harness.otel_manager,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -316,6 +321,7 @@ async fn responses_websocket_prewarm_uses_v2_when_model_prefers_websockets_and_f
             &harness.otel_manager,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -662,6 +668,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
             harness.effort,
             harness.summary,
             None,
+            None,
         )
         .await
         .expect("websocket stream failed");
@@ -732,6 +739,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             &harness.otel_manager,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -1038,6 +1046,7 @@ async fn responses_websocket_forwards_turn_metadata_on_initial_and_incremental_c
         &mut client_session,
         &harness,
         &prompt_one,
+        None,
         Some(first_turn_metadata),
     )
     .await;
@@ -1045,6 +1054,7 @@ async fn responses_websocket_forwards_turn_metadata_on_initial_and_incremental_c
         &mut client_session,
         &harness,
         &prompt_two,
+        None,
         Some(enriched_turn_metadata),
     )
     .await;
@@ -1310,6 +1320,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
             harness.effort,
             harness.summary,
             None,
+            None,
         )
         .await
         .expect("websocket stream failed");
@@ -1534,13 +1545,24 @@ async fn stream_until_complete(
     harness: &WebsocketTestHarness,
     prompt: &Prompt,
 ) {
-    stream_until_complete_with_turn_metadata(client_session, harness, prompt, None).await;
+    stream_until_complete_with_service_tier(client_session, harness, prompt, None).await;
+}
+
+async fn stream_until_complete_with_service_tier(
+    client_session: &mut ModelClientSession,
+    harness: &WebsocketTestHarness,
+    prompt: &Prompt,
+    service_tier: Option<ServiceTier>,
+) {
+    stream_until_complete_with_turn_metadata(client_session, harness, prompt, service_tier, None)
+        .await;
 }
 
 async fn stream_until_complete_with_turn_metadata(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
     prompt: &Prompt,
+    service_tier: Option<ServiceTier>,
     turn_metadata_header: Option<&str>,
 ) {
     let mut stream = client_session
@@ -1550,6 +1572,7 @@ async fn stream_until_complete_with_turn_metadata(
             &harness.otel_manager,
             harness.effort,
             harness.summary,
+            service_tier,
             turn_metadata_header,
         )
         .await

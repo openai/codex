@@ -11,6 +11,7 @@ use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -126,6 +127,7 @@ impl TestCodexBuilder {
         let base_url_clone = base_url.clone();
         self.config_mutators.push(Box::new(move |config| {
             config.model_provider.base_url = Some(base_url_clone);
+            config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
             config.features.enable(Feature::ResponsesWebsockets);
         }));
         self.build_with_home_and_base_url(base_url, home, None)
@@ -281,11 +283,36 @@ impl TestCodex {
             .await
     }
 
+    pub async fn submit_turn_with_service_tier(
+        &self,
+        prompt: &str,
+        service_tier: Option<ServiceTier>,
+    ) -> Result<()> {
+        self.submit_turn_with_context(
+            prompt,
+            AskForApproval::Never,
+            SandboxPolicy::DangerFullAccess,
+            Some(service_tier),
+        )
+        .await
+    }
+
     pub async fn submit_turn_with_policies(
         &self,
         prompt: &str,
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
+    ) -> Result<()> {
+        self.submit_turn_with_context(prompt, approval_policy, sandbox_policy, None)
+            .await
+    }
+
+    async fn submit_turn_with_context(
+        &self,
+        prompt: &str,
+        approval_policy: AskForApproval,
+        sandbox_policy: SandboxPolicy,
+        service_tier: Option<Option<ServiceTier>>,
     ) -> Result<()> {
         let session_model = self.session_configured.model.clone();
         self.codex
@@ -301,6 +328,7 @@ impl TestCodex {
                 model: session_model,
                 effort: None,
                 summary: None,
+                service_tier,
                 collaboration_mode: None,
                 personality: None,
             })
