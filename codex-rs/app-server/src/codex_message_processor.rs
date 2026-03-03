@@ -2521,7 +2521,8 @@ impl CodexMessageProcessor {
                             builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
                             builder.approval_mode = config_snapshot.approval_policy;
                             let metadata = builder.build(model_provider.as_str());
-                            if let Err(err) = state_db_ctx.upsert_thread(&metadata).await {
+                            if let Err(err) = state_db_ctx.insert_thread_if_absent(&metadata).await
+                            {
                                 self.send_internal_error(
                                     request_id,
                                     format!(

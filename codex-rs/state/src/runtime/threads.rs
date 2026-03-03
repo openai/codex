@@ -207,6 +207,64 @@ FROM threads
             .await
     }
 
+    pub async fn insert_thread_if_absent(
+        &self,
+        metadata: &crate::ThreadMetadata,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            r#"
+INSERT INTO threads (
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    source,
+    agent_nickname,
+    agent_role,
+    model_provider,
+    cwd,
+    cli_version,
+    title,
+    sandbox_policy,
+    approval_mode,
+    tokens_used,
+    first_user_message,
+    archived,
+    archived_at,
+    git_sha,
+    git_branch,
+    git_origin_url,
+    memory_mode
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO NOTHING
+            "#,
+        )
+        .bind(metadata.id.to_string())
+        .bind(metadata.rollout_path.display().to_string())
+        .bind(datetime_to_epoch_seconds(metadata.created_at))
+        .bind(datetime_to_epoch_seconds(metadata.updated_at))
+        .bind(metadata.source.as_str())
+        .bind(metadata.agent_nickname.as_deref())
+        .bind(metadata.agent_role.as_deref())
+        .bind(metadata.model_provider.as_str())
+        .bind(metadata.cwd.display().to_string())
+        .bind(metadata.cli_version.as_str())
+        .bind(metadata.title.as_str())
+        .bind(metadata.sandbox_policy.as_str())
+        .bind(metadata.approval_mode.as_str())
+        .bind(metadata.tokens_used)
+        .bind(metadata.first_user_message.as_deref().unwrap_or_default())
+        .bind(metadata.archived_at.is_some())
+        .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
+        .bind(metadata.git_sha.as_deref())
+        .bind(metadata.git_branch.as_deref())
+        .bind(metadata.git_origin_url.as_deref())
+        .bind("enabled")
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn set_thread_memory_mode(
         &self,
         thread_id: ThreadId,
@@ -740,6 +798,51 @@ mod tests {
         assert_eq!(
             persisted.git_origin_url.as_deref(),
             Some("git@example.com:openai/codex.git")
+        );
+    }
+
+    #[tokio::test]
+    async fn insert_thread_if_absent_preserves_existing_metadata() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000791").expect("valid thread id");
+
+        let mut existing = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        existing.tokens_used = 123;
+        existing.first_user_message = Some("newer preview".to_string());
+        existing.updated_at = DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp");
+        runtime
+            .upsert_thread(&existing)
+            .await
+            .expect("initial upsert should succeed");
+
+        let mut fallback = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        fallback.tokens_used = 0;
+        fallback.first_user_message = None;
+        fallback.updated_at = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp");
+
+        let inserted = runtime
+            .insert_thread_if_absent(&fallback)
+            .await
+            .expect("insert should succeed");
+        assert!(!inserted, "existing rows should not be overwritten");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.tokens_used, 123);
+        assert_eq!(
+            persisted.first_user_message.as_deref(),
+            Some("newer preview")
+        );
+        assert_eq!(
+            datetime_to_epoch_seconds(persisted.updated_at),
+            datetime_to_epoch_seconds(existing.updated_at)
         );
     }
 
