@@ -1,6 +1,6 @@
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
-use crate::config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL;
+use crate::config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION;
 use crate::memories::ensure_layout;
 use crate::memories::memory_root;
 use crate::memories::raw_memories_file;
@@ -95,14 +95,14 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
     sync_rollout_summaries_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("sync rollout summaries");
     rebuild_raw_memories_file_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("rebuild raw memories");
@@ -201,7 +201,7 @@ async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename(
     sync_rollout_summaries_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("sync rollout summaries");
@@ -304,14 +304,14 @@ task_outcome: success
     sync_rollout_summaries_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("sync rollout summaries");
     rebuild_raw_memories_file_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("rebuild raw memories");

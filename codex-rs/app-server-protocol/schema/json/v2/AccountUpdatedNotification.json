@@ -26,6 +26,20 @@
           "type": "string"
         }
       ]
+    },
+    "PlanType": {
+      "enum": [
+        "free",
+        "go",
+        "plus",
+        "pro",
+        "team",
+        "business",
+        "enterprise",
+        "edu",
+        "unknown"
+      ],
+      "type": "string"
     }
   },
   "properties": {
@@ -33,6 +47,16 @@
       "anyOf": [
         {
           "$ref": "#/definitions/AuthMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "planType": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PlanType"
         },
         {
           "type": "null"

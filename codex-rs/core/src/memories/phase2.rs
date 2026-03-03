@@ -52,7 +52,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         return;
     };
     let root = memory_root(&config.codex_home);
-    let max_raw_memories = config.memories.max_raw_memories_for_global;
+    let max_raw_memories = config.memories.max_raw_memories_for_consolidation;
     let max_unused_days = config.memories.max_unused_days;
 
     // 1. Claim the job.
@@ -294,7 +294,7 @@ mod agent {
         agent_config.model = Some(
             config
                 .memories
-                .phase_2_model
+                .consolidation_model
                 .clone()
                 .unwrap_or(phase_two::MODEL.to_string()),
         );

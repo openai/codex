@@ -166,6 +166,19 @@ pub enum SteerInputError {
     ExpectedTurnMismatch { expected: String, actual: String },
     EmptyInput,
 }
+
+/// Notes from the previous real user turn.
+///
+/// Conceptually this is the same role that `previous_model` used to fill, but
+/// it can carry other prior-turn settings that matter when constructing
+/// sensible state-change diffs or full-context reinjection, such as model
+/// switches or detecting a prior `realtime_active -> false` transition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PreviousTurnSettings {
+    pub(crate) model: String,
+    pub(crate) realtime_active: Option<bool>,
+}
+
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
@@ -333,6 +346,7 @@ impl Codex {
         dynamic_tools: Vec<DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -464,6 +478,7 @@ impl Codex {
             session_source,
             dynamic_tools,
             persist_extended_history,
+            inherited_shell_snapshot,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -617,6 +632,7 @@ impl TurnSkillsContext {
 #[derive(Debug)]
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
+    pub(crate) realtime_active: bool,
     pub(crate) config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
@@ -704,6 +720,7 @@ impl TurnContext {
 
         Self {
             sub_id: self.sub_id.clone(),
+            realtime_active: self.realtime_active,
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
@@ -767,6 +784,7 @@ impl TurnContext {
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
+            realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort,
             summary: self.reasoning_summary,
             user_instructions: self.user_instructions.clone(),
@@ -852,6 +870,7 @@ pub(crate) struct SessionConfiguration {
     session_source: SessionSource,
     dynamic_tools: Vec<DynamicToolSpec>,
     persist_extended_history: bool,
+    inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
 }
 
 impl SessionConfiguration {
@@ -1084,6 +1103,7 @@ impl Session {
         let (current_date, timezone) = local_time_context();
         TurnContext {
             sub_id,
+            realtime_active: false,
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
             model_info: model_info.clone(),
@@ -1374,13 +1394,19 @@ impl Session {
         };
         // Create the mutable state for the Session.
         let shell_snapshot_tx = if config.features.enabled(Feature::ShellSnapshot) {
-            ShellSnapshot::start_snapshotting(
-                config.codex_home.clone(),
-                conversation_id,
-                session_configuration.cwd.clone(),
-                &mut default_shell,
-                otel_manager.clone(),
-            )
+            if let Some(snapshot) = session_configuration.inherited_shell_snapshot.clone() {
+                let (tx, rx) = watch::channel(Some(snapshot));
+                default_shell.shell_snapshot = rx;
+                tx
+            } else {
+                ShellSnapshot::start_snapshotting(
+                    config.codex_home.clone(),
+                    conversation_id,
+                    session_configuration.cwd.clone(),
+                    &mut default_shell,
+                    otel_manager.clone(),
+                )
+            }
         } else {
             let (tx, rx) = watch::channel(None);
             default_shell.shell_snapshot = rx;
@@ -1765,13 +1791,13 @@ impl Session {
                 // TODO(ccunningham): Defer initial context insertion until the first real turn
                 // starts so it reflects the actual first-turn settings (permissions, etc.) and
                 // we do not emit model-visible "diff" updates before the first user message.
-                let items = self.build_initial_context(&turn_context, None).await;
+                let items = self.build_initial_context(&turn_context).await;
                 self.record_conversation_items(&turn_context, &items).await;
                 {
                     let mut state = self.state.lock().await;
                     state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
                 }
-                self.set_previous_model(None).await;
+                self.set_previous_turn_settings(None).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
                 if !is_subagent {
                     self.flush_rollout().await;
@@ -1781,19 +1807,25 @@ impl Session {
                 let rollout_items = resumed_history.history;
                 let restored_tool_selection =
                     Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
+
                 let reconstructed_rollout = self
                     .reconstruct_history_from_rollout(&turn_context, &rollout_items)
                     .await;
-                let previous_model = reconstructed_rollout.previous_model.clone();
-                let curr = turn_context.model_info.slug.as_str();
+                let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
+                self.set_previous_turn_settings(previous_turn_settings.clone())
+                    .await;
                 {
                     let mut state = self.state.lock().await;
                     state.set_reference_context_item(reconstructed_rollout.reference_context_item);
                 }
-                self.set_previous_model(previous_model.clone()).await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
-                if let Some(prev) = previous_model.as_deref().filter(|p| *p != curr) {
+                let curr: &str = turn_context.model_info.slug.as_str();
+                if let Some(prev) = previous_turn_settings
+                    .as_ref()
+                    .map(|settings| settings.model.as_str())
+                    .filter(|model| *model != curr)
+                {
                     warn!("resuming session with different model: previous={prev}, current={curr}");
                     self.send_event(
                         &turn_context,
@@ -1833,11 +1865,20 @@ impl Session {
             InitialHistory::Forked(rollout_items) => {
                 let restored_tool_selection =
                     Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
+
                 let reconstructed_rollout = self
                     .reconstruct_history_from_rollout(&turn_context, &rollout_items)
                     .await;
-                let previous_model = reconstructed_rollout.previous_model.clone();
-                self.set_previous_model(previous_model).await;
+                self.set_previous_turn_settings(
+                    reconstructed_rollout.previous_turn_settings.clone(),
+                )
+                .await;
+                {
+                    let mut state = self.state.lock().await;
+                    state.set_reference_context_item(
+                        reconstructed_rollout.reference_context_item.clone(),
+                    );
+                }
 
                 // Always add response items to conversation history
                 let reconstructed_history = reconstructed_rollout.history;
@@ -1862,7 +1903,7 @@ impl Session {
                 }
 
                 // Append the current session's initial context after the reconstructed history.
-                let initial_context = self.build_initial_context(&turn_context, None).await;
+                let initial_context = self.build_initial_context(&turn_context).await;
                 self.record_conversation_items(&turn_context, &initial_context)
                     .await;
                 {
@@ -1936,14 +1977,17 @@ impl Session {
         active_selected_tools
     }
 
-    async fn previous_model(&self) -> Option<String> {
+    async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         let state = self.state.lock().await;
-        state.previous_model()
+        state.previous_turn_settings()
     }
 
-    pub(crate) async fn set_previous_model(&self, previous_model: Option<String>) {
+    pub(crate) async fn set_previous_turn_settings(
+        &self,
+        previous_turn_settings: Option<PreviousTurnSettings>,
+    ) {
         let mut state = self.state.lock().await;
-        state.set_previous_model(previous_model);
+        state.set_previous_turn_settings(previous_turn_settings);
     }
 
     fn maybe_refresh_shell_snapshot_for_cwd(
@@ -1951,12 +1995,20 @@ impl Session {
         previous_cwd: &Path,
         next_cwd: &Path,
         codex_home: &Path,
+        session_source: &SessionSource,
     ) {
         if previous_cwd == next_cwd {
             return;
         }
 
         if !self.features.enabled(Feature::ShellSnapshot) {
+            return;
+        }
+
+        if matches!(
+            session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        ) {
             return;
         }
 
@@ -1981,10 +2033,16 @@ impl Session {
                 let previous_cwd = state.session_configuration.cwd.clone();
                 let next_cwd = updated.cwd.clone();
                 let codex_home = updated.codex_home.clone();
+                let session_source = updated.session_source.clone();
                 state.session_configuration = updated;
                 drop(state);
 
-                self.maybe_refresh_shell_snapshot_for_cwd(&previous_cwd, &next_cwd, &codex_home);
+                self.maybe_refresh_shell_snapshot_for_cwd(
+                    &previous_cwd,
+                    &next_cwd,
+                    &codex_home,
+                    &session_source,
+                );
 
                 Ok(())
             }
@@ -2000,7 +2058,13 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
-        let (session_configuration, sandbox_policy_changed, previous_cwd, codex_home) = {
+        let (
+            session_configuration,
+            sandbox_policy_changed,
+            previous_cwd,
+            codex_home,
+            session_source,
+        ) = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
@@ -2008,8 +2072,15 @@ impl Session {
                     let sandbox_policy_changed =
                         state.session_configuration.sandbox_policy != next.sandbox_policy;
                     let codex_home = next.codex_home.clone();
+                    let session_source = next.session_source.clone();
                     state.session_configuration = next.clone();
-                    (next, sandbox_policy_changed, previous_cwd, codex_home)
+                    (
+                        next,
+                        sandbox_policy_changed,
+                        previous_cwd,
+                        codex_home,
+                        session_source,
+                    )
                 }
                 Err(err) => {
                     drop(state);
@@ -2030,6 +2101,7 @@ impl Session {
             &previous_cwd,
             &session_configuration.cwd,
             &codex_home,
+            &session_source,
         );
 
         Ok(self
@@ -2106,6 +2178,7 @@ impl Session {
             Arc::clone(&self.js_repl),
             skills_outcome,
         );
+        turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -2267,21 +2340,24 @@ impl Session {
             .await
     }
 
-    fn build_settings_update_items(
+    async fn build_settings_update_items(
         &self,
         reference_context_item: Option<&TurnContextItem>,
-        previous_user_turn_model: Option<&str>,
         current_context: &TurnContext,
     ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
-        // context (shell, exec policy, feature gates, previous-model bridge) should be persisted
+        // context (shell, exec policy, feature gates, previous-turn bridge) should be persisted
         // state or explicit non-state replay events.
+        let previous_turn_settings = {
+            let state = self.state.lock().await;
+            state.previous_turn_settings()
+        };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
         crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
-            previous_user_turn_model,
+            previous_turn_settings.as_ref(),
             current_context,
             shell.as_ref(),
             exec_policy.as_ref(),
@@ -2299,6 +2375,8 @@ impl Session {
         self.send_event_raw(event).await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
+        self.maybe_clear_realtime_handoff_for_event(&legacy_source)
+            .await;
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
@@ -2314,12 +2392,21 @@ impl Session {
         let Some(text) = realtime_text_for_event(msg) else {
             return;
         };
-        if self.conversation.running_state().await.is_none() {
+        if self.conversation.running_state().await.is_none()
+            || self.conversation.active_handoff_id().await.is_none()
+        {
             return;
         }
-        if let Err(err) = self.conversation.text_in(text).await {
+        if let Err(err) = self.conversation.handoff_out(text).await {
             debug!("failed to mirror event text to realtime conversation: {err}");
         }
+    }
+
+    async fn maybe_clear_realtime_handoff_for_event(&self, msg: &EventMsg) {
+        if !matches!(msg, EventMsg::TurnComplete(_)) {
+            return;
+        }
+        self.conversation.clear_active_handoff().await;
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
@@ -2920,14 +3007,22 @@ impl Session {
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
-        previous_user_turn_model: Option<&str>,
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
+        let (reference_context_item, previous_turn_settings, collaboration_mode, base_instructions) = {
+            let state = self.state.lock().await;
+            (
+                state.reference_context_item(),
+                state.previous_turn_settings(),
+                state.session_configuration.collaboration_mode.clone(),
+                state.session_configuration.base_instructions.clone(),
+            )
+        };
         if let Some(model_switch_message) =
             crate::context_manager::updates::build_model_instructions_update_item(
-                previous_user_turn_model,
+                previous_turn_settings.as_ref(),
                 turn_context,
             )
         {
@@ -2955,17 +3050,17 @@ impl Session {
             developer_sections.push(memory_prompt);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
-        let (collaboration_mode, base_instructions) = {
-            let state = self.state.lock().await;
-            (
-                state.session_configuration.collaboration_mode.clone(),
-                state.session_configuration.base_instructions.clone(),
-            )
-        };
         if let Some(collab_instructions) =
             DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
         {
             developer_sections.push(collab_instructions.into_text());
+        }
+        if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
+            reference_context_item.as_ref(),
+            previous_turn_settings.as_ref(),
+            turn_context,
+        ) {
+            developer_sections.push(realtime_update.into_text());
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
@@ -3068,7 +3163,6 @@ impl Session {
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
-        previous_user_turn_model: Option<&str>,
     ) {
         let reference_context_item = {
             let state = self.state.lock().await;
@@ -3076,15 +3170,11 @@ impl Session {
         };
         let should_inject_full_context = reference_context_item.is_none();
         let context_items = if should_inject_full_context {
-            self.build_initial_context(turn_context, previous_user_turn_model)
-                .await
+            self.build_initial_context(turn_context).await
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
-            self.build_settings_update_items(
-                reference_context_item.as_ref(),
-                previous_user_turn_model,
-                turn_context,
-            )
+            self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
+                .await
         };
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
@@ -4354,8 +4444,8 @@ mod handlers {
         // TODO(ccunningham): Fix rollback/backtracking baseline handling.
         // We clear `reference_context_item` here, but should restore the
         // post-rollback baseline from the surviving history/rollout instead.
-        // Truncating history should also invalidate/recompute `previous_model`
-        // so the next regular turn replays any dropped model-switch
+        // Truncating history should also invalidate/recompute `previous_turn_settings`
+        // so the next regular turn replays any dropped model/realtime
         // instructions.
         history.drop_last_n_user_turns(num_turns);
 
@@ -4599,6 +4689,7 @@ async fn spawn_review_thread(
 
     let review_turn_context = TurnContext {
         sub_id: review_turn_id,
+        realtime_active: parent_turn_context.realtime_active,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
@@ -4758,12 +4849,8 @@ pub(crate) async fn run_turn(
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
 
-    let previous_model = sess.previous_model().await;
-    sess.record_context_updates_and_set_reference_context_item(
-        turn_context.as_ref(),
-        previous_model.as_deref(),
-    )
-    .await;
+    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+        .await;
 
     let available_connectors = if turn_context.config.features.enabled(Feature::Apps) {
         let mcp_tools = match sess
@@ -4869,11 +4956,14 @@ pub(crate) async fn run_turn(
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
-    // Track the previous-model baseline from the regular user-turn path only so
+    // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
-    // `<model_switch>` injections.
-    sess.set_previous_model(Some(turn_context.model_info.slug.clone()))
-        .await;
+    // model/realtime injections.
+    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+        model: turn_context.model_info.slug.clone(),
+        realtime_active: Some(turn_context.realtime_active),
+    }))
+    .await;
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -4981,7 +5071,6 @@ pub(crate) async fn run_turn(
                         &sess,
                         &turn_context,
                         InitialContextInjection::BeforeLastUserMessage,
-                        previous_model.as_deref(),
                     )
                     .await
                     .is_err()
@@ -5106,13 +5195,7 @@ async fn run_pre_sampling_compact(
         .unwrap_or(i64::MAX);
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(
-            sess,
-            turn_context,
-            InitialContextInjection::DoNotInject,
-            None,
-        )
-        .await?;
+        run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
     }
     Ok(())
 }
@@ -5128,12 +5211,12 @@ async fn maybe_run_previous_model_inline_compact(
     turn_context: &Arc<TurnContext>,
     total_usage_tokens: i64,
 ) -> CodexResult<bool> {
-    let Some(previous_model) = sess.previous_model().await else {
+    let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
         return Ok(false);
     };
     let previous_model_turn_context = Arc::new(
         turn_context
-            .with_model(previous_model, &sess.services.models_manager)
+            .with_model(previous_turn_settings.model, &sess.services.models_manager)
             .await,
     );
 
@@ -5155,7 +5238,6 @@ async fn maybe_run_previous_model_inline_compact(
             sess,
             &previous_model_turn_context,
             InitialContextInjection::DoNotInject,
-            None,
         )
         .await?;
         return Ok(true);
@@ -5167,14 +5249,12 @@ async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
-    previous_user_turn_model: Option<&str>,
 ) -> CodexResult<()> {
     if should_use_remote_compact_task(&turn_context.provider) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
-            previous_user_turn_model,
         )
         .await?;
     } else {
@@ -5182,7 +5262,6 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
-            previous_user_turn_model,
         )
         .await?;
     }
@@ -6554,6 +6633,23 @@ mod tests {
         }
     }
 
+    fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                ResponseItem::Message { role, content, .. } if role == "developer" => {
+                    Some(content.as_slice())
+                }
+                _ => None,
+            })
+            .flat_map(|content| content.iter())
+            .filter_map(|item| match item {
+                ContentItem::InputText { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn make_connector(id: &str, name: &str) -> AppInfo {
         AppInfo {
             id: id.to_string(),
@@ -7205,14 +7301,14 @@ mod tests {
         assert_eq!(expected, history_before_seed.raw_items());
 
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context, None)
+            .record_context_updates_and_set_reference_context_item(&turn_context)
             .await;
-        expected.extend(session.build_initial_context(&turn_context, None).await);
+        expected.extend(session.build_initial_context(&turn_context).await);
         let history_after_seed = session.clone_history().await;
         assert_eq!(expected, history_after_seed.raw_items());
 
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context, None)
+            .record_context_updates_and_set_reference_context_item(&turn_context)
             .await;
         let history_after_second_seed = session.clone_history().await;
         assert_eq!(
@@ -7372,7 +7468,7 @@ mod tests {
         let reconstruction_turn = session.new_default_turn().await;
         expected.extend(
             session
-                .build_initial_context(reconstruction_turn.as_ref(), None)
+                .build_initial_context(reconstruction_turn.as_ref())
                 .await,
         );
         let history = session.state.lock().await.clone_history();
@@ -7380,7 +7476,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_initial_history_forked_hydrates_previous_model() {
+    async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         let (session, turn_context) = make_session_and_context().await;
         let previous_model = "forked-rollout-model";
         let previous_context_item = TurnContextItem {
@@ -7394,6 +7490,7 @@ mod tests {
             model: previous_model.to_string(),
             personality: turn_context.personality,
             collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+            realtime_active: Some(turn_context.realtime_active),
             effort: turn_context.reasoning_effort,
             summary: turn_context.reasoning_summary,
             user_instructions: None,
@@ -7435,8 +7532,11 @@ mod tests {
             .await;
 
         assert_eq!(
-            session.previous_model().await,
-            Some(previous_model.to_string())
+            session.previous_turn_settings().await,
+            Some(PreviousTurnSettings {
+                model: previous_model.to_string(),
+                realtime_active: Some(turn_context.realtime_active),
+            })
         );
     }
 
@@ -7444,7 +7544,7 @@ mod tests {
     async fn thread_rollback_drops_last_turn_from_history() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -7491,8 +7591,11 @@ mod tests {
             },
         ];
         sess.record_into_history(&turn_2, tc.as_ref()).await;
-        sess.set_previous_model(Some("previous-regular-model".to_string()))
-            .await;
+        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: "previous-regular-model".to_string(),
+            realtime_active: Some(tc.realtime_active),
+        }))
+        .await;
 
         handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
 
@@ -7506,8 +7609,11 @@ mod tests {
         let history = sess.clone_history().await;
         assert_eq!(expected, history.raw_items());
         assert_eq!(
-            sess.previous_model().await,
-            Some("previous-regular-model".to_string())
+            sess.previous_turn_settings().await,
+            Some(PreviousTurnSettings {
+                model: "previous-regular-model".to_string(),
+                realtime_active: Some(tc.realtime_active),
+            })
         );
     }
 
@@ -7515,7 +7621,7 @@ mod tests {
     async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -7543,7 +7649,7 @@ mod tests {
     async fn thread_rollback_fails_when_turn_in_progress() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -7564,7 +7670,7 @@ mod tests {
     async fn thread_rollback_fails_when_num_turns_is_zero() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -7623,6 +7729,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -7717,6 +7824,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -8030,6 +8138,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         }
     }
 
@@ -8085,6 +8194,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         };
 
         let (tx_event, _rx_event) = async_channel::unbounded();
@@ -8176,6 +8286,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline_for_tests(
@@ -8344,6 +8455,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools,
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline_for_tests(
@@ -8533,9 +8645,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_task_does_not_update_previous_model_for_non_run_turn_tasks() {
+    async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_tasks() {
         let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-        sess.set_previous_model(None).await;
+        sess.set_previous_turn_settings(None).await;
         let input = vec![UserInput::Text {
             text: "hello".to_string(),
             text_elements: Vec::new(),
@@ -8552,7 +8664,7 @@ mod tests {
         .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-        assert_eq!(sess.previous_model().await, None);
+        assert_eq!(sess.previous_turn_settings().await, None);
     }
 
     #[tokio::test]
@@ -8591,11 +8703,9 @@ mod tests {
         current_context.config = Arc::new(config);
 
         let reference_context_item = previous_context.to_turn_context_item();
-        let update_items = session.build_settings_update_items(
-            Some(&reference_context_item),
-            None,
-            &current_context,
-        );
+        let update_items = session
+            .build_settings_update_items(Some(&reference_context_item), &current_context)
+            .await;
 
         let environment_update = update_items
             .iter()
@@ -8628,11 +8738,9 @@ mod tests {
         current_context.timezone = Some("Europe/Berlin".to_string());
 
         let reference_context_item = previous_context.to_turn_context_item();
-        let update_items = session.build_settings_update_items(
-            Some(&reference_context_item),
-            None,
-            &current_context,
-        );
+        let update_items = session
+            .build_settings_update_items(Some(&reference_context_item), &current_context)
+            .await;
 
         let environment_update = update_items
             .iter()
@@ -8651,14 +8759,175 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_settings_update_items_emits_realtime_start_when_session_becomes_live() {
+        let (session, previous_context) = make_session_and_context().await;
+        let previous_context = Arc::new(previous_context);
+        let mut current_context = previous_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+        current_context.realtime_active = true;
+
+        let update_items = session
+            .build_settings_update_items(
+                Some(&previous_context.to_turn_context_item()),
+                &current_context,
+            )
+            .await;
+
+        let developer_texts = developer_input_texts(&update_items);
+        assert!(
+            developer_texts
+                .iter()
+                .any(|text| text.contains("<realtime_conversation>")),
+            "expected a realtime start update, got {developer_texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_settings_update_items_emits_realtime_end_when_session_stops_being_live() {
+        let (session, mut previous_context) = make_session_and_context().await;
+        previous_context.realtime_active = true;
+        let mut current_context = previous_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+        current_context.realtime_active = false;
+
+        let update_items = session
+            .build_settings_update_items(
+                Some(&previous_context.to_turn_context_item()),
+                &current_context,
+            )
+            .await;
+
+        let developer_texts = developer_input_texts(&update_items);
+        assert!(
+            developer_texts
+                .iter()
+                .any(|text| text.contains("Reason: inactive")),
+            "expected a realtime end update, got {developer_texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_end() {
+        let (session, previous_context) = make_session_and_context().await;
+        let mut previous_context_item = previous_context.to_turn_context_item();
+        previous_context_item.realtime_active = None;
+        let previous_turn_settings = PreviousTurnSettings {
+            model: previous_context.model_info.slug.clone(),
+            realtime_active: Some(true),
+        };
+        let mut current_context = previous_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+        current_context.realtime_active = false;
+
+        session
+            .set_previous_turn_settings(Some(previous_turn_settings))
+            .await;
+        let update_items = session
+            .build_settings_update_items(Some(&previous_context_item), &current_context)
+            .await;
+
+        let developer_texts = developer_input_texts(&update_items);
+        assert!(
+            developer_texts
+                .iter()
+                .any(|text| text.contains("Reason: inactive")),
+            "expected a realtime end update from previous turn settings, got {developer_texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_initial_context_uses_previous_realtime_state() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.realtime_active = true;
+
+        let initial_context = session.build_initial_context(&turn_context).await;
+        let developer_texts = developer_input_texts(&initial_context);
+        assert!(
+            developer_texts
+                .iter()
+                .any(|text| text.contains("<realtime_conversation>")),
+            "expected initial context to describe active realtime state, got {developer_texts:?}"
+        );
+
+        let previous_context_item = turn_context.to_turn_context_item();
+        {
+            let mut state = session.state.lock().await;
+            state.set_reference_context_item(Some(previous_context_item));
+        }
+        let resumed_context = session.build_initial_context(&turn_context).await;
+        let resumed_developer_texts = developer_input_texts(&resumed_context);
+        assert!(
+            !resumed_developer_texts
+                .iter()
+                .any(|text| text.contains("<realtime_conversation>")),
+            "did not expect a duplicate realtime update, got {resumed_developer_texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_initial_context_uses_previous_turn_settings_for_realtime_end() {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_turn_settings = PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(true),
+        };
+
+        session
+            .set_previous_turn_settings(Some(previous_turn_settings))
+            .await;
+        let initial_context = session.build_initial_context(&turn_context).await;
+        let developer_texts = developer_input_texts(&initial_context);
+        assert!(
+            developer_texts
+                .iter()
+                .any(|text| text.contains("Reason: inactive")),
+            "expected initial context to describe an ended realtime session, got {developer_texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_initial_context_restates_realtime_start_when_reference_context_is_missing() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.realtime_active = true;
+        let previous_turn_settings = PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(true),
+        };
+
+        session
+            .set_previous_turn_settings(Some(previous_turn_settings))
+            .await;
+        let initial_context = session.build_initial_context(&turn_context).await;
+        let developer_texts = developer_input_texts(&initial_context);
+        assert!(
+            developer_texts
+                .iter()
+                .any(|text| text.contains("<realtime_conversation>")),
+            "expected initial context to restate active realtime when the reference context is missing, got {developer_texts:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn record_context_updates_and_set_reference_context_item_injects_full_context_when_baseline_missing()
      {
         let (session, turn_context) = make_session_and_context().await;
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context, None)
+            .record_context_updates_and_set_reference_context_item(&turn_context)
             .await;
         let history = session.clone_history().await;
-        let initial_context = session.build_initial_context(&turn_context, None).await;
+        let initial_context = session.build_initial_context(&turn_context).await;
         assert_eq!(history.raw_items().to_vec(), initial_context);
 
         let current_context = session.reference_context_item().await;
@@ -8686,7 +8955,7 @@ mod tests {
             .record_into_history(std::slice::from_ref(&compacted_summary), &turn_context)
             .await;
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context, None)
+            .record_context_updates_and_set_reference_context_item(&turn_context)
             .await;
         {
             let mut state = session.state.lock().await;
@@ -8697,12 +8966,12 @@ mod tests {
             .await;
 
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context, None)
+            .record_context_updates_and_set_reference_context_item(&turn_context)
             .await;
 
         let history = session.clone_history().await;
         let mut expected_history = vec![compacted_summary];
-        expected_history.extend(session.build_initial_context(&turn_context, None).await);
+        expected_history.extend(session.build_initial_context(&turn_context).await);
         assert_eq!(history.raw_items().to_vec(), expected_history);
     }
 
@@ -8745,12 +9014,13 @@ mod tests {
             *rollout = Some(recorder);
         }
 
-        let update_items =
-            session.build_settings_update_items(Some(&previous_context_item), None, &turn_context);
+        let update_items = session
+            .build_settings_update_items(Some(&previous_context_item), &turn_context)
+            .await;
         assert_eq!(update_items, Vec::new());
 
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context, None)
+            .record_context_updates_and_set_reference_context_item(&turn_context)
             .await;
 
         assert_eq!(
@@ -8787,10 +9057,15 @@ mod tests {
     #[tokio::test]
     async fn build_initial_context_prepends_model_switch_message() {
         let (session, turn_context) = make_session_and_context().await;
+        let previous_turn_settings = PreviousTurnSettings {
+            model: "previous-regular-model".to_string(),
+            realtime_active: None,
+        };
 
-        let initial_context = session
-            .build_initial_context(&turn_context, Some("previous-regular-model"))
+        session
+            .set_previous_turn_settings(Some(previous_turn_settings))
             .await;
+        let initial_context = session.build_initial_context(&turn_context).await;
 
         let ResponseItem::Message { role, content, .. } = &initial_context[0] else {
             panic!("expected developer message");
@@ -8852,10 +9127,13 @@ mod tests {
         }
 
         session
-            .record_context_updates_and_set_reference_context_item(
-                &turn_context,
-                Some(previous_context.model_info.slug.as_str()),
-            )
+            .set_previous_turn_settings(Some(PreviousTurnSettings {
+                model: previous_context.model_info.slug.clone(),
+                realtime_active: Some(previous_context.realtime_active),
+            }))
+            .await;
+        session
+            .record_context_updates_and_set_reference_context_item(&turn_context)
             .await;
         session.ensure_rollout_materialized().await;
         session.flush_rollout().await;
@@ -9274,7 +9552,7 @@ mod tests {
         // personality_spec) matches reconstruction.
         let reconstruction_turn = session.new_default_turn().await;
         let mut initial_context = session
-            .build_initial_context(reconstruction_turn.as_ref(), None)
+            .build_initial_context(reconstruction_turn.as_ref())
             .await;
         // Ensure personality_spec is present when Personality is enabled, so expected matches
         // what reconstruction produces (build_initial_context may omit it when baked into model).

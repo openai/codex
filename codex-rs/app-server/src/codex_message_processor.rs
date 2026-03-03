@@ -141,6 +141,7 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -172,7 +173,6 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
-use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
@@ -374,7 +374,6 @@ pub(crate) struct CodexMessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
-    single_client_mode: bool,
     cli_overrides: Vec<(String, TomlValue)>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
@@ -401,7 +400,6 @@ struct ListenerTaskContext {
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
-    single_client_mode: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -418,11 +416,18 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
-    pub(crate) single_client_mode: bool,
     pub(crate) feedback: CodexFeedback,
 }
 
 impl CodexMessageProcessor {
+    fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
+        let auth = self.auth_manager.auth_cached();
+        AccountUpdatedNotification {
+            auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
+            plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+        }
+    }
+
     async fn load_thread(
         &self,
         thread_id: &str,
@@ -455,7 +460,6 @@ impl CodexMessageProcessor {
             config,
             cli_overrides,
             cloud_requirements,
-            single_client_mode,
             feedback,
         } = args;
         Self {
@@ -464,7 +468,6 @@ impl CodexMessageProcessor {
             outgoing: outgoing.clone(),
             arg0_paths,
             config,
-            single_client_mode,
             cli_overrides,
             cloud_requirements,
             active_login: Arc::new(Mutex::new(None)),
@@ -1057,15 +1060,10 @@ impl CodexMessageProcessor {
                     ))
                     .await;
 
-                let payload_v2 = AccountUpdatedNotification {
-                    auth_mode: self
-                        .auth_manager
-                        .auth_cached()
-                        .as_ref()
-                        .map(CodexAuth::api_auth_mode),
-                };
                 self.outgoing
-                    .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+                    .send_server_notification(ServerNotification::AccountUpdated(
+                        self.current_account_updated_notification(),
+                    ))
                     .await;
             }
             Err(error) => {
@@ -1281,12 +1279,10 @@ impl CodexMessageProcessor {
                             .await;
 
                             // Notify clients with the actual current auth mode.
-                            let current_auth_method = auth_manager
-                                .auth_cached()
-                                .as_ref()
-                                .map(CodexAuth::api_auth_mode);
+                            let auth = auth_manager.auth_cached();
                             let payload_v2 = AccountUpdatedNotification {
-                                auth_mode: current_auth_method,
+                                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
+                                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
                             };
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
@@ -1467,11 +1463,10 @@ impl CodexMessageProcessor {
             ))
             .await;
 
-        let payload_v2 = AccountUpdatedNotification {
-            auth_mode: self.auth_manager.get_api_auth_mode(),
-        };
         self.outgoing
-            .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
+            ))
             .await;
     }
 
@@ -1529,6 +1524,7 @@ impl CodexMessageProcessor {
 
                 let payload_v2 = AccountUpdatedNotification {
                     auth_mode: current_auth_method,
+                    plan_type: None,
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -2080,7 +2076,6 @@ impl CodexMessageProcessor {
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.clone(),
-            single_client_mode: self.single_client_mode,
         };
 
         tokio::spawn(async move {
@@ -2203,7 +2198,7 @@ impl CodexMessageProcessor {
 
                 listener_task_context
                     .thread_watch_manager
-                    .upsert_thread(thread.clone())
+                    .upsert_thread_silently(thread.clone())
                     .await;
 
                 thread.status = resolve_thread_status(
@@ -2340,6 +2335,14 @@ impl CodexMessageProcessor {
 
     async fn thread_set_name(&self, request_id: ConnectionRequestId, params: ThreadSetNameParams) {
         let ThreadSetNameParams { thread_id, name } = params;
+        let thread_id = match ThreadId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
         let Some(name) = codex_core::util::normalize_thread_name(&name) else {
             self.send_invalid_request_error(
                 request_id,
@@ -2349,15 +2352,43 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let (_, thread) = match self.load_thread(&thread_id).await {
-            Ok(v) => v,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            if let Err(err) = thread.submit(Op::SetThreadName { name }).await {
+                self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
+                    .await;
                 return;
             }
-        };
 
-        if let Err(err) = thread.submit(Op::SetThreadName { name }).await {
+            self.outgoing
+                .send_response(request_id, ThreadSetNameResponse {})
+                .await;
+            return;
+        }
+
+        let thread_exists =
+            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
+            {
+                Ok(Some(_)) => true,
+                Ok(None) => false,
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate thread id {thread_id}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+        if !thread_exists {
+            self.send_invalid_request_error(request_id, format!("thread not found: {thread_id}"))
+                .await;
+            return;
+        }
+
+        if let Err(err) =
+            codex_core::append_thread_name(&self.config.codex_home, thread_id, &name).await
+        {
             self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
                 .await;
             return;
@@ -2365,6 +2396,13 @@ impl CodexMessageProcessor {
 
         self.outgoing
             .send_response(request_id, ThreadSetNameResponse {})
+            .await;
+        let notification = ThreadNameUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            thread_name: Some(name),
+        };
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
             .await;
     }
 
@@ -3666,7 +3704,7 @@ impl CodexMessageProcessor {
         }
 
         self.thread_watch_manager
-            .upsert_thread(thread.clone())
+            .upsert_thread_silently(thread.clone())
             .await;
 
         thread.status = resolve_thread_status(
@@ -5867,17 +5905,8 @@ impl CodexMessageProcessor {
                     status: TurnStatus::InProgress,
                 };
 
-                let response = TurnStartResponse { turn: turn.clone() };
+                let response = TurnStartResponse { turn };
                 self.outgoing.send_response(request_id, response).await;
-
-                // Emit v2 turn/started notification.
-                let notif = TurnStartedNotification {
-                    thread_id: params.thread_id,
-                    turn,
-                };
-                self.outgoing
-                    .send_server_notification(ServerNotification::TurnStarted(notif))
-                    .await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -6168,23 +6197,14 @@ impl CodexMessageProcessor {
         &self,
         request_id: &ConnectionRequestId,
         turn: Turn,
-        parent_thread_id: String,
         review_thread_id: String,
     ) {
         let response = ReviewStartResponse {
-            turn: turn.clone(),
+            turn,
             review_thread_id,
         };
         self.outgoing
             .send_response(request_id.clone(), response)
-            .await;
-
-        let notif = TurnStartedNotification {
-            thread_id: parent_thread_id,
-            turn,
-        };
-        self.outgoing
-            .send_server_notification(ServerNotification::TurnStarted(notif))
             .await;
     }
 
@@ -6201,13 +6221,8 @@ impl CodexMessageProcessor {
         match turn_id {
             Ok(turn_id) => {
                 let turn = Self::build_review_turn(turn_id, display_text);
-                self.emit_review_started(
-                    request_id,
-                    turn,
-                    parent_thread_id.clone(),
-                    parent_thread_id,
-                )
-                .await;
+                self.emit_review_started(request_id, turn, parent_thread_id)
+                    .await;
                 Ok(())
             }
             Err(err) => Err(JSONRPCErrorError {
@@ -6282,7 +6297,7 @@ impl CodexMessageProcessor {
                 Ok(summary) => {
                     let mut thread = summary_to_thread(summary);
                     self.thread_watch_manager
-                        .upsert_thread(thread.clone())
+                        .upsert_thread_silently(thread.clone())
                         .await;
                     thread.status = resolve_thread_status(
                         self.thread_watch_manager
@@ -6321,7 +6336,7 @@ impl CodexMessageProcessor {
 
         let turn = Self::build_review_turn(turn_id, display_text);
         let review_thread_id = thread_id.to_string();
-        self.emit_review_started(request_id, turn, review_thread_id.clone(), review_thread_id)
+        self.emit_review_started(request_id, turn, review_thread_id)
             .await;
 
         Ok(())
@@ -6497,7 +6512,6 @@ impl CodexMessageProcessor {
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
-                single_client_mode: self.single_client_mode,
             },
             conversation_id,
             connection_id,
@@ -6585,7 +6599,6 @@ impl CodexMessageProcessor {
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
-                single_client_mode: self.single_client_mode,
             },
             conversation_id,
             conversation,
@@ -6617,7 +6630,6 @@ impl CodexMessageProcessor {
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
-            single_client_mode,
         } = listener_task_context;
         let outgoing_for_task = Arc::clone(&outgoing);
         tokio::spawn(async move {
@@ -6667,9 +6679,7 @@ impl CodexMessageProcessor {
                         );
                         let raw_events_enabled = {
                             let mut thread_state = thread_state.lock().await;
-                            if !single_client_mode {
-                                thread_state.track_current_turn_event(&event.msg);
-                            }
+                            thread_state.track_current_turn_event(&event.msg);
                             thread_state.experimental_raw_events
                         };
                         let subscribed_connection_ids = thread_state_manager

@@ -14,6 +14,8 @@ use crate::protocol::AskForApproval;
 use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
 use crate::protocol::NetworkAccess;
+use crate::protocol::REALTIME_CONVERSATION_CLOSE_TAG;
+use crate::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
@@ -340,6 +342,9 @@ const SANDBOX_MODE_WORKSPACE_WRITE: &str =
     include_str!("prompts/permissions/sandbox_mode/workspace_write.md");
 const SANDBOX_MODE_READ_ONLY: &str = include_str!("prompts/permissions/sandbox_mode/read_only.md");
 
+const REALTIME_START_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_start.md");
+const REALTIME_END_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_end.md");
+
 impl DeveloperInstructions {
     pub fn new<T: Into<String>>(text: T) -> Self {
         Self { text: text.into() }
@@ -406,6 +411,20 @@ impl DeveloperInstructions {
     pub fn model_switch_message(model_instructions: String) -> Self {
         DeveloperInstructions::new(format!(
             "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{model_instructions}\n</model_switch>"
+        ))
+    }
+
+    pub fn realtime_start_message() -> Self {
+        DeveloperInstructions::new(format!(
+            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
+            REALTIME_START_INSTRUCTIONS.trim()
+        ))
+    }
+
+    pub fn realtime_end_message(reason: &str) -> Self {
+        DeveloperInstructions::new(format!(
+            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n\nReason: {reason}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
+            REALTIME_END_INSTRUCTIONS.trim()
         ))
     }
 

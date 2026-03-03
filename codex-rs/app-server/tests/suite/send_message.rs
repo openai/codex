@@ -628,6 +628,7 @@ fn append_rollout_turn_context(path: &Path, timestamp: &str, model: &str) -> std
             model: model.to_string(),
             personality: None,
             collaboration_mode: None,
+            realtime_active: Some(false),
             effort: None,
             summary: ReasoningSummary::Auto,
             user_instructions: None,

@@ -1115,6 +1115,91 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn cli_override_can_update_project_local_mcp_server_when_project_is_trusted()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    let dot_codex = project_root.join(".codex");
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::create_dir_all(&dot_codex).await?;
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        dot_codex.join(CONFIG_TOML_FILE),
+        r#"
+[mcp_servers.sentry]
+url = "https://mcp.sentry.dev/mcp"
+enabled = false
+"#,
+    )
+    .await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .cli_overrides(vec![(
+            "mcp_servers.sentry.enabled".to_string(),
+            TomlValue::Boolean(true),
+        )])
+        .fallback_cwd(Some(nested))
+        .build()
+        .await?;
+
+    let server = config
+        .mcp_servers
+        .get()
+        .get("sentry")
+        .expect("trusted project MCP server should load");
+    assert!(server.enabled);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_override_for_disabled_project_local_mcp_server_returns_invalid_transport()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    let dot_codex = project_root.join(".codex");
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::create_dir_all(&dot_codex).await?;
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        dot_codex.join(CONFIG_TOML_FILE),
+        r#"
+[mcp_servers.sentry]
+url = "https://mcp.sentry.dev/mcp"
+enabled = false
+"#,
+    )
+    .await?;
+
+    let err = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .cli_overrides(vec![(
+            "mcp_servers.sentry.enabled".to_string(),
+            TomlValue::Boolean(true),
+        )])
+        .fallback_cwd(Some(nested))
+        .build()
+        .await
+        .expect_err("untrusted project layer should not provide MCP transport");
+
+    assert!(
+        err.to_string().contains("invalid transport")
+            && err.to_string().contains("mcp_servers.sentry"),
+        "unexpected error: {err}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
