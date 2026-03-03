@@ -1,6 +1,9 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use image::GenericImageView;
+use image::ImageFormat;
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
 use ppt_rs::Chart;
 use ppt_rs::ChartSeries;
 use ppt_rs::ChartType;
@@ -15,7 +18,13 @@ use ppt_rs::SlideLayout;
 use ppt_rs::TableBuilder;
 use ppt_rs::TableCell;
 use ppt_rs::TableRow;
+use ppt_rs::generator::ArrowSize;
+use ppt_rs::generator::ArrowType;
 use ppt_rs::generator::CellAlign;
+use ppt_rs::generator::Connector;
+use ppt_rs::generator::ConnectorLine;
+use ppt_rs::generator::ConnectorType;
+use ppt_rs::generator::LineDash;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -115,7 +124,30 @@ impl PresentationArtifactRequest {
                         kind: PathAccessKind::Read,
                         path: resolve_path(cwd, &path),
                     }],
-                    ImageInputSource::DataUrl(_) => Vec::new(),
+                    ImageInputSource::DataUrl(_)
+                    | ImageInputSource::Uri(_)
+                    | ImageInputSource::Placeholder => Vec::new(),
+                }
+            }
+            "replace_image" => {
+                let args: ReplaceImageArgs = parse_args(&self.action, &self.args)?;
+                match (&args.path, &args.data_url, &args.uri, &args.prompt) {
+                    (Some(path), None, None, None) => vec![PathAccessRequirement {
+                        action: self.action.clone(),
+                        kind: PathAccessKind::Read,
+                        path: resolve_path(cwd, path),
+                    }],
+                    (None, Some(_), None, None)
+                    | (None, None, Some(_), None)
+                    | (None, None, None, Some(_)) => Vec::new(),
+                    _ => {
+                        return Err(PresentationArtifactError::InvalidArgs {
+                            action: self.action.clone(),
+                            message:
+                                "provide exactly one of `path`, `data_url`, or `uri`, or provide `prompt` for a placeholder image"
+                                    .to_string(),
+                        });
+                    }
                 }
             }
             _ => Vec::new(),
@@ -164,6 +196,7 @@ impl PresentationArtifactManager {
             "set_slide_background" => self.set_slide_background(request),
             "add_text_shape" => self.add_text_shape(request),
             "add_shape" => self.add_shape(request),
+            "add_connector" => self.add_connector(request),
             "add_image" => self.add_image(request, cwd),
             "replace_image" => self.replace_image(request, cwd),
             "add_table" => self.add_table(request),
@@ -172,6 +205,8 @@ impl PresentationArtifactManager {
             "add_chart" => self.add_chart(request),
             "update_text" => self.update_text(request),
             "update_shape_style" => self.update_shape_style(request),
+            "bring_to_front" => self.bring_to_front(request),
+            "send_to_back" => self.send_to_back(request),
             "delete_element" => self.delete_element(request),
             "delete_artifact" => self.delete_artifact(request),
             other => Err(PresentationArtifactError::UnknownAction(other.to_string())),
@@ -278,6 +313,10 @@ impl PresentationArtifactManager {
         let artifact_id = required_artifact_id(&request)?;
         let document = self.get_document(&artifact_id, &request.action)?;
         let output_path = resolve_path(cwd, &args.path);
+        let preview_format =
+            parse_preview_output_format(args.format.as_deref(), &output_path, &request.action)?;
+        let scale = normalize_preview_scale(args.scale, &request.action)?;
+        let quality = normalize_preview_quality(args.quality, &request.action)?;
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
                 PresentationArtifactError::ExportFailed {
@@ -326,12 +365,14 @@ impl PresentationArtifactManager {
                         path: output_path.clone(),
                         message: "preview renderer produced no images".to_string(),
                     })?;
-            std::fs::rename(&rendered, &output_path).map_err(|error| {
-                PresentationArtifactError::ExportFailed {
-                    path: output_path.clone(),
-                    message: error.to_string(),
-                }
-            })?;
+            write_preview_image(
+                &rendered,
+                &output_path,
+                preview_format,
+                scale,
+                quality,
+                &request.action,
+            )?;
             exported_paths = vec![output_path];
         } else {
             std::fs::create_dir_all(&output_path).map_err(|error| {
@@ -348,13 +389,19 @@ impl PresentationArtifactManager {
                         message: "rendered preview had no filename".to_string(),
                     }
                 })?;
-                let target = output_path.join(filename);
-                std::fs::rename(&rendered, &target).map_err(|error| {
-                    PresentationArtifactError::ExportFailed {
-                        path: target.clone(),
-                        message: error.to_string(),
-                    }
-                })?;
+                let stem = Path::new(filename)
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("preview");
+                let target = output_path.join(format!("{stem}.{}", preview_format.extension()));
+                write_preview_image(
+                    &rendered,
+                    &target,
+                    preview_format,
+                    scale,
+                    quality,
+                    &request.action,
+                )?;
                 relocated.push(target);
             }
             exported_paths = relocated;
@@ -697,7 +744,8 @@ impl PresentationArtifactManager {
         match element {
             PresentationElement::Text(text) => text.text = args.text,
             PresentationElement::Shape(shape) => shape.text = Some(args.text),
-            PresentationElement::Image(_)
+            PresentationElement::Connector(_)
+            | PresentationElement::Image(_)
             | PresentationElement::Table(_)
             | PresentationElement::Chart(_) => {}
         }
@@ -1043,6 +1091,60 @@ impl PresentationArtifactManager {
         ))
     }
 
+    fn add_connector(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: AddConnectorArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let element_id = document.next_element_id();
+        let line = parse_connector_line(document, args.line, &request.action)?;
+        let slide = document.get_slide_mut(args.slide_index, &request.action)?;
+        slide
+            .elements
+            .push(PresentationElement::Connector(ConnectorElement {
+                element_id: element_id.clone(),
+                connector_type: parse_connector_kind(&args.connector_type, &request.action)?,
+                start: args.start,
+                end: args.end,
+                line: StrokeStyle {
+                    color: line.color,
+                    width: line.width,
+                },
+                line_style: line.style,
+                start_arrow: args
+                    .start_arrow
+                    .as_deref()
+                    .map(|value| parse_connector_arrow(value, &request.action))
+                    .transpose()?
+                    .unwrap_or(ConnectorArrowKind::None),
+                end_arrow: args
+                    .end_arrow
+                    .as_deref()
+                    .map(|value| parse_connector_arrow(value, &request.action))
+                    .transpose()?
+                    .unwrap_or(ConnectorArrowKind::None),
+                arrow_size: args
+                    .arrow_size
+                    .as_deref()
+                    .map(|value| parse_connector_arrow_size(value, &request.action))
+                    .transpose()?
+                    .unwrap_or(ConnectorArrowScale::Medium),
+                label: args.label,
+                z_order: slide.elements.len(),
+            }));
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Added connector element `{element_id}` to slide {}",
+                args.slide_index
+            ),
+            snapshot_for_document(document),
+        ))
+    }
+
     fn add_image(
         &mut self,
         request: PresentationArtifactRequest,
@@ -1050,14 +1152,27 @@ impl PresentationArtifactManager {
     ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
         let args: AddImageArgs = parse_args(&request.action, &request.args)?;
         let image_source = args.image_source()?;
+        let is_placeholder = matches!(image_source, ImageInputSource::Placeholder);
         let image_payload = match image_source {
-            ImageInputSource::Path(path) => {
-                load_image_payload_from_path(&resolve_path(cwd, &path), &request.action)?
-            }
-            ImageInputSource::DataUrl(data_url) => {
-                load_image_payload_from_data_url(&data_url, &request.action)?
-            }
+            ImageInputSource::Path(path) => Some(load_image_payload_from_path(
+                &resolve_path(cwd, &path),
+                &request.action,
+            )?),
+            ImageInputSource::DataUrl(data_url) => Some(load_image_payload_from_data_url(
+                &data_url,
+                &request.action,
+            )?),
+            ImageInputSource::Uri(uri) => Some(load_image_payload_from_uri(&uri, &request.action)?),
+            ImageInputSource::Placeholder => None,
         };
+        let fit_mode = args.fit.unwrap_or(ImageFitMode::Stretch);
+        let lock_aspect_ratio = args
+            .lock_aspect_ratio
+            .unwrap_or(fit_mode != ImageFitMode::Stretch);
+        let crop = args
+            .crop
+            .map(|crop| normalize_image_crop(crop, &request.action))
+            .transpose()?;
         let artifact_id = required_artifact_id(&request)?;
         let document = self.get_document_mut(&artifact_id, &request.action)?;
         let element_id = document.next_element_id();
@@ -1068,10 +1183,12 @@ impl PresentationArtifactManager {
                 element_id: element_id.clone(),
                 frame: args.position.into(),
                 payload: image_payload,
-                fit_mode: args.fit.unwrap_or(ImageFitMode::Stretch),
+                fit_mode,
+                crop,
+                lock_aspect_ratio,
                 alt_text: args.alt,
                 prompt: args.prompt,
-                is_placeholder: args.path.is_none() && args.data_url.is_none(),
+                is_placeholder,
                 z_order: slide.elements.len(),
             }));
         Ok(PresentationArtifactResponse::new(
@@ -1092,24 +1209,41 @@ impl PresentationArtifactManager {
     ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
         let args: ReplaceImageArgs = parse_args(&request.action, &request.args)?;
         let artifact_id = required_artifact_id(&request)?;
-        let image_source = match (&args.path, &args.data_url) {
-            (Some(path), None) => ImageInputSource::Path(path.clone()),
-            (None, Some(data_url)) => ImageInputSource::DataUrl(data_url.clone()),
+        let image_source = match (&args.path, &args.data_url, &args.uri, &args.prompt) {
+            (Some(path), None, None, None) => ImageInputSource::Path(path.clone()),
+            (None, Some(data_url), None, None) => ImageInputSource::DataUrl(data_url.clone()),
+            (None, None, Some(uri), None) => ImageInputSource::Uri(uri.clone()),
+            (None, None, None, Some(_)) => ImageInputSource::Placeholder,
             _ => {
                 return Err(PresentationArtifactError::InvalidArgs {
                     action: request.action,
-                    message: "provide exactly one of `path` or `data_url`".to_string(),
+                    message:
+                        "provide exactly one of `path`, `data_url`, or `uri`, or provide `prompt` for a placeholder image"
+                            .to_string(),
                 });
             }
         };
+        let is_placeholder = matches!(image_source, ImageInputSource::Placeholder);
         let image_payload = match image_source {
-            ImageInputSource::Path(path) => {
-                load_image_payload_from_path(&resolve_path(cwd, &path), "replace_image")?
-            }
-            ImageInputSource::DataUrl(data_url) => {
-                load_image_payload_from_data_url(&data_url, "replace_image")?
-            }
+            ImageInputSource::Path(path) => Some(load_image_payload_from_path(
+                &resolve_path(cwd, &path),
+                "replace_image",
+            )?),
+            ImageInputSource::DataUrl(data_url) => Some(load_image_payload_from_data_url(
+                &data_url,
+                "replace_image",
+            )?),
+            ImageInputSource::Uri(uri) => Some(load_image_payload_from_uri(&uri, "replace_image")?),
+            ImageInputSource::Placeholder => None,
         };
+        let fit_mode = args.fit.unwrap_or(ImageFitMode::Stretch);
+        let lock_aspect_ratio = args
+            .lock_aspect_ratio
+            .unwrap_or(fit_mode != ImageFitMode::Stretch);
+        let crop = args
+            .crop
+            .map(|crop| normalize_image_crop(crop, &request.action))
+            .transpose()?;
         let document = self.get_document_mut(&artifact_id, &request.action)?;
         let element = document.find_element_mut(&args.element_id, &request.action)?;
         let PresentationElement::Image(image) = element else {
@@ -1119,9 +1253,12 @@ impl PresentationArtifactManager {
             });
         };
         image.payload = image_payload;
+        image.fit_mode = fit_mode;
+        image.crop = crop;
+        image.lock_aspect_ratio = lock_aspect_ratio;
         image.alt_text = args.alt;
         image.prompt = args.prompt;
-        image.is_placeholder = false;
+        image.is_placeholder = is_placeholder;
         Ok(PresentationArtifactResponse::new(
             artifact_id,
             "replace_image".to_string(),
@@ -1364,7 +1501,7 @@ impl PresentationArtifactManager {
         match element {
             PresentationElement::Text(text) => {
                 if let Some(position) = args.position {
-                    text.frame = position.into();
+                    text.frame = apply_partial_position(text.frame, position);
                 }
                 if let Some(fill) = fill.clone() {
                     text.fill = Some(fill);
@@ -1380,7 +1517,7 @@ impl PresentationArtifactManager {
             }
             PresentationElement::Shape(shape) => {
                 if let Some(position) = args.position {
-                    shape.frame = position.into();
+                    shape.frame = apply_partial_position(shape.frame, position);
                 }
                 if let Some(fill) = fill {
                     shape.fill = Some(fill);
@@ -1392,16 +1529,66 @@ impl PresentationArtifactManager {
                     shape.rotation_degrees = Some(rotation);
                 }
             }
+            PresentationElement::Connector(connector) => {
+                if args.fill.is_some()
+                    || args.rotation.is_some()
+                    || args.fit.is_some()
+                    || args.crop.is_some()
+                    || args.lock_aspect_ratio.is_some()
+                {
+                    return Err(PresentationArtifactError::UnsupportedFeature {
+                        action: request.action,
+                        message:
+                            "connector elements support only `position`, `stroke`, and `z_order` updates"
+                                .to_string(),
+                    });
+                }
+                if let Some(position) = args.position {
+                    let updated = apply_partial_position(
+                        Rect {
+                            left: connector.start.left,
+                            top: connector.start.top,
+                            width: connector.end.left.abs_diff(connector.start.left),
+                            height: connector.end.top.abs_diff(connector.start.top),
+                        },
+                        position,
+                    );
+                    connector.start = PointArgs {
+                        left: updated.left,
+                        top: updated.top,
+                    };
+                    connector.end = PointArgs {
+                        left: updated.left.saturating_add(updated.width),
+                        top: updated.top.saturating_add(updated.height),
+                    };
+                }
+                if let Some(stroke) = stroke {
+                    connector.line = stroke;
+                }
+            }
             PresentationElement::Image(image) => {
                 if args.fill.is_some() || args.stroke.is_some() || args.rotation.is_some() {
                     return Err(PresentationArtifactError::UnsupportedFeature {
                         action: request.action,
-                        message: "image elements support only `position` and `z_order` updates"
-                            .to_string(),
+                        message:
+                            "image elements support only `position`, `fit`, `crop`, `lock_aspect_ratio`, and `z_order` updates"
+                                .to_string(),
                     });
                 }
                 if let Some(position) = args.position {
-                    image.frame = position.into();
+                    image.frame = apply_partial_position_to_image(image, position);
+                }
+                if let Some(fit) = args.fit {
+                    image.fit_mode = fit;
+                    if !matches!(fit, ImageFitMode::Stretch) && args.lock_aspect_ratio.is_none() {
+                        image.lock_aspect_ratio = true;
+                    }
+                }
+                if let Some(crop) = args.crop {
+                    image.crop = Some(normalize_image_crop(crop, &request.action)?);
+                }
+                if let Some(lock_aspect_ratio) = args.lock_aspect_ratio {
+                    image.lock_aspect_ratio = lock_aspect_ratio;
                 }
             }
             PresentationElement::Table(table) => {
@@ -1413,7 +1600,7 @@ impl PresentationArtifactManager {
                     });
                 }
                 if let Some(position) = args.position {
-                    table.frame = position.into();
+                    table.frame = apply_partial_position(table.frame, position);
                 }
             }
             PresentationElement::Chart(chart) => {
@@ -1425,7 +1612,7 @@ impl PresentationArtifactManager {
                     });
                 }
                 if let Some(position) = args.position {
-                    chart.frame = position.into();
+                    chart.frame = apply_partial_position(chart.frame, position);
                 }
             }
         }
@@ -1452,6 +1639,39 @@ impl PresentationArtifactManager {
             artifact_id,
             request.action,
             format!("Deleted element `{}`", args.element_id),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn bring_to_front(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: ElementIdArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let target_index = document.total_element_count();
+        document.set_z_order(&args.element_id, target_index, &request.action)?;
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Brought `{}` to front", args.element_id),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn send_to_back(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: ElementIdArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        document.set_z_order(&args.element_id, 0, &request.action)?;
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Sent `{}` to back", args.element_id),
             snapshot_for_document(document),
         ))
     }
@@ -1952,6 +2172,7 @@ impl PresentationDocument {
         element_id: &str,
         action: &str,
     ) -> Result<&mut PresentationElement, PresentationArtifactError> {
+        let element_id = normalize_element_lookup_id(element_id);
         for slide in &mut self.slides {
             if let Some(element) = slide
                 .elements
@@ -1984,6 +2205,7 @@ impl PresentationDocument {
         element_id: &str,
         action: &str,
     ) -> Result<(), PresentationArtifactError> {
+        let element_id = normalize_element_lookup_id(element_id);
         for slide in &mut self.slides {
             if let Some(index) = slide
                 .elements
@@ -2007,6 +2229,7 @@ impl PresentationDocument {
         target_index: usize,
         action: &str,
     ) -> Result<(), PresentationArtifactError> {
+        let element_id = normalize_element_lookup_id(element_id);
         for slide in &mut self.slides {
             if let Some(current_index) = slide
                 .elements
@@ -2109,31 +2332,70 @@ impl PresentationSlide {
                     }
                     content = content.add_shape(ppt_shape);
                 }
-                PresentationElement::Image(image) => {
-                    let mut ppt_image = Image::from_bytes(
-                        image.payload.bytes.clone(),
-                        points_to_emu(image.frame.width),
-                        points_to_emu(image.frame.height),
-                        &image.payload.format,
+                PresentationElement::Connector(connector) => {
+                    let mut ppt_connector = Connector::new(
+                        connector.connector_type.to_ppt_rs(),
+                        points_to_emu(connector.start.left),
+                        points_to_emu(connector.start.top),
+                        points_to_emu(connector.end.left),
+                        points_to_emu(connector.end.top),
                     )
-                    .position(
-                        points_to_emu(image.frame.left),
-                        points_to_emu(image.frame.top),
-                    );
-                    if image.fit_mode != ImageFitMode::Stretch {
-                        let (x, y, width, height, crop) = fit_image(&image);
-                        ppt_image = Image::from_bytes(
-                            image.payload.bytes.clone(),
-                            points_to_emu(width),
-                            points_to_emu(height),
-                            &image.payload.format,
+                    .with_line(
+                        ConnectorLine::new(
+                            &connector.line.color,
+                            points_to_emu(connector.line.width),
                         )
-                        .position(points_to_emu(x), points_to_emu(y));
-                        if let Some((left, top, right, bottom)) = crop {
+                        .with_dash(connector.line_style.to_ppt_rs()),
+                    )
+                    .with_arrow_size(connector.arrow_size.to_ppt_rs())
+                    .with_start_arrow(connector.start_arrow.to_ppt_rs())
+                    .with_end_arrow(connector.end_arrow.to_ppt_rs());
+                    if let Some(label) = connector.label {
+                        ppt_connector = ppt_connector.with_label(&label);
+                    }
+                    content = content.add_connector(ppt_connector);
+                }
+                PresentationElement::Image(image) => {
+                    if let Some(ref payload) = image.payload {
+                        let mut ppt_image = Image::from_bytes(
+                            payload.bytes.clone(),
+                            points_to_emu(image.frame.width),
+                            points_to_emu(image.frame.height),
+                            &payload.format,
+                        )
+                        .position(
+                            points_to_emu(image.frame.left),
+                            points_to_emu(image.frame.top),
+                        );
+                        if image.fit_mode != ImageFitMode::Stretch {
+                            let (x, y, width, height, crop) = fit_image(&image);
+                            ppt_image = Image::from_bytes(
+                                payload.bytes.clone(),
+                                points_to_emu(width),
+                                points_to_emu(height),
+                                &payload.format,
+                            )
+                            .position(points_to_emu(x), points_to_emu(y));
+                            if let Some((left, top, right, bottom)) = crop {
+                                ppt_image = ppt_image.with_crop(left, top, right, bottom);
+                            }
+                        }
+                        if let Some((left, top, right, bottom)) = image.crop {
                             ppt_image = ppt_image.with_crop(left, top, right, bottom);
                         }
+                        content = content.add_image(ppt_image);
+                    } else {
+                        content = content.add_shape(
+                            Shape::new(
+                                ShapeType::Rectangle,
+                                points_to_emu(image.frame.left),
+                                points_to_emu(image.frame.top),
+                                points_to_emu(image.frame.width),
+                                points_to_emu(image.frame.height),
+                            )
+                            .with_text(image.prompt.as_deref().unwrap_or("Image placeholder")),
+                        );
                     }
-                    content = content.add_image(ppt_image);
                 }
                 PresentationElement::Table(table) => {
                     let row_count = table.rows.len().max(1) as u32;
@@ -2184,6 +2446,7 @@ impl PresentationSlide {
 enum PresentationElement {
     Text(TextElement),
     Shape(ShapeElement),
+    Connector(ConnectorElement),
     Image(ImageElement),
     Table(TableElement),
     Chart(ChartElement),
@@ -2194,6 +2457,7 @@ impl PresentationElement {
         match self {
             Self::Text(element) => &element.element_id,
             Self::Shape(element) => &element.element_id,
+            Self::Connector(element) => &element.element_id,
             Self::Image(element) => &element.element_id,
             Self::Table(element) => &element.element_id,
             Self::Chart(element) => &element.element_id,
@@ -2204,6 +2468,7 @@ impl PresentationElement {
         match self {
             Self::Text(element) => element.element_id = new_id,
             Self::Shape(element) => element.element_id = new_id,
+            Self::Connector(element) => element.element_id = new_id,
             Self::Image(element) => element.element_id = new_id,
             Self::Table(element) => element.element_id = new_id,
             Self::Chart(element) => element.element_id = new_id,
@@ -2214,6 +2479,7 @@ impl PresentationElement {
         match self {
             Self::Text(_) => "text",
             Self::Shape(_) => "shape",
+            Self::Connector(_) => "connector",
             Self::Image(_) => "image",
             Self::Table(_) => "table",
             Self::Chart(_) => "chart",
@@ -2224,6 +2490,7 @@ impl PresentationElement {
         match self {
             Self::Text(element) => element.z_order,
             Self::Shape(element) => element.z_order,
+            Self::Connector(element) => element.z_order,
             Self::Image(element) => element.z_order,
             Self::Table(element) => element.z_order,
             Self::Chart(element) => element.z_order,
@@ -2234,6 +2501,7 @@ impl PresentationElement {
         match self {
             Self::Text(element) => element.z_order = z_order,
             Self::Shape(element) => element.z_order = z_order,
+            Self::Connector(element) => element.z_order = z_order,
             Self::Image(element) => element.z_order = z_order,
             Self::Table(element) => element.z_order = z_order,
             Self::Chart(element) => element.z_order = z_order,
@@ -2267,11 +2535,28 @@ struct ShapeElement {
 }
 
 #[derive(Debug, Clone)]
+struct ConnectorElement {
+    element_id: String,
+    connector_type: ConnectorKind,
+    start: PointArgs,
+    end: PointArgs,
+    line: StrokeStyle,
+    line_style: LineStyle,
+    start_arrow: ConnectorArrowKind,
+    end_arrow: ConnectorArrowKind,
+    arrow_size: ConnectorArrowScale,
+    label: Option<String>,
+    z_order: usize,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ImageElement {
     pub(crate) element_id: String,
     pub(crate) frame: Rect,
-    pub(crate) payload: ImagePayload,
+    pub(crate) payload: Option<ImagePayload>,
     pub(crate) fit_mode: ImageFitMode,
+    pub(crate) crop: Option<ImageCrop>,
+    pub(crate) lock_aspect_ratio: bool,
     pub(crate) alt_text: Option<String>,
     pub(crate) prompt: Option<String>,
     pub(crate) is_placeholder: bool,
@@ -2466,6 +2751,53 @@ impl ChartTypeSpec {
     }
 }
 
+impl ConnectorKind {
+    fn to_ppt_rs(self) -> ConnectorType {
+        match self {
+            Self::Straight => ConnectorType::Straight,
+            Self::Elbow => ConnectorType::Elbow,
+            Self::Curved => ConnectorType::Curved,
+        }
+    }
+}
+
+impl ConnectorArrowKind {
+    fn to_ppt_rs(self) -> ArrowType {
+        match self {
+            Self::None => ArrowType::None,
+            Self::Triangle => ArrowType::Triangle,
+            Self::Stealth => ArrowType::Stealth,
+            Self::Diamond => ArrowType::Diamond,
+            Self::Oval => ArrowType::Oval,
+            Self::Open => ArrowType::Open,
+        }
+    }
+}
+
+impl ConnectorArrowScale {
+    fn to_ppt_rs(self) -> ArrowSize {
+        match self {
+            Self::Small => ArrowSize::Small,
+            Self::Medium => ArrowSize::Medium,
+            Self::Large => ArrowSize::Large,
+        }
+    }
+}
+
+impl LineStyle {
+    fn to_ppt_rs(self) -> LineDash {
+        match self {
+            Self::Solid => LineDash::Solid,
+            Self::Dashed => LineDash::Dash,
+            Self::Dotted => LineDash::Dot,
+            Self::DashDot => LineDash::DashDot,
+            Self::DashDotDot => LineDash::DashDotDot,
+            Self::LongDash => LineDash::LongDash,
+            Self::LongDashDot => LineDash::LongDashDot,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ImageFitMode {
@@ -2478,6 +2810,41 @@ pub(crate) enum ImageFitMode {
 struct StrokeStyle {
     color: String,
     width: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectorKind {
+    Straight,
+    Elbow,
+    Curved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectorArrowKind {
+    None,
+    Triangle,
+    Stealth,
+    Diamond,
+    Oval,
+    Open,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectorArrowScale {
+    Small,
+    Medium,
+    Large,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineStyle {
+    Solid,
+    Dashed,
+    Dotted,
+    DashDot,
+    DashDotDot,
+    LongDash,
+    LongDashDot,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2510,6 +2877,36 @@ impl From<PositionArgs> for Rect {
     }
 }
 
+fn apply_partial_position(rect: Rect, position: PartialPositionArgs) -> Rect {
+    Rect {
+        left: position.left.unwrap_or(rect.left),
+        top: position.top.unwrap_or(rect.top),
+        width: position.width.unwrap_or(rect.width),
+        height: position.height.unwrap_or(rect.height),
+    }
+}
+
+fn apply_partial_position_to_image(image: &ImageElement, position: PartialPositionArgs) -> Rect {
+    let mut frame = apply_partial_position(image.frame, position.clone());
+    if image.lock_aspect_ratio {
+        let base_ratio = image
+            .payload
+            .as_ref()
+            .map(|payload| payload.width_px as f64 / payload.height_px as f64)
+            .unwrap_or_else(|| image.frame.width as f64 / image.frame.height as f64);
+        if let Some(width) = position.width
+            && position.height.is_none()
+        {
+            frame.height = (width as f64 / base_ratio).round() as u32;
+        } else if let Some(height) = position.height
+            && position.width.is_none()
+        {
+            frame.width = (height as f64 * base_ratio).round() as u32;
+        }
+    }
+    frame
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateArgs {
     name: Option<String>,
@@ -2531,6 +2928,9 @@ struct ExportPptxArgs {
 struct ExportPreviewArgs {
     path: PathBuf,
     slide_index: Option<u32>,
+    format: Option<String>,
+    scale: Option<f32>,
+    quality: Option<u8>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2545,6 +2945,21 @@ struct CreateLayoutArgs {
     name: String,
     kind: Option<String>,
     parent_layout_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreviewOutputFormat {
+    Png,
+    Jpeg,
+}
+
+impl PreviewOutputFormat {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2641,6 +3056,14 @@ struct PositionArgs {
     height: u32,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PartialPositionArgs {
+    left: Option<u32>,
+    top: Option<u32>,
+    width: Option<u32>,
+    height: Option<u32>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct TextStylingArgs {
     font_size: Option<u32>,
@@ -2679,25 +3102,58 @@ struct AddShapeArgs {
     text_style: TextStylingArgs,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ConnectorLineArgs {
+    color: Option<String>,
+    width: Option<u32>,
+    style: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PointArgs {
+    left: u32,
+    top: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct AddConnectorArgs {
+    slide_index: u32,
+    connector_type: String,
+    start: PointArgs,
+    end: PointArgs,
+    line: Option<ConnectorLineArgs>,
+    start_arrow: Option<String>,
+    end_arrow: Option<String>,
+    arrow_size: Option<String>,
+    label: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct AddImageArgs {
     slide_index: u32,
     path: Option<PathBuf>,
     data_url: Option<String>,
+    uri: Option<String>,
     position: PositionArgs,
     fit: Option<ImageFitMode>,
+    crop: Option<ImageCropArgs>,
+    lock_aspect_ratio: Option<bool>,
     alt: Option<String>,
     prompt: Option<String>,
 }
 
 impl AddImageArgs {
     fn image_source(&self) -> Result<ImageInputSource, PresentationArtifactError> {
-        match (&self.path, &self.data_url) {
-            (Some(path), None) => Ok(ImageInputSource::Path(path.clone())),
-            (None, Some(data_url)) => Ok(ImageInputSource::DataUrl(data_url.clone())),
+        match (&self.path, &self.data_url, &self.uri) {
+            (Some(path), None, None) => Ok(ImageInputSource::Path(path.clone())),
+            (None, Some(data_url), None) => Ok(ImageInputSource::DataUrl(data_url.clone())),
+            (None, None, Some(uri)) => Ok(ImageInputSource::Uri(uri.clone())),
+            (None, None, None) if self.prompt.is_some() => Ok(ImageInputSource::Placeholder),
             _ => Err(PresentationArtifactError::InvalidArgs {
                 action: "add_image".to_string(),
-                message: "provide exactly one of `path` or `data_url`".to_string(),
+                message:
+                    "provide exactly one of `path`, `data_url`, or `uri`, or provide `prompt` for a placeholder image"
+                        .to_string(),
             }),
         }
     }
@@ -2706,6 +3162,16 @@ impl AddImageArgs {
 enum ImageInputSource {
     Path(PathBuf),
     DataUrl(String),
+    Uri(String),
+    Placeholder,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImageCropArgs {
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2743,10 +3209,13 @@ struct UpdateTextArgs {
 #[derive(Debug, Deserialize)]
 struct UpdateShapeStyleArgs {
     element_id: String,
-    position: Option<PositionArgs>,
+    position: Option<PartialPositionArgs>,
     fill: Option<String>,
     stroke: Option<StrokeArgs>,
     rotation: Option<i32>,
+    fit: Option<ImageFitMode>,
+    crop: Option<ImageCropArgs>,
+    lock_aspect_ratio: Option<bool>,
     z_order: Option<u32>,
 }
 
@@ -2760,6 +3229,10 @@ struct ReplaceImageArgs {
     element_id: String,
     path: Option<PathBuf>,
     data_url: Option<String>,
+    uri: Option<String>,
+    fit: Option<ImageFitMode>,
+    crop: Option<ImageCropArgs>,
+    lock_aspect_ratio: Option<bool>,
     alt: Option<String>,
     prompt: Option<String>,
 }
@@ -2946,6 +3419,99 @@ fn parse_required_stroke(
         color: normalize_color_with_document(document, &stroke.color, action, "stroke.color")?,
         width: stroke.width,
     })
+}
+
+fn parse_connector_kind(
+    connector_type: &str,
+    action: &str,
+) -> Result<ConnectorKind, PresentationArtifactError> {
+    match connector_type {
+        "straight" => Ok(ConnectorKind::Straight),
+        "elbow" => Ok(ConnectorKind::Elbow),
+        "curved" => Ok(ConnectorKind::Curved),
+        _ => Err(PresentationArtifactError::UnsupportedFeature {
+            action: action.to_string(),
+            message: format!("connector_type `{connector_type}` is not supported"),
+        }),
+    }
+}
+
+fn parse_connector_arrow(
+    value: &str,
+    action: &str,
+) -> Result<ConnectorArrowKind, PresentationArtifactError> {
+    match value {
+        "none" => Ok(ConnectorArrowKind::None),
+        "triangle" => Ok(ConnectorArrowKind::Triangle),
+        "stealth" => Ok(ConnectorArrowKind::Stealth),
+        "diamond" => Ok(ConnectorArrowKind::Diamond),
+        "oval" => Ok(ConnectorArrowKind::Oval),
+        "open" => Ok(ConnectorArrowKind::Open),
+        _ => Err(PresentationArtifactError::UnsupportedFeature {
+            action: action.to_string(),
+            message: format!("connector arrow `{value}` is not supported"),
+        }),
+    }
+}
+
+fn parse_connector_arrow_size(
+    value: &str,
+    action: &str,
+) -> Result<ConnectorArrowScale, PresentationArtifactError> {
+    match value {
+        "small" => Ok(ConnectorArrowScale::Small),
+        "medium" => Ok(ConnectorArrowScale::Medium),
+        "large" => Ok(ConnectorArrowScale::Large),
+        _ => Err(PresentationArtifactError::UnsupportedFeature {
+            action: action.to_string(),
+            message: format!("connector arrow_size `{value}` is not supported"),
+        }),
+    }
+}
+
+fn parse_line_style(value: &str, action: &str) -> Result<LineStyle, PresentationArtifactError> {
+    match value {
+        "solid" => Ok(LineStyle::Solid),
+        "dashed" => Ok(LineStyle::Dashed),
+        "dotted" => Ok(LineStyle::Dotted),
+        "dash-dot" | "dash_dot" => Ok(LineStyle::DashDot),
+        "dash-dot-dot" | "dash_dot_dot" => Ok(LineStyle::DashDotDot),
+        "long-dash" | "long_dash" => Ok(LineStyle::LongDash),
+        "long-dash-dot" | "long_dash_dot" => Ok(LineStyle::LongDashDot),
+        _ => Err(PresentationArtifactError::UnsupportedFeature {
+            action: action.to_string(),
+            message: format!("line style `{value}` is not supported"),
+        }),
+    }
+}
+
+fn parse_connector_line(
+    document: &PresentationDocument,
+    line: Option<ConnectorLineArgs>,
+    action: &str,
+) -> Result<ParsedConnectorLine, PresentationArtifactError> {
+    let line = line.unwrap_or_default();
+    Ok(ParsedConnectorLine {
+        color: line
+            .color
+            .as_deref()
+            .map(|value| normalize_color_with_document(document, value, action, "line.color"))
+            .transpose()?
+            .unwrap_or_else(|| "000000".to_string()),
+        width: line.width.unwrap_or(1),
+        style: line
+            .style
+            .as_deref()
+            .map(|value| parse_line_style(value, action))
+            .transpose()?
+            .unwrap_or(LineStyle::Solid),
+    })
+}
+
+struct ParsedConnectorLine {
+    color: String,
+    width: u32,
+    style: LineStyle,
 }
 
 fn normalize_text_style_with_document(
@@ -3215,7 +3781,8 @@ fn slide_placeholder_list(
                         text_preview: shape.text.clone(),
                     })
             }
-            PresentationElement::Image(_)
+            PresentationElement::Connector(_)
+            | PresentationElement::Image(_)
             | PresentationElement::Table(_)
             | PresentationElement::Chart(_) => None,
         })
@@ -3284,7 +3851,8 @@ fn inspect_document(
     target_id: Option<&str>,
     max_chars: Option<usize>,
 ) -> String {
-    let kinds = kind.unwrap_or("deck,slide,textbox,shape,table,chart,image,notes,layoutList");
+    let kinds =
+        kind.unwrap_or("deck,slide,textbox,shape,connector,table,chart,image,notes,layoutList");
     let include = |name: &str| kinds.split(',').map(str::trim).any(|entry| entry == name);
     let mut lines = Vec::new();
     if include("deck") {
@@ -3389,6 +3957,21 @@ fn inspect_document(
                         "bboxUnit": "points",
                     })
                 }
+                PresentationElement::Connector(connector) => {
+                    if !include("shape") && !include("connector") {
+                        continue;
+                    }
+                    serde_json::json!({
+                        "kind": "connector",
+                        "id": format!("cn/{}", connector.element_id),
+                        "slide": index + 1,
+                        "connectorType": format!("{:?}", connector.connector_type),
+                        "start": [connector.start.left, connector.start.top],
+                        "end": [connector.end.left, connector.end.top],
+                        "lineStyle": format!("{:?}", connector.line_style),
+                        "label": connector.label,
+                    })
+                }
                 PresentationElement::Table(table) => {
                     if !include("table") {
                         continue;
@@ -3429,6 +4012,15 @@ fn inspect_document(
                         "slide": index + 1,
                         "alt": image.alt_text,
                         "prompt": image.prompt,
+                        "fit": format!("{:?}", image.fit_mode),
+                        "crop": image.crop.map(|(left, top, right, bottom)| serde_json::json!({
+                            "left": left,
+                            "top": top,
+                            "right": right,
+                            "bottom": bottom,
+                        })),
+                        "isPlaceholder": image.is_placeholder,
+                        "lockAspectRatio": image.lock_aspect_ratio,
                         "bbox": [image.frame.left, image.frame.top, image.frame.width, image.frame.height],
                         "bboxUnit": "points",
                     })
@@ -3440,7 +4032,8 @@ fn inspect_document(
             if let Some(placeholder) = match element {
                 PresentationElement::Text(text) => text.placeholder.as_ref(),
                 PresentationElement::Shape(shape) => shape.placeholder.as_ref(),
-                PresentationElement::Image(_)
+                PresentationElement::Connector(_)
+                | PresentationElement::Image(_)
                 | PresentationElement::Table(_)
                 | PresentationElement::Chart(_) => None,
             } {
@@ -3486,6 +4079,13 @@ fn target_matches(target_id: Option<&str>, record: &Value) -> bool {
     }
 }
 
+fn normalize_element_lookup_id(element_id: &str) -> &str {
+    element_id
+        .split_once('/')
+        .map(|(_, normalized)| normalized)
+        .unwrap_or(element_id)
+}
+
 fn resolve_anchor(
     document: &PresentationDocument,
     id: &str,
@@ -3514,6 +4114,7 @@ fn resolve_anchor(
                 "elementIds": slide.elements.iter().map(|element| {
                     let prefix = match element {
                         PresentationElement::Text(_) | PresentationElement::Shape(_) => "sh",
+                        PresentationElement::Connector(_) => "cn",
                         PresentationElement::Image(_) => "im",
                         PresentationElement::Table(_) => "tb",
                         PresentationElement::Chart(_) => "ch",
@@ -3556,6 +4157,18 @@ fn resolve_anchor(
                     "bbox": [shape.frame.left, shape.frame.top, shape.frame.width, shape.frame.height],
                     "bboxUnit": "points",
                 }),
+                PresentationElement::Connector(connector) => serde_json::json!({
+                    "kind": "connector",
+                    "id": format!("cn/{}", connector.element_id),
+                    "elementId": connector.element_id,
+                    "slide": slide_index + 1,
+                    "slideIndex": slide_index,
+                    "connectorType": format!("{:?}", connector.connector_type),
+                    "start": [connector.start.left, connector.start.top],
+                    "end": [connector.end.left, connector.end.top],
+                    "lineStyle": format!("{:?}", connector.line_style),
+                    "label": connector.label,
+                }),
                 PresentationElement::Image(image) => serde_json::json!({
                     "kind": "image",
                     "id": format!("im/{}", image.element_id),
@@ -3564,6 +4177,15 @@ fn resolve_anchor(
                     "slideIndex": slide_index,
                     "alt": image.alt_text,
                     "prompt": image.prompt,
+                    "fit": format!("{:?}", image.fit_mode),
+                    "crop": image.crop.map(|(left, top, right, bottom)| serde_json::json!({
+                        "left": left,
+                        "top": top,
+                        "right": right,
+                        "bottom": bottom,
+                    })),
+                    "isPlaceholder": image.is_placeholder,
+                    "lockAspectRatio": image.lock_aspect_ratio,
                     "bbox": [image.frame.left, image.frame.top, image.frame.width, image.frame.height],
                     "bboxUnit": "points",
                 }),
@@ -3641,6 +4263,64 @@ fn write_preview_images(
         })
 }
 
+pub(crate) fn write_preview_image(
+    source_path: &Path,
+    target_path: &Path,
+    format: PreviewOutputFormat,
+    scale: f32,
+    quality: u8,
+    action: &str,
+) -> Result<(), PresentationArtifactError> {
+    if matches!(format, PreviewOutputFormat::Png) && scale == 1.0 {
+        std::fs::rename(source_path, target_path).map_err(|error| {
+            PresentationArtifactError::ExportFailed {
+                path: target_path.to_path_buf(),
+                message: error.to_string(),
+            }
+        })?;
+        return Ok(());
+    }
+    let mut preview =
+        image::open(source_path).map_err(|error| PresentationArtifactError::ExportFailed {
+            path: source_path.to_path_buf(),
+            message: format!("{action}: {error}"),
+        })?;
+    if scale != 1.0 {
+        let width = (preview.width() as f32 * scale).round().max(1.0) as u32;
+        let height = (preview.height() as f32 * scale).round().max(1.0) as u32;
+        preview = preview.resize_exact(width, height, FilterType::Lanczos3);
+    }
+    let file = std::fs::File::create(target_path).map_err(|error| {
+        PresentationArtifactError::ExportFailed {
+            path: target_path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+    let mut writer = std::io::BufWriter::new(file);
+    match format {
+        PreviewOutputFormat::Png => {
+            preview
+                .write_to(&mut writer, ImageFormat::Png)
+                .map_err(|error| PresentationArtifactError::ExportFailed {
+                    path: target_path.to_path_buf(),
+                    message: format!("{action}: {error}"),
+                })?
+        }
+        PreviewOutputFormat::Jpeg => {
+            let rgb = preview.to_rgb8();
+            let mut encoder = JpegEncoder::new_with_quality(&mut writer, quality);
+            encoder.encode_image(&rgb).map_err(|error| {
+                PresentationArtifactError::ExportFailed {
+                    path: target_path.to_path_buf(),
+                    message: format!("{action}: {error}"),
+                }
+            })?;
+        }
+    }
+    std::fs::remove_file(source_path).ok();
+    Ok(())
+}
+
 fn collect_pngs(output_dir: &Path) -> Result<Vec<PathBuf>, PresentationArtifactError> {
     let mut files = std::fs::read_dir(output_dir)
         .map_err(|error| PresentationArtifactError::ExportFailed {
@@ -3653,6 +4333,61 @@ fn collect_pngs(output_dir: &Path) -> Result<Vec<PathBuf>, PresentationArtifactE
         .collect::<Vec<_>>();
     files.sort();
     Ok(files)
+}
+
+fn parse_preview_output_format(
+    format: Option<&str>,
+    path: &Path,
+    action: &str,
+) -> Result<PreviewOutputFormat, PresentationArtifactError> {
+    let value = format
+        .map(str::to_owned)
+        .or_else(|| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "png".to_string());
+    match value.to_ascii_lowercase().as_str() {
+        "png" => Ok(PreviewOutputFormat::Png),
+        "jpg" | "jpeg" => Ok(PreviewOutputFormat::Jpeg),
+        "svg" => Err(PresentationArtifactError::UnsupportedFeature {
+            action: action.to_string(),
+            message: "preview format `svg` is not supported".to_string(),
+        }),
+        other => Err(PresentationArtifactError::InvalidArgs {
+            action: action.to_string(),
+            message: format!("preview format `{other}` is not supported"),
+        }),
+    }
+}
+
+fn normalize_preview_scale(
+    scale: Option<f32>,
+    action: &str,
+) -> Result<f32, PresentationArtifactError> {
+    let scale = scale.unwrap_or(1.0);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(PresentationArtifactError::InvalidArgs {
+            action: action.to_string(),
+            message: "`scale` must be a positive number".to_string(),
+        });
+    }
+    Ok(scale)
+}
+
+fn normalize_preview_quality(
+    quality: Option<u8>,
+    action: &str,
+) -> Result<u8, PresentationArtifactError> {
+    let quality = quality.unwrap_or(90);
+    if quality == 0 || quality > 100 {
+        return Err(PresentationArtifactError::InvalidArgs {
+            action: action.to_string(),
+            message: "`quality` must be between 1 and 100".to_string(),
+        });
+    }
+    Ok(quality)
 }
 
 fn cell_value_to_string(value: Value) -> String {
@@ -3736,9 +4471,18 @@ type ImageCrop = (f64, f64, f64, f64);
 type FittedImage = (u32, u32, u32, u32, Option<ImageCrop>);
 
 pub(crate) fn fit_image(image: &ImageElement) -> FittedImage {
+    let Some(payload) = image.payload.as_ref() else {
+        return (
+            image.frame.left,
+            image.frame.top,
+            image.frame.width,
+            image.frame.height,
+            None,
+        );
+    };
     let frame = image.frame;
-    let source_width = image.payload.width_px as f64;
-    let source_height = image.payload.height_px as f64;
+    let source_width = payload.width_px as f64;
+    let source_height = payload.height_px as f64;
     let target_width = frame.width as f64;
     let target_height = frame.height as f64;
     let source_ratio = source_width / source_height;
@@ -3777,6 +4521,26 @@ pub(crate) fn fit_image(image: &ImageElement) -> FittedImage {
             )
         }
     }
+}
+
+fn normalize_image_crop(
+    crop: ImageCropArgs,
+    action: &str,
+) -> Result<ImageCrop, PresentationArtifactError> {
+    for (name, value) in [
+        ("left", crop.left),
+        ("top", crop.top),
+        ("right", crop.right),
+        ("bottom", crop.bottom),
+    ] {
+        if !(0.0..=1.0).contains(&value) {
+            return Err(PresentationArtifactError::InvalidArgs {
+                action: action.to_string(),
+                message: format!("image crop `{name}` must be between 0.0 and 1.0"),
+            });
+        }
+    }
+    Ok((crop.left, crop.top, crop.right, crop.bottom))
 }
 
 fn load_image_payload_from_path(
@@ -3826,6 +4590,60 @@ fn load_image_payload_from_data_url(
         format!("image.{}", image_extension_from_mime(mime)),
         action,
     )
+}
+
+fn load_image_payload_from_uri(
+    uri: &str,
+    action: &str,
+) -> Result<ImagePayload, PresentationArtifactError> {
+    let response =
+        reqwest::blocking::get(uri).map_err(|error| PresentationArtifactError::InvalidArgs {
+            action: action.to_string(),
+            message: format!("failed to fetch image `{uri}`: {error}"),
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(PresentationArtifactError::InvalidArgs {
+            action: action.to_string(),
+            message: format!("failed to fetch image `{uri}`: HTTP {status}"),
+        });
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(';').next().unwrap_or(value).trim().to_string());
+    let bytes = response
+        .bytes()
+        .map_err(|error| PresentationArtifactError::InvalidArgs {
+            action: action.to_string(),
+            message: format!("failed to read image `{uri}`: {error}"),
+        })?;
+    build_image_payload(
+        bytes.to_vec(),
+        infer_remote_image_filename(uri, content_type.as_deref()),
+        action,
+    )
+}
+
+fn infer_remote_image_filename(uri: &str, content_type: Option<&str>) -> String {
+    let path_name = reqwest::Url::parse(uri)
+        .ok()
+        .and_then(|url| {
+            url.path_segments()
+                .and_then(Iterator::last)
+                .map(str::to_owned)
+        })
+        .filter(|segment| !segment.is_empty());
+    match (path_name, content_type) {
+        (Some(path_name), _) if Path::new(&path_name).extension().is_some() => path_name,
+        (Some(path_name), Some(content_type)) => {
+            format!("{path_name}.{}", image_extension_from_mime(content_type))
+        }
+        (Some(path_name), None) => path_name,
+        (None, Some(content_type)) => format!("image.{}", image_extension_from_mime(content_type)),
+        (None, None) => "image.png".to_string(),
+    }
 }
 
 fn build_image_payload(

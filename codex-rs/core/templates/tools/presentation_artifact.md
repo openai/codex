@@ -34,6 +34,7 @@ Supported actions:
 - `set_slide_background`
 - `add_text_shape`
 - `add_shape`
+- `add_connector`
 - `add_image`
 - `replace_image`
 - `add_table`
@@ -42,6 +43,8 @@ Supported actions:
 - `add_chart`
 - `update_text`
 - `update_shape_style`
+- `bring_to_front`
+- `send_to_back`
 - `delete_element`
 - `delete_artifact`
 
@@ -73,5 +76,20 @@ Example resolve:
 
 Notes visibility is honored on export: `set_notes_visibility` controls whether speaker notes are emitted into exported PPTX output.
 
+Image placeholders can be prompt-only. `add_image` accepts `prompt` without `path`/`data_url`, and unresolved placeholders export as a visible placeholder box instead of failing.
+
+Remote images are supported. `add_image` and `replace_image` accept `uri` in addition to local `path` and `data_url`.
+
+Image edits can target inspect/resolve anchors like `im/element_3`, and `update_shape_style` now accepts image `fit`, `crop`, and `lock_aspect_ratio` updates.
+
+`update_shape_style.position` accepts partial updates, so you can move or resize an element without resending the full rect.
+
+Connectors are supported via `add_connector`, with straight/elbow/curved types plus dash styles and arrow heads.
+
 Example preview:
 `{"artifact_id":"presentation_x","action":"export_preview","args":{"slide_index":0,"path":"artifacts/q2-update-slide1.png"}}`
+
+`export_preview` also accepts `format`, `scale`, and `quality` for rendered previews. `format` currently supports `png` and `jpeg`.
+
+Example JPEG preview:
+`{"artifact_id":"presentation_x","action":"export_preview","args":{"slide_index":0,"path":"artifacts/q2-update-slide1.jpg","format":"jpeg","scale":0.75,"quality":85}}`

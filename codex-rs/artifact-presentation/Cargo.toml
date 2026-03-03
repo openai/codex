@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "codex_presentation_artifact"
+name = "codex_artifact_presentation"
 path = "src/lib.rs"
 
 [lints]
@@ -15,6 +15,7 @@ workspace = true
 base64 = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
 ppt-rs = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -23,3 +24,4 @@ uuid = { workspace = true, features = ["v4"] }
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+tiny_http = { workspace = true }

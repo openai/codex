@@ -1,6 +1,6 @@
 //! Session-wide mutable state.
 
-use codex_presentation_artifact::PresentationArtifactManager;
+use codex_artifact_presentation::PresentationArtifactManager;
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;

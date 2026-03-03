@@ -1,8 +1,8 @@
 use async_trait::async_trait;
-use codex_presentation_artifact::PathAccessKind;
-use codex_presentation_artifact::PathAccessRequirement;
-use codex_presentation_artifact::PresentationArtifactError;
-use codex_presentation_artifact::PresentationArtifactRequest;
+use codex_artifact_presentation::PathAccessKind;
+use codex_artifact_presentation::PathAccessRequirement;
+use codex_artifact_presentation::PresentationArtifactError;
+use codex_artifact_presentation::PresentationArtifactRequest;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use serde_json::to_string;
