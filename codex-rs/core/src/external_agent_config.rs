@@ -615,7 +615,7 @@ fn write_toml_file(path: &Path, value: &TomlValue) -> io::Result<()> {
     let serialized = toml_value_to_document(value)
         .map(|document| document.to_string())
         .map_err(|err| invalid_data_error(format!("failed to serialize config.toml: {err}")))?;
-    fs::write(path, format!("{serialized}\n"))
+    fs::write(path, format!("{}\n", serialized.trim_end()))
 }
 
 fn toml_value_to_document(value: &TomlValue) -> io::Result<DocumentMut> {
@@ -634,7 +634,7 @@ fn toml_value_to_document(value: &TomlValue) -> io::Result<DocumentMut> {
 
 fn toml_value_to_edit_item(path: &[&str], value: &TomlValue) -> io::Result<TomlEditItem> {
     match value {
-        TomlValue::Table(table) if should_inline_table(path) => {
+        TomlValue::Table(table) if matches!(path, ["shell_environment_policy", "set"]) => {
             toml_table_to_inline_table(path, table)
                 .map(TomlEditValue::InlineTable)
                 .map(TomlEditItem::Value)
@@ -684,10 +684,6 @@ fn toml_value_to_edit_value(path: &[&str], value: &TomlValue) -> io::Result<Toml
             toml_table_to_inline_table(path, table).map(TomlEditValue::InlineTable)
         }
     }
-}
-
-fn should_inline_table(path: &[&str]) -> bool {
-    matches!(path, ["shell_environment_policy", "set"])
 }
 
 fn is_empty_toml_table(value: &TomlValue) -> bool {
