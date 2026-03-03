@@ -113,6 +113,26 @@ impl SpreadsheetArtifactManager {
             "list_sheets" => self.list_sheets(request),
             "get_sheet" => self.get_sheet(request),
             "inspect" => self.inspect(request),
+            "list_charts" => self.list_charts(request),
+            "get_chart" => self.get_chart(request),
+            "create_chart" => self.create_chart(request),
+            "add_chart_series" => self.add_chart_series(request),
+            "set_chart_properties" => self.set_chart_properties(request),
+            "delete_chart" => self.delete_chart(request),
+            "list_tables" => self.list_tables(request),
+            "get_table" => self.get_table(request),
+            "create_table" => self.create_table(request),
+            "set_table_style" => self.set_table_style(request),
+            "clear_table_filters" => self.clear_table_filters(request),
+            "reapply_table_filters" => self.reapply_table_filters(request),
+            "rename_table_column" => self.rename_table_column(request),
+            "set_table_column_totals" => self.set_table_column_totals(request),
+            "delete_table" => self.delete_table(request),
+            "list_conditional_formats" => self.list_conditional_formats(request),
+            "add_conditional_format" => self.add_conditional_format(request),
+            "delete_conditional_format" => self.delete_conditional_format(request),
+            "list_pivot_tables" => self.list_pivot_tables(request),
+            "get_pivot_table" => self.get_pivot_table(request),
             "create_sheet" => self.create_sheet(request),
             "rename_sheet" => self.rename_sheet(request),
             "delete_sheet" => self.delete_sheet(request),
@@ -493,6 +513,632 @@ impl SpreadsheetArtifactManager {
         Ok(response)
     }
 
+    fn list_charts(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SheetLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let range = args.range.as_deref().map(CellRange::parse).transpose()?;
+        let charts = sheet.list_charts(range.as_ref())?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Listed {} charts on `{}`", charts.len(), sheet.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_ref = Some(sheet_reference(sheet));
+        response.range_ref = range
+            .as_ref()
+            .map(|entry| SpreadsheetCellRangeRef::new(sheet.name.clone(), entry));
+        response.chart_list = Some(charts);
+        Ok(response)
+    }
+
+    fn get_chart(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: ChartLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let chart = sheet
+            .get_chart(&request.action, chart_lookup_from_args(&args))?
+            .clone();
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Retrieved chart `{}` from `{}`", chart.id, sheet.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_ref = Some(sheet_reference(sheet));
+        response.chart_list = Some(vec![chart]);
+        Ok(response)
+    }
+
+    fn create_chart(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CreateChartArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        if let Some(source_sheet_name) = args.source_sheet_name.as_deref() {
+            artifact.sheet_lookup(&request.action, Some(source_sheet_name), None)?;
+        }
+        let source_range = CellRange::parse(&args.source_range)?;
+        let chart = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            let chart_id = sheet.create_chart(
+                &request.action,
+                args.chart_type,
+                args.source_sheet_name.or_else(|| Some(sheet.name.clone())),
+                &source_range,
+                args.options.unwrap_or_default(),
+            )?;
+            sheet
+                .get_chart(
+                    &request.action,
+                    crate::SpreadsheetChartLookup {
+                        id: Some(chart_id),
+                        index: None,
+                    },
+                )?
+                .clone()
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Created chart `{}`", chart.id),
+            snapshot_for_artifact(artifact),
+        );
+        response.chart_list = Some(vec![chart]);
+        Ok(response)
+    }
+
+    fn add_chart_series(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: AddChartSeriesArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let chart = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            let series_id = sheet.add_chart_series(
+                &request.action,
+                crate::SpreadsheetChartLookup {
+                    id: args.chart_id,
+                    index: args.chart_index.map(|value| value as usize),
+                },
+                args.series,
+            )?;
+            let chart = sheet.get_chart(
+                &request.action,
+                crate::SpreadsheetChartLookup {
+                    id: args.chart_id.or(Some(series_id).and(None)),
+                    index: args.chart_index.map(|value| value as usize),
+                },
+            );
+            match chart {
+                Ok(chart) => chart.clone(),
+                Err(_) => sheet
+                    .get_chart(
+                        &request.action,
+                        crate::SpreadsheetChartLookup {
+                            id: None,
+                            index: args.chart_index.map(|value| value as usize),
+                        },
+                    )?
+                    .clone(),
+            }
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Added chart series to chart `{}`", chart.id),
+            snapshot_for_artifact(artifact),
+        );
+        response.chart_list = Some(vec![chart]);
+        Ok(response)
+    }
+
+    fn set_chart_properties(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SetChartPropertiesArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let chart = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.lookup.sheet_name.as_deref(),
+                args.lookup.sheet_index.map(|value| value as usize),
+            )?;
+            let lookup = chart_lookup_from_args(&args.lookup);
+            sheet.set_chart_properties(&request.action, lookup.clone(), args.properties)?;
+            sheet.get_chart(&request.action, lookup)?.clone()
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Updated chart `{}`", chart.id),
+            snapshot_for_artifact(artifact),
+        );
+        response.chart_list = Some(vec![chart]);
+        Ok(response)
+    }
+
+    fn delete_chart(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: ChartLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let sheet_name = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            let name = sheet.name.clone();
+            sheet.delete_chart(&request.action, chart_lookup_from_args(&args))?;
+            name
+        };
+        let action = request.action.clone();
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            action.clone(),
+            format!("Deleted chart from `{sheet_name}`"),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_list = Some(vec![
+            artifact
+                .sheet_lookup(&action, Some(&sheet_name), None)?
+                .summary(),
+        ]);
+        Ok(response)
+    }
+
+    fn list_tables(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SheetLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let range = args.range.as_deref().map(CellRange::parse).transpose()?;
+        let tables = sheet.list_tables(range.as_ref())?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Listed {} tables on `{}`", tables.len(), sheet.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_ref = Some(sheet_reference(sheet));
+        response.range_ref = range
+            .as_ref()
+            .map(|entry| SpreadsheetCellRangeRef::new(sheet.name.clone(), entry));
+        response.table_list = Some(tables);
+        Ok(response)
+    }
+
+    fn get_table(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: TableLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let table = sheet.get_table_view(&request.action, table_lookup_from_args(&args))?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Retrieved table `{}` from `{}`", table.name, sheet.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_ref = Some(sheet_reference(sheet));
+        response.table_list = Some(vec![table]);
+        Ok(response)
+    }
+
+    fn create_table(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: CreateTableArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let range = CellRange::parse(&args.range)?;
+        let table = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            let table_id = sheet.create_table(&request.action, &range, args.options)?;
+            sheet.get_table_view(
+                &request.action,
+                crate::SpreadsheetTableLookup {
+                    name: None,
+                    display_name: None,
+                    id: Some(table_id),
+                },
+            )?
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Created table `{}`", table.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.table_list = Some(vec![table]);
+        Ok(response)
+    }
+
+    fn set_table_style(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SetTableStyleArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let table = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.lookup.sheet_name.as_deref(),
+                args.lookup.sheet_index.map(|value| value as usize),
+            )?;
+            let lookup = table_lookup_from_args(&args.lookup);
+            sheet.set_table_style(&request.action, lookup.clone(), args.options)?;
+            sheet.get_table_view(&request.action, lookup)?
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Updated table style for `{}`", table.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.table_list = Some(vec![table]);
+        Ok(response)
+    }
+
+    fn clear_table_filters(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: TableLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let table = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            let lookup = table_lookup_from_args(&args);
+            sheet.clear_table_filters(&request.action, lookup.clone())?;
+            sheet.get_table_view(&request.action, lookup)?
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Cleared table filters for `{}`", table.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.table_list = Some(vec![table]);
+        Ok(response)
+    }
+
+    fn reapply_table_filters(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: TableLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let table = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            let lookup = table_lookup_from_args(&args);
+            sheet.reapply_table_filters(&request.action, lookup.clone())?;
+            sheet.get_table_view(&request.action, lookup)?
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Reapplied table filters for `{}`", table.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.table_list = Some(vec![table]);
+        Ok(response)
+    }
+
+    fn rename_table_column(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: RenameTableColumnArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let column = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.lookup.sheet_name.as_deref(),
+                args.lookup.sheet_index.map(|value| value as usize),
+            )?;
+            sheet.rename_table_column(
+                &request.action,
+                table_lookup_from_args(&args.lookup),
+                args.column_id,
+                args.column_name.as_deref(),
+                args.new_name,
+            )?
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Renamed table column to `{}`", column.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.serialized_dict = Some(to_serialized_value(column)?);
+        Ok(response)
+    }
+
+    fn set_table_column_totals(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SetTableColumnTotalsArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let column = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.lookup.sheet_name.as_deref(),
+                args.lookup.sheet_index.map(|value| value as usize),
+            )?;
+            sheet.set_table_column_totals(
+                &request.action,
+                table_lookup_from_args(&args.lookup),
+                args.column_id,
+                args.column_name.as_deref(),
+                args.totals_row_label,
+                args.totals_row_function,
+            )?
+        };
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Updated totals metadata for column `{}`", column.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.serialized_dict = Some(to_serialized_value(column)?);
+        Ok(response)
+    }
+
+    fn delete_table(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: TableLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let sheet_name = {
+            let sheet = artifact.sheet_lookup_mut(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?;
+            let name = sheet.name.clone();
+            sheet.delete_table(&request.action, table_lookup_from_args(&args))?;
+            name
+        };
+        let action = request.action.clone();
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            action.clone(),
+            format!("Deleted table from `{sheet_name}`"),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_list = Some(vec![
+            artifact
+                .sheet_lookup(&action, Some(&sheet_name), None)?
+                .summary(),
+        ]);
+        Ok(response)
+    }
+
+    fn list_conditional_formats(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SheetLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let range = args.range.as_deref().map(CellRange::parse).transpose()?;
+        let formats = sheet.list_conditional_formats(range.as_ref());
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Listed {} conditional formats on `{}`",
+                formats.len(),
+                sheet.name
+            ),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_ref = Some(sheet_reference(sheet));
+        response.range_ref = range
+            .as_ref()
+            .map(|entry| SpreadsheetCellRangeRef::new(sheet.name.clone(), entry));
+        response.conditional_format_list = Some(formats);
+        Ok(response)
+    }
+
+    fn add_conditional_format(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: AddConditionalFormatArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let sheet_name = artifact
+            .sheet_lookup(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?
+            .name
+            .clone();
+        let format_id =
+            artifact.add_conditional_format(&request.action, &sheet_name, args.format)?;
+        let format = artifact
+            .sheet_lookup(&request.action, Some(&sheet_name), None)?
+            .conditional_formats
+            .iter()
+            .find(|entry| entry.id == format_id)
+            .cloned()
+            .ok_or_else(|| SpreadsheetArtifactError::Serialization {
+                message: format!("created conditional format `{format_id}` was not available"),
+            })?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Created conditional format `{format_id}`"),
+            snapshot_for_artifact(artifact),
+        );
+        response.conditional_format_list = Some(vec![format]);
+        Ok(response)
+    }
+
+    fn delete_conditional_format(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: DeleteConditionalFormatArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        let sheet_name = artifact
+            .sheet_lookup(
+                &request.action,
+                args.sheet_name.as_deref(),
+                args.sheet_index.map(|value| value as usize),
+            )?
+            .name
+            .clone();
+        artifact.delete_conditional_format(&request.action, &sheet_name, args.id)?;
+        let action = request.action.clone();
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            action.clone(),
+            format!("Deleted conditional format `{}`", args.id),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_list = Some(vec![
+            artifact
+                .sheet_lookup(&action, Some(&sheet_name), None)?
+                .summary(),
+        ]);
+        Ok(response)
+    }
+
+    fn list_pivot_tables(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: SheetLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let range = args.range.as_deref().map(CellRange::parse).transpose()?;
+        let pivots = sheet.list_pivot_tables(range.as_ref())?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Listed {} pivot tables on `{}`", pivots.len(), sheet.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_ref = Some(sheet_reference(sheet));
+        response.range_ref = range
+            .as_ref()
+            .map(|entry| SpreadsheetCellRangeRef::new(sheet.name.clone(), entry));
+        response.pivot_table_list = Some(pivots);
+        Ok(response)
+    }
+
+    fn get_pivot_table(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: PivotTableLookupArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let pivot = sheet
+            .get_pivot_table(&request.action, pivot_lookup_from_args(&args))?
+            .clone();
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!(
+                "Retrieved pivot table `{}` from `{}`",
+                pivot.name, sheet.name
+            ),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_ref = Some(sheet_reference(sheet));
+        response.pivot_table_list = Some(vec![pivot]);
+        Ok(response)
+    }
+
     fn rename_sheet(
         &mut self,
         request: SpreadsheetArtifactRequest,
@@ -776,6 +1422,7 @@ impl SpreadsheetArtifactManager {
             sheet.cleanup_and_validate_sheet()?;
             sheet.summary()
         };
+        artifact.validate_conditional_formats(&request.action, &sheet_summary.name)?;
         let mut response = SpreadsheetArtifactResponse::new(
             artifact_id,
             request.action,
@@ -2006,6 +2653,14 @@ pub struct SpreadsheetArtifactResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sheet_list: Option<Vec<SpreadsheetSheetSummary>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub chart_list: Option<Vec<crate::SpreadsheetChart>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table_list: Option<Vec<crate::SpreadsheetTableView>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditional_format_list: Option<Vec<crate::SpreadsheetConditionalFormat>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pivot_table_list: Option<Vec<crate::SpreadsheetPivotTable>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sheet_ref: Option<SpreadsheetSheetRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_ref: Option<SpreadsheetCellRef>,
@@ -2056,6 +2711,10 @@ impl SpreadsheetArtifactResponse {
             artifact_snapshot: Some(artifact_snapshot),
             workbook_summary: None,
             sheet_list: None,
+            chart_list: None,
+            table_list: None,
+            conditional_format_list: None,
+            pivot_table_list: None,
             sheet_ref: None,
             cell_ref: None,
             range_ref: None,
@@ -2097,6 +2756,10 @@ pub struct SpreadsheetSheetSnapshot {
     pub filled_columns: usize,
     pub minimum_range_filled: String,
     pub merged_range_count: usize,
+    pub chart_count: usize,
+    pub table_count: usize,
+    pub conditional_format_count: usize,
+    pub pivot_table_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2135,6 +2798,105 @@ struct SheetLookupArgs {
     sheet_name: Option<String>,
     sheet_index: Option<u32>,
     range: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChartLookupArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    chart_id: Option<u32>,
+    chart_index: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateChartArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    chart_type: crate::SpreadsheetChartType,
+    source_sheet_name: Option<String>,
+    source_range: String,
+    options: Option<crate::SpreadsheetChartCreateOptions>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AddChartSeriesArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    chart_id: Option<u32>,
+    chart_index: Option<u32>,
+    series: crate::SpreadsheetChartSeries,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetChartPropertiesArgs {
+    #[serde(flatten)]
+    lookup: ChartLookupArgs,
+    properties: crate::SpreadsheetChartProperties,
+}
+
+#[derive(Debug, Deserialize)]
+struct TableLookupArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    name: Option<String>,
+    display_name: Option<String>,
+    id: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTableArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    range: String,
+    options: crate::SpreadsheetCreateTableOptions,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetTableStyleArgs {
+    #[serde(flatten)]
+    lookup: TableLookupArgs,
+    options: crate::SpreadsheetTableStyleOptions,
+}
+
+#[derive(Debug, Deserialize)]
+struct RenameTableColumnArgs {
+    #[serde(flatten)]
+    lookup: TableLookupArgs,
+    column_id: Option<u32>,
+    column_name: Option<String>,
+    new_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetTableColumnTotalsArgs {
+    #[serde(flatten)]
+    lookup: TableLookupArgs,
+    column_id: Option<u32>,
+    column_name: Option<String>,
+    totals_row_label: Option<String>,
+    totals_row_function: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AddConditionalFormatArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    format: crate::SpreadsheetConditionalFormat,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteConditionalFormatArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    id: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct PivotTableLookupArgs {
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    name: Option<String>,
+    index: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2444,8 +3206,34 @@ fn snapshot_for_artifact(artifact: &SpreadsheetArtifact) -> SpreadsheetArtifactS
                 filled_columns: sheet.filled_columns(),
                 minimum_range_filled: sheet.minimum_range_filled(),
                 merged_range_count: sheet.merged_ranges.len(),
+                chart_count: sheet.charts.len(),
+                table_count: sheet.tables.len(),
+                conditional_format_count: sheet.conditional_formats.len(),
+                pivot_table_count: sheet.pivot_tables.len(),
             })
             .collect(),
+    }
+}
+
+fn chart_lookup_from_args(args: &ChartLookupArgs) -> crate::SpreadsheetChartLookup {
+    crate::SpreadsheetChartLookup {
+        id: args.chart_id,
+        index: args.chart_index.map(|value| value as usize),
+    }
+}
+
+fn table_lookup_from_args(args: &TableLookupArgs) -> crate::SpreadsheetTableLookup<'_> {
+    crate::SpreadsheetTableLookup {
+        name: args.name.as_deref(),
+        display_name: args.display_name.as_deref(),
+        id: args.id,
+    }
+}
+
+fn pivot_lookup_from_args(args: &PivotTableLookupArgs) -> crate::SpreadsheetPivotTableLookup<'_> {
+    crate::SpreadsheetPivotTableLookup {
+        name: args.name.as_deref(),
+        index: args.index.map(|value| value as usize),
     }
 }
 

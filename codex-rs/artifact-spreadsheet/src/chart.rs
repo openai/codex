@@ -64,7 +64,7 @@ pub struct SpreadsheetChart {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct SpreadsheetChartLookup<'a> {
+pub struct SpreadsheetChartLookup {
     pub id: Option<u32>,
     pub index: Option<usize>,
 }
@@ -101,7 +101,6 @@ impl SpreadsheetSheet {
                         .transpose()
                         .ok()
                         .flatten()
-                        .flatten()
                         .is_some_and(|chart_range| chart_range.intersects(target))
                 })
             })
@@ -112,7 +111,7 @@ impl SpreadsheetSheet {
     pub fn get_chart(
         &self,
         action: &str,
-        lookup: SpreadsheetChartLookup<'_>,
+        lookup: SpreadsheetChartLookup,
     ) -> Result<&SpreadsheetChart, SpreadsheetArtifactError> {
         if let Some(id) = lookup.id {
             return self
@@ -221,7 +220,7 @@ impl SpreadsheetSheet {
     pub fn add_chart_series(
         &mut self,
         action: &str,
-        lookup: SpreadsheetChartLookup<'_>,
+        lookup: SpreadsheetChartLookup,
         mut series: SpreadsheetChartSeries,
     ) -> Result<u32, SpreadsheetArtifactError> {
         validate_chart_series(action, &series)?;
@@ -235,7 +234,7 @@ impl SpreadsheetSheet {
     pub fn delete_chart(
         &mut self,
         action: &str,
-        lookup: SpreadsheetChartLookup<'_>,
+        lookup: SpreadsheetChartLookup,
     ) -> Result<(), SpreadsheetArtifactError> {
         let index = if let Some(id) = lookup.id {
             self.charts
@@ -267,7 +266,7 @@ impl SpreadsheetSheet {
     pub fn set_chart_properties(
         &mut self,
         action: &str,
-        lookup: SpreadsheetChartLookup<'_>,
+        lookup: SpreadsheetChartLookup,
         properties: SpreadsheetChartProperties,
     ) -> Result<(), SpreadsheetArtifactError> {
         let chart = self.get_chart_mut(action, lookup)?;
@@ -307,7 +306,7 @@ impl SpreadsheetSheet {
     fn get_chart_mut(
         &mut self,
         action: &str,
-        lookup: SpreadsheetChartLookup<'_>,
+        lookup: SpreadsheetChartLookup,
     ) -> Result<&mut SpreadsheetChart, SpreadsheetArtifactError> {
         if let Some(id) = lookup.id {
             return self
@@ -320,11 +319,12 @@ impl SpreadsheetSheet {
                 });
         }
         if let Some(index) = lookup.index {
+            let len = self.charts.len();
             return self.charts.get_mut(index).ok_or_else(|| {
                 SpreadsheetArtifactError::IndexOutOfRange {
                     action: action.to_string(),
                     index,
-                    len: self.charts.len(),
+                    len,
                 }
             });
         }

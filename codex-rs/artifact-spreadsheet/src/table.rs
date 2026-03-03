@@ -181,7 +181,12 @@ impl SpreadsheetSheet {
         range: &CellRange,
         options: SpreadsheetCreateTableOptions,
     ) -> Result<u32, SpreadsheetArtifactError> {
-        validate_table_geometry(action, range, options.header_row_count, options.totals_row_count)?;
+        validate_table_geometry(
+            action,
+            range,
+            options.header_row_count,
+            options.totals_row_count,
+        )?;
         for table in &self.tables {
             let table_range = table.range()?;
             if table_range.intersects(range) {
@@ -368,7 +373,12 @@ impl SpreadsheetSheet {
         let mut seen_display_names = BTreeSet::new();
         for table in &self.tables {
             let range = table.range()?;
-            validate_table_geometry(action, &range, table.header_row_count, table.totals_row_count)?;
+            validate_table_geometry(
+                action,
+                &range,
+                table.header_row_count,
+                table.totals_row_count,
+            )?;
             if !seen_names.insert(table.name.clone()) {
                 return Err(SpreadsheetArtifactError::InvalidArgs {
                     action: action.to_string(),
@@ -565,7 +575,8 @@ fn build_table_columns(
 
 fn unique_table_column_names(names: Vec<String>) -> Vec<String> {
     let mut seen = BTreeMap::<String, u32>::new();
-    names.into_iter()
+    names
+        .into_iter()
         .map(|name| {
             let entry = seen.entry(name.clone()).or_insert(0);
             *entry += 1;

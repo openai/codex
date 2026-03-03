@@ -128,6 +128,18 @@ impl SpreadsheetConditionalFormatCollection {
 }
 
 impl SpreadsheetArtifact {
+    pub fn validate_conditional_formats(
+        &self,
+        action: &str,
+        sheet_name: &str,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        let sheet = self.sheet_lookup(action, Some(sheet_name), None)?;
+        for format in &sheet.conditional_formats {
+            validate_conditional_format(self, format, action)?;
+        }
+        Ok(())
+    }
+
     pub fn add_conditional_format(
         &mut self,
         action: &str,

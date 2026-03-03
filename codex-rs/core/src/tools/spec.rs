@@ -35,8 +35,6 @@ use std::collections::HashMap;
 
 const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
-const PRESENTATION_ARTIFACT_DESCRIPTION_TEMPLATE: &str =
-    include_str!("../../templates/tools/presentation_artifact.md");
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
@@ -57,7 +55,7 @@ pub(crate) struct ToolsConfig {
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
-    pub presentation_artifact: bool,
+    pub artifact_tools: bool,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
@@ -87,7 +85,7 @@ impl ToolsConfig {
         let include_default_mode_request_user_input =
             features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
-        let include_presentation_artifact = features.enabled(Feature::Artifact);
+        let include_artifact_tools = features.enabled(Feature::Artifact);
         let include_agent_jobs = include_collab_tools && features.enabled(Feature::Sqlite);
         let request_permission_enabled = features.enabled(Feature::RequestPermissions);
         let shell_command_backend =
@@ -143,7 +141,7 @@ impl ToolsConfig {
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
-            presentation_artifact: include_presentation_artifact,
+            artifact_tools: include_artifact_tools,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
@@ -609,11 +607,49 @@ fn create_presentation_artifact_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "presentation_artifact".to_string(),
-        description: PRESENTATION_ARTIFACT_DESCRIPTION_TEMPLATE.to_string(),
+        description: "Create or edit a presentation artifact for the current thread.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["actions".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_spreadsheet_artifact_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "artifact_id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Artifact id returned by an earlier spreadsheet_artifact call.".to_string(),
+                ),
+            },
+        ),
+        (
+            "action".to_string(),
+            JsonSchema::String {
+                description: Some("Action name to run for this request.".to_string()),
+            },
+        ),
+        (
+            "args".to_string(),
+            JsonSchema::Object {
+                properties: BTreeMap::new(),
+                required: None,
+                additional_properties: Some(true.into()),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spreadsheet_artifact".to_string(),
+        description: "Create or edit a spreadsheet artifact for the current thread.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["action".to_string(), "args".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1722,6 +1758,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::SearchToolBm25Handler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
+    use crate::tools::handlers::SpreadsheetArtifactHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
@@ -1745,6 +1782,7 @@ pub(crate) fn build_specs(
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let presentation_artifact_handler = Arc::new(PresentationArtifactHandler);
+    let spreadsheet_artifact_handler = Arc::new(SpreadsheetArtifactHandler);
     let request_permission_enabled = config.request_permission_enabled;
 
     match &config.shell_type {
@@ -1882,9 +1920,11 @@ pub(crate) fn build_specs(
     builder.push_spec_with_parallel_support(create_view_image_tool(), true);
     builder.register_handler("view_image", view_image_handler);
 
-    if config.presentation_artifact {
+    if config.artifact_tools {
         builder.push_spec(create_presentation_artifact_tool());
+        builder.push_spec(create_spreadsheet_artifact_tool());
         builder.register_handler("presentation_artifact", presentation_artifact_handler);
+        builder.register_handler("spreadsheet_artifact", spreadsheet_artifact_handler);
     }
 
     if config.collab_tools {
@@ -2201,7 +2241,7 @@ mod tests {
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-        assert_contains_tool_names(&tools, &["presentation_artifact"]);
+        assert_contains_tool_names(&tools, &["presentation_artifact", "spreadsheet_artifact"]);
     }
 
     #[test]

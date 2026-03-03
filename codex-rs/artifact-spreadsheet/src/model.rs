@@ -457,6 +457,10 @@ pub struct SpreadsheetSheetSummary {
     pub default_column_width: Option<f64>,
     pub show_grid_lines: bool,
     pub merged_range_count: usize,
+    pub chart_count: usize,
+    pub table_count: usize,
+    pub conditional_format_count: usize,
+    pub pivot_table_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -504,6 +508,14 @@ pub struct SpreadsheetSheet {
     pub cells: BTreeMap<CellAddress, SpreadsheetCell>,
     #[serde(default)]
     pub merged_ranges: Vec<CellRange>,
+    #[serde(default)]
+    pub charts: Vec<crate::SpreadsheetChart>,
+    #[serde(default)]
+    pub tables: Vec<crate::SpreadsheetTable>,
+    #[serde(default)]
+    pub conditional_formats: Vec<crate::SpreadsheetConditionalFormat>,
+    #[serde(default)]
+    pub pivot_tables: Vec<crate::SpreadsheetPivotTable>,
     pub default_row_height: Option<f64>,
     pub default_column_width: Option<f64>,
     pub show_grid_lines: bool,
@@ -569,6 +581,10 @@ impl SpreadsheetSheet {
             name,
             cells: BTreeMap::new(),
             merged_ranges: Vec::new(),
+            charts: Vec::new(),
+            tables: Vec::new(),
+            conditional_formats: Vec::new(),
+            pivot_tables: Vec::new(),
             default_row_height: None,
             default_column_width: None,
             show_grid_lines: true,
@@ -679,6 +695,10 @@ impl SpreadsheetSheet {
             default_column_width: self.default_column_width,
             show_grid_lines: self.show_grid_lines,
             merged_range_count: self.merged_ranges.len(),
+            chart_count: self.charts.len(),
+            table_count: self.tables.len(),
+            conditional_format_count: self.conditional_formats.len(),
+            pivot_table_count: self.pivot_tables.len(),
         }
     }
 
@@ -1303,6 +1323,9 @@ impl SpreadsheetSheet {
                 }
             }
         }
+        self.validate_tables("cleanup_and_validate_sheet")?;
+        self.validate_charts("cleanup_and_validate_sheet")?;
+        self.validate_pivot_tables("cleanup_and_validate_sheet")?;
         Ok(())
     }
 
@@ -1718,7 +1741,24 @@ impl SpreadsheetArtifact {
         }
 
         match selected.as_str() {
-            "xlsx" => write_xlsx(self, path),
+            "xlsx" => {
+                for sheet in &self.sheets {
+                    if !sheet.charts.is_empty()
+                        || !sheet.tables.is_empty()
+                        || !sheet.conditional_formats.is_empty()
+                        || !sheet.pivot_tables.is_empty()
+                    {
+                        return Err(SpreadsheetArtifactError::ExportFailed {
+                            path: path.to_path_buf(),
+                            message: format!(
+                                "xlsx export does not yet support charts, tables, conditional formats, or pivot tables on sheet `{}`; use json or bin export instead",
+                                sheet.name
+                            ),
+                        });
+                    }
+                }
+                write_xlsx(self, path)
+            }
             "json" => {
                 let json = self.to_json()?;
                 std::fs::write(path, json).map_err(|error| {

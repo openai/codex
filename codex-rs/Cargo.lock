@@ -1802,6 +1802,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-arg0",
  "codex-artifact-presentation",
+ "codex-artifact-spreadsheet",
  "codex-async-utils",
  "codex-client",
  "codex-config",
