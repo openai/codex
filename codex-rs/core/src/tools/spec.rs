@@ -23,6 +23,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -35,18 +36,6 @@ use std::collections::HashMap;
 
 const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
-const IMAGE_GENERATION_SUPPORTED_MODELS: [&str; 9] = [
-    "gpt-4o",
-    "gpt-4o-mini",
-    "gpt-4.1",
-    "gpt-4.1-mini",
-    "gpt-4.1-nano",
-    "o3",
-    "gpt-5",
-    "gpt-5-nano",
-    "gpt-5.2",
-];
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
     Classic,
@@ -181,7 +170,7 @@ impl ToolsConfig {
 }
 
 fn supports_image_generation(model_info: &ModelInfo) -> bool {
-    IMAGE_GENERATION_SUPPORTED_MODELS.contains(&model_info.slug.as_str())
+    model_info.input_modalities.contains(&InputModality::Image)
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -2023,6 +2012,7 @@ mod tests {
     use crate::models_manager::manager::ModelsManager;
     use crate::models_manager::model_info::with_config_overrides;
     use crate::tools::registry::ConfiguredToolSpec;
+    use codex_protocol::openai_models::InputModality;
     use codex_protocol::openai_models::ModelInfo;
     use codex_protocol::openai_models::ModelsResponse;
     use pretty_assertions::assert_eq;
@@ -2409,10 +2399,11 @@ mod tests {
     #[test]
     fn image_generation_tools_require_feature_and_supported_model() {
         let config = test_config();
-        let supported_model_info =
+        let mut supported_model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5.2", &config);
-        let unsupported_model_info =
-            ModelsManager::construct_model_info_offline_for_tests("gpt-5.2-codex", &config);
+        supported_model_info.slug = "custom/gpt-5.2-variant".to_string();
+        let mut unsupported_model_info = supported_model_info.clone();
+        unsupported_model_info.input_modalities = vec![InputModality::Text];
         let features = Features::with_defaults();
 
         let default_tools_config = ToolsConfig::new(&ToolsConfigParams {

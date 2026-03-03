@@ -654,11 +654,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ImageGeneration,
         key: "image_generation",
-        stage: Stage::Experimental {
-            name: "Image generation",
-            menu_description: "Enable the built-in image generation tool for supported Responses API models.",
-            announcement: "NEW: Image generation is available as an experimental built-in tool. Enable it in /experimental to receive image-generation responses from supported models.",
-        },
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -878,6 +874,12 @@ mod tests {
             ))
         );
         assert_eq!(Feature::JsRepl.default_enabled(), false);
+    }
+
+    #[test]
+    fn image_generation_is_under_development() {
+        assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
+        assert_eq!(Feature::ImageGeneration.default_enabled(), false);
     }
 
     #[test]
