@@ -137,8 +137,8 @@ fn run_setup_refresh_inner(
         read_roots_override,
         write_roots_override,
     );
-    let uses_offline_identity = proxy_enforced || !policy.has_full_network_access();
-    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, uses_offline_identity);
+    let network_identity = SandboxNetworkIdentity::from_policy(policy, proxy_enforced);
+    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, network_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -365,6 +365,26 @@ pub(crate) struct OfflineProxySettings {
     pub allow_local_binding: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SandboxNetworkIdentity {
+    Offline,
+    Online,
+}
+
+impl SandboxNetworkIdentity {
+    pub(crate) fn from_policy(policy: &SandboxPolicy, proxy_enforced: bool) -> Self {
+        if proxy_enforced || !policy.has_full_network_access() {
+            Self::Offline
+        } else {
+            Self::Online
+        }
+    }
+
+    pub(crate) fn uses_offline_identity(self) -> bool {
+        matches!(self, Self::Offline)
+    }
+}
+
 const PROXY_ENV_KEYS: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -381,9 +401,9 @@ const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
 
 pub(crate) fn offline_proxy_settings_from_env(
     env_map: &HashMap<String, String>,
-    uses_offline_identity: bool,
+    network_identity: SandboxNetworkIdentity,
 ) -> OfflineProxySettings {
-    if !uses_offline_identity {
+    if !network_identity.uses_offline_identity() {
         return OfflineProxySettings {
             proxy_ports: vec![],
             allow_local_binding: false,
@@ -635,8 +655,8 @@ pub fn run_elevated_setup(
         read_roots_override,
         write_roots_override,
     );
-    let uses_offline_identity = proxy_enforced || !policy.has_full_network_access();
-    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, uses_offline_identity);
+    let network_identity = SandboxNetworkIdentity::from_policy(policy, proxy_enforced);
+    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, network_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -776,7 +796,7 @@ mod tests {
         );
 
         assert_eq!(
-            offline_proxy_settings_from_env(&env, false),
+            offline_proxy_settings_from_env(&env, super::SandboxNetworkIdentity::Online),
             super::OfflineProxySettings {
                 proxy_ports: vec![],
                 allow_local_binding: false,
@@ -801,7 +821,7 @@ mod tests {
         );
 
         assert_eq!(
-            offline_proxy_settings_from_env(&env, true),
+            offline_proxy_settings_from_env(&env, super::SandboxNetworkIdentity::Offline),
             super::OfflineProxySettings {
                 proxy_ports: vec![1081, 8080],
                 allow_local_binding: true,
