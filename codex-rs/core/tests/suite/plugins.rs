@@ -24,7 +24,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 fn write_plugin_skill_plugin(home: &TempDir) -> std::path::PathBuf {
-    let plugin_root = home.path().join("plugins/sample");
+    let plugin_root = home.path().join("plugins/cache/test/sample/local");
     let skill_dir = plugin_root.join("skills/sample-search");
     std::fs::create_dir_all(skill_dir.as_path()).expect("create plugin skill dir");
     std::fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
@@ -40,17 +40,14 @@ fn write_plugin_skill_plugin(home: &TempDir) -> std::path::PathBuf {
     .expect("write plugin skill");
     std::fs::write(
         home.path().join("config.toml"),
-        format!(
-            "[features]\nplugins = true\n\n[plugins.sample]\nenabled = true\npath = \"{}\"\n",
-            plugin_root.display()
-        ),
+        "[features]\nplugins = true\n\n[plugins.\"sample@test\"]\nenabled = true\n",
     )
     .expect("write config");
     skill_dir.join("SKILL.md")
 }
 
 fn write_plugin_mcp_plugin(home: &TempDir, command: &str) {
-    let plugin_root = home.path().join("plugins/sample");
+    let plugin_root = home.path().join("plugins/cache/test/sample/local");
     std::fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
     std::fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
@@ -72,10 +69,7 @@ fn write_plugin_mcp_plugin(home: &TempDir, command: &str) {
     .expect("write plugin mcp config");
     std::fs::write(
         home.path().join("config.toml"),
-        format!(
-            "[features]\nplugins = true\n\n[plugins.sample]\nenabled = true\npath = \"{}\"\n",
-            plugin_root.display()
-        ),
+        "[features]\nplugins = true\n\n[plugins.\"sample@test\"]\nenabled = true\n",
     )
     .expect("write config");
 }
