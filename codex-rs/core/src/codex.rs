@@ -4891,10 +4891,15 @@ pub(crate) async fn run_turn(
             Ok(mcp_tools) => mcp_tools,
             Err(_) => return None,
         };
-        connectors::with_app_enabled_state(
+        let plugin_apps = sess
+            .services
+            .plugins_manager
+            .plugins_for_config(&turn_context.config);
+        let connectors = connectors::merge_plugin_apps_with_accessible(
+            plugin_apps.effective_apps(),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-            &turn_context.config,
-        )
+        );
+        connectors::with_app_enabled_state(connectors, &turn_context.config)
     } else {
         Vec::new()
     };
@@ -5614,8 +5619,16 @@ async fn built_tools(
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
     let connectors = if turn_context.features.enabled(Feature::Apps) {
-        Some(connectors::with_app_enabled_state(
+        let plugin_apps = sess
+            .services
+            .plugins_manager
+            .plugins_for_config(&turn_context.config);
+        let connectors = connectors::merge_plugin_apps_with_accessible(
+            plugin_apps.effective_apps(),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+        );
+        Some(connectors::with_app_enabled_state(
+            connectors,
             &turn_context.config,
         ))
     } else {

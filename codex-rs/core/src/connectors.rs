@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -29,6 +30,7 @@ use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
+use crate::plugins::PluginApp;
 use crate::token_data::TokenData;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -353,6 +355,30 @@ pub fn merge_connectors(
     merged
 }
 
+pub fn merge_plugin_apps(connectors: Vec<AppInfo>, plugin_apps: Vec<PluginApp>) -> Vec<AppInfo> {
+    let plugin_connectors = plugin_apps
+        .into_iter()
+        .map(plugin_app_to_app_info)
+        .collect::<Vec<_>>();
+    merge_connectors(plugin_connectors, connectors)
+}
+
+pub fn merge_plugin_apps_with_accessible(
+    plugin_apps: Vec<PluginApp>,
+    accessible_connectors: Vec<AppInfo>,
+) -> Vec<AppInfo> {
+    let accessible_connector_ids: HashSet<&str> = accessible_connectors
+        .iter()
+        .map(|connector| connector.id.as_str())
+        .collect();
+    let plugin_connectors = plugin_apps
+        .into_iter()
+        .filter(|app| accessible_connector_ids.contains(app.connector_id.as_str()))
+        .map(plugin_app_to_app_info)
+        .collect::<Vec<_>>();
+    merge_connectors(plugin_connectors, accessible_connectors)
+}
+
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
     let apps_config = read_apps_config(config);
     if let Some(apps_config) = apps_config.as_ref() {
@@ -573,6 +599,30 @@ where
             .then_with(|| left.id.cmp(&right.id))
     });
     accessible
+}
+
+fn plugin_app_to_app_info(plugin_app: PluginApp) -> AppInfo {
+    let connector_id = plugin_app.connector_id;
+    let name = if plugin_app.alias.trim().is_empty() {
+        connector_id.clone()
+    } else {
+        plugin_app.alias
+    };
+
+    AppInfo {
+        id: connector_id.clone(),
+        name: name.clone(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some(connector_install_url(&name, &connector_id)),
+        is_accessible: false,
+        is_enabled: true,
+    }
 }
 
 fn normalize_connector_value(value: Option<&str>) -> Option<String> {
