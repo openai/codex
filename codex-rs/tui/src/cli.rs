@@ -110,6 +110,10 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
+    /// Internal: replay serialized runtime overrides when resuming a session.
+    #[arg(long = "runtime-overrides", hide = true, value_name = "FILE")]
+    pub runtime_overrides: Option<PathBuf>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

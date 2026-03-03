@@ -112,6 +112,8 @@ use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -925,18 +927,18 @@ impl SessionConfiguration {
     }
 }
 
-#[derive(Default, Clone)]
-pub(crate) struct SessionSettingsUpdate {
-    pub(crate) cwd: Option<PathBuf>,
-    pub(crate) approval_policy: Option<AskForApproval>,
-    pub(crate) sandbox_policy: Option<SandboxPolicy>,
-    pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
-    pub(crate) collaboration_mode: Option<CollaborationMode>,
-    pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
-    pub(crate) service_tier: Option<Option<ServiceTier>>,
-    pub(crate) final_output_json_schema: Option<Option<Value>>,
-    pub(crate) personality: Option<Personality>,
-    pub(crate) app_server_client_name: Option<String>,
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SessionSettingsUpdate {
+    pub cwd: Option<PathBuf>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox_policy: Option<SandboxPolicy>,
+    pub windows_sandbox_level: Option<WindowsSandboxLevel>,
+    pub collaboration_mode: Option<CollaborationMode>,
+    pub reasoning_summary: Option<ReasoningSummaryConfig>,
+    pub service_tier: Option<Option<ServiceTier>>,
+    pub final_output_json_schema: Option<Option<Value>>,
+    pub personality: Option<Personality>,
+    pub app_server_client_name: Option<String>,
 }
 
 impl Session {

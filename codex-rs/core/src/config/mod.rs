@@ -1557,7 +1557,7 @@ impl ConfigToml {
 }
 
 /// Optional overrides for user configuration (e.g., from CLI flags).
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConfigOverrides {
     pub model: Option<String>,
     pub review_model: Option<String>,

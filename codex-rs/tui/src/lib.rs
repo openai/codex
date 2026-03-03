@@ -16,6 +16,7 @@ use codex_core::ThreadSortKey;
 use codex_core::auth::AuthMode;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
+use codex_core::codex::SessionSettingsUpdate;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -277,7 +278,44 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
         }
     };
 
-    let cwd = cli.cwd.clone();
+    #[allow(clippy::print_stderr)]
+    let runtime_overrides = match cli.runtime_overrides.as_deref() {
+        Some(path) => {
+            let contents = match std::fs::read(path) {
+                Ok(contents) => contents,
+                Err(err) => {
+                    eprintln!("Error reading runtime overrides {}: {err}", path.display());
+                    std::process::exit(1);
+                }
+            };
+            let runtime_overrides =
+                match serde_json::from_slice(&contents).map_err(std::io::Error::other) {
+                    Ok(runtime_overrides) => runtime_overrides,
+                    Err(err) => {
+                        eprintln!("Error parsing runtime overrides {}: {err}", path.display());
+                        std::process::exit(1);
+                    }
+                };
+            if let Err(err) = std::fs::remove_file(path)
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "failed to remove runtime overrides"
+                );
+            }
+            Some(runtime_overrides)
+        }
+        None => None,
+    };
+
+    let cwd = cli.cwd.clone().or_else(|| {
+        runtime_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.cwd.clone())
+    });
+    let launch_cli_kv_overrides = cli_kv_overrides.clone();
     let config_cwd = match cwd.as_deref() {
         Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
         None => AbsolutePathBuf::current_dir()?,
@@ -287,7 +325,7 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
     let config_toml = match load_config_as_toml_with_cli_overrides(
         &codex_home,
         &config_cwd,
-        cli_kv_overrides.clone(),
+        launch_cli_kv_overrides.clone(),
     )
     .await
     {
@@ -383,10 +421,11 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
         ..Default::default()
     };
 
-    let config = load_config_or_exit(
-        cli_kv_overrides.clone(),
+    let config = load_config_or_exit_with_runtime_overrides(
+        launch_cli_kv_overrides.clone(),
         overrides.clone(),
         cloud_requirements.clone(),
+        runtime_overrides.as_ref(),
     )
     .await;
 
@@ -521,7 +560,8 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
         cli,
         config,
         overrides,
-        cli_kv_overrides,
+        launch_cli_kv_overrides,
+        runtime_overrides,
         cloud_requirements,
         feedback,
     )
@@ -534,6 +574,7 @@ async fn run_ratatui_app(
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
+    runtime_overrides: Option<SessionSettingsUpdate>,
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
@@ -631,10 +672,11 @@ async fn run_ratatui_app(
         // If the user made an explicit trust decision, or we showed the login flow, reload config
         // so current process state reflects persisted trust/auth changes.
         if onboarding_result.directory_trust_decision.is_some() || show_login_screen {
-            load_config_or_exit(
+            load_config_or_exit_with_runtime_overrides(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
                 cloud_requirements.clone(),
+                runtime_overrides.as_ref(),
             )
             .await
         } else {
@@ -886,6 +928,7 @@ async fn run_ratatui_app(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
                 cloud_requirements.clone(),
+                runtime_overrides.as_ref(),
                 fallback_cwd,
             )
             .await
@@ -1116,19 +1159,28 @@ fn get_login_status(config: &Config) -> LoginStatus {
     }
 }
 
-async fn load_config_or_exit(
+async fn load_config_or_exit_with_runtime_overrides(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    runtime_overrides: Option<&SessionSettingsUpdate>,
 ) -> Config {
-    load_config_or_exit_with_fallback_cwd(cli_kv_overrides, overrides, cloud_requirements, None)
-        .await
+    let fallback_cwd = runtime_overrides.and_then(|overrides| overrides.cwd.clone());
+    load_config_or_exit_with_fallback_cwd(
+        cli_kv_overrides,
+        overrides,
+        cloud_requirements,
+        runtime_overrides,
+        fallback_cwd,
+    )
+    .await
 }
 
 async fn load_config_or_exit_with_fallback_cwd(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    runtime_overrides: Option<&SessionSettingsUpdate>,
     fallback_cwd: Option<PathBuf>,
 ) -> Config {
     #[allow(clippy::print_stderr)]
@@ -1140,7 +1192,76 @@ async fn load_config_or_exit_with_fallback_cwd(
         .build()
         .await
     {
-        Ok(config) => config,
+        Ok(mut config) => {
+            if let Some(runtime_overrides) = runtime_overrides {
+                let approval_policy_changed =
+                    runtime_overrides
+                        .approval_policy
+                        .is_some_and(|approval_policy| {
+                            config.permissions.approval_policy.value() != approval_policy
+                        });
+                let sandbox_policy_changed =
+                    runtime_overrides
+                        .sandbox_policy
+                        .as_ref()
+                        .is_some_and(|sandbox_policy| {
+                            config.permissions.sandbox_policy.get() != sandbox_policy
+                        });
+                if let Some(cwd) = runtime_overrides.cwd.as_ref() {
+                    config.cwd = cwd.clone();
+                }
+                #[allow(clippy::print_stderr)]
+                if let Some(approval_policy) = runtime_overrides.approval_policy
+                    && let Err(err) = config.permissions.approval_policy.set(approval_policy)
+                {
+                    eprintln!("Error applying runtime approval policy: {err}");
+                    std::process::exit(1);
+                }
+                #[allow(clippy::print_stderr)]
+                if let Some(sandbox_policy) = runtime_overrides.sandbox_policy.as_ref()
+                    && let Err(err) = config
+                        .permissions
+                        .sandbox_policy
+                        .set(sandbox_policy.clone())
+                {
+                    eprintln!("Error applying runtime sandbox policy: {err}");
+                    std::process::exit(1);
+                }
+                if let Some(collaboration_mode) = runtime_overrides.collaboration_mode.as_ref() {
+                    config.model = Some(collaboration_mode.model().to_string());
+                    config.model_reasoning_effort = collaboration_mode.reasoning_effort();
+                }
+                if let Some(reasoning_summary) = runtime_overrides.reasoning_summary {
+                    config.model_reasoning_summary = Some(reasoning_summary);
+                }
+                if let Some(service_tier) = runtime_overrides.service_tier {
+                    config.service_tier = service_tier;
+                }
+                if let Some(personality) = runtime_overrides.personality {
+                    config.personality = Some(personality);
+                }
+                if let Some(windows_sandbox_level) = runtime_overrides.windows_sandbox_level {
+                    match windows_sandbox_level {
+                        WindowsSandboxLevel::Disabled => {
+                            config.set_windows_sandbox_enabled(false);
+                            config.set_windows_elevated_sandbox_enabled(false);
+                        }
+                        WindowsSandboxLevel::RestrictedToken => {
+                            config.set_windows_sandbox_enabled(true);
+                            config.set_windows_elevated_sandbox_enabled(false);
+                        }
+                        WindowsSandboxLevel::Elevated => {
+                            config.set_windows_sandbox_enabled(false);
+                            config.set_windows_elevated_sandbox_enabled(true);
+                        }
+                    }
+                }
+                if approval_policy_changed || sandbox_policy_changed {
+                    config.did_user_set_custom_approval_policy_or_sandbox_mode = true;
+                }
+            }
+            config
+        }
         Err(err) => {
             eprintln!("Error loading configuration: {err}");
             std::process::exit(1);

@@ -7051,7 +7051,6 @@ impl ChatWidget {
         self.effective_reasoning_effort()
     }
 
-    #[cfg(test)]
     pub(crate) fn active_collaboration_mode_kind(&self) -> ModeKind {
         self.active_mode_kind()
     }

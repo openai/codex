@@ -58,7 +58,9 @@ use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::TurnItem;
