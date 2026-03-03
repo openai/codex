@@ -60,7 +60,7 @@ fn syntax_set() -> &'static SyntaxSet {
 
 fn append_warning(warning: &mut Option<String>, msg: String) {
     if let Some(existing) = warning {
-        if !existing.contains(&msg) {
+        if !existing.lines().any(|line| line == msg.as_str()) {
             existing.push('\n');
             existing.push_str(&msg);
         }
@@ -469,17 +469,6 @@ const BUILTIN_THEME_NAMES: &[&str] = &[
 
 // -- Style conversion (syntect -> ratatui) ------------------------------------
 
-fn warn_unexpected_alpha(channel: &'static str, color: SyntectColor) {
-    tracing::warn!(
-        channel,
-        alpha = color.a,
-        r = color.r,
-        g = color.g,
-        b = color.b,
-        "syntax theme color used unexpected alpha marker; treating it as RGB"
-    );
-}
-
 /// Map a low ANSI palette index (0–7) to ratatui's named color variants,
 /// falling back to `Indexed(n)` for indices 8–255.
 ///
@@ -514,12 +503,12 @@ fn ansi_palette_color(index: u8) -> RtColor {
 ///
 /// Passing a color from a standard RGB theme (alpha 0xFF) returns
 /// `Some(Rgb(..))`, so this function is backward-compatible with non-ANSI
-/// themes. Unexpected intermediate alpha values are treated as RGB and logged.
+/// themes. Unexpected intermediate alpha values are treated as RGB.
 ///
 /// `clippy::disallowed_methods` is explicitly allowed here because this helper
 /// intentionally constructs `ratatui::style::Color::Rgb`.
 #[allow(clippy::disallowed_methods)]
-fn convert_syntect_color(channel: &'static str, color: SyntectColor) -> Option<RtColor> {
+fn convert_syntect_color(color: SyntectColor) -> Option<RtColor> {
     match color.a {
         // Bat-compatible encoding used by `ansi`, `base16`, and `base16-256`:
         // alpha 0x00 means `r` stores an ANSI palette index, not RGB red.
@@ -527,10 +516,8 @@ fn convert_syntect_color(channel: &'static str, color: SyntectColor) -> Option<R
         // alpha 0x01 means "use terminal default foreground/background".
         ANSI_ALPHA_DEFAULT => None,
         OPAQUE_ALPHA => Some(RtColor::Rgb(color.r, color.g, color.b)),
-        _ => {
-            warn_unexpected_alpha(channel, color);
-            Some(RtColor::Rgb(color.r, color.g, color.b))
-        }
+        // Non-ANSI alpha values appear in some bundled themes; treat as plain RGB.
+        _ => Some(RtColor::Rgb(color.r, color.g, color.b)),
     }
 }
 
@@ -541,7 +528,7 @@ fn convert_syntect_color(channel: &'static str, color: SyntectColor) -> Option<R
 fn convert_style(syn_style: SyntectStyle) -> Style {
     let mut rt_style = Style::default();
 
-    if let Some(fg) = convert_syntect_color("foreground", syn_style.foreground) {
+    if let Some(fg) = convert_syntect_color(syn_style.foreground) {
         rt_style = rt_style.fg(fg);
     }
     // Intentionally skip background to avoid overwriting terminal bg.
@@ -838,6 +825,27 @@ mod tests {
     }
 
     #[test]
+    fn append_warning_sets_initial_warning() {
+        let mut warning = None;
+        append_warning(&mut warning, "first warning".to_string());
+        assert_eq!(warning, Some("first warning".to_string()));
+    }
+
+    #[test]
+    fn append_warning_dedupes_exact_duplicate_messages() {
+        let mut warning = Some("same warning".to_string());
+        append_warning(&mut warning, "same warning".to_string());
+        assert_eq!(warning, Some("same warning".to_string()));
+    }
+
+    #[test]
+    fn append_warning_keeps_distinct_messages_even_when_substrings_overlap() {
+        let mut warning = Some("alpha marker warning".to_string());
+        append_warning(&mut warning, "marker".to_string());
+        assert_eq!(warning, Some("alpha marker warning\nmarker".to_string()));
+    }
+
+    #[test]
     fn highlight_rust_has_keyword_style() {
         let code = "fn main() {}";
         let lines = highlight_code_to_lines(code, "rust");
@@ -960,7 +968,7 @@ mod tests {
                 r: 0,
                 g: 0,
                 b: 0,
-                a: 0,
+                a: 0xFF,
             },
             font_style: FontStyle::UNDERLINE,
         };
@@ -986,7 +994,7 @@ mod tests {
                 r: 0,
                 g: 0,
                 b: 0,
-                a: 0,
+                a: 0xFF,
             },
             font_style: FontStyle::empty(),
         };
@@ -1007,7 +1015,7 @@ mod tests {
                 r: 0,
                 g: 0,
                 b: 0,
-                a: 0,
+                a: 0xFF,
             },
             font_style: FontStyle::empty(),
         };
@@ -1028,7 +1036,7 @@ mod tests {
                 r: 0,
                 g: 0,
                 b: 0,
-                a: 0,
+                a: 0xFF,
             },
             font_style: FontStyle::empty(),
         };
@@ -1049,12 +1057,17 @@ mod tests {
                 r: 0,
                 g: 0,
                 b: 0,
-                a: 0,
+                a: 0xFF,
             },
             font_style: FontStyle::empty(),
         };
         let rt = convert_style(syn);
         assert_eq!(rt.fg, Some(RtColor::Rgb(10, 20, 30)));
+    }
+
+    #[test]
+    fn ansi_palette_color_maps_ansi_white_to_gray() {
+        assert_eq!(ansi_palette_color(0x07), RtColor::Gray);
     }
 
     #[test]
