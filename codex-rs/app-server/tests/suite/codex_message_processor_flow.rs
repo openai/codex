@@ -196,33 +196,42 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         );
         return Ok(());
     }
-    let python = if cfg!(windows) { "python" } else { "python3" };
-
+    let (command_tokens, expected_command) = if cfg!(windows) {
+        (
+            vec![
+                "pwsh".to_string(),
+                "-Command".to_string(),
+                "Write-Output 42".to_string(),
+            ],
+            "pwsh -Command 'Write-Output 42'".to_string(),
+        )
+    } else {
+        (
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            "python3 -c 'print(42)'".to_string(),
+        )
+    };
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
-    // Mock server will request a python shell call for the first and second turn, then finish.
+    // Mock server will request a shell call for the first and second turn, then finish.
     let responses = vec![
         create_shell_command_sse_response(
-            vec![
-                python.to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
+            command_tokens.clone(),
             Some(&working_directory),
             Some(5000),
             "call1",
         )?,
         create_final_assistant_message_sse_response("done 1")?,
         create_shell_command_sse_response(
-            vec![
-                python.to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
+            command_tokens,
             Some(&working_directory),
             Some(5000),
             "call2",
@@ -272,7 +281,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
             items: vec![codex_app_server_protocol::InputItem::Text {
-                text: "run python".to_string(),
+                text: "run command".to_string(),
                 text_elements: Vec::new(),
             }],
         })
@@ -300,11 +309,11 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             conversation_id,
             call_id: "call1".to_string(),
             approval_id: None,
-            command: format_with_current_shell(&format!("{python} -c 'print(42)'")),
+            command: format_with_current_shell(&expected_command),
             cwd: working_directory.clone(),
             reason: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
-                cmd: format!("{python} -c 'print(42)'")
+                cmd: expected_command.clone()
             }],
         },
         params
@@ -329,7 +338,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         .send_send_user_turn_request(SendUserTurnParams {
             conversation_id,
             items: vec![codex_app_server_protocol::InputItem::Text {
-                text: "run python again".to_string(),
+                text: "run command again".to_string(),
                 text_elements: Vec::new(),
             }],
             cwd: working_directory.clone(),
