@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/feedback_view.rs
-assertion_line: 731
 expression: rendered
 ---
 ▌ Tell us more (safety check)

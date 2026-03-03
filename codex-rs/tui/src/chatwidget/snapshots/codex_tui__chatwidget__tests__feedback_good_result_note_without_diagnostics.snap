@@ -1,6 +1,5 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 6456
 expression: popup
 ---
 ▌ Tell us more (good result)

@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/feedback_view.rs
-assertion_line: 710
 expression: rendered
 ---
 ▌ Tell us more (good result)
