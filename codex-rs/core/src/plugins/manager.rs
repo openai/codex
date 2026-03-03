@@ -1,6 +1,7 @@
 use super::load_plugin_manifest;
 use super::plugin_manifest_name;
 use super::store::DEFAULT_PLUGIN_VERSION;
+use super::store::PluginId;
 use super::store::PluginInstallRequest;
 use super::store::PluginInstallResult;
 use super::store::PluginStore;
@@ -155,7 +156,7 @@ impl PluginsManager {
 
         ConfigService::new_with_defaults(self.codex_home.clone())
             .write_value(ConfigValueWriteParams {
-                key_path: format!("plugins.{}", result.plugin_key),
+                key_path: format!("plugins.{}", result.plugin_id.as_key()),
                 value: json!({
                     "enabled": true,
                 }),
@@ -285,7 +286,8 @@ fn configured_plugins_from_stack(
 
 fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) -> LoadedPlugin {
     let plugin_version = DEFAULT_PLUGIN_VERSION.to_string();
-    let plugin_root = store.plugin_root(&config_name, &plugin_version);
+    let plugin_root = PluginId::parse(&config_name)
+        .map(|plugin_id| store.plugin_root(&plugin_id, &plugin_version));
     let root = match &plugin_root {
         Ok(plugin_root) => plugin_root.clone(),
         Err(_) => store.root().clone(),
@@ -731,8 +733,7 @@ mod tests {
         assert_eq!(
             result,
             PluginInstallResult {
-                plugin_key: "sample-plugin@debug".to_string(),
-                plugin_name: "sample-plugin".to_string(),
+                plugin_id: PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap(),
                 plugin_version: "local".to_string(),
                 installed_path,
             }
