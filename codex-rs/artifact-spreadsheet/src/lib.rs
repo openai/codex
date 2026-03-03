@@ -3,6 +3,7 @@ mod error;
 mod formula;
 mod manager;
 mod model;
+mod render;
 mod style;
 mod xlsx;
 
@@ -13,4 +14,5 @@ pub use address::*;
 pub use error::*;
 pub use manager::*;
 pub use model::*;
+pub use render::*;
 pub use style::*;

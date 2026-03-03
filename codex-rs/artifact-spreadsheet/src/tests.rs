@@ -15,6 +15,7 @@ use crate::SpreadsheetFileType;
 use crate::SpreadsheetFill;
 use crate::SpreadsheetFontFace;
 use crate::SpreadsheetNumberFormat;
+use crate::SpreadsheetRenderOptions;
 use crate::SpreadsheetSheet;
 use crate::SpreadsheetSheetReference;
 use crate::SpreadsheetTextStyle;
@@ -161,6 +162,70 @@ fn path_accesses_cover_import_and_export() -> Result<(), Box<dyn std::error::Err
     let accesses = request.required_path_accesses(cwd.path())?;
     assert_eq!(accesses.len(), 1);
     assert!(accesses[0].path.ends_with("out/report.xlsx"));
+    Ok(())
+}
+
+#[test]
+fn render_options_write_deterministic_html_previews() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut artifact = SpreadsheetArtifact::new(Some("Preview".to_string()));
+    artifact.create_sheet("Sheet 1".to_string())?;
+    {
+        let sheet = artifact.get_sheet_mut(Some("Sheet 1"), None).expect("sheet");
+        sheet.set_value(
+            CellAddress::parse("A1")?,
+            Some(SpreadsheetCellValue::String("Name".to_string())),
+        )?;
+        sheet.set_value(
+            CellAddress::parse("B1")?,
+            Some(SpreadsheetCellValue::String("Value".to_string())),
+        )?;
+        sheet.set_value(
+            CellAddress::parse("A2")?,
+            Some(SpreadsheetCellValue::String("Alpha".to_string())),
+        )?;
+        sheet.set_value(
+            CellAddress::parse("B2")?,
+            Some(SpreadsheetCellValue::Integer(42)),
+        )?;
+    }
+
+    let rendered = artifact.render_range_preview(
+        temp_dir.path(),
+        artifact.get_sheet(Some("Sheet 1"), None).expect("sheet"),
+        &CellRange::parse("A1:B2")?,
+        &SpreadsheetRenderOptions {
+            output_path: Some(temp_dir.path().join("range-preview.html")),
+            width: Some(320),
+            height: Some(200),
+            include_headers: true,
+            scale: 1.25,
+            performance_mode: true,
+            ..Default::default()
+        },
+    )?;
+    assert!(rendered.path.exists());
+    assert_eq!(std::fs::read_to_string(&rendered.path)?, rendered.html);
+    assert!(rendered.html.contains("<!doctype html>"));
+    assert!(rendered.html.contains("data-performance-mode=\"true\""));
+    assert!(rendered.html.contains(
+        "style=\"--scale: 1.25; --headers: 1; width: 320px; height: 200px; overflow: auto\""
+    ));
+    assert!(rendered.html.contains("<th>A</th>"));
+    assert!(rendered.html.contains("data-address=\"B2\""));
+    assert!(rendered.html.contains(">42</td>"));
+
+    let workbook = artifact.render_workbook_previews(
+        temp_dir.path(),
+        &SpreadsheetRenderOptions {
+            output_path: Some(temp_dir.path().join("workbook")),
+            include_headers: false,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(workbook.len(), 1);
+    assert!(workbook[0].path.ends_with("Sheet_1.html"));
+    assert!(!workbook[0].html.contains("<th>A</th>"));
     Ok(())
 }
 

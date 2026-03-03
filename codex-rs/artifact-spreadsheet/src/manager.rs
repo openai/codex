@@ -72,6 +72,18 @@ impl SpreadsheetArtifactRequest {
                     path: resolve_path(cwd, &args.path),
                 }]
             }
+            "render_workbook" | "render_sheet" | "render_range" => {
+                let args: RenderArgs = parse_args(&self.action, &self.args)?;
+                args.output_path
+                    .map(|path| {
+                        vec![PathAccessRequirement {
+                            action: self.action.clone(),
+                            kind: PathAccessKind::Write,
+                            path: resolve_path(cwd, &path),
+                        }]
+                    })
+                    .unwrap_or_default()
+            }
             _ => Vec::new(),
         };
         Ok(access)
@@ -94,6 +106,9 @@ impl SpreadsheetArtifactManager {
             "import_xlsx" | "load" | "read" => self.import_xlsx(request, cwd),
             "export_xlsx" => self.export_xlsx(request, cwd),
             "save" => self.save(request, cwd),
+            "render_workbook" => self.render_workbook(request, cwd),
+            "render_sheet" => self.render_sheet(request, cwd),
+            "render_range" => self.render_range(request, cwd),
             "get_summary" => self.get_summary(request),
             "list_sheets" => self.list_sheets(request),
             "get_sheet" => self.get_sheet(request),
@@ -272,6 +287,86 @@ impl SpreadsheetArtifactManager {
                 .map(super::model::SpreadsheetSheet::summary)
                 .collect(),
         );
+        Ok(response)
+    }
+
+    fn render_workbook(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+        cwd: &Path,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: RenderArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let rendered = artifact.render_workbook_previews(cwd, &render_options_from_args(args)?)?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Rendered workbook to {} preview files", rendered.len()),
+            snapshot_for_artifact(artifact),
+        );
+        response.exported_paths = rendered.into_iter().map(|output| output.path).collect();
+        Ok(response)
+    }
+
+    fn render_sheet(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+        cwd: &Path,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: RenderArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let rendered = artifact.render_sheet_preview(cwd, sheet, &render_options_from_args(args)?)?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Rendered sheet `{}`", sheet.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_ref = Some(sheet_reference(sheet));
+        response.exported_paths.push(rendered.path);
+        response.rendered_html = Some(rendered.html);
+        response.rendered_text = Some(sheet.to_rendered_text(None));
+        Ok(response)
+    }
+
+    fn render_range(
+        &mut self,
+        request: SpreadsheetArtifactRequest,
+        cwd: &Path,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let args: RenderArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let artifact = self.get_artifact(&artifact_id, &request.action)?;
+        let sheet = artifact.sheet_lookup(
+            &request.action,
+            args.sheet_name.as_deref(),
+            args.sheet_index.map(|value| value as usize),
+        )?;
+        let range_text = args.range.ok_or_else(|| SpreadsheetArtifactError::InvalidArgs {
+            action: request.action.clone(),
+            message: "range is required".to_string(),
+        })?;
+        let range = CellRange::parse(&range_text)?;
+        let rendered =
+            artifact.render_range_preview(cwd, sheet, &range, &render_options_from_args(args)?)?;
+        let mut response = SpreadsheetArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Rendered range `{range_text}` from `{}`", sheet.name),
+            snapshot_for_artifact(artifact),
+        );
+        response.sheet_ref = Some(sheet_reference(sheet));
+        response.range_ref = Some(SpreadsheetCellRangeRef::new(sheet.name.clone(), &range));
+        response.exported_paths.push(rendered.path);
+        response.rendered_html = Some(rendered.html);
+        response.rendered_text = Some(sheet.to_rendered_text(Some(&range)));
         Ok(response)
     }
 
@@ -1931,6 +2026,8 @@ pub struct SpreadsheetArtifactResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rendered_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub rendered_html: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub row_height: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serialized_dict: Option<Value>,
@@ -1967,6 +2064,7 @@ impl SpreadsheetArtifactResponse {
             top_left_style_index: None,
             cell_format_summary: None,
             rendered_text: None,
+            rendered_html: None,
             row_height: None,
             serialized_dict: None,
             serialized_json: None,
@@ -2012,6 +2110,20 @@ struct PathArgs {
 struct SaveArgs {
     path: PathBuf,
     file_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RenderArgs {
+    output_path: Option<PathBuf>,
+    sheet_name: Option<String>,
+    sheet_index: Option<u32>,
+    range: Option<String>,
+    center_address: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    include_headers: Option<bool>,
+    scale: Option<f64>,
+    performance_mode: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2383,6 +2495,27 @@ fn normalize_formula(formula: String) -> String {
     } else {
         format!("={trimmed}")
     }
+}
+
+fn render_options_from_args(
+    args: RenderArgs,
+) -> Result<crate::SpreadsheetRenderOptions, SpreadsheetArtifactError> {
+    let scale = args.scale.unwrap_or(1.0);
+    if scale <= 0.0 {
+        return Err(SpreadsheetArtifactError::InvalidArgs {
+            action: "render".to_string(),
+            message: "render scale must be positive".to_string(),
+        });
+    }
+    Ok(crate::SpreadsheetRenderOptions {
+        output_path: args.output_path,
+        center_address: args.center_address,
+        width: args.width,
+        height: args.height,
+        include_headers: args.include_headers.unwrap_or(true),
+        scale,
+        performance_mode: args.performance_mode.unwrap_or(false),
+    })
 }
 
 fn required_artifact_id(
