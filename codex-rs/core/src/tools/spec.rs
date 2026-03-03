@@ -740,9 +740,15 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
-        description:
-            "Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent."
-                .to_string(),
+        description: r#"Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent.
+This tool gives access to smaller, efficient sub-agents that can often solve bounded tasks faster than the main model.
+Before delegating, quickly analyze the overall task, identify the critical path, and decide what you should do locally right now.
+Delegate concrete, self-contained sidecar work that can run in parallel with your next local step.
+Do not delegate urgent blocking work when your immediate next action depends on the result.
+Avoid duplicated work, avoid tightly coupled subtasks, and prefer delegated coding tasks with disjoint write sets.
+Prefer worker agents for bounded code changes, explorer agents for specific codebase questions, and reuse existing agents when their context is still relevant.
+After delegating, keep doing meaningful non-overlapping local work instead of idling or immediately waiting."#
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -908,9 +914,8 @@ fn create_send_input_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_input".to_string(),
-        description:
-            "Send a message to an existing agent. Use interrupt=true to redirect work immediately."
-                .to_string(),
+        description: "Send a message to an existing agent. Use interrupt=true to redirect work immediately. Reuse the agent with send_input when the new task depends heavily on the context from its previous task."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -931,9 +936,8 @@ fn create_resume_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "resume_agent".to_string(),
-        description:
-            "Resume a previously closed agent by id so it can receive send_input and wait calls."
-                .to_string(),
+        description: "Resume a previously closed agent by id so it can receive send_input and wait calls. Use this when you want to continue from an earlier agent context instead of spawning a fresh agent."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -966,7 +970,7 @@ fn create_wait_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "wait".to_string(),
-        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches his final status, a notification message will be received containing the same completed status."
+        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status. Use wait sparingly: prefer letting delegated work continue in the background while you do other non-overlapping local work, and wait only when the result is needed on the critical path."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -1073,7 +1077,7 @@ fn create_close_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent when it is no longer needed and return its last known status."
+        description: "Close an agent when it is no longer needed and return its last known status. Close finished agents you do not plan to reuse so the active collaboration set stays focused."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
