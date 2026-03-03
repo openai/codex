@@ -31,6 +31,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::RwLock;
 use syntect::easy::HighlightLines;
+use syntect::highlighting::Color as SyntectColor;
 use syntect::highlighting::FontStyle;
 use syntect::highlighting::Highlighter;
 use syntect::highlighting::Style as SyntectStyle;
@@ -49,8 +50,60 @@ static THEME: OnceLock<RwLock<Theme>> = OnceLock::new();
 static THEME_OVERRIDE: OnceLock<Option<String>> = OnceLock::new();
 static CODEX_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
 
+const ANSI_ALPHA_INDEX: u8 = 0x00;
+const ANSI_ALPHA_DEFAULT: u8 = 0x01;
+const OPAQUE_ALPHA: u8 = 0xFF;
+
 fn syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(two_face::syntax::extra_newlines)
+}
+
+fn append_warning(warning: &mut Option<String>, msg: String) {
+    if let Some(existing) = warning {
+        if !existing.contains(&msg) {
+            existing.push('\n');
+            existing.push_str(&msg);
+        }
+    } else {
+        *warning = Some(msg);
+    }
+}
+
+fn is_ansi_family_theme_name(name: &str) -> bool {
+    matches!(name, "ansi" | "base16" | "base16-256")
+}
+
+fn is_ansi_alpha_signal(color: Option<SyntectColor>) -> bool {
+    color.is_some_and(|c| matches!(c.a, ANSI_ALPHA_INDEX | ANSI_ALPHA_DEFAULT))
+}
+
+fn theme_uses_ansi_alpha_encoding(theme: &Theme) -> bool {
+    is_ansi_alpha_signal(theme.settings.foreground)
+        || is_ansi_alpha_signal(theme.settings.background)
+        || theme.scopes.iter().any(|item| {
+            is_ansi_alpha_signal(item.style.foreground)
+                || is_ansi_alpha_signal(item.style.background)
+        })
+}
+
+fn ansi_family_theme_contract_warning_for_theme(name: &str, theme: &Theme) -> Option<String> {
+    if !is_ansi_family_theme_name(name) || theme_uses_ansi_alpha_encoding(theme) {
+        return None;
+    }
+    Some(format!(
+        "Syntax theme \"{name}\" resolved, but no alpha-encoded ANSI color \
+         markers were detected. This may indicate an upstream theme-format \
+         change. Codex will continue with RGB fallback semantics."
+    ))
+}
+
+fn validate_ansi_family_theme_contract(
+    name: Option<&str>,
+    codex_home: Option<&Path>,
+) -> Option<String> {
+    let name = name?;
+    let theme = resolve_theme_by_name(name, codex_home)?;
+    ansi_family_theme_contract_warning_for_theme(name, &theme)
 }
 
 /// Set the user-configured syntax theme override and codex home path.
@@ -71,6 +124,12 @@ pub(crate) fn set_theme_override(
     codex_home: Option<PathBuf>,
 ) -> Option<String> {
     let mut warning = validate_theme_name(name.as_deref(), codex_home.as_deref());
+    if let Some(contract_warning) =
+        validate_ansi_family_theme_contract(name.as_deref(), codex_home.as_deref())
+    {
+        tracing::warn!("{contract_warning}");
+        append_warning(&mut warning, contract_warning);
+    }
     let override_set_ok = THEME_OVERRIDE.set(name.clone()).is_ok();
     let codex_home_set_ok = CODEX_HOME.set(codex_home.clone()).is_ok();
     if THEME.get().is_some() {
@@ -82,9 +141,7 @@ pub(crate) fn set_theme_override(
     if !override_set_ok || !codex_home_set_ok {
         let duplicate_msg = "Ignoring duplicate or late syntax theme override persistence; runtime theme was updated from the latest override, but persisted override config can only be initialized once.";
         tracing::warn!("{duplicate_msg}");
-        if warning.is_none() {
-            warning = Some(duplicate_msg.to_string());
-        }
+        append_warning(&mut warning, duplicate_msg.to_string());
     }
     warning
 }
@@ -412,20 +469,84 @@ const BUILTIN_THEME_NAMES: &[&str] = &[
 
 // -- Style conversion (syntect -> ratatui) ------------------------------------
 
+fn warn_unexpected_alpha(channel: &'static str, color: SyntectColor) {
+    tracing::warn!(
+        channel,
+        alpha = color.a,
+        r = color.r,
+        g = color.g,
+        b = color.b,
+        "syntax theme color used unexpected alpha marker; treating it as RGB"
+    );
+}
+
+/// Map a low ANSI palette index (0–7) to ratatui's named color variants,
+/// falling back to `Indexed(n)` for indices 8–255.
+///
+/// Named variants are preferred over `Indexed(0)`…`Indexed(7)` because many
+/// terminals apply bold/bright treatment differently for named vs indexed
+/// colors, and ANSI themes expect the named behavior.
+///
+/// `clippy::disallowed_methods` is explicitly allowed here because this helper
+/// intentionally constructs `ratatui::style::Color::Indexed`.
+#[allow(clippy::disallowed_methods)]
+fn ansi_palette_color(index: u8) -> RtColor {
+    match index {
+        0x00 => RtColor::Black,
+        0x01 => RtColor::Red,
+        0x02 => RtColor::Green,
+        0x03 => RtColor::Yellow,
+        0x04 => RtColor::Blue,
+        0x05 => RtColor::Magenta,
+        0x06 => RtColor::Cyan,
+        // ANSI code 37 is "white", represented as `Gray` in ratatui.
+        0x07 => RtColor::Gray,
+        n => RtColor::Indexed(n),
+    }
+}
+
+/// Decode a syntect foreground `Color` into a ratatui color, respecting the
+/// alpha-channel encoding that bat's `ansi`, `base16`, and `base16-256` themes
+/// use to signal ANSI palette semantics instead of true RGB.
+///
+/// Returns `None` when the color signals "use the terminal's default
+/// foreground", allowing the caller to omit the foreground attribute entirely.
+///
+/// Passing a color from a standard RGB theme (alpha 0xFF) returns
+/// `Some(Rgb(..))`, so this function is backward-compatible with non-ANSI
+/// themes. Unexpected intermediate alpha values are treated as RGB and logged.
+///
+/// `clippy::disallowed_methods` is explicitly allowed here because this helper
+/// intentionally constructs `ratatui::style::Color::Rgb`.
+#[allow(clippy::disallowed_methods)]
+fn convert_syntect_color(channel: &'static str, color: SyntectColor) -> Option<RtColor> {
+    match color.a {
+        // Bat-compatible encoding used by `ansi`, `base16`, and `base16-256`:
+        // alpha 0x00 means `r` stores an ANSI palette index, not RGB red.
+        ANSI_ALPHA_INDEX => Some(ansi_palette_color(color.r)),
+        // alpha 0x01 means "use terminal default foreground/background".
+        ANSI_ALPHA_DEFAULT => None,
+        OPAQUE_ALPHA => Some(RtColor::Rgb(color.r, color.g, color.b)),
+        _ => {
+            warn_unexpected_alpha(channel, color);
+            Some(RtColor::Rgb(color.r, color.g, color.b))
+        }
+    }
+}
+
 /// Convert a syntect `Style` to a ratatui `Style`.
 ///
-/// Syntax highlighting themes inherently produce RGB colors, so we allow
-/// `Color::Rgb` here despite the project-wide preference for ANSI colors.
-#[allow(clippy::disallowed_methods)]
+/// Most themes produce RGB colors. The built-in `ansi`/`base16`/`base16-256`
+/// themes encode ANSI palette semantics in the alpha channel, matching bat.
 fn convert_style(syn_style: SyntectStyle) -> Style {
     let mut rt_style = Style::default();
 
-    // Map foreground color when visible.
-    let fg = syn_style.foreground;
-    if fg.a > 0 {
-        rt_style = rt_style.fg(RtColor::Rgb(fg.r, fg.g, fg.b));
+    if let Some(fg) = convert_syntect_color("foreground", syn_style.foreground) {
+        rt_style = rt_style.fg(fg);
     }
     // Intentionally skip background to avoid overwriting terminal bg.
+    // If background support is added later, decode with `convert_syntect_color`
+    // to reuse the same alpha-marker semantics as foreground.
 
     if syn_style.font_style.contains(FontStyle::BOLD) {
         rt_style.add_modifier |= Modifier::BOLD;
@@ -500,10 +621,16 @@ pub(crate) fn exceeds_highlight_limits(total_bytes: usize, total_lines: usize) -
 
 // -- Core highlighting --------------------------------------------------------
 
-/// Parse `code` using syntect for `lang` and return per-line styled spans.
-/// Each inner Vec represents one source line.  Returns None when the language
-/// is not recognized or the input exceeds safety limits.
-fn highlight_to_line_spans(code: &str, lang: &str) -> Option<Vec<Vec<Span<'static>>>> {
+/// Core highlighter that accepts an explicit theme reference.
+///
+/// This keeps production behavior and test behavior on the same code path:
+/// production callers pass the global theme lock, while tests can pass a
+/// concrete theme without mutating process-global state.
+fn highlight_to_line_spans_with_theme(
+    code: &str,
+    lang: &str,
+    theme: &Theme,
+) -> Option<Vec<Vec<Span<'static>>>> {
     // Empty input has nothing to highlight; fall back to the plain text path
     // which correctly produces a single empty Line.
     if code.is_empty() {
@@ -518,11 +645,7 @@ fn highlight_to_line_spans(code: &str, lang: &str) -> Option<Vec<Vec<Span<'stati
     }
 
     let syntax = find_syntax(lang)?;
-    let theme_guard = match theme_lock().read() {
-        Ok(theme_guard) => theme_guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let mut h = HighlightLines::new(syntax, &theme_guard);
+    let mut h = HighlightLines::new(syntax, theme);
     let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
 
     for line in LinesWithEndings::from(code) {
@@ -544,6 +667,17 @@ fn highlight_to_line_spans(code: &str, lang: &str) -> Option<Vec<Vec<Span<'stati
     }
 
     Some(lines)
+}
+
+/// Parse `code` using syntect for `lang` and return per-line styled spans.
+/// Each inner Vec represents one source line.  Returns None when the language
+/// is not recognized or the input exceeds safety limits.
+fn highlight_to_line_spans(code: &str, lang: &str) -> Option<Vec<Vec<Span<'static>>>> {
+    let theme_guard = match theme_lock().read() {
+        Ok(theme_guard) => theme_guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    highlight_to_line_spans_with_theme(code, lang, &theme_guard)
 }
 
 // -- Public API ---------------------------------------------------------------
@@ -596,6 +730,7 @@ pub(crate) fn highlight_code_to_styled_spans(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use std::str::FromStr;
     use syntect::highlighting::Color as SyntectColor;
@@ -671,6 +806,25 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn unique_foreground_colors_for_theme(theme_name: &str) -> Vec<String> {
+        let theme = resolve_theme_by_name(theme_name, None)
+            .unwrap_or_else(|| panic!("expected built-in theme {theme_name} to resolve"));
+        let lines = highlight_to_line_spans_with_theme(
+            "fn main() { let answer = 42; println!(\"hello\"); }\n",
+            "rust",
+            &theme,
+        )
+        .expect("expected highlighted spans");
+        let mut colors: Vec<String> = lines
+            .iter()
+            .flat_map(|line| line.iter().filter_map(|span| span.style.fg))
+            .map(|fg| format!("{fg:?}"))
+            .collect();
+        colors.sort();
+        colors.dedup();
+        colors
     }
 
     fn theme_item(scope: &str, background: Option<(u8, u8, u8)>) -> ThemeItem {
@@ -791,7 +945,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::disallowed_methods)]
     fn convert_style_suppresses_underline() {
         // Dracula (and other themes) set FontStyle::UNDERLINE on type scopes,
         // producing distracting underlines on type names in terminal output.
@@ -818,6 +971,156 @@ mod tests {
              themes like Dracula use underline on type scopes which \
              looks wrong in terminal output"
         );
+    }
+
+    #[test]
+    fn style_conversion_uses_ansi_named_color_when_alpha_is_zero_low_index() {
+        let syn = SyntectStyle {
+            foreground: syntect::highlighting::Color {
+                r: 0x02,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+            background: syntect::highlighting::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+            font_style: FontStyle::empty(),
+        };
+        let rt = convert_style(syn);
+        assert_eq!(rt.fg, Some(RtColor::Green));
+    }
+
+    #[test]
+    fn style_conversion_uses_indexed_color_when_alpha_is_zero_high_index() {
+        let syn = SyntectStyle {
+            foreground: syntect::highlighting::Color {
+                r: 0x9a,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+            background: syntect::highlighting::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+            font_style: FontStyle::empty(),
+        };
+        let rt = convert_style(syn);
+        assert_eq!(rt.fg, Some(RtColor::Indexed(0x9a)));
+    }
+
+    #[test]
+    fn style_conversion_uses_terminal_default_when_alpha_is_one() {
+        let syn = SyntectStyle {
+            foreground: syntect::highlighting::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1,
+            },
+            background: syntect::highlighting::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+            font_style: FontStyle::empty(),
+        };
+        let rt = convert_style(syn);
+        assert_eq!(rt.fg, None);
+    }
+
+    #[test]
+    fn style_conversion_unexpected_alpha_falls_back_to_rgb() {
+        let syn = SyntectStyle {
+            foreground: syntect::highlighting::Color {
+                r: 10,
+                g: 20,
+                b: 30,
+                a: 0x80,
+            },
+            background: syntect::highlighting::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+            font_style: FontStyle::empty(),
+        };
+        let rt = convert_style(syn);
+        assert_eq!(rt.fg, Some(RtColor::Rgb(10, 20, 30)));
+    }
+
+    #[test]
+    fn ansi_family_themes_use_terminal_palette_colors_not_rgb() {
+        for theme_name in ["ansi", "base16", "base16-256"] {
+            let theme = resolve_theme_by_name(theme_name, None)
+                .unwrap_or_else(|| panic!("expected built-in theme {theme_name} to resolve"));
+            let lines = highlight_to_line_spans_with_theme(
+                "fn main() { let answer = 42; println!(\"hello\"); }\n",
+                "rust",
+                &theme,
+            )
+            .expect("expected highlighted spans");
+            let mut has_non_default_fg = false;
+            for line in &lines {
+                for span in line {
+                    match span.style.fg {
+                        Some(RtColor::Rgb(..)) => {
+                            panic!("theme {theme_name} produced RGB foreground: {span:?}")
+                        }
+                        Some(_) => has_non_default_fg = true,
+                        None => {}
+                    }
+                }
+            }
+            assert!(
+                has_non_default_fg,
+                "theme {theme_name} should produce at least one non-default foreground color"
+            );
+        }
+    }
+
+    #[test]
+    fn ansi_family_foreground_palette_snapshot() {
+        let mut out = String::new();
+        for theme_name in ["ansi", "base16", "base16-256"] {
+            let colors = unique_foreground_colors_for_theme(theme_name);
+            out.push_str(&format!("{theme_name}:\n"));
+            for color in colors {
+                out.push_str(&format!("  {color}\n"));
+            }
+        }
+        assert_snapshot!("ansi_family_foreground_palette", out);
+    }
+
+    #[test]
+    fn ansi_family_contract_warning_for_non_ansi_theme_is_none() {
+        let warning = ansi_family_theme_contract_warning_for_theme("dracula", &Theme::default());
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn ansi_family_contract_warning_for_theme_without_alpha_markers_is_some() {
+        let warning = ansi_family_theme_contract_warning_for_theme("ansi", &Theme::default());
+        assert!(warning.is_some());
+    }
+
+    #[test]
+    fn ansi_family_contract_warning_for_builtin_ansi_family_themes_is_none() {
+        for theme_name in ["ansi", "base16", "base16-256"] {
+            let warning = validate_ansi_family_theme_contract(Some(theme_name), None);
+            assert!(
+                warning.is_none(),
+                "expected built-in theme {theme_name} to satisfy ansi-family contract"
+            );
+        }
     }
 
     #[test]
