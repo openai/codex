@@ -44,6 +44,7 @@ pub(crate) fn compile_permission_profile(
         file_system,
         macos,
     } = permissions?;
+    let network_access = network.unwrap_or_default();
     let file_system = file_system.unwrap_or_default();
     let fs_read = normalize_permission_paths(
         file_system.read.as_deref().unwrap_or_default(),
@@ -64,7 +65,7 @@ pub(crate) fn compile_permission_profile(
                     readable_roots: fs_read,
                 }
             },
-            network_access: network.unwrap_or_default(),
+            network_access,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
@@ -74,6 +75,12 @@ pub(crate) fn compile_permission_profile(
                 include_platform_defaults: true,
                 readable_roots: fs_read,
             },
+            network_access,
+        }
+    } else if network_access {
+        SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            network_access: true,
         }
     } else {
         // Default sandbox policy
@@ -320,7 +327,10 @@ mod tests {
             profile,
             Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::ReadOnly {
+                    access: ReadOnlyAccess::FullAccess,
+                    network_access: true,
+                }),
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -366,6 +376,7 @@ mod tests {
                             .expect("absolute read path")
                         ],
                     },
+                    network_access: true,
                 }),
                 network: None,
                 allow_login_shell: true,

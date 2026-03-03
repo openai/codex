@@ -950,6 +950,8 @@ pub enum SandboxPolicy {
     ReadOnly {
         #[serde(default)]
         access: ReadOnlyAccess,
+        #[serde(default)]
+        network_access: bool,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -979,11 +981,13 @@ impl SandboxPolicy {
             SandboxPolicy::DangerFullAccess => {
                 codex_protocol::protocol::SandboxPolicy::DangerFullAccess
             }
-            SandboxPolicy::ReadOnly { access } => {
-                codex_protocol::protocol::SandboxPolicy::ReadOnly {
-                    access: access.to_core(),
-                }
-            }
+            SandboxPolicy::ReadOnly {
+                access,
+                network_access,
+            } => codex_protocol::protocol::SandboxPolicy::ReadOnly {
+                access: access.to_core(),
+                network_access: *network_access,
+            },
             SandboxPolicy::ExternalSandbox { network_access } => {
                 codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
                     network_access: match network_access {
@@ -1015,11 +1019,13 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
             codex_protocol::protocol::SandboxPolicy::DangerFullAccess => {
                 SandboxPolicy::DangerFullAccess
             }
-            codex_protocol::protocol::SandboxPolicy::ReadOnly { access } => {
-                SandboxPolicy::ReadOnly {
-                    access: ReadOnlyAccess::from(access),
-                }
-            }
+            codex_protocol::protocol::SandboxPolicy::ReadOnly {
+                access,
+                network_access,
+            } => SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::from(access),
+                network_access,
+            },
             codex_protocol::protocol::SandboxPolicy::ExternalSandbox { network_access } => {
                 SandboxPolicy::ExternalSandbox {
                     network_access: match network_access {
@@ -4278,6 +4284,7 @@ mod tests {
                 include_platform_defaults: false,
                 readable_roots: vec![readable_root.clone()],
             },
+            network_access: true,
         };
 
         let core_policy = v2_policy.to_core();
@@ -4288,6 +4295,7 @@ mod tests {
                     include_platform_defaults: false,
                     readable_roots: vec![readable_root],
                 },
+                network_access: true,
             }
         );
 
@@ -4338,6 +4346,7 @@ mod tests {
             policy,
             SandboxPolicy::ReadOnly {
                 access: ReadOnlyAccess::FullAccess,
+                network_access: false,
             }
         );
     }
