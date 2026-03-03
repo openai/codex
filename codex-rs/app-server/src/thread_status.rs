@@ -91,11 +91,13 @@ impl ThreadWatchManager {
     }
 
     pub(crate) async fn upsert_thread(&self, thread: Thread) {
-        self.upsert_thread_with_notification(thread, true).await;
+        self.mutate_and_publish(move |state| state.upsert_thread(thread.id, true))
+            .await;
     }
 
     pub(crate) async fn upsert_thread_silently(&self, thread: Thread) {
-        self.upsert_thread_with_notification(thread, false).await;
+        self.mutate_and_publish(move |state| state.upsert_thread(thread.id, false))
+            .await;
     }
 
     pub(crate) async fn remove_thread(&self, thread_id: &str) {
@@ -256,11 +258,6 @@ impl ThreadWatchManager {
     {
         let thread_id = thread_id.to_string();
         self.mutate_and_publish(move |state| state.update_runtime(&thread_id, update))
-            .await;
-    }
-
-    async fn upsert_thread_with_notification(&self, thread: Thread, emit_notification: bool) {
-        self.mutate_and_publish(move |state| state.upsert_thread(thread.id, emit_notification))
             .await;
     }
 
