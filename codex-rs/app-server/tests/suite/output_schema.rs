@@ -92,6 +92,7 @@ async fn send_user_turn_accepts_output_schema_v1() -> Result<()> {
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            service_tier: None,
             output_schema: Some(output_schema.clone()),
         })
         .await?;
@@ -184,6 +185,7 @@ async fn send_user_turn_rejects_oversized_input_v1() -> Result<()> {
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Low),
             summary: ReasoningSummary::Auto,
+            service_tier: None,
             output_schema: None,
         })
         .await?;
@@ -273,6 +275,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            service_tier: None,
             output_schema: Some(output_schema.clone()),
         })
         .await?;
@@ -321,6 +324,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            service_tier: None,
             output_schema: None,
         })
         .await?;

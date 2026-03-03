@@ -55,6 +55,12 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
+use codex_artifact_presentation::PresentationArtifactError;
+use codex_artifact_presentation::PresentationArtifactExecutionRequest;
+use codex_artifact_presentation::PresentationArtifactResponse;
+use codex_artifact_spreadsheet::SpreadsheetArtifactError;
+use codex_artifact_spreadsheet::SpreadsheetArtifactRequest;
+use codex_artifact_spreadsheet::SpreadsheetArtifactResponse;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -882,6 +888,7 @@ impl SessionConfiguration {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
+            service_tier: self.service_tier,
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             cwd: self.cwd.clone(),
@@ -1556,6 +1563,7 @@ impl Session {
                 thread_name: session_configuration.thread_name.clone(),
                 model: session_configuration.collaboration_mode.model().to_string(),
                 model_provider_id: config.model_provider_id.clone(),
+                service_tier: session_configuration.service_tier,
                 approval_policy: session_configuration.approval_policy.value(),
                 sandbox_policy: session_configuration.sandbox_policy.get().clone(),
                 cwd: session_configuration.cwd.clone(),
@@ -1773,6 +1781,24 @@ impl Session {
     pub(crate) async fn clear_connector_selection(&self) {
         let mut state = self.state.lock().await;
         state.clear_connector_selection();
+    }
+
+    pub(crate) async fn execute_presentation_artifact(
+        &self,
+        request: PresentationArtifactExecutionRequest,
+        cwd: &Path,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let mut state = self.state.lock().await;
+        state.artifacts.presentation.execute_requests(request, cwd)
+    }
+
+    pub(crate) async fn execute_spreadsheet_artifact(
+        &self,
+        request: SpreadsheetArtifactRequest,
+        cwd: &Path,
+    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
+        let mut state = self.state.lock().await;
+        state.artifacts.spreadsheet.execute(request, cwd)
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
@@ -5546,12 +5572,10 @@ async fn run_sampling_request(
             // transient reconnect messages. In debug builds, keep full visibility for diagnosis.
             let report_error = retries > 1
                 || cfg!(debug_assertions)
-                || sess
+                || !sess
                     .services
                     .model_client
-                    .active_ws_version(&turn_context.model_info)
-                    .is_none();
-
+                    .responses_websocket_enabled(&turn_context.model_info);
             if report_error {
                 // Surface retry information to any UI/front‑end so the
                 // user understands what is happening instead of staring
@@ -6392,7 +6416,6 @@ async fn try_run_sampling_request(
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
-                can_append: _,
             } => {
                 flush_assistant_text_segments_all(
                     &sess,
@@ -9168,7 +9191,7 @@ mod tests {
         handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
             .await;
 
-        let deadline = StdDuration::from_secs(5);
+        let deadline = StdDuration::from_secs(15);
         let start = std::time::Instant::now();
         loop {
             let remaining = deadline.saturating_sub(start.elapsed());

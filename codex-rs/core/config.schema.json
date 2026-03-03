@@ -313,6 +313,9 @@
             "apps_mcp_gateway": {
               "type": "boolean"
             },
+            "artifact": {
+              "type": "boolean"
+            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -1328,21 +1331,10 @@
       "type": "object"
     },
     "ServiceTier": {
-      "oneOf": [
-        {
-          "enum": [
-            "fast"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Legacy compatibility value for older local config files.",
-          "enum": [
-            "standard"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "fast"
+      ],
+      "type": "string"
     },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
@@ -1709,6 +1701,9 @@
           "type": "boolean"
         },
         "apps_mcp_gateway": {
+          "type": "boolean"
+        },
+        "artifact": {
           "type": "boolean"
         },
         "child_agents_md": {

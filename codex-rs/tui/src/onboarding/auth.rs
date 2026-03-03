@@ -335,7 +335,7 @@ impl AuthModeWidget {
         let chatgpt_description = if !self.is_chatgpt_login_allowed() {
             "ChatGPT login is disabled"
         } else {
-            "Usage included with Plus, Pro, Team, and Enterprise plans"
+            "Usage included with Plus, Pro, Business, and Enterprise plans"
         };
         let device_code_description = "Sign in from another device with a one-time code";
 

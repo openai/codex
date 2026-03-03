@@ -226,6 +226,7 @@ impl CodexLogSnapshot {
         include_logs: bool,
         extra_log_files: &[PathBuf],
         session_source: Option<SessionSource>,
+        logs_override: Option<Vec<u8>>,
     ) -> Result<()> {
         use std::collections::BTreeMap;
         use std::fs;
@@ -310,7 +311,7 @@ impl CodexLogSnapshot {
 
         if include_logs {
             envelope.add_item(EnvelopeItem::Attachment(Attachment {
-                buffer: self.bytes.clone(),
+                buffer: logs_override.unwrap_or_else(|| self.bytes.clone()),
                 filename: String::from("codex-logs.log"),
                 content_type: Some("text/plain".to_string()),
                 ty: None,

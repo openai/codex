@@ -337,6 +337,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            service_tier: None,
             output_schema: None,
         })
         .await?;
@@ -453,6 +454,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             model: model.clone(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            service_tier: None,
             output_schema: None,
         })
         .await?;
@@ -481,6 +483,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
             model: model.clone(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            service_tier: None,
             output_schema: None,
         })
         .await?;

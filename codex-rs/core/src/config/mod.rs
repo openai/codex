@@ -1565,6 +1565,7 @@ pub struct ConfigOverrides {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub model_provider: Option<String>,
+    pub service_tier: Option<Option<ServiceTier>>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
@@ -1695,6 +1696,7 @@ impl Config {
             approval_policy: approval_policy_override,
             sandbox_mode,
             model_provider,
+            service_tier: service_tier_override,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
@@ -1956,10 +1958,12 @@ impl Config {
 
         let model = model.or(config_profile.model).or(cfg.model);
         let service_tier = if features.enabled(Feature::FastMode) {
-            config_profile
-                .service_tier
-                .or(cfg.service_tier)
-                .filter(|tier| matches!(tier, ServiceTier::Fast))
+            service_tier_override.unwrap_or_else(|| {
+                config_profile
+                    .service_tier
+                    .or(cfg.service_tier)
+                    .filter(|tier| matches!(tier, ServiceTier::Fast))
+            })
         } else {
             None
         };
@@ -5651,33 +5655,6 @@ trust_level = "untrusted"
                 "Expected WorkspaceWrite for untrusted project, got {resolution:?}"
             );
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn legacy_standard_service_tier_loads_as_default_none() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-        let cfg = toml::from_str::<ConfigToml>(
-            r#"
-service_tier = "standard"
-
-[features]
-fast_mode = true
-"#,
-        )
-        .expect("TOML deserialization should succeed");
-
-        let config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides {
-                cwd: Some(codex_home.path().to_path_buf()),
-                ..Default::default()
-            },
-            codex_home.path().to_path_buf(),
-        )?;
-
-        assert_eq!(config.service_tier, None);
 
         Ok(())
     }

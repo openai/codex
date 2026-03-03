@@ -66,9 +66,9 @@ async fn websocket_fallback_switches_to_http_on_upgrade_required_connect() -> Re
         .filter(|req| req.method == Method::POST && req.url.path().ends_with("/responses"))
         .count();
 
-    // Startup prewarm now only preconnects for v1 (one websocket GET with no request body).
-    // The first turn then attempts websocket once, sees 426, and falls back to HTTP.
-    assert_eq!(websocket_attempts, 2);
+    // The startup prewarm request sees 426 and immediately switches the session to HTTP fallback,
+    // so the first turn goes straight to HTTP with no additional websocket connect attempt.
+    assert_eq!(websocket_attempts, 1);
     assert_eq!(http_attempts, 1);
     assert_eq!(response_mock.requests().len(), 1);
 
