@@ -1657,11 +1657,15 @@
       "$ref": "#/definitions/AbsolutePathBuf"
     },
     "experimental_realtime_ws_backend_prompt": {
-      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport backend prompt (the `Op::RealtimeConversation` `/ws` session.create backend_prompt) without changing normal prompts.",
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport instructions (the `Op::RealtimeConversation` `/ws` session.update instructions) without changing normal prompts.",
       "type": "string"
     },
     "experimental_realtime_ws_base_url": {
-      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/ws` connection) without changing normal provider HTTP requests.",
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/v1/realtime` connection) without changing normal provider HTTP requests.",
+      "type": "string"
+    },
+    "experimental_realtime_ws_model": {
+      "description": "Experimental / do not use. Selects the realtime websocket model/snapshot used for the `Op::RealtimeConversation` connection.",
       "type": "string"
     },
     "experimental_use_freeform_apply_patch": {

@@ -232,7 +232,6 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::RealtimeConversationRealtime(event) => {
             if let ApiVersion::V2 = api_version {
                 match event.payload {
-                    RealtimeEvent::SessionCreated { .. } => {}
                     RealtimeEvent::SessionUpdated { .. } => {}
                     RealtimeEvent::AudioOut(audio) => {
                         let notification = ThreadRealtimeOutputAudioDeltaNotification {
@@ -249,6 +248,24 @@ pub(crate) async fn apply_bespoke_event_handling(
                         let notification = ThreadRealtimeItemAddedNotification {
                             thread_id: conversation_id.to_string(),
                             item,
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                                notification,
+                            ))
+                            .await;
+                    }
+                    RealtimeEvent::ConversationItemDone { .. } => {}
+                    RealtimeEvent::HandoffRequested(handoff) => {
+                        let notification = ThreadRealtimeItemAddedNotification {
+                            thread_id: conversation_id.to_string(),
+                            item: serde_json::json!({
+                                "type": "handoff_request",
+                                "handoff_id": handoff.handoff_id,
+                                "item_id": handoff.item_id,
+                                "input_transcript": handoff.input_transcript,
+                                "messages": handoff.messages,
+                            }),
                         };
                         outgoing
                             .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
