@@ -14,6 +14,47 @@ struct HistoryEntry {
 }
 
 impl PresentationArtifactManager {
+    pub fn execute_requests(
+        &mut self,
+        request: PresentationArtifactExecutionRequest,
+        cwd: &Path,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let PresentationArtifactExecutionRequest {
+            artifact_id,
+            requests,
+        } = request;
+        let request_count = requests.len();
+        let mut current_artifact_id = artifact_id;
+        let mut executed_actions = Vec::with_capacity(request_count);
+        let mut exported_paths = Vec::new();
+        let mut last_response = None;
+
+        for mut request in requests {
+            if request.artifact_id.is_none() {
+                request.artifact_id = current_artifact_id.clone();
+            }
+            let response = self.execute(request, cwd)?;
+            current_artifact_id = Some(response.artifact_id.clone());
+            exported_paths.extend(response.exported_paths.iter().cloned());
+            executed_actions.push(response.action.clone());
+            last_response = Some(response);
+        }
+
+        let mut response = last_response.ok_or_else(|| PresentationArtifactError::InvalidArgs {
+            action: "presentation_artifact".to_string(),
+            message: "request sequence must contain at least one action".to_string(),
+        })?;
+        if request_count > 1 {
+            let final_summary = response.summary.clone();
+            response.action = "batch".to_string();
+            response.summary =
+                format!("Executed {request_count} actions sequentially. {final_summary}");
+            response.executed_actions = Some(executed_actions);
+            response.exported_paths = exported_paths;
+        }
+        Ok(response)
+    }
+
     pub fn execute(
         &mut self,
         request: PresentationArtifactRequest,
@@ -2163,6 +2204,7 @@ impl PresentationArtifactManager {
                 removed.artifact_id,
                 removed.slides.len()
             ),
+            executed_actions: None,
             exported_paths: Vec::new(),
             artifact_snapshot: None,
             slide_list: None,

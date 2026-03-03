@@ -3,6 +3,8 @@ pub struct PresentationArtifactResponse {
     pub artifact_id: String,
     pub action: String,
     pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executed_actions: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub exported_paths: Vec<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,6 +40,7 @@ impl PresentationArtifactResponse {
             artifact_id,
             action,
             summary,
+            executed_actions: None,
             exported_paths: Vec::new(),
             artifact_snapshot: Some(artifact_snapshot),
             slide_list: None,
@@ -63,6 +66,7 @@ fn response_for_document_state(
         artifact_id,
         action,
         summary,
+        executed_actions: None,
         exported_paths: Vec::new(),
         artifact_snapshot: document.map(snapshot_for_document),
         slide_list: None,
@@ -132,4 +136,3 @@ pub struct ThemeSnapshot {
     pub major_font: Option<String>,
     pub minor_font: Option<String>,
 }
-

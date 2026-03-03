@@ -259,6 +259,85 @@ fn exported_images_are_real_pictures_with_media_parts() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn tool_request_accepts_sequential_actions() -> Result<(), Box<dyn std::error::Error>> {
+    let request: PresentationArtifactToolRequest = serde_json::from_value(serde_json::json!({
+        "actions": [
+            {
+                "action": "create",
+                "args": { "name": "Batch Deck" }
+            },
+            {
+                "action": "export_pptx",
+                "args": { "path": "deck.pptx" }
+            }
+        ]
+    }))?;
+
+    let execution = request.into_execution_request()?;
+    assert_eq!(execution.artifact_id, None);
+    assert_eq!(execution.requests.len(), 2);
+    assert_eq!(execution.requests[0].action, "create");
+    assert_eq!(execution.requests[1].action, "export_pptx");
+    Ok(())
+}
+
+#[test]
+fn manager_can_execute_sequential_actions() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let response = manager.execute_requests(
+        PresentationArtifactExecutionRequest {
+            artifact_id: None,
+            requests: vec![
+                PresentationArtifactRequest {
+                    artifact_id: None,
+                    action: "create".to_string(),
+                    args: serde_json::json!({ "name": "Batch Deck" }),
+                },
+                PresentationArtifactRequest {
+                    artifact_id: None,
+                    action: "add_slide".to_string(),
+                    args: serde_json::json!({}),
+                },
+                PresentationArtifactRequest {
+                    artifact_id: None,
+                    action: "add_text_shape".to_string(),
+                    args: serde_json::json!({
+                        "slide_index": 0,
+                        "text": "hello",
+                        "position": { "left": 40, "top": 40, "width": 200, "height": 80 }
+                    }),
+                },
+            ],
+        },
+        temp_dir.path(),
+    )?;
+
+    assert_eq!(response.action, "batch");
+    assert_eq!(
+        response.executed_actions,
+        Some(vec![
+            "create".to_string(),
+            "add_slide".to_string(),
+            "add_text_shape".to_string(),
+        ])
+    );
+    assert_eq!(
+        response
+            .artifact_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.slide_count),
+        Some(1)
+    );
+    assert!(
+        response
+            .summary
+            .contains("Executed 3 actions sequentially.")
+    );
+    Ok(())
+}
+
+#[test]
 fn imported_pptx_surfaces_image_elements() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::tempdir()?;
     let source_path = temp_dir.path().join("import-source.png");

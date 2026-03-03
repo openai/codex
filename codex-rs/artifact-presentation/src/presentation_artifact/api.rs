@@ -85,6 +85,27 @@ pub struct PresentationArtifactRequest {
     pub args: Value,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PresentationArtifactToolRequest {
+    pub artifact_id: Option<String>,
+    pub actions: Vec<PresentationArtifactToolAction>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PresentationArtifactExecutionRequest {
+    pub artifact_id: Option<String>,
+    pub requests: Vec<PresentationArtifactRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PresentationArtifactToolAction {
+    pub action: String,
+    #[serde(default)]
+    pub args: Value,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathAccessKind {
     Read,
@@ -99,6 +120,10 @@ pub struct PathAccessRequirement {
 }
 
 impl PresentationArtifactRequest {
+    pub fn is_mutating(&self) -> bool {
+        !is_read_only_action(&self.action)
+    }
+
     pub fn required_path_accesses(
         &self,
         cwd: &Path,
@@ -173,5 +198,52 @@ impl PresentationArtifactRequest {
             _ => Vec::new(),
         };
         Ok(access)
+    }
+}
+
+impl PresentationArtifactToolRequest {
+    pub fn is_mutating(&self) -> Result<bool, PresentationArtifactError> {
+        Ok(self.actions.iter().any(|request| !is_read_only_action(&request.action)))
+    }
+
+    pub fn into_execution_request(
+        self,
+    ) -> Result<PresentationArtifactExecutionRequest, PresentationArtifactError> {
+        if self.actions.is_empty() {
+            return Err(PresentationArtifactError::InvalidArgs {
+                action: "presentation_artifact".to_string(),
+                message: "`actions` must contain at least one item".to_string(),
+            });
+        }
+        Ok(PresentationArtifactExecutionRequest {
+            artifact_id: self.artifact_id,
+            requests: self
+                .actions
+                .into_iter()
+                .map(|request| PresentationArtifactRequest {
+                    artifact_id: None,
+                    action: request.action,
+                    args: request.args,
+                })
+                .collect(),
+        })
+    }
+
+    pub fn required_path_accesses(
+        &self,
+        cwd: &Path,
+    ) -> Result<Vec<PathAccessRequirement>, PresentationArtifactError> {
+        let mut accesses = Vec::new();
+        for request in &self.actions {
+            accesses.extend(
+                PresentationArtifactRequest {
+                    artifact_id: None,
+                    action: request.action.clone(),
+                    args: request.args.clone(),
+                }
+                .required_path_accesses(cwd)?,
+            );
+        }
+        Ok(accesses)
     }
 }

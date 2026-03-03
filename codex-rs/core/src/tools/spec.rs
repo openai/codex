@@ -567,6 +567,26 @@ fn create_view_image_tool() -> ToolSpec {
 }
 
 fn create_presentation_artifact_tool() -> ToolSpec {
+    let action_step_schema = JsonSchema::Object {
+        properties: BTreeMap::from([
+            (
+                "action".to_string(),
+                JsonSchema::String {
+                    description: Some("Action name to run for this step.".to_string()),
+                },
+            ),
+            (
+                "args".to_string(),
+                JsonSchema::Object {
+                    properties: BTreeMap::new(),
+                    required: None,
+                    additional_properties: Some(true.into()),
+                },
+            ),
+        ]),
+        required: Some(vec!["action".to_string(), "args".to_string()]),
+        additional_properties: Some(false.into()),
+    };
     let properties = BTreeMap::from([
         (
             "artifact_id".to_string(),
@@ -577,17 +597,12 @@ fn create_presentation_artifact_tool() -> ToolSpec {
             },
         ),
         (
-            "action".to_string(),
-            JsonSchema::String {
-                description: Some("Action name to run against the artifact.".to_string()),
-            },
-        ),
-        (
-            "args".to_string(),
-            JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: Some(true.into()),
+            "actions".to_string(),
+            JsonSchema::Array {
+                items: Box::new(action_step_schema),
+                description: Some(
+                    "Array of `(action, args)` steps to execute sequentially.".to_string(),
+                ),
             },
         ),
     ]);
@@ -598,7 +613,7 @@ fn create_presentation_artifact_tool() -> ToolSpec {
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["action".to_string(), "args".to_string()]),
+            required: Some(vec!["actions".to_string()]),
             additional_properties: Some(false.into()),
         },
     })

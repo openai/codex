@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use codex_artifact_presentation::PathAccessKind;
 use codex_artifact_presentation::PathAccessRequirement;
 use codex_artifact_presentation::PresentationArtifactError;
-use codex_artifact_presentation::PresentationArtifactRequest;
+use codex_artifact_presentation::PresentationArtifactToolRequest;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use serde_json::to_string;
@@ -37,23 +37,10 @@ impl ToolHandler for PresentationArtifactHandler {
         let ToolPayload::Function { arguments } = &invocation.payload else {
             return true;
         };
-        let Ok(request) = parse_arguments::<PresentationArtifactRequest>(arguments) else {
+        let Ok(request) = parse_arguments::<PresentationArtifactToolRequest>(arguments) else {
             return true;
         };
-        !matches!(
-            request.action.as_str(),
-            "get_summary"
-                | "list_slides"
-                | "list_layouts"
-                | "list_layout_placeholders"
-                | "list_slide_placeholders"
-                | "inspect"
-                | "resolve"
-                | "to_proto"
-                | "get_style"
-                | "describe_styles"
-                | "record_patch"
-        )
+        request.is_mutating().unwrap_or(true)
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
@@ -80,7 +67,7 @@ impl ToolHandler for PresentationArtifactHandler {
             }
         };
 
-        let request: PresentationArtifactRequest = parse_arguments(&arguments)?;
+        let request: PresentationArtifactToolRequest = parse_arguments(&arguments)?;
         for access in request
             .required_path_accesses(&turn.cwd)
             .map_err(presentation_error)?
@@ -89,7 +76,12 @@ impl ToolHandler for PresentationArtifactHandler {
         }
 
         let response = session
-            .execute_presentation_artifact(request, &turn.cwd)
+            .execute_presentation_artifact(
+                request
+                    .into_execution_request()
+                    .map_err(presentation_error)?,
+                &turn.cwd,
+            )
             .await
             .map_err(presentation_error)?;
 
