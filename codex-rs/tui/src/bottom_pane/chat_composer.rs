@@ -4844,6 +4844,19 @@ mod tests {
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
             },
         );
+
+        // Draft text with a configured status line should keep rendering the
+        // status line even when no collaboration mode indicator is shown.
+        snapshot_composer_state_with_width(
+            "footer_collapse_status_line_draft_no_mode",
+            120,
+            true,
+            |composer| {
+                composer.set_status_line_enabled(true);
+                composer.set_status_line(Some(Line::from("model: gpt-5 · cwd: codex-rs")));
+                composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+            },
+        );
     }
 
     #[test]
