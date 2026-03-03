@@ -177,116 +177,38 @@ mod tests {
     use super::sanitize_url_for_display;
 
     #[test]
-    fn collect_from_pairs_returns_empty_when_no_diagnostics_are_present() {
-        let diagnostics = FeedbackDiagnostics::collect_from_pairs(Vec::<(String, String)>::new());
-
-        assert_eq!(diagnostics, FeedbackDiagnostics::default());
-        assert_eq!(diagnostics.attachment_text(), None);
-    }
-
-    #[test]
-    fn collect_from_pairs_reports_proxy_env_vars_in_fixed_order() {
-        let diagnostics = FeedbackDiagnostics::collect_from_pairs([
-            ("HTTPS_PROXY", "https://secure-proxy.example.com:443"),
-            ("HTTP_PROXY", "proxy.example.com:8080"),
-            ("ALL_PROXY", "socks5h://all-proxy.example.com:1080"),
-        ]);
-
-        assert_eq!(
-            diagnostics,
-            FeedbackDiagnostics {
-                diagnostics: vec![FeedbackDiagnostic {
-                    headline: "Proxy environment variables are set and may affect connectivity."
-                        .to_string(),
-                    details: vec![
-                        "HTTP_PROXY = http://proxy.example.com:8080".to_string(),
-                        "HTTPS_PROXY = https://secure-proxy.example.com".to_string(),
-                        "ALL_PROXY = socks5h://all-proxy.example.com:1080".to_string(),
-                    ],
-                }],
-            }
-        );
-    }
-
-    #[test]
-    fn collect_from_pairs_reports_invalid_proxy_values_without_echoing_them() {
-        let diagnostics =
-            FeedbackDiagnostics::collect_from_pairs([("HTTP_PROXY", "not a valid\nproxy")]);
-
-        assert_eq!(
-            diagnostics,
-            FeedbackDiagnostics {
-                diagnostics: vec![FeedbackDiagnostic {
-                    headline: "Proxy environment variables are set and may affect connectivity."
-                        .to_string(),
-                    details: vec!["HTTP_PROXY = invalid value".to_string()],
-                }],
-            }
-        );
-    }
-
-    #[test]
-    fn collect_from_pairs_reports_non_default_openai_base_url() {
-        let diagnostics = FeedbackDiagnostics::collect_from_pairs([(
-            "OPENAI_BASE_URL",
-            "https://example.com/v1",
-        )]);
-
-        assert_eq!(
-            diagnostics,
-            FeedbackDiagnostics {
-                diagnostics: vec![FeedbackDiagnostic {
-                    headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                    details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
-                }],
-            }
-        );
-    }
-
-    #[test]
-    fn collect_from_pairs_ignores_default_openai_base_url() {
-        let diagnostics = FeedbackDiagnostics::collect_from_pairs([(
-            "OPENAI_BASE_URL",
-            "https://api.openai.com/v1/",
-        )]);
-
-        assert_eq!(diagnostics, FeedbackDiagnostics::default());
-    }
-
-    #[test]
-    fn collect_from_pairs_reports_invalid_openai_base_url_without_echoing_it() {
-        let diagnostics =
-            FeedbackDiagnostics::collect_from_pairs([("OPENAI_BASE_URL", "not a valid\nurl")]);
-
-        assert_eq!(
-            diagnostics,
-            FeedbackDiagnostics {
-                diagnostics: vec![FeedbackDiagnostic {
-                    headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                    details: vec!["OPENAI_BASE_URL = invalid value".to_string()],
-                }],
-            }
-        );
-    }
-
-    #[test]
-    fn sanitize_url_for_display_strips_credentials_query_and_fragment() {
-        let sanitized = sanitize_url_for_display(
-            "https://user:password@example.com:8443/v1?token=secret#fragment",
-        );
-
-        assert_eq!(sanitized, Some("https://example.com:8443/v1".to_string()));
-    }
-
-    #[test]
-    fn write_temp_attachment_persists_sanitized_text() {
+    fn collect_from_pairs_reports_sanitized_diagnostics_and_attachment() {
         let diagnostics = FeedbackDiagnostics::collect_from_pairs([
             (
-                "HTTP_PROXY",
-                "https://user:password@proxy.example.com:8443?secret=1",
+                "HTTPS_PROXY",
+                "https://user:password@secure-proxy.example.com:443?secret=1",
             ),
+            ("http_proxy", "proxy.example.com:8080"),
+            ("all_proxy", "socks5h://all-proxy.example.com:1080"),
             ("OPENAI_BASE_URL", "https://example.com/v1?token=secret"),
         ]);
+
+        assert_eq!(
+            diagnostics,
+            FeedbackDiagnostics {
+                diagnostics: vec![
+                    FeedbackDiagnostic {
+                        headline:
+                            "Proxy environment variables are set and may affect connectivity."
+                                .to_string(),
+                        details: vec![
+                            "http_proxy = http://proxy.example.com:8080".to_string(),
+                            "HTTPS_PROXY = https://secure-proxy.example.com".to_string(),
+                            "all_proxy = socks5h://all-proxy.example.com:1080".to_string(),
+                        ],
+                    },
+                    FeedbackDiagnostic {
+                        headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                        details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
+                    },
+                ],
+            }
+        );
 
         let attachment = diagnostics
             .write_temp_attachment()
@@ -301,8 +223,70 @@ mod tests {
         );
         assert_eq!(
             contents,
-            "Connectivity diagnostics\n\n- Proxy environment variables are set and may affect connectivity.\n  - HTTP_PROXY = https://proxy.example.com:8443\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1"
+            "Connectivity diagnostics\n\n- Proxy environment variables are set and may affect connectivity.\n  - http_proxy = http://proxy.example.com:8080\n  - HTTPS_PROXY = https://secure-proxy.example.com\n  - all_proxy = socks5h://all-proxy.example.com:1080\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1"
                 .to_string()
         );
+    }
+
+    #[test]
+    fn collect_from_pairs_ignores_absent_and_default_values() {
+        for diagnostics in [
+            FeedbackDiagnostics::collect_from_pairs(Vec::<(String, String)>::new()),
+            FeedbackDiagnostics::collect_from_pairs([(
+                "OPENAI_BASE_URL",
+                "https://api.openai.com/v1/",
+            )]),
+        ] {
+            assert_eq!(diagnostics, FeedbackDiagnostics::default());
+            assert_eq!(diagnostics.attachment_text(), None);
+            assert!(
+                diagnostics
+                    .write_temp_attachment()
+                    .expect("empty diagnostics should not write attachment")
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn collect_from_pairs_reports_invalid_values_without_echoing_them() {
+        let invalid_proxy = "not a valid\nproxy";
+        let invalid_base_url = "not a valid\nurl";
+        let diagnostics = FeedbackDiagnostics::collect_from_pairs([
+            ("HTTP_PROXY", invalid_proxy),
+            ("OPENAI_BASE_URL", invalid_base_url),
+        ]);
+
+        assert_eq!(
+            diagnostics,
+            FeedbackDiagnostics {
+                diagnostics: vec![
+                    FeedbackDiagnostic {
+                        headline:
+                            "Proxy environment variables are set and may affect connectivity."
+                                .to_string(),
+                        details: vec!["HTTP_PROXY = invalid value".to_string()],
+                    },
+                    FeedbackDiagnostic {
+                        headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                        details: vec!["OPENAI_BASE_URL = invalid value".to_string()],
+                    },
+                ],
+            }
+        );
+        let attachment_text = diagnostics
+            .attachment_text()
+            .expect("invalid diagnostics should still render attachment text");
+        assert!(!attachment_text.contains(invalid_proxy));
+        assert!(!attachment_text.contains(invalid_base_url));
+    }
+
+    #[test]
+    fn sanitize_url_for_display_strips_credentials_query_and_fragment() {
+        let sanitized = sanitize_url_for_display(
+            "https://user:password@example.com:8443/v1?token=secret#fragment",
+        );
+
+        assert_eq!(sanitized, Some("https://example.com:8443/v1".to_string()));
     }
 }

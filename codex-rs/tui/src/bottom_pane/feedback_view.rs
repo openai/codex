@@ -647,7 +647,6 @@ mod tests {
     use crate::app_event_sender::AppEventSender;
     use pretty_assertions::assert_eq;
     use std::ffi::OsStr;
-    use std::fs;
 
     fn render(view: &FeedbackNoteView, width: u16) -> String {
         let height = view.desired_height(width);
@@ -753,63 +752,39 @@ mod tests {
     }
 
     #[test]
-    fn prepare_feedback_attachments_skips_diagnostics_without_logs() {
-        let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
+    fn prepare_feedback_attachments_only_includes_diagnostics_when_logs_are_enabled() {
         let diagnostics = FeedbackDiagnostics::collect_from_pairs([(
             "OPENAI_BASE_URL",
             "https://example.com/v1",
         )]);
-        let view = FeedbackNoteView::new(
-            FeedbackCategory::Other,
-            snapshot,
-            None,
-            diagnostics,
-            tx,
-            false,
-            FeedbackAudience::External,
-        );
+        let make_view = |include_logs| {
+            let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+            let tx = AppEventSender::new(tx_raw);
+            let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
+            FeedbackNoteView::new(
+                FeedbackCategory::Other,
+                snapshot,
+                None,
+                diagnostics.clone(),
+                tx,
+                include_logs,
+                FeedbackAudience::External,
+            )
+        };
 
-        let attachments = view.prepare_feedback_attachments();
-        assert_eq!(attachments.attachment_paths, Vec::<PathBuf>::new());
-        assert!(attachments._diagnostics_attachment.is_none());
-    }
+        let without_logs = make_view(false).prepare_feedback_attachments();
+        assert_eq!(without_logs.attachment_paths, Vec::<PathBuf>::new());
+        assert!(without_logs._diagnostics_attachment.is_none());
 
-    #[test]
-    fn prepare_feedback_attachments_includes_diagnostics_with_logs() {
-        let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
-        let diagnostics = FeedbackDiagnostics::collect_from_pairs([(
-            "OPENAI_BASE_URL",
-            "https://example.com/v1",
-        )]);
-        let view = FeedbackNoteView::new(
-            FeedbackCategory::Other,
-            snapshot,
-            None,
-            diagnostics,
-            tx,
-            true,
-            FeedbackAudience::External,
-        );
-
-        let attachments = view.prepare_feedback_attachments();
-        assert_eq!(attachments.attachment_paths.len(), 1);
+        let with_logs = make_view(true).prepare_feedback_attachments();
+        assert_eq!(with_logs.attachment_paths.len(), 1);
         assert_eq!(
-            attachments.attachment_paths[0].file_name(),
+            with_logs.attachment_paths[0].file_name(),
             Some(OsStr::new(FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME))
         );
         assert!(
-            attachments._diagnostics_attachment.is_some(),
+            with_logs._diagnostics_attachment.is_some(),
             "diagnostics attachment should stay alive until upload completes"
-        );
-        let contents = fs::read_to_string(&attachments.attachment_paths[0])
-            .expect("diagnostics attachment should be readable");
-        assert_eq!(
-            contents,
-            "Connectivity diagnostics\n\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1"
         );
     }
 
