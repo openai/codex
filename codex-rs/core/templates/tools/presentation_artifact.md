@@ -32,6 +32,7 @@ Supported actions:
 - `get_style`
 - `describe_styles`
 - `set_notes`
+- `set_notes_rich_text`
 - `append_notes`
 - `clear_notes`
 - `set_notes_visibility`
@@ -48,13 +49,25 @@ Supported actions:
 - `add_image`
 - `replace_image`
 - `add_table`
+- `update_table_style`
+- `style_table_block`
 - `update_table_cell`
 - `merge_table_cells`
 - `add_chart`
+- `update_chart`
+- `add_chart_series`
 - `update_text`
+- `set_rich_text`
+- `format_text_range`
 - `replace_text`
 - `insert_text_after`
 - `set_hyperlink`
+- `set_comment_author`
+- `add_comment_thread`
+- `add_comment_reply`
+- `toggle_comment_reaction`
+- `resolve_comment_thread`
+- `reopen_comment_thread`
 - `update_shape_style`
 - `bring_to_front`
 - `send_to_back`
@@ -73,7 +86,7 @@ Example edit:
 Example sequential batch:
 `{"actions":[{"action":"create","args":{"name":"Quarterly Update"}},{"action":"add_slide","args":{}},{"action":"add_text_shape","args":{"slide_index":0,"text":"Revenue up 24%","position":{"left":48,"top":72,"width":260,"height":80}}}]}`
 
-Table creation also accepts optional `column_widths` and `row_heights` arrays in points when you need explicit table sizing instead of even splits.
+Table creation also accepts optional `column_widths` and `row_heights` arrays in points when you need explicit table sizing instead of even splits. Tables also support `style_options`, `borders`, and `right_to_left`, with `update_table_style` and `style_table_block` available for incremental styling after creation.
 
 Example export:
 `{"artifact_id":"presentation_x","actions":[{"action":"export_pptx","args":{"path":"artifacts/q2-update.pptx"}}]}`
@@ -94,7 +107,7 @@ Layout references in `create_layout.parent_layout_id`, `add_layout_placeholder.l
 `insert_slide` accepts `index` or `after_slide_index`. If neither is provided, the new slide is inserted immediately after the active slide, or appended if no active slide is set yet.
 
 Example inspect:
-`{"artifact_id":"presentation_x","actions":[{"action":"inspect","args":{"include":"deck,slide,textbox,shape,table,chart,image,notes,layoutList","exclude":"notes","search":"roadmap","max_chars":12000}}]}`
+`{"artifact_id":"presentation_x","actions":[{"action":"inspect","args":{"include":"deck,slide,textbox,shape,table,chart,image,notes,layoutList,textRange,comment","exclude":"notes","search":"roadmap","max_chars":12000}}]}`
 
 Example inspect target window:
 `{"artifact_id":"presentation_x","actions":[{"action":"inspect","args":{"include":"textbox","target":{"id":"sh/element_3","before_lines":1,"after_lines":1}}}]}`
@@ -106,6 +119,14 @@ Example proto export:
 `{"artifact_id":"presentation_x","actions":[{"action":"to_proto","args":{}}]}`
 
 `to_proto` returns a full JSON snapshot of the current in-memory presentation document, including slide/layout records, anchors, notes, theme state, and typed element payloads.
+
+Rich text is supported on notes, text boxes, shapes with text, and table cells. Use `set_rich_text` to replace a full rich-text payload, `set_notes_rich_text` for speaker notes, and `format_text_range` to annotate a substring by `query` or explicit codepoint range. `inspect`, `resolve`, and `to_proto` surface text-range anchors as `tr/<range_id>`.
+
+Comment threads are supported through `set_comment_author`, `add_comment_thread`, `add_comment_reply`, `toggle_comment_reaction`, `resolve_comment_thread`, and `reopen_comment_thread`. Thread anchors resolve as `th/<thread_id>`, and comment records appear in both `inspect` and `to_proto`.
+
+Charts support richer series metadata plus `update_chart` and `add_chart_series`, including legend, axis, data-label, marker, fill, and per-point override state.
+
+Exported PPTX files embed Codex metadata so rich text, comment threads, and advanced table/chart state round-trip through `export_pptx` and `import_pptx` even when the base OOXML representation is lossy.
 
 Example patch recording:
 `{"artifact_id":"presentation_x","actions":[{"action":"record_patch","args":{"operations":[{"action":"add_text_shape","args":{"slide_index":0,"text":"Headline","position":{"left":48,"top":48,"width":320,"height":72}}},{"action":"set_slide_background","args":{"slide_index":0,"fill":"#F7F1E8"}}]}}]}`
@@ -136,9 +157,18 @@ Text styling payloads on `add_text_shape`, `add_shape.text_style`, `update_text.
 
 Text-bearing elements also support literal `replace_text` and `insert_text_after` helpers for in-place edits without resending the full string.
 
+Example rich text update:
+`{"artifact_id":"presentation_x","actions":[{"action":"set_rich_text","args":{"element_id":"element_3","text":[[{"run":"Quarterly ","text_style":{"bold":true}},"update pipeline"]],"text_layout":{"wrap":"square","auto_fit":"shrinkText","vertical_alignment":"middle","insets":{"left":6,"right":6,"top":4,"bottom":4}}}}]}`
+
+Example substring formatting:
+`{"artifact_id":"presentation_x","actions":[{"action":"format_text_range","args":{"element_id":"element_3","query":"update","styling":{"italic":true},"link":{"uri":"https://example.com/update","is_external":true}}}]}`
+
 Text boxes and shapes support whole-element hyperlinks via `set_hyperlink`. Supported `link_type` values are `url`, `slide`, `first_slide`, `last_slide`, `next_slide`, `previous_slide`, `end_show`, `email`, and `file`. Use `clear: true` to remove an existing hyperlink.
 
 Notes visibility is honored on export: `set_notes_visibility` controls whether speaker notes are emitted into exported PPTX output.
+
+Example comment thread:
+`{"artifact_id":"presentation_x","actions":[{"action":"set_comment_author","args":{"display_name":"Jamie Fox","initials":"JF"}},{"action":"add_comment_thread","args":{"slide_index":0,"element_id":"element_3","query":"Quarterly","text":"Tighten this headline"}},{"action":"add_comment_reply","args":{"thread_id":"thread_1","text":"Applied to the draft."}}]}`
 
 Image placeholders can be prompt-only. `add_image` accepts `prompt` without `path`/`data_url`, and unresolved placeholders export as a visible placeholder box instead of failing.
 
@@ -157,6 +187,9 @@ Shape strokes accept an optional `style` field such as `solid`, `dashed`, `dotte
 `add_shape` also accepts optional `rotation`, `flip_horizontal`, and `flip_vertical` fields. Those same transform fields can also be provided inside the `position` object for `add_shape`, `add_image`, and `update_shape_style`.
 
 Connectors are supported via `add_connector`, with straight/elbow/curved types plus dash styles and arrow heads.
+
+Example chart update:
+`{"artifact_id":"presentation_x","actions":[{"action":"update_chart","args":{"element_id":"element_7","style_index":12,"legend_position":"bottom","y_axis_title":"USD (millions)"}},{"action":"add_chart_series","args":{"element_id":"element_7","name":"Target","values":[11,13],"fill":"#70AD47","marker":{"symbol":"diamond","size":6}}}]}`
 
 Example preview:
 `{"artifact_id":"presentation_x","actions":[{"action":"export_preview","args":{"slide_index":0,"path":"artifacts/q2-update-slide1.png"}}]}`

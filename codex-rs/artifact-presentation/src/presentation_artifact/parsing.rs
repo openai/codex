@@ -169,6 +169,134 @@ fn parse_chart_type(
     }
 }
 
+fn parse_chart_marker(marker: Option<ChartMarkerArgs>) -> ChartMarkerStyle {
+    marker
+        .map(|marker| ChartMarkerStyle {
+            symbol: marker.symbol,
+            size: marker.size,
+        })
+        .unwrap_or_default()
+}
+
+fn parse_chart_data_labels(
+    document: &PresentationDocument,
+    data_labels: Option<ChartDataLabelsArgs>,
+    action: &str,
+) -> Result<Option<ChartDataLabels>, PresentationArtifactError> {
+    data_labels
+        .map(|data_labels| {
+            Ok(ChartDataLabels {
+                show_value: data_labels.show_value.unwrap_or(false),
+                show_category_name: data_labels.show_category_name.unwrap_or(false),
+                show_leader_lines: data_labels.show_leader_lines.unwrap_or(false),
+                position: data_labels.position,
+                text_style: normalize_text_style_with_document(
+                    document,
+                    &data_labels.text_style,
+                    action,
+                )?,
+            })
+        })
+        .transpose()
+}
+
+fn parse_chart_series(
+    document: &PresentationDocument,
+    series: Vec<ChartSeriesArgs>,
+    action: &str,
+) -> Result<Vec<ChartSeriesSpec>, PresentationArtifactError> {
+    series
+        .into_iter()
+        .map(|entry| {
+            if entry.values.is_empty() {
+                return Err(PresentationArtifactError::InvalidArgs {
+                    action: action.to_string(),
+                    message: format!("series `{}` must contain at least one value", entry.name),
+                });
+            }
+            let fill = entry
+                .fill
+                .as_deref()
+                .map(|value| normalize_color_with_document(document, value, action, "series.fill"))
+                .transpose()?;
+            let stroke = entry
+                .stroke
+                .map(|stroke| {
+                    Ok(StrokeStyle {
+                        color: normalize_color_with_document(
+                            document,
+                            &stroke.color,
+                            action,
+                            "series.stroke.color",
+                        )?,
+                        width: stroke.width,
+                        style: stroke
+                            .style
+                            .as_deref()
+                            .map(|value| parse_line_style(value, action))
+                            .transpose()?
+                            .unwrap_or(LineStyle::Solid),
+                    })
+                })
+                .transpose()?;
+            let data_label_overrides = entry
+                .data_label_overrides
+                .unwrap_or_default()
+                .into_iter()
+                .map(|override_args| {
+                    Ok(ChartDataLabelOverride {
+                        idx: override_args.idx as usize,
+                        text: override_args.text,
+                        position: override_args.position,
+                        text_style: normalize_text_style_with_document(
+                            document,
+                            &override_args.text_style,
+                            action,
+                        )?,
+                        fill: override_args
+                            .fill
+                            .as_deref()
+                            .map(|value| {
+                                normalize_color_with_document(document, value, action, "fill")
+                            })
+                            .transpose()?,
+                        stroke: override_args
+                            .stroke
+                            .map(|stroke| {
+                                Ok(StrokeStyle {
+                                    color: normalize_color_with_document(
+                                        document,
+                                        &stroke.color,
+                                        action,
+                                        "stroke.color",
+                                    )?,
+                                    width: stroke.width,
+                                    style: stroke
+                                        .style
+                                        .as_deref()
+                                        .map(|value| parse_line_style(value, action))
+                                        .transpose()?
+                                        .unwrap_or(LineStyle::Solid),
+                                })
+                            })
+                            .transpose()?,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ChartSeriesSpec {
+                name: entry.name,
+                values: entry.values,
+                categories: entry.categories,
+                x_values: entry.x_values,
+                fill,
+                stroke,
+                marker: Some(parse_chart_marker(entry.marker)),
+                data_label_overrides,
+            })
+        })
+        .collect()
+}
+
 fn parse_stroke(
     document: &PresentationDocument,
     stroke: Option<StrokeArgs>,
@@ -299,6 +427,216 @@ fn normalize_text_style_with_document(
     })
 }
 
+fn normalize_text_layout(
+    layout: &TextLayoutArgs,
+    action: &str,
+) -> Result<TextLayoutState, PresentationArtifactError> {
+    let wrap = layout
+        .wrap
+        .as_deref()
+        .map(|value| match value {
+            "square" => Ok(TextWrapMode::Square),
+            "none" => Ok(TextWrapMode::None),
+            _ => Err(PresentationArtifactError::InvalidArgs {
+                action: action.to_string(),
+                message: format!("unsupported wrap `{value}`"),
+            }),
+        })
+        .transpose()?;
+    let auto_fit = layout
+        .auto_fit
+        .as_deref()
+        .map(|value| match value {
+            "none" => Ok(TextAutoFitMode::None),
+            "shrinkText" | "shrink_text" => Ok(TextAutoFitMode::ShrinkText),
+            "resizeShapeToFitText" | "resize_shape_to_fit_text" => {
+                Ok(TextAutoFitMode::ResizeShapeToFitText)
+            }
+            _ => Err(PresentationArtifactError::InvalidArgs {
+                action: action.to_string(),
+                message: format!("unsupported auto_fit `{value}`"),
+            }),
+        })
+        .transpose()?;
+    let vertical_alignment = layout
+        .vertical_alignment
+        .as_deref()
+        .map(|value| match value {
+            "top" => Ok(TextVerticalAlignment::Top),
+            "middle" | "center" => Ok(TextVerticalAlignment::Middle),
+            "bottom" => Ok(TextVerticalAlignment::Bottom),
+            _ => Err(PresentationArtifactError::InvalidArgs {
+                action: action.to_string(),
+                message: format!("unsupported vertical_alignment `{value}`"),
+            }),
+        })
+        .transpose()?;
+    Ok(TextLayoutState {
+        insets: layout.insets.as_ref().map(|insets| TextInsets {
+            left: insets.left,
+            right: insets.right,
+            top: insets.top,
+            bottom: insets.bottom,
+        }),
+        wrap,
+        auto_fit,
+        vertical_alignment,
+    })
+}
+
+fn normalize_rich_text_input(
+    document: &PresentationDocument,
+    input: RichTextInput,
+    action: &str,
+) -> Result<(String, RichTextState), PresentationArtifactError> {
+    let mut text = String::new();
+    let mut ranges = Vec::new();
+    let paragraphs = match input {
+        RichTextInput::Plain(value) => vec![RichParagraphInput::Plain(value)],
+        RichTextInput::Paragraphs(paragraphs) => paragraphs,
+    };
+    for (paragraph_index, paragraph) in paragraphs.into_iter().enumerate() {
+        if paragraph_index > 0 {
+            text.push('\n');
+        }
+        let paragraph_start = text.chars().count();
+        match paragraph {
+            RichParagraphInput::Plain(value) => text.push_str(&value),
+            RichParagraphInput::Runs(runs) => {
+                for run in runs {
+                    match run {
+                        RichRunInput::Plain(value) => text.push_str(&value),
+                        RichRunInput::Styled(value) => {
+                            let start_cp = text.chars().count();
+                            text.push_str(&value.run);
+                            let length = value.run.chars().count();
+                            let style = normalize_text_style_with_document(
+                                document,
+                                &value.text_style,
+                                action,
+                            )?;
+                            let hyperlink = value
+                                .link
+                                .as_ref()
+                                .map(|link| parse_rich_text_link(link, action))
+                                .transpose()?;
+                            if length > 0
+                                && (!text_style_is_empty(&style) || hyperlink.is_some())
+                            {
+                                ranges.push(TextRangeAnnotation {
+                                    range_id: format!("inline_{paragraph_index}_{start_cp}"),
+                                    start_cp,
+                                    length,
+                                    style,
+                                    hyperlink,
+                                    spacing_before: None,
+                                    spacing_after: None,
+                                    line_spacing: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let paragraph_len = text.chars().count() - paragraph_start;
+        if paragraph_len == 0 {
+            continue;
+        }
+    }
+    Ok((
+        text,
+        RichTextState {
+            ranges,
+            layout: TextLayoutState::default(),
+        },
+    ))
+}
+
+fn parse_rich_text_link(
+    link: &RichTextLinkInput,
+    action: &str,
+) -> Result<HyperlinkState, PresentationArtifactError> {
+    let uri = link
+        .uri
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| PresentationArtifactError::InvalidArgs {
+            action: action.to_string(),
+            message: "`link.uri` is required".to_string(),
+        })?;
+    let target = if link.is_external.unwrap_or(true) {
+        HyperlinkTarget::Url(uri.clone())
+    } else {
+        HyperlinkTarget::File(uri.clone())
+    };
+    Ok(HyperlinkState {
+        target,
+        tooltip: None,
+        highlight_click: true,
+    })
+}
+
+fn text_style_is_empty(style: &TextStyle) -> bool {
+    style.style_name.is_none()
+        && style.font_size.is_none()
+        && style.font_family.is_none()
+        && style.color.is_none()
+        && style.alignment.is_none()
+        && !style.bold
+        && !style.italic
+        && !style.underline
+}
+
+fn resolve_text_range_selector(
+    text: &str,
+    query: Option<&str>,
+    occurrence: Option<usize>,
+    start_cp: Option<usize>,
+    length: Option<usize>,
+    action: &str,
+) -> Result<(usize, usize, Option<String>), PresentationArtifactError> {
+    if let Some(query) = query {
+        let occurrence = occurrence.unwrap_or(0);
+        let haystack = text.chars().collect::<Vec<_>>();
+        let needle = query.chars().collect::<Vec<_>>();
+        if needle.is_empty() {
+            return Err(PresentationArtifactError::InvalidArgs {
+                action: action.to_string(),
+                message: "`query` must not be empty".to_string(),
+            });
+        }
+        let mut matches = Vec::new();
+        for start in 0..=haystack.len().saturating_sub(needle.len()) {
+            if haystack[start..start + needle.len()] == needle[..] {
+                matches.push(start);
+            }
+        }
+        let Some(found) = matches.get(occurrence).copied() else {
+            return Err(PresentationArtifactError::InvalidArgs {
+                action: action.to_string(),
+                message: format!("query `{query}` occurrence {occurrence} was not found"),
+            });
+        };
+        return Ok((found, needle.len(), Some(query.to_string())));
+    }
+    let start_cp = start_cp.ok_or_else(|| PresentationArtifactError::InvalidArgs {
+        action: action.to_string(),
+        message: "provide either `query` or `start_cp`".to_string(),
+    })?;
+    let length = length.ok_or_else(|| PresentationArtifactError::InvalidArgs {
+        action: action.to_string(),
+        message: "`length` is required with `start_cp`".to_string(),
+    })?;
+    if start_cp + length > text.chars().count() {
+        return Err(PresentationArtifactError::InvalidArgs {
+            action: action.to_string(),
+            message: "text range is out of bounds".to_string(),
+        });
+    }
+    Ok((start_cp, length, None))
+}
+
 fn normalize_text_style_with_palette(
     theme: Option<&ThemeState>,
     styling: &TextStylingArgs,
@@ -423,10 +761,80 @@ fn coerce_table_rows(
                     text_style: TextStyle::default(),
                     background_fill: None,
                     alignment: None,
+                    rich_text: RichTextState::default(),
+                    borders: None,
                 })
                 .collect()
         })
         .collect())
+}
+
+fn parse_table_border(
+    document: &PresentationDocument,
+    border: &TableBorderArgs,
+    action: &str,
+    field: &str,
+) -> Result<TableBorder, PresentationArtifactError> {
+    Ok(TableBorder {
+        color: normalize_color_with_document(document, &border.color, action, field)?,
+        width: border.width,
+    })
+}
+
+fn parse_table_borders(
+    document: &PresentationDocument,
+    borders: Option<TableBordersArgs>,
+    action: &str,
+) -> Result<Option<TableBorders>, PresentationArtifactError> {
+    borders
+        .map(|borders| {
+            Ok(TableBorders {
+                outside: borders
+                    .outside
+                    .as_ref()
+                    .map(|border| parse_table_border(document, border, action, "borders.outside"))
+                    .transpose()?,
+                inside: borders
+                    .inside
+                    .as_ref()
+                    .map(|border| parse_table_border(document, border, action, "borders.inside"))
+                    .transpose()?,
+                top: borders
+                    .top
+                    .as_ref()
+                    .map(|border| parse_table_border(document, border, action, "borders.top"))
+                    .transpose()?,
+                bottom: borders
+                    .bottom
+                    .as_ref()
+                    .map(|border| parse_table_border(document, border, action, "borders.bottom"))
+                    .transpose()?,
+                left: borders
+                    .left
+                    .as_ref()
+                    .map(|border| parse_table_border(document, border, action, "borders.left"))
+                    .transpose()?,
+                right: borders
+                    .right
+                    .as_ref()
+                    .map(|border| parse_table_border(document, border, action, "borders.right"))
+                    .transpose()?,
+            })
+        })
+        .transpose()
+}
+
+fn parse_table_style_options(style_options: Option<TableStyleOptionsArgs>) -> TableStyleOptions {
+    style_options
+        .map(|style_options| TableStyleOptions {
+            header_row: style_options.header_row.unwrap_or(false),
+            banded_rows: style_options.banded_rows.unwrap_or(false),
+            banded_columns: style_options.banded_columns.unwrap_or(false),
+            first_column: style_options.first_column.unwrap_or(false),
+            last_column: style_options.last_column.unwrap_or(false),
+            total_row: style_options.total_row.unwrap_or(false),
+        })
+        .unwrap_or_default()
 }
 
 fn normalize_table_dimensions(
@@ -685,6 +1093,7 @@ fn materialize_placeholder_element(
             fill: None,
             style: TextStyle::default(),
             hyperlink: None,
+            rich_text: RichTextState::default(),
             placeholder: placeholder_ref,
             z_order,
         })
@@ -698,6 +1107,7 @@ fn materialize_placeholder_element(
             text: placeholder.text,
             text_style: TextStyle::default(),
             hyperlink: None,
+            rich_text: None,
             placeholder: placeholder_ref,
             rotation_degrees: None,
             flip_horizontal: false,
@@ -861,4 +1271,3 @@ fn slide_placeholder_list(
         })
         .collect()
 }
-

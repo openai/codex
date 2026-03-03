@@ -1,3 +1,21 @@
+const CODEX_METADATA_ENTRY: &str = "ppt/codex-document.json";
+
+fn import_codex_metadata_document(path: &Path) -> Result<Option<PresentationDocument>, String> {
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
+    let mut entry = match archive.by_name(CODEX_METADATA_ENTRY) {
+        Ok(entry) => entry,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut bytes = Vec::new();
+    entry.read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
 fn build_pptx_bytes(document: &PresentationDocument, action: &str) -> Result<Vec<u8>, String> {
     let bytes = document
         .to_ppt_rs()
@@ -211,6 +229,9 @@ fn patch_pptx_package(
             continue;
         }
         let name = file.name().to_string();
+        if name == CODEX_METADATA_ENTRY {
+            continue;
+        }
         let options = file.options();
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
@@ -281,6 +302,15 @@ fn patch_pptx_package(
             .write_all(&bytes)
             .map_err(|error| error.to_string())?;
     }
+
+    writer
+        .start_file(CODEX_METADATA_ENTRY, SimpleFileOptions::default())
+        .map_err(|error| error.to_string())?;
+    writer
+        .write_all(
+            &serde_json::to_vec(document).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
 
     writer
         .finish()
@@ -919,4 +949,3 @@ fn normalize_preview_quality(
     }
     Ok(quality)
 }
-

@@ -122,6 +122,7 @@ impl PresentationArtifactManager {
             "get_style" => self.get_style(request),
             "describe_styles" => self.describe_styles(request),
             "set_notes" => self.set_notes(request),
+            "set_notes_rich_text" => self.set_notes_rich_text(request),
             "append_notes" => self.append_notes(request),
             "clear_notes" => self.clear_notes(request),
             "set_notes_visibility" => self.set_notes_visibility(request),
@@ -133,13 +134,25 @@ impl PresentationArtifactManager {
             "add_image" => self.add_image(request, cwd),
             "replace_image" => self.replace_image(request, cwd),
             "add_table" => self.add_table(request),
+            "update_table_style" => self.update_table_style(request),
+            "style_table_block" => self.style_table_block(request),
             "update_table_cell" => self.update_table_cell(request),
             "merge_table_cells" => self.merge_table_cells(request),
             "add_chart" => self.add_chart(request),
+            "update_chart" => self.update_chart(request),
+            "add_chart_series" => self.add_chart_series(request),
             "update_text" => self.update_text(request),
+            "set_rich_text" => self.set_rich_text(request),
+            "format_text_range" => self.format_text_range(request),
             "replace_text" => self.replace_text(request),
             "insert_text_after" => self.insert_text_after(request),
             "set_hyperlink" => self.set_hyperlink(request),
+            "set_comment_author" => self.set_comment_author(request),
+            "add_comment_thread" => self.add_comment_thread(request),
+            "add_comment_reply" => self.add_comment_reply(request),
+            "toggle_comment_reaction" => self.toggle_comment_reaction(request),
+            "resolve_comment_thread" => self.resolve_comment_thread(request),
+            "reopen_comment_thread" => self.reopen_comment_thread(request),
             "update_shape_style" => self.update_shape_style(request),
             "bring_to_front" => self.bring_to_front(request),
             "send_to_back" => self.send_to_back(request),
@@ -187,14 +200,24 @@ impl PresentationArtifactManager {
     ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
         let args: ImportPptxArgs = parse_args(&request.action, &request.args)?;
         let path = resolve_path(cwd, &args.path);
-        let imported = Presentation::from_path(&path).map_err(|error| {
-            PresentationArtifactError::ImportFailed {
+        let document = if let Some(document) = import_codex_metadata_document(&path)
+            .map_err(|message| PresentationArtifactError::ImportFailed {
                 path: path.clone(),
-                message: error.to_string(),
-            }
-        })?;
-        let mut document = PresentationDocument::from_ppt_rs(imported);
-        import_pptx_images(&path, &mut document, &request.action)?;
+                message,
+            })?
+        {
+            document
+        } else {
+            let imported = Presentation::from_path(&path).map_err(|error| {
+                PresentationArtifactError::ImportFailed {
+                    path: path.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+            let mut document = PresentationDocument::from_ppt_rs(imported);
+            import_pptx_images(&path, &mut document, &request.action)?;
+            document
+        };
         let artifact_id = document.artifact_id.clone();
         let slide_count = document.slides.len();
         let snapshot = snapshot_for_document(&document);
@@ -287,6 +310,7 @@ impl PresentationArtifactManager {
                 .ok_or_else(|| {
                     index_out_of_range(&request.action, slide_index as usize, document.slides.len())
                 })?;
+            let slide_id = slide.slide_id.clone();
             PresentationDocument {
                 artifact_id: document.artifact_id.clone(),
                 name: document.name.clone(),
@@ -296,9 +320,25 @@ impl PresentationArtifactManager {
                 layouts: Vec::new(),
                 slides: vec![slide],
                 active_slide_index: Some(0),
+                comment_self: document.comment_self.clone(),
+                comment_threads: document
+                    .comment_threads
+                    .iter()
+                    .filter(|thread| match &thread.target {
+                        CommentTarget::Slide { slide_id: target_slide_id }
+                        | CommentTarget::Element { slide_id: target_slide_id, .. }
+                        | CommentTarget::TextRange { slide_id: target_slide_id, .. } => {
+                            target_slide_id == &slide_id
+                        }
+                    })
+                    .cloned()
+                    .collect(),
                 next_slide_seq: 1,
                 next_element_seq: 1,
                 next_layout_seq: 1,
+                next_text_range_seq: document.next_text_range_seq,
+                next_comment_thread_seq: document.next_comment_thread_seq,
+                next_comment_message_seq: document.next_comment_message_seq,
             }
         } else {
             document.clone()
@@ -993,10 +1033,36 @@ impl PresentationArtifactManager {
         let document = self.get_document_mut(&artifact_id, &request.action)?;
         let slide = document.get_slide_mut(args.slide_index, &request.action)?;
         slide.notes.text = args.text.unwrap_or_default();
+        slide.notes.rich_text = RichTextState::default();
         Ok(PresentationArtifactResponse::new(
             artifact_id,
             request.action,
             format!("Updated notes for slide {}", args.slide_index),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn set_notes_rich_text(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: SetRichTextArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let slide_index = args.slide_index.ok_or_else(|| PresentationArtifactError::InvalidArgs {
+            action: request.action.clone(),
+            message: "`slide_index` is required for notes rich text".to_string(),
+        })?;
+        let (text, mut rich_text) =
+            normalize_rich_text_input(document, args.text, &request.action)?;
+        rich_text.layout = normalize_text_layout(&args.text_layout, &request.action)?;
+        let slide = document.get_slide_mut(slide_index, &request.action)?;
+        slide.notes.text = text;
+        slide.notes.rich_text = rich_text;
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Updated rich notes for slide {slide_index}"),
             snapshot_for_document(document),
         ))
     }
@@ -1015,6 +1081,7 @@ impl PresentationArtifactManager {
         } else {
             slide.notes.text = format!("{}\n{text}", slide.notes.text);
         }
+        slide.notes.rich_text = RichTextState::default();
         Ok(PresentationArtifactResponse::new(
             artifact_id,
             request.action,
@@ -1032,6 +1099,7 @@ impl PresentationArtifactManager {
         let document = self.get_document_mut(&artifact_id, &request.action)?;
         let slide = document.get_slide_mut(args.slide_index, &request.action)?;
         slide.notes.text.clear();
+        slide.notes.rich_text = RichTextState::default();
         Ok(PresentationArtifactResponse::new(
             artifact_id,
             request.action,
@@ -1261,6 +1329,7 @@ impl PresentationArtifactManager {
             .as_deref()
             .map(|value| normalize_color_with_document(document, value, &request.action, "fill"))
             .transpose()?;
+        let text_layout = normalize_text_layout(&args.text_layout, &request.action)?;
         let element_id = document.next_element_id();
         let slide = document.get_slide_mut(args.slide_index, &request.action)?;
         slide.elements.push(PresentationElement::Text(TextElement {
@@ -1270,6 +1339,10 @@ impl PresentationArtifactManager {
             fill,
             style,
             hyperlink: None,
+            rich_text: RichTextState {
+                ranges: Vec::new(),
+                layout: text_layout,
+            },
             placeholder: None,
             z_order: slide.elements.len(),
         }));
@@ -1299,6 +1372,11 @@ impl PresentationArtifactManager {
             .map(|value| normalize_color_with_document(document, value, &request.action, "fill"))
             .transpose()?;
         let stroke = parse_stroke(document, args.stroke, &request.action)?;
+        let text_layout = normalize_text_layout(&args.text_layout, &request.action)?;
+        let rich_text = args.text.as_ref().map(|_| RichTextState {
+            ranges: Vec::new(),
+            layout: text_layout,
+        });
         let element_id = document.next_element_id();
         let slide = document.get_slide_mut(args.slide_index, &request.action)?;
         slide
@@ -1312,6 +1390,7 @@ impl PresentationArtifactManager {
                 text: args.text,
                 text_style,
                 hyperlink: None,
+                rich_text,
                 placeholder: None,
                 rotation_degrees: args.rotation.or(args.position.rotation),
                 flip_horizontal: args
@@ -1552,6 +1631,8 @@ impl PresentationArtifactManager {
         let artifact_id = required_artifact_id(&request)?;
         let document = self.get_document_mut(&artifact_id, &request.action)?;
         let rows = coerce_table_rows(args.rows, &request.action)?;
+        let borders = parse_table_borders(document, args.borders, &request.action)?;
+        let style_options = parse_table_style_options(args.style_options);
         let mut frame: Rect = args.position.into();
         let (column_widths, row_heights) = normalize_table_dimensions(
             &rows,
@@ -1573,6 +1654,9 @@ impl PresentationArtifactManager {
                 column_widths,
                 row_heights,
                 style: args.style,
+                style_options,
+                borders,
+                right_to_left: args.right_to_left.unwrap_or(false),
                 merges: Vec::new(),
                 z_order: slide.elements.len(),
             }));
@@ -1622,6 +1706,7 @@ impl PresentationArtifactManager {
         cell.text = cell_value_to_string(args.value);
         cell.text_style = text_style;
         cell.background_fill = background_fill;
+        cell.rich_text = RichTextState::default();
         cell.alignment = args
             .alignment
             .as_deref()
@@ -1631,6 +1716,137 @@ impl PresentationArtifactManager {
             artifact_id,
             request.action,
             format!("Updated table cell ({row}, {column})"),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn update_table_style(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: UpdateTableStyleArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let borders = parse_table_borders(document, args.borders, &request.action)?;
+        let element = document.find_element_mut(&args.element_id, &request.action)?;
+        let PresentationElement::Table(table) = element else {
+            return Err(PresentationArtifactError::UnsupportedFeature {
+                action: request.action,
+                message: format!("element `{}` is not a table", args.element_id),
+            });
+        };
+        table.style = args.style;
+        if let Some(borders) = borders {
+            if let Some(existing) = table.borders.as_mut() {
+                if borders.outside.is_some() {
+                    existing.outside = borders.outside;
+                }
+                if borders.inside.is_some() {
+                    existing.inside = borders.inside;
+                }
+                if borders.top.is_some() {
+                    existing.top = borders.top;
+                }
+                if borders.bottom.is_some() {
+                    existing.bottom = borders.bottom;
+                }
+                if borders.left.is_some() {
+                    existing.left = borders.left;
+                }
+                if borders.right.is_some() {
+                    existing.right = borders.right;
+                }
+            } else {
+                table.borders = Some(borders);
+            }
+        }
+        if let Some(style_options) = args.style_options {
+            if let Some(value) = style_options.header_row {
+                table.style_options.header_row = value;
+            }
+            if let Some(value) = style_options.banded_rows {
+                table.style_options.banded_rows = value;
+            }
+            if let Some(value) = style_options.banded_columns {
+                table.style_options.banded_columns = value;
+            }
+            if let Some(value) = style_options.first_column {
+                table.style_options.first_column = value;
+            }
+            if let Some(value) = style_options.last_column {
+                table.style_options.last_column = value;
+            }
+            if let Some(value) = style_options.total_row {
+                table.style_options.total_row = value;
+            }
+        }
+        if let Some(right_to_left) = args.right_to_left {
+            table.right_to_left = right_to_left;
+        }
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Updated table style for `{}`", args.element_id),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn style_table_block(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: StyleTableBlockArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let text_style =
+            normalize_text_style_with_document(document, &args.styling, &request.action)?;
+        let background_fill = args
+            .background_fill
+            .as_deref()
+            .map(|fill| {
+                normalize_color_with_document(document, fill, &request.action, "background_fill")
+            })
+            .transpose()?;
+        let borders = parse_table_borders(document, args.borders, &request.action)?;
+        let alignment = args
+            .alignment
+            .as_deref()
+            .map(|value| parse_alignment(value, &request.action))
+            .transpose()?;
+        let element = document.find_element_mut(&args.element_id, &request.action)?;
+        let PresentationElement::Table(table) = element else {
+            return Err(PresentationArtifactError::UnsupportedFeature {
+                action: request.action,
+                message: format!("element `{}` is not a table", args.element_id),
+            });
+        };
+        let end_row = (args.row + args.row_count) as usize;
+        let end_column = (args.column + args.column_count) as usize;
+        for row_index in args.row as usize..end_row {
+            if row_index >= table.rows.len() {
+                break;
+            }
+            for column_index in args.column as usize..end_column {
+                if column_index >= table.rows[row_index].len() {
+                    break;
+                }
+                let cell = &mut table.rows[row_index][column_index];
+                cell.text_style = text_style.clone();
+                if let Some(fill) = background_fill.clone() {
+                    cell.background_fill = Some(fill);
+                }
+                if let Some(alignment) = alignment {
+                    cell.alignment = Some(alignment);
+                }
+                if let Some(borders) = borders.clone() {
+                    cell.borders = Some(borders);
+                }
+            }
+        }
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Styled table block for `{}`", args.element_id),
             snapshot_for_document(document),
         ))
     }
@@ -1672,22 +1888,24 @@ impl PresentationArtifactManager {
         let artifact_id = required_artifact_id(&request)?;
         let document = self.get_document_mut(&artifact_id, &request.action)?;
         let chart_type = parse_chart_type(&args.chart_type, &request.action)?;
-        let series = args
-            .series
-            .into_iter()
-            .map(|entry| {
-                if entry.values.is_empty() {
-                    return Err(PresentationArtifactError::InvalidArgs {
-                        action: request.action.clone(),
-                        message: format!("series `{}` must contain at least one value", entry.name),
-                    });
-                }
-                Ok(ChartSeriesSpec {
-                    name: entry.name,
-                    values: entry.values,
-                })
+        let series = parse_chart_series(document, args.series, &request.action)?;
+        let legend_text_style =
+            normalize_text_style_with_document(document, &args.legend_text_style, &request.action)?;
+        let data_labels = parse_chart_data_labels(document, args.data_labels, &request.action)?;
+        let chart_fill = args
+            .chart_fill
+            .as_deref()
+            .map(|value| {
+                normalize_color_with_document(document, value, &request.action, "chart_fill")
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .transpose()?;
+        let plot_area_fill = args
+            .plot_area_fill
+            .as_deref()
+            .map(|value| {
+                normalize_color_with_document(document, value, &request.action, "plot_area_fill")
+            })
+            .transpose()?;
         let element_id = document.next_element_id();
         let slide = document.get_slide_mut(args.slide_index, &request.action)?;
         slide
@@ -1699,6 +1917,21 @@ impl PresentationArtifactManager {
                 categories: args.categories,
                 series,
                 title: args.title,
+                style_index: args.style_index,
+                has_legend: args.has_legend.unwrap_or(false),
+                legend: Some(ChartLegend {
+                    position: args.legend_position,
+                    text_style: legend_text_style,
+                }),
+                x_axis: Some(ChartAxisSpec {
+                    title: args.x_axis_title,
+                }),
+                y_axis: Some(ChartAxisSpec {
+                    title: args.y_axis_title,
+                }),
+                data_labels,
+                chart_fill,
+                plot_area_fill,
                 z_order: slide.elements.len(),
             }));
         Ok(PresentationArtifactResponse::new(
@@ -1708,6 +1941,115 @@ impl PresentationArtifactManager {
                 "Added chart element `{element_id}` to slide {}",
                 args.slide_index
             ),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn update_chart(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: UpdateChartArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let legend_text_style =
+            normalize_text_style_with_document(document, &args.legend_text_style, &request.action)?;
+        let data_labels = parse_chart_data_labels(document, args.data_labels, &request.action)?;
+        let chart_fill = args
+            .chart_fill
+            .as_deref()
+            .map(|value| normalize_color_with_document(document, value, &request.action, "chart_fill"))
+            .transpose()?;
+        let plot_area_fill = args
+            .plot_area_fill
+            .as_deref()
+            .map(|value| normalize_color_with_document(document, value, &request.action, "plot_area_fill"))
+            .transpose()?;
+        let element = document.find_element_mut(&args.element_id, &request.action)?;
+        let PresentationElement::Chart(chart) = element else {
+            return Err(PresentationArtifactError::UnsupportedFeature {
+                action: request.action,
+                message: format!("element `{}` is not a chart", args.element_id),
+            });
+        };
+        if let Some(title) = args.title {
+            chart.title = Some(title);
+        }
+        if let Some(categories) = args.categories {
+            chart.categories = categories;
+        }
+        if let Some(style_index) = args.style_index {
+            chart.style_index = Some(style_index);
+        }
+        if let Some(has_legend) = args.has_legend {
+            chart.has_legend = has_legend;
+        }
+        if args.legend_position.is_some() || !text_style_is_empty(&legend_text_style) {
+            chart.legend = Some(ChartLegend {
+                position: args.legend_position,
+                text_style: legend_text_style,
+            });
+        }
+        if args.x_axis_title.is_some() {
+            chart.x_axis = Some(ChartAxisSpec {
+                title: args.x_axis_title,
+            });
+        }
+        if args.y_axis_title.is_some() {
+            chart.y_axis = Some(ChartAxisSpec {
+                title: args.y_axis_title,
+            });
+        }
+        if data_labels.is_some() {
+            chart.data_labels = data_labels;
+        }
+        if chart_fill.is_some() {
+            chart.chart_fill = chart_fill;
+        }
+        if plot_area_fill.is_some() {
+            chart.plot_area_fill = plot_area_fill;
+        }
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Updated chart `{}`", args.element_id),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn add_chart_series(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: AddChartSeriesArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let series = parse_chart_series(
+            document,
+            vec![ChartSeriesArgs {
+                name: args.name,
+                values: args.values,
+                categories: args.categories,
+                x_values: args.x_values,
+                fill: args.fill,
+                stroke: args.stroke,
+                marker: args.marker,
+                data_label_overrides: None,
+            }],
+            &request.action,
+        )?;
+        let element = document.find_element_mut(&args.element_id, &request.action)?;
+        let PresentationElement::Chart(chart) = element else {
+            return Err(PresentationArtifactError::UnsupportedFeature {
+                action: request.action,
+                message: format!("element `{}` is not a chart", args.element_id),
+            });
+        };
+        chart.series.extend(series);
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Added chart series to `{}`", args.element_id),
             snapshot_for_document(document),
         ))
     }
@@ -1726,6 +2068,7 @@ impl PresentationArtifactManager {
             .as_deref()
             .map(|value| normalize_color_with_document(document, value, &request.action, "fill"))
             .transpose()?;
+        let text_layout = normalize_text_layout(&args.text_layout, &request.action)?;
         let element = document.find_element_mut(&args.element_id, &request.action)?;
         match element {
             PresentationElement::Text(text) => {
@@ -1734,6 +2077,10 @@ impl PresentationArtifactManager {
                     text.fill = Some(fill);
                 }
                 text.style = style;
+                text.rich_text = RichTextState {
+                    ranges: Vec::new(),
+                    layout: text_layout,
+                };
             }
             PresentationElement::Shape(shape) => {
                 if shape.text.is_none() {
@@ -1750,6 +2097,10 @@ impl PresentationArtifactManager {
                     shape.fill = Some(fill);
                 }
                 shape.text_style = style;
+                shape.rich_text = Some(RichTextState {
+                    ranges: Vec::new(),
+                    layout: text_layout,
+                });
             }
             other => {
                 return Err(PresentationArtifactError::UnsupportedFeature {
@@ -1766,6 +2117,228 @@ impl PresentationArtifactManager {
             artifact_id,
             request.action,
             format!("Updated text for element `{}`", args.element_id),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn set_rich_text(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: SetRichTextArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let (text, mut rich_text) =
+            normalize_rich_text_input(document, args.text, &request.action)?;
+        rich_text.layout = normalize_text_layout(&args.text_layout, &request.action)?;
+        let style = normalize_text_style_with_document(document, &args.styling, &request.action)?;
+        if args.notes.unwrap_or(false) {
+            let slide_index = args.slide_index.ok_or_else(|| PresentationArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: "`slide_index` is required for notes rich text".to_string(),
+            })?;
+            let slide = document.get_slide_mut(slide_index, &request.action)?;
+            slide.notes.text = text;
+            slide.notes.rich_text = rich_text;
+            return Ok(PresentationArtifactResponse::new(
+                artifact_id,
+                request.action,
+                format!("Updated rich text for notes on slide {slide_index}"),
+                snapshot_for_document(document),
+            ));
+        }
+        if let Some(element_id) = args.element_id {
+            if let (Some(row), Some(column)) = (args.row, args.column) {
+                let element = document.find_element_mut(&element_id, &request.action)?;
+                let PresentationElement::Table(table) = element else {
+                    return Err(PresentationArtifactError::UnsupportedFeature {
+                        action: request.action,
+                        message: format!("element `{element_id}` is not a table"),
+                    });
+                };
+                let row = row as usize;
+                let column = column as usize;
+                if row >= table.rows.len() || column >= table.rows[row].len() {
+                    return Err(PresentationArtifactError::InvalidArgs {
+                        action: request.action,
+                        message: format!("cell ({row}, {column}) is out of bounds"),
+                    });
+                }
+                let cell = &mut table.rows[row][column];
+                cell.text = text;
+                cell.text_style = style;
+                cell.rich_text = rich_text;
+                return Ok(PresentationArtifactResponse::new(
+                    artifact_id,
+                    request.action,
+                    format!("Updated rich text for table cell ({row}, {column})"),
+                    snapshot_for_document(document),
+                ));
+            }
+            let element = document.find_element_mut(&element_id, &request.action)?;
+            match element {
+                PresentationElement::Text(text_element) => {
+                    text_element.text = text;
+                    text_element.style = style;
+                    text_element.rich_text = rich_text;
+                }
+                PresentationElement::Shape(shape) => {
+                    if shape.text.is_none() {
+                        return Err(PresentationArtifactError::UnsupportedFeature {
+                            action: request.action,
+                            message: format!(
+                                "element `{element_id}` does not contain editable text"
+                            ),
+                        });
+                    }
+                    shape.text = Some(text);
+                    shape.text_style = style;
+                    shape.rich_text = Some(rich_text);
+                }
+                other => {
+                    return Err(PresentationArtifactError::UnsupportedFeature {
+                        action: request.action,
+                        message: format!(
+                            "element `{element_id}` is `{}`; only text-bearing elements support `set_rich_text`",
+                            other.kind()
+                        ),
+                    });
+                }
+            }
+            return Ok(PresentationArtifactResponse::new(
+                artifact_id,
+                request.action,
+                format!("Updated rich text for element `{element_id}`"),
+                snapshot_for_document(document),
+            ));
+        }
+        Err(PresentationArtifactError::InvalidArgs {
+            action: request.action,
+            message: "provide `element_id` or `slide_index` with `notes: true`".to_string(),
+        })
+    }
+
+    fn format_text_range(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: FormatTextRangeArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let style = normalize_text_style_with_document(document, &args.styling, &request.action)?;
+        let hyperlink = args
+            .link
+            .as_ref()
+            .map(|link| parse_rich_text_link(link, &request.action))
+            .transpose()?;
+        let layout = normalize_text_layout(&args.text_layout, &request.action)?;
+        let apply_annotation =
+            |range_id: String,
+             text: &str,
+             rich_text: &mut RichTextState|
+             -> Result<(), PresentationArtifactError> {
+                let (start_cp, length, _) = resolve_text_range_selector(
+                    text,
+                    args.query.as_deref(),
+                    args.occurrence,
+                    args.start_cp,
+                    args.length,
+                    &request.action,
+                )?;
+                rich_text.ranges.push(TextRangeAnnotation {
+                    range_id,
+                    start_cp,
+                    length,
+                    style: style.clone(),
+                    hyperlink: hyperlink.clone(),
+                    spacing_before: args.spacing_before.map(|value| value * 100),
+                    spacing_after: args.spacing_after.map(|value| value * 100),
+                    line_spacing: args.line_spacing,
+                });
+                if layout.insets.is_some()
+                    || layout.wrap.is_some()
+                    || layout.auto_fit.is_some()
+                    || layout.vertical_alignment.is_some()
+                {
+                    rich_text.layout = layout.clone();
+                }
+                Ok(())
+            };
+        if args.notes.unwrap_or(false) {
+            let slide_index = args.slide_index.ok_or_else(|| PresentationArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: "`slide_index` is required for notes text ranges".to_string(),
+            })?;
+            let range_id = document.next_text_range_id();
+            let slide = document.get_slide_mut(slide_index, &request.action)?;
+            apply_annotation(range_id, &slide.notes.text, &mut slide.notes.rich_text)?;
+            return Ok(PresentationArtifactResponse::new(
+                artifact_id,
+                request.action,
+                format!("Formatted notes text range on slide {slide_index}"),
+                snapshot_for_document(document),
+            ));
+        }
+        let element_id = args.element_id.clone().ok_or_else(|| PresentationArtifactError::InvalidArgs {
+            action: request.action.clone(),
+            message: "`element_id` is required unless formatting notes".to_string(),
+        })?;
+        if let (Some(row), Some(column)) = (args.row, args.column) {
+            let range_id = document.next_text_range_id();
+            let element = document.find_element_mut(&element_id, &request.action)?;
+            let PresentationElement::Table(table) = element else {
+                return Err(PresentationArtifactError::UnsupportedFeature {
+                    action: request.action,
+                    message: format!("element `{element_id}` is not a table"),
+                });
+            };
+            let row = row as usize;
+            let column = column as usize;
+            if row >= table.rows.len() || column >= table.rows[row].len() {
+                return Err(PresentationArtifactError::InvalidArgs {
+                    action: request.action,
+                    message: format!("cell ({row}, {column}) is out of bounds"),
+                });
+            }
+            let cell = &mut table.rows[row][column];
+            apply_annotation(range_id, &cell.text, &mut cell.rich_text)?;
+            return Ok(PresentationArtifactResponse::new(
+                artifact_id,
+                request.action,
+                format!("Formatted table cell text range ({row}, {column})"),
+                snapshot_for_document(document),
+            ));
+        }
+        let range_id = document.next_text_range_id();
+        let element = document.find_element_mut(&element_id, &request.action)?;
+        match element {
+            PresentationElement::Text(text) => {
+                apply_annotation(range_id, &text.text, &mut text.rich_text)?;
+            }
+            PresentationElement::Shape(shape) => {
+                let text_value = shape.text.as_ref().ok_or_else(|| {
+                    PresentationArtifactError::UnsupportedFeature {
+                        action: request.action.clone(),
+                        message: format!("element `{element_id}` does not contain editable text"),
+                    }
+                })?;
+                let rich_text = shape.rich_text.get_or_insert_with(RichTextState::default);
+                apply_annotation(range_id, text_value, rich_text)?;
+            }
+            other => {
+                return Err(PresentationArtifactError::UnsupportedFeature {
+                    action: request.action,
+                    message: format!(
+                        "element `{element_id}` is `{}`; only text-bearing elements support `format_text_range`",
+                        other.kind()
+                    ),
+                });
+            }
+        }
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Formatted text range on element `{element_id}`"),
             snapshot_for_document(document),
         ))
     }
@@ -1934,6 +2507,234 @@ impl PresentationArtifactManager {
         ))
     }
 
+    fn set_comment_author(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: SetCommentAuthorArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        document.comment_self = Some(CommentAuthorProfile {
+            display_name: args.display_name,
+            initials: args.initials,
+            email: args.email,
+        });
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            "Updated comment author".to_string(),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn add_comment_thread(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: AddCommentThreadArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let author = document.comment_self.clone().ok_or_else(|| {
+            PresentationArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: "set a comment author first with `set_comment_author`".to_string(),
+            }
+        })?;
+        let target = if let Some(slide_index) = args.slide_index {
+            let slide = document.get_slide_mut(slide_index, &request.action)?;
+            if let Some(element_id) = args.element_id {
+                if args.query.is_some() || args.start_cp.is_some() {
+                    let (text, _rich_text) = lookup_text_target(
+                        slide,
+                        &element_id,
+                        None,
+                        None,
+                        &request.action,
+                    )?;
+                    let (start_cp, length, context) = resolve_text_range_selector(
+                        text,
+                        args.query.as_deref(),
+                        args.occurrence,
+                        args.start_cp,
+                        args.length,
+                        &request.action,
+                    )?;
+                    CommentTarget::TextRange {
+                        slide_id: slide.slide_id.clone(),
+                        element_id: normalize_element_lookup_id(&element_id).to_string(),
+                        start_cp,
+                        length,
+                        context,
+                    }
+                } else {
+                    CommentTarget::Element {
+                        slide_id: slide.slide_id.clone(),
+                        element_id: normalize_element_lookup_id(&element_id).to_string(),
+                    }
+                }
+            } else {
+                CommentTarget::Slide {
+                    slide_id: slide.slide_id.clone(),
+                }
+            }
+        } else {
+            return Err(PresentationArtifactError::InvalidArgs {
+                action: request.action,
+                message: "`slide_index` is required for comment threads".to_string(),
+            });
+        };
+        let thread_id = document.next_comment_thread_id();
+        let message_id = document.next_comment_message_id();
+        document.comment_threads.push(CommentThread {
+            thread_id: thread_id.clone(),
+            target,
+            position: args.position.map(|position| CommentPosition {
+                x: position.x,
+                y: position.y,
+            }),
+            status: CommentThreadStatus::Active,
+            messages: vec![CommentMessage {
+                message_id,
+                author,
+                text: args.text,
+                created_at: "2026-03-03T00:00:00Z".to_string(),
+                reactions: Vec::new(),
+            }],
+        });
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Added comment thread `{thread_id}`"),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn add_comment_reply(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: AddCommentReplyArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let author = document.comment_self.clone().ok_or_else(|| {
+            PresentationArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: "set a comment author first with `set_comment_author`".to_string(),
+            }
+        })?;
+        let message_id = document.next_comment_message_id();
+        let thread = document
+            .comment_threads
+            .iter_mut()
+            .find(|thread| thread.thread_id == args.thread_id)
+            .ok_or_else(|| PresentationArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("unknown comment thread `{}`", args.thread_id),
+            })?;
+        thread.messages.push(CommentMessage {
+            message_id,
+            author,
+            text: args.text,
+            created_at: "2026-03-03T00:00:00Z".to_string(),
+            reactions: Vec::new(),
+        });
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Added reply to `{}`", args.thread_id),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn toggle_comment_reaction(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: ToggleCommentReactionArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let thread = document
+            .comment_threads
+            .iter_mut()
+            .find(|thread| thread.thread_id == args.thread_id)
+            .ok_or_else(|| PresentationArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("unknown comment thread `{}`", args.thread_id),
+            })?;
+        let target_message_id = args
+            .message_id
+            .clone()
+            .or_else(|| thread.messages.last().map(|message| message.message_id.clone()))
+            .unwrap_or_default();
+        let message = thread
+            .messages
+            .iter_mut()
+            .find(|message| message.message_id == target_message_id)
+            .ok_or_else(|| PresentationArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("unknown comment message `{target_message_id}`"),
+            })?;
+        if let Some(index) = message.reactions.iter().position(|emoji| emoji == &args.emoji) {
+            message.reactions.remove(index);
+        } else {
+            message.reactions.push(args.emoji.clone());
+        }
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Toggled reaction on `{}`", args.thread_id),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn resolve_comment_thread(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: CommentThreadIdArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let thread = document
+            .comment_threads
+            .iter_mut()
+            .find(|thread| thread.thread_id == args.thread_id)
+            .ok_or_else(|| PresentationArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("unknown comment thread `{}`", args.thread_id),
+            })?;
+        thread.status = CommentThreadStatus::Resolved;
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Resolved `{}`", args.thread_id),
+            snapshot_for_document(document),
+        ))
+    }
+
+    fn reopen_comment_thread(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: CommentThreadIdArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document_mut(&artifact_id, &request.action)?;
+        let thread = document
+            .comment_threads
+            .iter_mut()
+            .find(|thread| thread.thread_id == args.thread_id)
+            .ok_or_else(|| PresentationArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("unknown comment thread `{}`", args.thread_id),
+            })?;
+        thread.status = CommentThreadStatus::Active;
+        Ok(PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Reopened `{}`", args.thread_id),
+            snapshot_for_document(document),
+        ))
+    }
+
     fn update_shape_style(
         &mut self,
         request: PresentationArtifactRequest,
@@ -1951,6 +2752,11 @@ impl PresentationArtifactManager {
             .clone()
             .map(|value| parse_required_stroke(document, value, &request.action))
             .transpose()?;
+        let text_layout = normalize_text_layout(&args.text_layout, &request.action)?;
+        let has_text_layout = text_layout.insets.is_some()
+            || text_layout.wrap.is_some()
+            || text_layout.auto_fit.is_some()
+            || text_layout.vertical_alignment.is_some();
         let element = document.find_element_mut(&args.element_id, &request.action)?;
         match element {
             PresentationElement::Text(text) => {
@@ -1959,6 +2765,9 @@ impl PresentationArtifactManager {
                 }
                 if let Some(fill) = fill.clone() {
                     text.fill = Some(fill);
+                }
+                if has_text_layout {
+                    text.rich_text.layout = text_layout;
                 }
                 if args.stroke.is_some()
                     || args.rotation.is_some()
@@ -2003,6 +2812,12 @@ impl PresentationArtifactManager {
                 }
                 if let Some(flip_vertical) = args.flip_vertical.or(position_flip_vertical) {
                     shape.flip_vertical = flip_vertical;
+                }
+                if shape.text.is_some() && has_text_layout {
+                    shape.rich_text = Some(RichTextState {
+                        ranges: shape.rich_text.take().unwrap_or_default().ranges,
+                        layout: text_layout,
+                    });
                 }
             }
             PresentationElement::Connector(connector) => {
@@ -2346,5 +3161,43 @@ impl PresentationArtifactManager {
         }
         self.get_document(&patch.artifact_id, action)?;
         Ok(patch)
+    }
+}
+
+fn lookup_text_target<'a>(
+    slide: &'a PresentationSlide,
+    element_id: &str,
+    _row: Option<u32>,
+    _column: Option<u32>,
+    action: &str,
+) -> Result<(&'a str, Option<&'a RichTextState>), PresentationArtifactError> {
+    let normalized_element_id = normalize_element_lookup_id(element_id);
+    let element = slide
+        .elements
+        .iter()
+        .find(|element| element.element_id() == normalized_element_id)
+        .ok_or_else(|| PresentationArtifactError::UnsupportedFeature {
+            action: action.to_string(),
+            message: format!("unknown element `{element_id}` on slide `{}`", slide.slide_id),
+        })?;
+    match element {
+        PresentationElement::Text(text) => Ok((&text.text, Some(&text.rich_text))),
+        PresentationElement::Shape(shape) => shape
+            .text
+            .as_deref()
+            .map(|text| (text, shape.rich_text.as_ref()))
+            .ok_or_else(|| PresentationArtifactError::UnsupportedFeature {
+                action: action.to_string(),
+                message: format!("element `{element_id}` does not contain editable text"),
+            }),
+        PresentationElement::Connector(_)
+        | PresentationElement::Image(_)
+        | PresentationElement::Table(_)
+        | PresentationElement::Chart(_) => Err(PresentationArtifactError::UnsupportedFeature {
+            action: action.to_string(),
+            message: format!(
+                "element `{element_id}` does not support text-range comments"
+            ),
+        }),
     }
 }

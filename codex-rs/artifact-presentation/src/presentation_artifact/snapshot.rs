@@ -42,7 +42,8 @@ fn slide_list(document: &PresentationDocument) -> Vec<SlideListEntry> {
             slide_id: slide.slide_id.clone(),
             index,
             is_active: document.active_slide_index == Some(index),
-            notes: (!slide.notes.text.is_empty()).then(|| slide.notes.text.clone()),
+            notes: (slide.notes.visible && !slide.notes.text.is_empty())
+                .then(|| slide.notes.text.clone()),
             notes_visible: slide.notes.visible,
             background_fill: slide.background_fill.clone(),
             layout_id: slide.layout_id.clone(),

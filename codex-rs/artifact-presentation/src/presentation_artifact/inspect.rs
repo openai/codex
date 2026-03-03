@@ -3,7 +3,9 @@ fn inspect_document(document: &PresentationDocument, args: &InspectArgs) -> Stri
         .include
         .as_deref()
         .or(args.kind.as_deref())
-        .unwrap_or("deck,slide,textbox,shape,connector,table,chart,image,notes,layoutList");
+        .unwrap_or(
+            "deck,slide,textbox,shape,connector,table,chart,image,notes,layoutList,textRange,comment",
+        );
     let included_kinds = include_kinds
         .split(',')
         .map(str::trim)
@@ -33,6 +35,11 @@ fn inspect_document(document: &PresentationDocument, args: &InspectArgs) -> Stri
                     .collect::<Vec<_>>(),
                 "activeSlideIndex": document.active_slide_index,
                 "activeSlideId": document.active_slide_index.and_then(|index| document.slides.get(index)).map(|slide| format!("sl/{}", slide.slide_id)),
+                "commentThreadIds": document
+                    .comment_threads
+                    .iter()
+                    .map(|thread| format!("th/{}", thread.thread_id))
+                    .collect::<Vec<_>>(),
             }),
             None,
         ));
@@ -97,9 +104,28 @@ fn inspect_document(document: &PresentationDocument, args: &InspectArgs) -> Stri
                     "textPreview": slide.notes.text.replace('\n', " | "),
                     "textChars": slide.notes.text.chars().count(),
                     "textLines": slide.notes.text.lines().count(),
+                    "richText": rich_text_to_proto(&slide.notes.text, &slide.notes.rich_text),
                 }),
                 Some(slide_id.clone()),
             ));
+        }
+        if include("textRange") {
+            records.extend(
+                slide
+                    .notes
+                    .rich_text
+                    .ranges
+                    .iter()
+                    .map(|range| {
+                        let mut record = text_range_to_proto(&slide.notes.text, range);
+                        record["kind"] = Value::String("textRange".to_string());
+                        record["slide"] = Value::from(index + 1);
+                        record["slideIndex"] = Value::from(index);
+                        record["hostAnchor"] = Value::String(format!("nt/{}", slide.slide_id));
+                        record["hostKind"] = Value::String("notes".to_string());
+                        (record, Some(slide_id.clone()))
+                    }),
+            );
         }
         for element in &slide.elements {
             let mut record = match element {
@@ -116,6 +142,7 @@ fn inspect_document(document: &PresentationDocument, args: &InspectArgs) -> Stri
                         "textPreview": text.text.replace('\n', " | "),
                         "textChars": text.text.chars().count(),
                         "textLines": text.text.lines().count(),
+                        "richText": rich_text_to_proto(&text.text, &text.rich_text),
                         "bbox": [text.frame.left, text.frame.top, text.frame.width, text.frame.height],
                         "bboxUnit": "points",
                     })
@@ -136,6 +163,12 @@ fn inspect_document(document: &PresentationDocument, args: &InspectArgs) -> Stri
                         "geometry": format!("{:?}", shape.geometry),
                         "text": shape.text,
                         "textStyle": text_style_to_proto(&shape.text_style),
+                        "richText": shape
+                            .text
+                            .as_ref()
+                            .zip(shape.rich_text.as_ref())
+                            .map(|(text, rich_text)| rich_text_to_proto(text, rich_text))
+                            .unwrap_or(Value::Null),
                         "rotation": shape.rotation_degrees,
                         "flipHorizontal": shape.flip_horizontal,
                         "flipVertical": shape.flip_vertical,
@@ -178,10 +211,18 @@ fn inspect_document(document: &PresentationDocument, args: &InspectArgs) -> Stri
                         "rowHeights": table.row_heights,
                         "preview": table.rows.first().map(|row| row.iter().map(|cell| cell.text.clone()).collect::<Vec<_>>().join(" | ")),
                         "style": table.style,
+                        "styleOptions": table_style_options_to_proto(&table.style_options),
+                        "borders": table.borders.as_ref().map(table_borders_to_proto),
+                        "rightToLeft": table.right_to_left,
                         "cellTextStyles": table
                             .rows
                             .iter()
                             .map(|row| row.iter().map(|cell| text_style_to_proto(&cell.text_style)).collect::<Vec<_>>())
+                            .collect::<Vec<_>>(),
+                        "rowsData": table
+                            .rows
+                            .iter()
+                            .map(|row| row.iter().map(table_cell_to_proto).collect::<Vec<_>>())
                             .collect::<Vec<_>>(),
                         "bbox": [table.frame.left, table.frame.top, table.frame.width, table.frame.height],
                         "bboxUnit": "points",
@@ -197,6 +238,32 @@ fn inspect_document(document: &PresentationDocument, args: &InspectArgs) -> Stri
                         "slide": index + 1,
                         "chartType": format!("{:?}", chart.chart_type),
                         "title": chart.title,
+                        "styleIndex": chart.style_index,
+                        "hasLegend": chart.has_legend,
+                        "legend": chart.legend.as_ref().map(chart_legend_to_proto),
+                        "xAxis": chart.x_axis.as_ref().map(chart_axis_to_proto),
+                        "yAxis": chart.y_axis.as_ref().map(chart_axis_to_proto),
+                        "dataLabels": chart.data_labels.as_ref().map(chart_data_labels_to_proto),
+                        "chartFill": chart.chart_fill,
+                        "plotAreaFill": chart.plot_area_fill,
+                        "series": chart
+                            .series
+                            .iter()
+                            .map(|series| serde_json::json!({
+                                "name": series.name,
+                                "values": series.values,
+                                "categories": series.categories,
+                                "xValues": series.x_values,
+                                "fill": series.fill,
+                                "stroke": series.stroke.as_ref().map(stroke_to_proto),
+                                "marker": series.marker.as_ref().map(chart_marker_to_proto),
+                                "dataLabelOverrides": series
+                                    .data_label_overrides
+                                    .iter()
+                                    .map(chart_data_label_override_to_proto)
+                                    .collect::<Vec<_>>(),
+                            }))
+                            .collect::<Vec<_>>(),
                         "bbox": [chart.frame.left, chart.frame.top, chart.frame.width, chart.frame.height],
                         "bboxUnit": "points",
                     })
@@ -261,7 +328,63 @@ fn inspect_document(document: &PresentationDocument, args: &InspectArgs) -> Stri
                 record["hyperlink"] = hyperlink.to_json();
             }
             records.push((record, Some(slide_id.clone())));
+            if include("textRange") {
+                match element {
+                    PresentationElement::Text(text) => {
+                        records.extend(text.rich_text.ranges.iter().map(|range| {
+                            let mut record = text_range_to_proto(&text.text, range);
+                            record["kind"] = Value::String("textRange".to_string());
+                            record["slide"] = Value::from(index + 1);
+                            record["slideIndex"] = Value::from(index);
+                            record["hostAnchor"] = Value::String(format!("sh/{}", text.element_id));
+                            record["hostKind"] = Value::String("textbox".to_string());
+                            (record, Some(slide_id.clone()))
+                        }));
+                    }
+                    PresentationElement::Shape(shape) => {
+                        if let Some((text, rich_text)) = shape.text.as_ref().zip(shape.rich_text.as_ref()) {
+                            records.extend(rich_text.ranges.iter().map(|range| {
+                                let mut record = text_range_to_proto(text, range);
+                                record["kind"] = Value::String("textRange".to_string());
+                                record["slide"] = Value::from(index + 1);
+                                record["slideIndex"] = Value::from(index);
+                                record["hostAnchor"] = Value::String(format!("sh/{}", shape.element_id));
+                                record["hostKind"] = Value::String("textbox".to_string());
+                                (record, Some(slide_id.clone()))
+                            }));
+                        }
+                    }
+                    PresentationElement::Table(table) => {
+                        for (row_index, row) in table.rows.iter().enumerate() {
+                            for (column_index, cell) in row.iter().enumerate() {
+                                records.extend(cell.rich_text.ranges.iter().map(|range| {
+                                    let mut record = text_range_to_proto(&cell.text, range);
+                                    record["kind"] = Value::String("textRange".to_string());
+                                    record["slide"] = Value::from(index + 1);
+                                    record["slideIndex"] = Value::from(index);
+                                    record["hostAnchor"] = Value::String(format!(
+                                        "tb/{}#cell/{row_index}/{column_index}",
+                                        table.element_id
+                                    ));
+                                    record["hostKind"] = Value::String("tableCell".to_string());
+                                    (record, Some(slide_id.clone()))
+                                }));
+                            }
+                        }
+                    }
+                    PresentationElement::Connector(_)
+                    | PresentationElement::Image(_)
+                    | PresentationElement::Chart(_) => {}
+                }
+            }
         }
+    }
+    if include("comment") {
+        records.extend(document.comment_threads.iter().map(|thread| {
+            let mut record = comment_thread_to_proto(thread);
+            record["id"] = Value::String(format!("th/{}", thread.thread_id));
+            (record, None)
+        }));
     }
 
     if let Some(target_id) = args.target_id.as_deref() {
@@ -442,6 +565,27 @@ fn resolve_anchor(
                 "text": slide.notes.text,
             });
             add_text_metadata(&mut record, &slide.notes.text);
+            record["richText"] = rich_text_to_proto(&slide.notes.text, &slide.notes.rich_text);
+            return Ok(record);
+        }
+        if let Some(range_id) = id.strip_prefix("tr/")
+            && let Some(record) = slide
+                .notes
+                .rich_text
+                .ranges
+                .iter()
+                .find(|range| range.range_id == range_id)
+                .map(|range| {
+                    let mut record = text_range_to_proto(&slide.notes.text, range);
+                    record["kind"] = Value::String("textRange".to_string());
+                    record["id"] = Value::String(id.to_string());
+                    record["slide"] = Value::from(slide_index + 1);
+                    record["slideIndex"] = Value::from(slide_index);
+                    record["hostAnchor"] = Value::String(notes_id.clone());
+                    record["hostKind"] = Value::String("notes".to_string());
+                    record
+                })
+        {
             return Ok(record);
         }
         for element in &slide.elements {
@@ -455,6 +599,7 @@ fn resolve_anchor(
                         "slideIndex": slide_index,
                         "text": text.text,
                         "textStyle": text_style_to_proto(&text.style),
+                        "richText": rich_text_to_proto(&text.text, &text.rich_text),
                         "bbox": [text.frame.left, text.frame.top, text.frame.width, text.frame.height],
                         "bboxUnit": "points",
                     });
@@ -471,6 +616,12 @@ fn resolve_anchor(
                         "geometry": format!("{:?}", shape.geometry),
                         "text": shape.text,
                         "textStyle": text_style_to_proto(&shape.text_style),
+                        "richText": shape
+                            .text
+                            .as_ref()
+                            .zip(shape.rich_text.as_ref())
+                            .map(|(text, rich_text)| rich_text_to_proto(text, rich_text))
+                            .unwrap_or(Value::Null),
                         "rotation": shape.rotation_degrees,
                         "flipHorizontal": shape.flip_horizontal,
                         "flipVertical": shape.flip_vertical,
@@ -527,10 +678,19 @@ fn resolve_anchor(
                     "cols": table.rows.iter().map(std::vec::Vec::len).max().unwrap_or(0),
                     "columnWidths": table.column_widths,
                     "rowHeights": table.row_heights,
+                    "style": table.style,
+                    "styleOptions": table_style_options_to_proto(&table.style_options),
+                    "borders": table.borders.as_ref().map(table_borders_to_proto),
+                    "rightToLeft": table.right_to_left,
                     "cellTextStyles": table
                         .rows
                         .iter()
                         .map(|row| row.iter().map(|cell| text_style_to_proto(&cell.text_style)).collect::<Vec<_>>())
+                        .collect::<Vec<_>>(),
+                    "rowsData": table
+                        .rows
+                        .iter()
+                        .map(|row| row.iter().map(table_cell_to_proto).collect::<Vec<_>>())
                         .collect::<Vec<_>>(),
                     "bbox": [table.frame.left, table.frame.top, table.frame.width, table.frame.height],
                     "bboxUnit": "points",
@@ -543,6 +703,32 @@ fn resolve_anchor(
                     "slideIndex": slide_index,
                     "chartType": format!("{:?}", chart.chart_type),
                     "title": chart.title,
+                    "styleIndex": chart.style_index,
+                    "hasLegend": chart.has_legend,
+                    "legend": chart.legend.as_ref().map(chart_legend_to_proto),
+                    "xAxis": chart.x_axis.as_ref().map(chart_axis_to_proto),
+                    "yAxis": chart.y_axis.as_ref().map(chart_axis_to_proto),
+                    "dataLabels": chart.data_labels.as_ref().map(chart_data_labels_to_proto),
+                    "chartFill": chart.chart_fill,
+                    "plotAreaFill": chart.plot_area_fill,
+                    "series": chart
+                        .series
+                        .iter()
+                        .map(|series| serde_json::json!({
+                            "name": series.name,
+                            "values": series.values,
+                            "categories": series.categories,
+                            "xValues": series.x_values,
+                            "fill": series.fill,
+                            "stroke": series.stroke.as_ref().map(stroke_to_proto),
+                            "marker": series.marker.as_ref().map(chart_marker_to_proto),
+                            "dataLabelOverrides": series
+                                .data_label_overrides
+                                .iter()
+                                .map(chart_data_label_override_to_proto)
+                                .collect::<Vec<_>>(),
+                        }))
+                        .collect::<Vec<_>>(),
                     "bbox": [chart.frame.left, chart.frame.top, chart.frame.width, chart.frame.height],
                     "bboxUnit": "points",
                 }),
@@ -582,7 +768,82 @@ fn resolve_anchor(
             if record.get("id").and_then(Value::as_str) == Some(id) {
                 return Ok(record);
             }
+            if let Some(range_id) = id.strip_prefix("tr/") {
+                match element {
+                    PresentationElement::Text(text) => {
+                        if let Some(range) =
+                            text.rich_text.ranges.iter().find(|range| range.range_id == range_id)
+                        {
+                            let mut range_record = text_range_to_proto(&text.text, range);
+                            range_record["kind"] = Value::String("textRange".to_string());
+                            range_record["id"] = Value::String(id.to_string());
+                            range_record["slide"] = Value::from(slide_index + 1);
+                            range_record["slideIndex"] = Value::from(slide_index);
+                            range_record["hostAnchor"] =
+                                Value::String(format!("sh/{}", text.element_id));
+                            range_record["hostKind"] = Value::String("textbox".to_string());
+                            return Ok(range_record);
+                        }
+                    }
+                    PresentationElement::Shape(shape) => {
+                        if let Some((text, rich_text)) =
+                            shape.text.as_ref().zip(shape.rich_text.as_ref())
+                            && let Some(range) =
+                                rich_text.ranges.iter().find(|range| range.range_id == range_id)
+                        {
+                            let mut range_record = text_range_to_proto(text, range);
+                            range_record["kind"] = Value::String("textRange".to_string());
+                            range_record["id"] = Value::String(id.to_string());
+                            range_record["slide"] = Value::from(slide_index + 1);
+                            range_record["slideIndex"] = Value::from(slide_index);
+                            range_record["hostAnchor"] =
+                                Value::String(format!("sh/{}", shape.element_id));
+                            range_record["hostKind"] = Value::String("textbox".to_string());
+                            return Ok(range_record);
+                        }
+                    }
+                    PresentationElement::Table(table) => {
+                        for (row_index, row) in table.rows.iter().enumerate() {
+                            for (column_index, cell) in row.iter().enumerate() {
+                                if let Some(range) = cell
+                                    .rich_text
+                                    .ranges
+                                    .iter()
+                                    .find(|range| range.range_id == range_id)
+                                {
+                                    let mut range_record = text_range_to_proto(&cell.text, range);
+                                    range_record["kind"] = Value::String("textRange".to_string());
+                                    range_record["id"] = Value::String(id.to_string());
+                                    range_record["slide"] = Value::from(slide_index + 1);
+                                    range_record["slideIndex"] = Value::from(slide_index);
+                                    range_record["hostAnchor"] = Value::String(format!(
+                                        "tb/{}#cell/{row_index}/{column_index}",
+                                        table.element_id
+                                    ));
+                                    range_record["hostKind"] =
+                                        Value::String("tableCell".to_string());
+                                    return Ok(range_record);
+                                }
+                            }
+                        }
+                    }
+                    PresentationElement::Connector(_)
+                    | PresentationElement::Image(_)
+                    | PresentationElement::Chart(_) => {}
+                }
+            }
         }
+    }
+
+    if let Some(thread_id) = id.strip_prefix("th/")
+        && let Some(thread) = document
+            .comment_threads
+            .iter()
+            .find(|thread| thread.thread_id == thread_id)
+    {
+        let mut record = comment_thread_to_proto(thread);
+        record["id"] = Value::String(id.to_string());
+        return Ok(record);
     }
 
     for layout in &document.layouts {
@@ -608,4 +869,3 @@ fn resolve_anchor(
         message: format!("unknown resolve id `{id}`"),
     })
 }
-

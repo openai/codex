@@ -1954,6 +1954,15 @@ fn inspect_supports_filters_target_windows_and_shape_text_metadata()
                 "italic": false,
                 "underline": false
             },
+            "richText": {
+                "layout": {
+                    "insets": serde_json::Value::Null,
+                    "wrap": serde_json::Value::Null,
+                    "autoFit": serde_json::Value::Null,
+                    "verticalAlignment": serde_json::Value::Null
+                },
+                "ranges": []
+            },
             "rotation": serde_json::Value::Null,
             "flipHorizontal": false,
             "flipVertical": false,
@@ -2817,6 +2826,441 @@ fn manager_supports_table_cell_updates_and_merges() -> Result<(), Box<dyn std::e
 }
 
 #[test]
+fn rich_text_comments_tables_and_charts_roundtrip_through_metadata()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Parity Roundtrip" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+
+    let text_added = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_text_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "text": "Placeholder",
+                "position": { "left": 32, "top": 28, "width": 280, "height": 72 }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let text_id = text_added
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .cloned()
+        .expect("text id");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "set_rich_text".to_string(),
+            args: serde_json::json!({
+                "element_id": text_id,
+                "text": [[
+                    {
+                        "run": "Quarterly ",
+                        "text_style": { "bold": true, "color": "#114488" }
+                    },
+                    "update pipeline"
+                ]],
+                "text_layout": {
+                    "wrap": "square",
+                    "auto_fit": "shrinkText",
+                    "vertical_alignment": "middle",
+                    "insets": { "left": 6, "right": 6, "top": 4, "bottom": 4 }
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "format_text_range".to_string(),
+            args: serde_json::json!({
+                "element_id": text_id,
+                "query": "update",
+                "styling": { "italic": true },
+                "link": { "uri": "https://example.com/update", "is_external": true }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "set_comment_author".to_string(),
+            args: serde_json::json!({
+                "display_name": "Jamie Fox",
+                "initials": "JF",
+                "email": "jamie@example.com"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_comment_thread".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "element_id": text_id,
+                "query": "Quarterly",
+                "text": "Tighten this headline",
+                "position": { "x": 240, "y": 44 }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_comment_reply".to_string(),
+            args: serde_json::json!({
+                "thread_id": "thread_1",
+                "text": "Applied to the slide draft."
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "toggle_comment_reaction".to_string(),
+            args: serde_json::json!({
+                "thread_id": "thread_1",
+                "emoji": "eyes"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "resolve_comment_thread".to_string(),
+            args: serde_json::json!({ "thread_id": "thread_1" }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "reopen_comment_thread".to_string(),
+            args: serde_json::json!({ "thread_id": "thread_1" }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let table_added = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_table".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "position": { "left": 32, "top": 124, "width": 320, "height": 120 },
+                "rows": [["Metric", "Value"], ["Status", "Beta"]],
+                "style": "TableStyleMedium2",
+                "style_options": {
+                    "header_row": true,
+                    "banded_rows": true,
+                    "first_column": true
+                },
+                "borders": {
+                    "outside": { "color": "#222222", "width": 2 }
+                },
+                "right_to_left": true
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let table_id = table_added
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.last())
+        .cloned()
+        .expect("table id");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "update_table_style".to_string(),
+            args: serde_json::json!({
+                "element_id": table_id,
+                "style_options": { "last_column": true, "total_row": true },
+                "borders": {
+                    "inside": { "color": "#999999", "width": 1 }
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "style_table_block".to_string(),
+            args: serde_json::json!({
+                "element_id": table_id,
+                "row": 1,
+                "column": 0,
+                "row_count": 1,
+                "column_count": 2,
+                "background_fill": "#FFF2CC",
+                "alignment": "center",
+                "styling": { "bold": true }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "format_text_range".to_string(),
+            args: serde_json::json!({
+                "element_id": table_id,
+                "row": 1,
+                "column": 1,
+                "query": "Beta",
+                "styling": { "italic": true, "color": "#AA0000" }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let chart_added = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_chart".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "position": { "left": 372, "top": 120, "width": 280, "height": 210 },
+                "chart_type": "bar",
+                "categories": ["Q1", "Q2"],
+                "series": [{
+                    "name": "Revenue",
+                    "values": [10.0, 12.0],
+                    "fill": "#4472C4",
+                    "stroke": { "color": "#1F4E79", "width": 2 },
+                    "marker": { "symbol": "circle", "size": 7 },
+                    "data_label_overrides": [{
+                        "idx": 1,
+                        "text": "12M",
+                        "position": "outsideEnd",
+                        "fill": "#FFFFFF"
+                    }]
+                }],
+                "title": "Revenue",
+                "style_index": 7,
+                "has_legend": true,
+                "legend_position": "right",
+                "legend_text_style": { "italic": true },
+                "x_axis_title": "Quarter",
+                "y_axis_title": "USD",
+                "data_labels": {
+                    "show_value": true,
+                    "position": "outsideEnd",
+                    "text_style": { "bold": true }
+                },
+                "chart_fill": "#F8F8F8",
+                "plot_area_fill": "#FFFFFF"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let chart_id = chart_added
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.last())
+        .cloned()
+        .expect("chart id");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "update_chart".to_string(),
+            args: serde_json::json!({
+                "element_id": chart_id,
+                "title": "Revenue outlook",
+                "style_index": 12,
+                "legend_position": "bottom",
+                "y_axis_title": "USD (millions)"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_chart_series".to_string(),
+            args: serde_json::json!({
+                "element_id": chart_id,
+                "name": "Target",
+                "values": [11.0, 13.0],
+                "fill": "#70AD47",
+                "marker": { "symbol": "diamond", "size": 6 }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let export_path = temp_dir.path().join("parity-roundtrip.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+    let metadata = zip_entry_text(
+        &temp_dir.path().join("parity-roundtrip.pptx"),
+        "ppt/codex-document.json",
+    )?;
+    assert!(metadata.contains("\"thread_id\":\"thread_1\""));
+    assert!(metadata.contains("\"style_index\":12"));
+    assert!(metadata.contains("\"right_to_left\":true"));
+
+    let imported = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "import_pptx".to_string(),
+            args: serde_json::json!({ "path": "parity-roundtrip.pptx" }),
+        },
+        temp_dir.path(),
+    )?;
+    let imported_artifact_id = imported.artifact_id;
+
+    let proto = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(imported_artifact_id.clone()),
+            action: "to_proto".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let proto = proto.proto_json.expect("proto");
+    let comments = proto["commentThreads"].as_array().expect("comments");
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0]["status"], "active");
+    assert_eq!(comments[0]["messages"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        comments[0]["messages"][1]["reactions"],
+        serde_json::json!(["eyes"])
+    );
+
+    let elements = proto["slides"][0]["elements"].as_array().expect("elements");
+    let text_record = elements
+        .iter()
+        .find(|element| element["elementId"] == text_id)
+        .expect("text record");
+    assert_eq!(text_record["richText"]["layout"]["wrap"], "square");
+    assert_eq!(text_record["richText"]["layout"]["autoFit"], "shrinkText");
+    assert_eq!(
+        text_record["richText"]["layout"]["verticalAlignment"],
+        "middle"
+    );
+    assert_eq!(
+        text_record["richText"]["ranges"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert!(
+        text_record["richText"]["ranges"]
+            .as_array()
+            .expect("text ranges")
+            .iter()
+            .any(|range| range["text"] == "update")
+    );
+
+    let table_record = elements
+        .iter()
+        .find(|element| element["elementId"] == table_id)
+        .expect("table record");
+    assert_eq!(table_record["styleOptions"]["headerRow"], true);
+    assert_eq!(table_record["styleOptions"]["lastColumn"], true);
+    assert_eq!(table_record["rightToLeft"], true);
+    assert_eq!(table_record["borders"]["outside"]["color"], "222222");
+    assert_eq!(
+        table_record["rows"][1][1]["richText"]["ranges"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+
+    let chart_record = elements
+        .iter()
+        .find(|element| element["elementId"] == chart_id)
+        .expect("chart record");
+    assert_eq!(chart_record["styleIndex"], 12);
+    assert_eq!(chart_record["legend"]["position"], "bottom");
+    assert_eq!(chart_record["series"].as_array().map(Vec::len), Some(2));
+    assert_eq!(chart_record["series"][1]["name"], "Target");
+
+    let inspect = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(imported_artifact_id.clone()),
+            action: "inspect".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let inspect_ndjson = inspect.inspect_ndjson.expect("inspect");
+    assert!(inspect_ndjson.contains("\"kind\":\"comment\""));
+    assert!(inspect_ndjson.contains("\"kind\":\"textRange\""));
+    assert!(inspect_ndjson.contains("\"chartType\":\"Bar\""));
+
+    let resolved_thread = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(imported_artifact_id.clone()),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": "th/thread_1" }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        resolved_thread
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("target"))
+            .and_then(|target| target.get("type")),
+        Some(&serde_json::json!("textRange"))
+    );
+
+    let resolved_range = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(imported_artifact_id),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": "tr/range_1" }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        resolved_range
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("text")),
+        Some(&serde_json::json!("update"))
+    );
+    Ok(())
+}
+
+#[test]
 fn history_can_undo_and_redo_created_artifact() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::tempdir()?;
     let mut manager = PresentationArtifactManager::default();
@@ -2971,160 +3415,32 @@ fn proto_and_patch_actions_work_and_patch_history_is_atomic()
         },
         temp_dir.path(),
     )?;
+    let proto = proto.proto_json.expect("proto");
+    assert_eq!(proto["kind"], "presentation");
+    assert_eq!(proto["artifactId"], artifact_id);
+    assert_eq!(proto["activeSlideId"], slide_id);
+    assert_eq!(proto["commentAuthor"], serde_json::Value::Null);
+    assert_eq!(proto["commentThreads"], serde_json::json!([]));
+    assert_eq!(proto["masters"], serde_json::json!([]));
+    assert_eq!(proto["layouts"], serde_json::json!([]));
+    assert_eq!(proto["theme"]["hexColorMap"], serde_json::json!({}));
+    assert_eq!(proto["styles"].as_array().map(Vec::len), Some(5));
+    assert_eq!(proto["slides"].as_array().map(Vec::len), Some(1));
+    assert_eq!(proto["slides"][0]["slideId"], slide_id);
+    assert_eq!(proto["slides"][0]["backgroundFill"], "FFEECC");
     assert_eq!(
-        proto.proto_json,
-        Some(serde_json::json!({
-            "kind": "presentation",
-            "artifactId": artifact_id,
-            "anchor": format!("pr/{artifact_id}"),
-            "name": "Proto Patch",
-            "slideSize": {
-                "left": 0,
-                "top": 0,
-                "width": 720,
-                "height": 540,
-                "unit": "points"
-            },
-            "activeSlideIndex": 0,
-            "activeSlideId": slide_id,
-            "theme": {
-                "colorScheme": {},
-                "hexColorMap": {},
-                "majorFont": serde_json::Value::Null,
-                "minorFont": serde_json::Value::Null
-            },
-            "styles": [
-                {
-                    "kind": "textStyle",
-                    "id": "st/body",
-                    "name": "body",
-                    "builtIn": true,
-                    "style": {
-                        "styleName": "body",
-                        "fontSize": 14,
-                        "fontFamily": serde_json::Value::Null,
-                        "color": serde_json::Value::Null,
-                        "alignment": "left",
-                        "bold": false,
-                        "italic": false,
-                        "underline": false
-                    }
-                },
-                {
-                    "kind": "textStyle",
-                    "id": "st/heading1",
-                    "name": "heading1",
-                    "builtIn": true,
-                    "style": {
-                        "styleName": "heading1",
-                        "fontSize": 22,
-                        "fontFamily": serde_json::Value::Null,
-                        "color": serde_json::Value::Null,
-                        "alignment": "left",
-                        "bold": true,
-                        "italic": false,
-                        "underline": false
-                    }
-                },
-                {
-                    "kind": "textStyle",
-                    "id": "st/list",
-                    "name": "list",
-                    "builtIn": true,
-                    "style": {
-                        "styleName": "list",
-                        "fontSize": 14,
-                        "fontFamily": serde_json::Value::Null,
-                        "color": serde_json::Value::Null,
-                        "alignment": "left",
-                        "bold": false,
-                        "italic": false,
-                        "underline": false
-                    }
-                },
-                {
-                    "kind": "textStyle",
-                    "id": "st/numberedlist",
-                    "name": "numberedlist",
-                    "builtIn": true,
-                    "style": {
-                        "styleName": "numberedlist",
-                        "fontSize": 14,
-                        "fontFamily": serde_json::Value::Null,
-                        "color": serde_json::Value::Null,
-                        "alignment": "left",
-                        "bold": false,
-                        "italic": false,
-                        "underline": false
-                    }
-                },
-                {
-                    "kind": "textStyle",
-                    "id": "st/title",
-                    "name": "title",
-                    "builtIn": true,
-                    "style": {
-                        "styleName": "title",
-                        "fontSize": 28,
-                        "fontFamily": serde_json::Value::Null,
-                        "color": serde_json::Value::Null,
-                        "alignment": "left",
-                        "bold": true,
-                        "italic": false,
-                        "underline": false
-                    }
-                }
-            ],
-            "masters": [],
-            "layouts": [],
-            "slides": [
-                {
-                    "slideId": slide_id,
-                    "anchor": format!("sl/{slide_id}"),
-                    "index": 0,
-                    "layoutId": serde_json::Value::Null,
-                    "backgroundFill": "FFEECC",
-                    "notes": {
-                        "anchor": format!("nt/{slide_id}"),
-                        "text": "",
-                        "visible": true,
-                        "textPreview": "",
-                        "textChars": 0,
-                        "textLines": 0
-                    },
-                    "elements": [
-                        {
-                            "kind": "text",
-                            "elementId": element_id,
-                            "anchor": format!("sh/{element_id}"),
-                            "frame": {
-                                "left": 40,
-                                "top": 60,
-                                "width": 180,
-                                "height": 50,
-                                "unit": "points"
-                            },
-                            "text": "Patch text",
-                            "textPreview": "Patch text",
-                            "textChars": 10,
-                            "textLines": 1,
-                            "fill": serde_json::Value::Null,
-                            "style": {
-                                "styleName": serde_json::Value::Null,
-                                "fontSize": serde_json::Value::Null,
-                                "fontFamily": serde_json::Value::Null,
-                                "color": serde_json::Value::Null,
-                                "alignment": serde_json::Value::Null,
-                                "bold": false,
-                                "italic": false,
-                                "underline": false
-                            },
-                            "zOrder": 0
-                        }
-                    ]
-                }
-            ]
-        }))
+        proto["slides"][0]["notes"]["richText"]["ranges"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        proto["slides"][0]["elements"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(proto["slides"][0]["elements"][0]["elementId"], element_id);
+    assert_eq!(proto["slides"][0]["elements"][0]["text"], "Patch text");
+    assert_eq!(
+        proto["slides"][0]["elements"][0]["richText"]["ranges"],
+        serde_json::json!([])
     );
 
     let undone = manager.execute(
@@ -3191,6 +3507,6 @@ fn proto_and_patch_actions_work_and_patch_history_is_atomic()
         },
         temp_dir.path(),
     )?;
-    assert_eq!(redone_proto.proto_json, proto.proto_json);
+    assert_eq!(redone_proto.proto_json, Some(proto));
     Ok(())
 }

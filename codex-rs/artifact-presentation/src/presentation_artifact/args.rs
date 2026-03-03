@@ -225,7 +225,7 @@ struct PartialPositionArgs {
     flip_vertical: Option<bool>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct TextStylingArgs {
     style: Option<String>,
     font_size: Option<u32>,
@@ -238,6 +238,57 @@ struct TextStylingArgs {
     underline: Option<bool>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+struct TextLayoutArgs {
+    insets: Option<TextInsetsArgs>,
+    wrap: Option<String>,
+    auto_fit: Option<String>,
+    vertical_alignment: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TextInsetsArgs {
+    left: u32,
+    right: u32,
+    top: u32,
+    bottom: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum RichTextInput {
+    Plain(String),
+    Paragraphs(Vec<RichParagraphInput>),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum RichParagraphInput {
+    Plain(String),
+    Runs(Vec<RichRunInput>),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum RichRunInput {
+    Plain(String),
+    Styled(RichRunObjectInput),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RichRunObjectInput {
+    run: String,
+    #[serde(default)]
+    text_style: TextStylingArgs,
+    link: Option<RichTextLinkInput>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RichTextLinkInput {
+    uri: Option<String>,
+    is_external: Option<bool>,
+}
+
 #[derive(Debug, Deserialize)]
 struct AddTextShapeArgs {
     slide_index: u32,
@@ -245,6 +296,8 @@ struct AddTextShapeArgs {
     position: PositionArgs,
     #[serde(flatten)]
     styling: TextStylingArgs,
+    #[serde(default)]
+    text_layout: TextLayoutArgs,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -267,6 +320,8 @@ struct AddShapeArgs {
     flip_vertical: Option<bool>,
     #[serde(default)]
     text_style: TextStylingArgs,
+    #[serde(default)]
+    text_layout: TextLayoutArgs,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -276,7 +331,7 @@ struct ConnectorLineArgs {
     style: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PointArgs {
     left: u32,
     top: u32,
@@ -355,6 +410,9 @@ struct AddTableArgs {
     column_widths: Option<Vec<u32>>,
     row_heights: Option<Vec<u32>>,
     style: Option<String>,
+    style_options: Option<TableStyleOptionsArgs>,
+    borders: Option<TableBordersArgs>,
+    right_to_left: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -365,12 +423,55 @@ struct AddChartArgs {
     categories: Vec<String>,
     series: Vec<ChartSeriesArgs>,
     title: Option<String>,
+    style_index: Option<u32>,
+    has_legend: Option<bool>,
+    legend_position: Option<String>,
+    #[serde(default)]
+    legend_text_style: TextStylingArgs,
+    x_axis_title: Option<String>,
+    y_axis_title: Option<String>,
+    data_labels: Option<ChartDataLabelsArgs>,
+    chart_fill: Option<String>,
+    plot_area_fill: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ChartSeriesArgs {
     name: String,
     values: Vec<f64>,
+    categories: Option<Vec<String>>,
+    x_values: Option<Vec<f64>>,
+    fill: Option<String>,
+    stroke: Option<StrokeArgs>,
+    marker: Option<ChartMarkerArgs>,
+    data_label_overrides: Option<Vec<ChartDataLabelOverrideArgs>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ChartMarkerArgs {
+    symbol: Option<String>,
+    size: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ChartDataLabelsArgs {
+    show_value: Option<bool>,
+    show_category_name: Option<bool>,
+    show_leader_lines: Option<bool>,
+    position: Option<String>,
+    #[serde(default)]
+    text_style: TextStylingArgs,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ChartDataLabelOverrideArgs {
+    idx: u32,
+    text: Option<String>,
+    position: Option<String>,
+    #[serde(default)]
+    text_style: TextStylingArgs,
+    fill: Option<String>,
+    stroke: Option<StrokeArgs>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -379,6 +480,43 @@ struct UpdateTextArgs {
     text: String,
     #[serde(default)]
     styling: TextStylingArgs,
+    #[serde(default)]
+    text_layout: TextLayoutArgs,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetRichTextArgs {
+    element_id: Option<String>,
+    slide_index: Option<u32>,
+    row: Option<u32>,
+    column: Option<u32>,
+    notes: Option<bool>,
+    text: RichTextInput,
+    #[serde(default)]
+    styling: TextStylingArgs,
+    #[serde(default)]
+    text_layout: TextLayoutArgs,
+}
+
+#[derive(Debug, Deserialize)]
+struct FormatTextRangeArgs {
+    element_id: Option<String>,
+    slide_index: Option<u32>,
+    row: Option<u32>,
+    column: Option<u32>,
+    notes: Option<bool>,
+    query: Option<String>,
+    occurrence: Option<usize>,
+    start_cp: Option<usize>,
+    length: Option<usize>,
+    #[serde(default)]
+    styling: TextStylingArgs,
+    #[serde(default)]
+    text_layout: TextLayoutArgs,
+    link: Option<RichTextLinkInput>,
+    spacing_before: Option<u32>,
+    spacing_after: Option<u32>,
+    line_spacing: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -422,6 +560,8 @@ struct UpdateShapeStyleArgs {
     crop: Option<ImageCropArgs>,
     lock_aspect_ratio: Option<bool>,
     z_order: Option<u32>,
+    #[serde(default)]
+    text_layout: TextLayoutArgs,
 }
 
 #[derive(Debug, Deserialize)]
@@ -458,6 +598,55 @@ struct UpdateTableCellArgs {
     alignment: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct TableStyleOptionsArgs {
+    header_row: Option<bool>,
+    banded_rows: Option<bool>,
+    banded_columns: Option<bool>,
+    first_column: Option<bool>,
+    last_column: Option<bool>,
+    total_row: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TableBorderArgs {
+    color: String,
+    width: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TableBordersArgs {
+    outside: Option<TableBorderArgs>,
+    inside: Option<TableBorderArgs>,
+    top: Option<TableBorderArgs>,
+    bottom: Option<TableBorderArgs>,
+    left: Option<TableBorderArgs>,
+    right: Option<TableBorderArgs>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateTableStyleArgs {
+    element_id: String,
+    style: Option<String>,
+    style_options: Option<TableStyleOptionsArgs>,
+    borders: Option<TableBordersArgs>,
+    right_to_left: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StyleTableBlockArgs {
+    element_id: String,
+    row: u32,
+    column: u32,
+    row_count: u32,
+    column_count: u32,
+    #[serde(default)]
+    styling: TextStylingArgs,
+    background_fill: Option<String>,
+    alignment: Option<String>,
+    borders: Option<TableBordersArgs>,
+}
+
 #[derive(Debug, Deserialize)]
 struct MergeTableCellsArgs {
     element_id: String,
@@ -465,4 +654,76 @@ struct MergeTableCellsArgs {
     end_row: u32,
     start_column: u32,
     end_column: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateChartArgs {
+    element_id: String,
+    title: Option<String>,
+    categories: Option<Vec<String>>,
+    style_index: Option<u32>,
+    has_legend: Option<bool>,
+    legend_position: Option<String>,
+    #[serde(default)]
+    legend_text_style: TextStylingArgs,
+    x_axis_title: Option<String>,
+    y_axis_title: Option<String>,
+    data_labels: Option<ChartDataLabelsArgs>,
+    chart_fill: Option<String>,
+    plot_area_fill: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AddChartSeriesArgs {
+    element_id: String,
+    name: String,
+    values: Vec<f64>,
+    categories: Option<Vec<String>>,
+    x_values: Option<Vec<f64>>,
+    fill: Option<String>,
+    stroke: Option<StrokeArgs>,
+    marker: Option<ChartMarkerArgs>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetCommentAuthorArgs {
+    display_name: String,
+    initials: String,
+    email: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommentPositionArgs {
+    x: u32,
+    y: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct AddCommentThreadArgs {
+    slide_index: Option<u32>,
+    element_id: Option<String>,
+    query: Option<String>,
+    occurrence: Option<usize>,
+    start_cp: Option<usize>,
+    length: Option<usize>,
+    text: String,
+    position: Option<CommentPositionArgs>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AddCommentReplyArgs {
+    thread_id: String,
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToggleCommentReactionArgs {
+    thread_id: String,
+    message_id: Option<String>,
+    emoji: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommentThreadIdArgs {
+    thread_id: String,
 }

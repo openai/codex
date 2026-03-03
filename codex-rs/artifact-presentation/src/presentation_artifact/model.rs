@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ThemeState {
     color_scheme: HashMap<String, String>,
     major_font: Option<String>,
@@ -27,13 +27,13 @@ impl ThemeState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum LayoutKind {
     Layout,
     Master,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LayoutDocument {
     layout_id: String,
     name: String,
@@ -42,7 +42,7 @@ struct LayoutDocument {
     placeholders: Vec<PlaceholderDefinition>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlaceholderDefinition {
     name: String,
     placeholder_type: String,
@@ -52,19 +52,21 @@ struct PlaceholderDefinition {
     frame: Rect,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ResolvedPlaceholder {
     source_layout_id: String,
     definition: PlaceholderDefinition,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct NotesState {
     text: String,
     visible: bool,
+    #[serde(default)]
+    rich_text: RichTextState,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct TextStyle {
     style_name: Option<String>,
     font_size: Option<u32>,
@@ -76,21 +78,21 @@ struct TextStyle {
     underline: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct NamedTextStyle {
     name: String,
     style: TextStyle,
     built_in: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct HyperlinkState {
     target: HyperlinkTarget,
     tooltip: Option<String>,
     highlight_click: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum HyperlinkTarget {
     Url(String),
     Slide(u32),
@@ -217,7 +219,7 @@ impl HyperlinkState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum TextAlignment {
     Left,
@@ -226,14 +228,188 @@ enum TextAlignment {
     Justify,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct RichTextState {
+    #[serde(default)]
+    ranges: Vec<TextRangeAnnotation>,
+    #[serde(default)]
+    layout: TextLayoutState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TextRangeAnnotation {
+    range_id: String,
+    start_cp: usize,
+    length: usize,
+    style: TextStyle,
+    hyperlink: Option<HyperlinkState>,
+    spacing_before: Option<u32>,
+    spacing_after: Option<u32>,
+    line_spacing: Option<f32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct TextLayoutState {
+    insets: Option<TextInsets>,
+    wrap: Option<TextWrapMode>,
+    auto_fit: Option<TextAutoFitMode>,
+    vertical_alignment: Option<TextVerticalAlignment>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct TextInsets {
+    left: u32,
+    right: u32,
+    top: u32,
+    bottom: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum TextWrapMode {
+    Square,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum TextAutoFitMode {
+    None,
+    ShrinkText,
+    ResizeShapeToFitText,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum TextVerticalAlignment {
+    Top,
+    Middle,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CommentAuthorProfile {
+    display_name: String,
+    initials: String,
+    email: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CommentPosition {
+    x: u32,
+    y: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum CommentThreadStatus {
+    Active,
+    Resolved,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CommentMessage {
+    message_id: String,
+    author: CommentAuthorProfile,
+    text: String,
+    created_at: String,
+    #[serde(default)]
+    reactions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum CommentTarget {
+    Slide {
+        slide_id: String,
+    },
+    Element {
+        slide_id: String,
+        element_id: String,
+    },
+    TextRange {
+        slide_id: String,
+        element_id: String,
+        start_cp: usize,
+        length: usize,
+        context: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CommentThread {
+    thread_id: String,
+    target: CommentTarget,
+    position: Option<CommentPosition>,
+    status: CommentThreadStatus,
+    messages: Vec<CommentMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TableBorder {
+    color: String,
+    width: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct TableBorders {
+    outside: Option<TableBorder>,
+    inside: Option<TableBorder>,
+    top: Option<TableBorder>,
+    bottom: Option<TableBorder>,
+    left: Option<TableBorder>,
+    right: Option<TableBorder>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct TableStyleOptions {
+    header_row: bool,
+    banded_rows: bool,
+    banded_columns: bool,
+    first_column: bool,
+    last_column: bool,
+    total_row: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ChartMarkerStyle {
+    symbol: Option<String>,
+    size: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ChartDataLabels {
+    show_value: bool,
+    show_category_name: bool,
+    show_leader_lines: bool,
+    position: Option<String>,
+    text_style: TextStyle,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ChartLegend {
+    position: Option<String>,
+    text_style: TextStyle,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ChartAxisSpec {
+    title: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ChartDataLabelOverride {
+    idx: usize,
+    text: Option<String>,
+    position: Option<String>,
+    text_style: TextStyle,
+    fill: Option<String>,
+    stroke: Option<StrokeStyle>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PlaceholderRef {
     name: String,
     placeholder_type: String,
     index: Option<u32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TableMergeRegion {
     start_row: usize,
     end_row: usize,
@@ -241,15 +417,18 @@ struct TableMergeRegion {
     end_column: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TableCellSpec {
     text: String,
     text_style: TextStyle,
     background_fill: Option<String>,
     alignment: Option<TextAlignment>,
+    #[serde(default)]
+    rich_text: RichTextState,
+    borders: Option<TableBorders>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PresentationDocument {
     artifact_id: String,
     name: Option<String>,
@@ -259,9 +438,16 @@ struct PresentationDocument {
     layouts: Vec<LayoutDocument>,
     slides: Vec<PresentationSlide>,
     active_slide_index: Option<usize>,
+    #[serde(default)]
+    comment_self: Option<CommentAuthorProfile>,
+    #[serde(default)]
+    comment_threads: Vec<CommentThread>,
     next_slide_seq: u32,
     next_element_seq: u32,
     next_layout_seq: u32,
+    next_text_range_seq: u32,
+    next_comment_thread_seq: u32,
+    next_comment_message_seq: u32,
 }
 
 impl PresentationDocument {
@@ -280,9 +466,14 @@ impl PresentationDocument {
             layouts: Vec::new(),
             slides: Vec::new(),
             active_slide_index: None,
+            comment_self: None,
+            comment_threads: Vec::new(),
             next_slide_seq: 1,
             next_element_seq: 1,
             next_layout_seq: 1,
+            next_text_range_seq: 1,
+            next_comment_thread_seq: 1,
+            next_comment_message_seq: 1,
         }
     }
 
@@ -296,6 +487,7 @@ impl PresentationDocument {
                 notes: NotesState {
                     text: imported_slide.notes.clone().unwrap_or_default(),
                     visible: true,
+                    rich_text: RichTextState::default(),
                 },
                 background_fill: None,
                 layout_id: None,
@@ -316,6 +508,7 @@ impl PresentationDocument {
                     fill: None,
                     style: TextStyle::default(),
                     hyperlink: None,
+                    rich_text: RichTextState::default(),
                     placeholder: None,
                     z_order: slide.elements.len(),
                 }));
@@ -334,6 +527,7 @@ impl PresentationDocument {
                     fill: None,
                     style: TextStyle::default(),
                     hyperlink: None,
+                    rich_text: RichTextState::default(),
                     placeholder: None,
                     z_order: slide.elements.len(),
                 }));
@@ -360,6 +554,10 @@ impl PresentationDocument {
                         text: imported_shape.text.clone(),
                         text_style: TextStyle::default(),
                         hyperlink: None,
+                        rich_text: imported_shape
+                            .text
+                            .as_ref()
+                            .map(|_| RichTextState::default()),
                         placeholder: None,
                         rotation_degrees: imported_shape.rotation,
                         flip_horizontal: false,
@@ -390,6 +588,8 @@ impl PresentationDocument {
                                         text_style: TextStyle::default(),
                                         background_fill: None,
                                         alignment: None,
+                                        rich_text: RichTextState::default(),
+                                        borders: None,
                                     })
                                     .collect()
                             })
@@ -407,6 +607,9 @@ impl PresentationDocument {
                             .map(emu_to_points)
                             .collect(),
                         style: None,
+                        style_options: TableStyleOptions::default(),
+                        borders: None,
+                        right_to_left: false,
                         merges: Vec::new(),
                         z_order: slide.elements.len(),
                     }));
@@ -434,6 +637,7 @@ impl PresentationDocument {
             notes: NotesState {
                 text: notes.unwrap_or_default(),
                 visible: true,
+                rich_text: RichTextState::default(),
             },
             background_fill: normalized_fill,
             layout_id: None,
@@ -466,6 +670,24 @@ impl PresentationDocument {
         let element_id = format!("element_{}", self.next_element_seq);
         self.next_element_seq += 1;
         element_id
+    }
+
+    fn next_text_range_id(&mut self) -> String {
+        let range_id = format!("range_{}", self.next_text_range_seq);
+        self.next_text_range_seq += 1;
+        range_id
+    }
+
+    fn next_comment_thread_id(&mut self) -> String {
+        let thread_id = format!("thread_{}", self.next_comment_thread_seq);
+        self.next_comment_thread_seq += 1;
+        thread_id
+    }
+
+    fn next_comment_message_id(&mut self) -> String {
+        let message_id = format!("message_{}", self.next_comment_message_seq);
+        self.next_comment_message_seq += 1;
+        message_id
     }
 
     fn total_element_count(&self) -> usize {
@@ -717,7 +939,7 @@ impl PresentationDocument {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PresentationSlide {
     slide_id: String,
     notes: NotesState,
@@ -1190,7 +1412,7 @@ impl PresentationSlide {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum PresentationElement {
     Text(TextElement),
     Shape(ShapeElement),
@@ -1257,7 +1479,7 @@ impl PresentationElement {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TextElement {
     element_id: String,
     text: String,
@@ -1265,11 +1487,13 @@ struct TextElement {
     fill: Option<String>,
     style: TextStyle,
     hyperlink: Option<HyperlinkState>,
+    #[serde(default)]
+    rich_text: RichTextState,
     placeholder: Option<PlaceholderRef>,
     z_order: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ShapeElement {
     element_id: String,
     geometry: ShapeGeometry,
@@ -1279,6 +1503,7 @@ struct ShapeElement {
     text: Option<String>,
     text_style: TextStyle,
     hyperlink: Option<HyperlinkState>,
+    rich_text: Option<RichTextState>,
     placeholder: Option<PlaceholderRef>,
     rotation_degrees: Option<i32>,
     flip_horizontal: bool,
@@ -1286,7 +1511,7 @@ struct ShapeElement {
     z_order: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConnectorElement {
     element_id: String,
     connector_type: ConnectorKind,
@@ -1301,7 +1526,7 @@ struct ConnectorElement {
     z_order: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ImageElement {
     pub(crate) element_id: String,
     pub(crate) frame: Rect,
@@ -1319,7 +1544,7 @@ pub(crate) struct ImageElement {
     pub(crate) z_order: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TableElement {
     element_id: String,
     frame: Rect,
@@ -1327,11 +1552,14 @@ struct TableElement {
     column_widths: Vec<u32>,
     row_heights: Vec<u32>,
     style: Option<String>,
+    style_options: TableStyleOptions,
+    borders: Option<TableBorders>,
+    right_to_left: bool,
     merges: Vec<TableMergeRegion>,
     z_order: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChartElement {
     element_id: String,
     frame: Rect,
@@ -1339,10 +1567,18 @@ struct ChartElement {
     categories: Vec<String>,
     series: Vec<ChartSeriesSpec>,
     title: Option<String>,
+    style_index: Option<u32>,
+    has_legend: bool,
+    legend: Option<ChartLegend>,
+    x_axis: Option<ChartAxisSpec>,
+    y_axis: Option<ChartAxisSpec>,
+    data_labels: Option<ChartDataLabels>,
+    chart_fill: Option<String>,
+    plot_area_fill: Option<String>,
     z_order: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ImagePayload {
     pub(crate) bytes: Vec<u8>,
     pub(crate) format: String,
@@ -1350,13 +1586,20 @@ pub(crate) struct ImagePayload {
     pub(crate) height_px: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChartSeriesSpec {
     name: String,
     values: Vec<f64>,
+    categories: Option<Vec<String>>,
+    x_values: Option<Vec<f64>>,
+    fill: Option<String>,
+    stroke: Option<StrokeStyle>,
+    marker: Option<ChartMarkerStyle>,
+    #[serde(default)]
+    data_label_overrides: Vec<ChartDataLabelOverride>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum ShapeGeometry {
     Rectangle,
     RoundedRectangle,
@@ -1456,7 +1699,7 @@ impl ShapeGeometry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum ChartTypeSpec {
     Bar,
     BarHorizontal,
@@ -1580,7 +1823,7 @@ impl LineStyle {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ImageFitMode {
     Stretch,
@@ -1588,21 +1831,21 @@ pub(crate) enum ImageFitMode {
     Cover,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct StrokeStyle {
     color: String,
     width: u32,
     style: LineStyle,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum ConnectorKind {
     Straight,
     Elbow,
     Curved,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum ConnectorArrowKind {
     None,
     Triangle,
@@ -1612,14 +1855,14 @@ enum ConnectorArrowKind {
     Open,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum ConnectorArrowScale {
     Small,
     Medium,
     Large,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum LineStyle {
     Solid,
     Dashed,
@@ -1630,7 +1873,7 @@ enum LineStyle {
     LongDashDot,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(crate) struct Rect {
     pub(crate) left: u32,
     pub(crate) top: u32,

@@ -35,6 +35,12 @@ fn document_to_proto(
         "masters": document.layouts.iter().filter(|layout| layout.kind == LayoutKind::Master).map(|layout| layout.layout_id.clone()).collect::<Vec<_>>(),
         "layouts": layouts,
         "slides": slides,
+        "commentAuthor": document.comment_self.as_ref().map(comment_author_to_proto),
+        "commentThreads": document
+            .comment_threads
+            .iter()
+            .map(comment_thread_to_proto)
+            .collect::<Vec<_>>(),
     }))
 }
 
@@ -95,6 +101,7 @@ fn slide_to_proto(slide: &PresentationSlide, slide_index: usize) -> Value {
             "textPreview": slide.notes.text.replace('\n', " | "),
             "textChars": slide.notes.text.chars().count(),
             "textLines": slide.notes.text.lines().count(),
+            "richText": rich_text_to_proto(&slide.notes.text, &slide.notes.rich_text),
         }),
         "elements": slide.elements.iter().map(element_to_proto).collect::<Vec<_>>(),
     })
@@ -114,6 +121,7 @@ fn element_to_proto(element: &PresentationElement) -> Value {
                 "textLines": text.text.lines().count(),
                 "fill": text.fill,
                 "style": text_style_to_proto(&text.style),
+                "richText": rich_text_to_proto(&text.text, &text.rich_text),
                 "zOrder": text.z_order,
             });
             if let Some(placeholder) = &text.placeholder {
@@ -135,6 +143,12 @@ fn element_to_proto(element: &PresentationElement) -> Value {
                 "stroke": shape.stroke.as_ref().map(stroke_to_proto),
                 "text": shape.text,
                 "textStyle": text_style_to_proto(&shape.text_style),
+                "richText": shape
+                    .text
+                    .as_ref()
+                    .zip(shape.rich_text.as_ref())
+                    .map(|(text, rich_text)| rich_text_to_proto(text, rich_text))
+                    .unwrap_or(Value::Null),
                 "rotation": shape.rotation_degrees,
                 "flipHorizontal": shape.flip_horizontal,
                 "flipVertical": shape.flip_vertical,
@@ -215,6 +229,9 @@ fn element_to_proto(element: &PresentationElement) -> Value {
             "columnWidths": table.column_widths,
             "rowHeights": table.row_heights,
             "style": table.style,
+            "styleOptions": table_style_options_to_proto(&table.style_options),
+            "borders": table.borders.as_ref().map(table_borders_to_proto),
+            "rightToLeft": table.right_to_left,
             "merges": table.merges.iter().map(|merge| serde_json::json!({
                 "startRow": merge.start_row,
                 "endRow": merge.end_row,
@@ -231,9 +248,27 @@ fn element_to_proto(element: &PresentationElement) -> Value {
             "chartType": format!("{:?}", chart.chart_type),
             "title": chart.title,
             "categories": chart.categories,
+            "styleIndex": chart.style_index,
+            "hasLegend": chart.has_legend,
+            "legend": chart.legend.as_ref().map(chart_legend_to_proto),
+            "xAxis": chart.x_axis.as_ref().map(chart_axis_to_proto),
+            "yAxis": chart.y_axis.as_ref().map(chart_axis_to_proto),
+            "dataLabels": chart.data_labels.as_ref().map(chart_data_labels_to_proto),
+            "chartFill": chart.chart_fill,
+            "plotAreaFill": chart.plot_area_fill,
             "series": chart.series.iter().map(|series| serde_json::json!({
                 "name": series.name,
                 "values": series.values,
+                "categories": series.categories,
+                "xValues": series.x_values,
+                "fill": series.fill,
+                "stroke": series.stroke.as_ref().map(stroke_to_proto),
+                "marker": series.marker.as_ref().map(chart_marker_to_proto),
+                "dataLabelOverrides": series
+                    .data_label_overrides
+                    .iter()
+                    .map(chart_data_label_override_to_proto)
+                    .collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "zOrder": chart.z_order,
         }),
@@ -272,6 +307,72 @@ fn text_style_to_proto(style: &TextStyle) -> Value {
     })
 }
 
+fn rich_text_to_proto(text: &str, rich_text: &RichTextState) -> Value {
+    serde_json::json!({
+        "layout": text_layout_to_proto(&rich_text.layout),
+        "ranges": rich_text
+            .ranges
+            .iter()
+            .map(|range| text_range_to_proto(text, range))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn text_range_to_proto(text: &str, range: &TextRangeAnnotation) -> Value {
+    serde_json::json!({
+        "rangeId": range.range_id,
+        "anchor": format!("tr/{}", range.range_id),
+        "startCp": range.start_cp,
+        "length": range.length,
+        "text": text_slice_by_codepoint_range(text, range.start_cp, range.length),
+        "style": text_style_to_proto(&range.style),
+        "hyperlink": range.hyperlink.as_ref().map(HyperlinkState::to_json),
+        "spacingBefore": range.spacing_before,
+        "spacingAfter": range.spacing_after,
+        "lineSpacing": range.line_spacing,
+    })
+}
+
+fn text_layout_to_proto(layout: &TextLayoutState) -> Value {
+    serde_json::json!({
+        "insets": layout.insets.map(|insets| serde_json::json!({
+            "left": insets.left,
+            "right": insets.right,
+            "top": insets.top,
+            "bottom": insets.bottom,
+            "unit": "points",
+        })),
+        "wrap": layout.wrap.map(text_wrap_mode_to_proto),
+        "autoFit": layout.auto_fit.map(text_auto_fit_mode_to_proto),
+        "verticalAlignment": layout
+            .vertical_alignment
+            .map(text_vertical_alignment_to_proto),
+    })
+}
+
+fn text_wrap_mode_to_proto(mode: TextWrapMode) -> &'static str {
+    match mode {
+        TextWrapMode::Square => "square",
+        TextWrapMode::None => "none",
+    }
+}
+
+fn text_auto_fit_mode_to_proto(mode: TextAutoFitMode) -> &'static str {
+    match mode {
+        TextAutoFitMode::None => "none",
+        TextAutoFitMode::ShrinkText => "shrinkText",
+        TextAutoFitMode::ResizeShapeToFitText => "resizeShapeToFitText",
+    }
+}
+
+fn text_vertical_alignment_to_proto(alignment: TextVerticalAlignment) -> &'static str {
+    match alignment {
+        TextVerticalAlignment::Top => "top",
+        TextVerticalAlignment::Middle => "middle",
+        TextVerticalAlignment::Bottom => "bottom",
+    }
+}
+
 fn placeholder_ref_to_proto(placeholder: &PlaceholderRef) -> Value {
     serde_json::json!({
         "name": placeholder.name,
@@ -293,9 +394,167 @@ fn table_cell_to_proto(cell: &TableCellSpec) -> Value {
     serde_json::json!({
         "text": cell.text,
         "textStyle": text_style_to_proto(&cell.text_style),
+        "richText": rich_text_to_proto(&cell.text, &cell.rich_text),
         "backgroundFill": cell.background_fill,
         "alignment": cell.alignment,
+        "borders": cell.borders.as_ref().map(table_borders_to_proto),
     })
+}
+
+fn table_style_options_to_proto(style_options: &TableStyleOptions) -> Value {
+    serde_json::json!({
+        "headerRow": style_options.header_row,
+        "bandedRows": style_options.banded_rows,
+        "bandedColumns": style_options.banded_columns,
+        "firstColumn": style_options.first_column,
+        "lastColumn": style_options.last_column,
+        "totalRow": style_options.total_row,
+    })
+}
+
+fn table_borders_to_proto(borders: &TableBorders) -> Value {
+    serde_json::json!({
+        "outside": borders.outside.as_ref().map(table_border_to_proto),
+        "inside": borders.inside.as_ref().map(table_border_to_proto),
+        "top": borders.top.as_ref().map(table_border_to_proto),
+        "bottom": borders.bottom.as_ref().map(table_border_to_proto),
+        "left": borders.left.as_ref().map(table_border_to_proto),
+        "right": borders.right.as_ref().map(table_border_to_proto),
+    })
+}
+
+fn table_border_to_proto(border: &TableBorder) -> Value {
+    serde_json::json!({
+        "color": border.color,
+        "width": border.width,
+        "unit": "points",
+    })
+}
+
+fn chart_marker_to_proto(marker: &ChartMarkerStyle) -> Value {
+    serde_json::json!({
+        "symbol": marker.symbol,
+        "size": marker.size,
+    })
+}
+
+fn chart_data_labels_to_proto(data_labels: &ChartDataLabels) -> Value {
+    serde_json::json!({
+        "showValue": data_labels.show_value,
+        "showCategoryName": data_labels.show_category_name,
+        "showLeaderLines": data_labels.show_leader_lines,
+        "position": data_labels.position,
+        "textStyle": text_style_to_proto(&data_labels.text_style),
+    })
+}
+
+fn chart_legend_to_proto(legend: &ChartLegend) -> Value {
+    serde_json::json!({
+        "position": legend.position,
+        "textStyle": text_style_to_proto(&legend.text_style),
+    })
+}
+
+fn chart_axis_to_proto(axis: &ChartAxisSpec) -> Value {
+    serde_json::json!({
+        "title": axis.title,
+    })
+}
+
+fn chart_data_label_override_to_proto(override_spec: &ChartDataLabelOverride) -> Value {
+    serde_json::json!({
+        "idx": override_spec.idx,
+        "text": override_spec.text,
+        "position": override_spec.position,
+        "textStyle": text_style_to_proto(&override_spec.text_style),
+        "fill": override_spec.fill,
+        "stroke": override_spec.stroke.as_ref().map(stroke_to_proto),
+    })
+}
+
+fn comment_author_to_proto(author: &CommentAuthorProfile) -> Value {
+    serde_json::json!({
+        "displayName": author.display_name,
+        "initials": author.initials,
+        "email": author.email,
+    })
+}
+
+fn comment_thread_to_proto(thread: &CommentThread) -> Value {
+    serde_json::json!({
+        "kind": "comment",
+        "threadId": thread.thread_id,
+        "anchor": format!("th/{}", thread.thread_id),
+        "target": comment_target_to_proto(&thread.target),
+        "position": thread.position.as_ref().map(comment_position_to_proto),
+        "status": comment_status_to_proto(thread.status),
+        "messages": thread.messages.iter().map(comment_message_to_proto).collect::<Vec<_>>(),
+    })
+}
+
+fn comment_target_to_proto(target: &CommentTarget) -> Value {
+    match target {
+        CommentTarget::Slide { slide_id } => serde_json::json!({
+            "type": "slide",
+            "slideId": slide_id,
+            "slideAnchor": format!("sl/{slide_id}"),
+        }),
+        CommentTarget::Element {
+            slide_id,
+            element_id,
+        } => serde_json::json!({
+            "type": "element",
+            "slideId": slide_id,
+            "slideAnchor": format!("sl/{slide_id}"),
+            "elementId": element_id,
+            "elementAnchor": format!("sh/{element_id}"),
+        }),
+        CommentTarget::TextRange {
+            slide_id,
+            element_id,
+            start_cp,
+            length,
+            context,
+        } => serde_json::json!({
+            "type": "textRange",
+            "slideId": slide_id,
+            "slideAnchor": format!("sl/{slide_id}"),
+            "elementId": element_id,
+            "elementAnchor": format!("sh/{element_id}"),
+            "startCp": start_cp,
+            "length": length,
+            "context": context,
+        }),
+    }
+}
+
+fn comment_position_to_proto(position: &CommentPosition) -> Value {
+    serde_json::json!({
+        "x": position.x,
+        "y": position.y,
+        "unit": "points",
+    })
+}
+
+fn comment_message_to_proto(message: &CommentMessage) -> Value {
+    serde_json::json!({
+        "messageId": message.message_id,
+        "author": comment_author_to_proto(&message.author),
+        "text": message.text,
+        "createdAt": message.created_at,
+        "reactions": message.reactions,
+    })
+}
+
+fn comment_status_to_proto(status: CommentThreadStatus) -> &'static str {
+    match status {
+        CommentThreadStatus::Active => "active",
+        CommentThreadStatus::Resolved => "resolved",
+    }
+}
+
+fn text_slice_by_codepoint_range(text: &str, start_cp: usize, length: usize) -> String {
+    text.chars().skip(start_cp).take(length).collect()
 }
 
 fn build_table_cell(
@@ -353,4 +612,3 @@ fn build_table_cell(
     }
     table_cell
 }
-
