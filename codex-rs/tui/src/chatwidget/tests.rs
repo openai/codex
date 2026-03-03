@@ -6440,6 +6440,7 @@ async fn feedback_upload_consent_popup_snapshot() {
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::Bug,
         chat.current_rollout_path.clone(),
+        true,
     ));
 
     let popup = render_bottom_popup(&chat, 80);
@@ -6447,13 +6448,18 @@ async fn feedback_upload_consent_popup_snapshot() {
 }
 
 #[tokio::test]
-async fn feedback_good_result_skips_attachment_prompt() {
+async fn feedback_good_result_consent_popup_omits_connectivity_diagnostics() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.open_feedback_consent(crate::app_event::FeedbackCategory::GoodResult);
+    chat.show_selection_view(crate::bottom_pane::feedback_upload_consent_params(
+        chat.app_event_tx.clone(),
+        crate::app_event::FeedbackCategory::GoodResult,
+        chat.current_rollout_path.clone(),
+        false,
+    ));
 
     let popup = render_bottom_popup(&chat, 80);
-    assert_snapshot!("feedback_good_result_note_without_diagnostics", popup);
+    assert_snapshot!("feedback_good_result_consent_popup", popup);
 }
 
 #[tokio::test]

@@ -392,7 +392,9 @@ impl FeedbackNoteView {
         } else {
             Vec::new()
         };
-        let diagnostics_attachment = if self.include_logs {
+        let diagnostics_attachment = if self.include_logs
+            && should_show_feedback_connectivity_details(self.category, &self.diagnostics)
+        {
             match self.diagnostics.write_temp_attachment() {
                 Ok(attachment) => attachment,
                 Err(err) => {
@@ -570,6 +572,7 @@ pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
     rollout_path: Option<std::path::PathBuf>,
+    include_connectivity_diagnostics_attachment: bool,
 ) -> super::SelectionViewParams {
     use super::popup_consts::standard_popup_hint_line;
     let yes_action: super::SelectionAction = Box::new({
@@ -606,14 +609,15 @@ pub(crate) fn feedback_upload_consent_params(
     {
         header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
     }
-    header_lines.push(
-        Line::from(vec![
-            "  • ".into(),
-            FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME.into(),
-            " (if connectivity diagnostics are detected)".dim(),
-        ])
-        .into(),
-    );
+    if include_connectivity_diagnostics_attachment {
+        header_lines.push(
+            Line::from(vec![
+                "  • ".into(),
+                FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME.into(),
+            ])
+            .into(),
+        );
+    }
 
     super::SelectionViewParams {
         footer_hint: Some(standard_popup_hint_line()),
@@ -782,12 +786,12 @@ mod tests {
             "OPENAI_BASE_URL",
             "https://example.com/v1",
         )]);
-        let make_view = |include_logs| {
+        let make_view = |category, include_logs| {
             let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
             let tx = AppEventSender::new(tx_raw);
             let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
             FeedbackNoteView::new(
-                FeedbackCategory::Other,
+                category,
                 snapshot,
                 None,
                 diagnostics.clone(),
@@ -797,11 +801,11 @@ mod tests {
             )
         };
 
-        let without_logs = make_view(false).prepare_feedback_attachments();
+        let without_logs = make_view(FeedbackCategory::Other, false).prepare_feedback_attachments();
         assert_eq!(without_logs.attachment_paths, Vec::<PathBuf>::new());
         assert!(without_logs._diagnostics_attachment.is_none());
 
-        let with_logs = make_view(true).prepare_feedback_attachments();
+        let with_logs = make_view(FeedbackCategory::Other, true).prepare_feedback_attachments();
         assert_eq!(with_logs.attachment_paths.len(), 1);
         assert_eq!(
             with_logs.attachment_paths[0].file_name(),
@@ -811,6 +815,14 @@ mod tests {
             with_logs._diagnostics_attachment.is_some(),
             "diagnostics attachment should stay alive until upload completes"
         );
+
+        let good_result_with_logs =
+            make_view(FeedbackCategory::GoodResult, true).prepare_feedback_attachments();
+        assert_eq!(
+            good_result_with_logs.attachment_paths,
+            Vec::<PathBuf>::new()
+        );
+        assert!(good_result_with_logs._diagnostics_attachment.is_none());
     }
 
     #[test]

@@ -1293,14 +1293,11 @@ impl ChatWidget {
 
     pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
         let diagnostics = codex_core::feedback_diagnostics::FeedbackDiagnostics::collect_from_env();
-        if !crate::bottom_pane::should_show_feedback_connectivity_details(category, &diagnostics) {
-            self.show_feedback_note(category, false, diagnostics);
-            return;
-        }
         let params = crate::bottom_pane::feedback_upload_consent_params(
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
+            crate::bottom_pane::should_show_feedback_connectivity_details(category, &diagnostics),
         );
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
