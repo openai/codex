@@ -6710,6 +6710,7 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::Once;
     use std::time::Duration as StdDuration;
 
     struct InstructionsTestCase {
@@ -8176,10 +8177,16 @@ mod tests {
         })
     }
 
-    fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
-        let provider = SdkTracerProvider::builder().build();
-        let tracer = provider.tracer("codex-core-tests");
-        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer))
+    fn init_test_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let provider = SdkTracerProvider::builder().build();
+            let tracer = provider.tracer("codex-core-tests");
+            let subscriber = tracing_subscriber::registry()
+                .with(tracing_opentelemetry::layer().with_tracer(tracer));
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("global tracing subscriber should only be installed once");
+        });
     }
 
     async fn build_test_config(codex_home: &Path) -> Config {
@@ -8522,8 +8529,7 @@ mod tests {
             session: Arc::new(session),
         };
 
-        let subscriber = test_tracing_subscriber();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        init_test_tracing();
 
         let request_parent = W3cTraceContext {
             traceparent: Some("00-00000000000000000000000000000011-0000000000000022-01".into()),
@@ -8557,8 +8563,7 @@ mod tests {
 
     #[test]
     fn submission_dispatch_span_prefers_submission_trace_context() {
-        let subscriber = test_tracing_subscriber();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        init_test_tracing();
 
         let ambient_parent = W3cTraceContext {
             traceparent: Some("00-00000000000000000000000000000033-0000000000000044-01".into()),
@@ -8621,8 +8626,7 @@ mod tests {
             }
         }
 
-        let subscriber = test_tracing_subscriber();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        init_test_tracing();
 
         let request_parent = W3cTraceContext {
             traceparent: Some("00-00000000000000000000000000000011-0000000000000022-01".into()),
