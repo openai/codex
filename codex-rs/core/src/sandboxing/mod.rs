@@ -326,12 +326,11 @@ impl SandboxManager {
             use_linux_sandbox_bwrap,
             windows_sandbox_level,
         } = request;
-        let policy = policy.clone();
         let effective_policy =
             if let Some(additional_permissions) = spec.additional_permissions.take() {
-                sandbox_policy_with_additional_permissions(&policy, &additional_permissions)?
+                sandbox_policy_with_additional_permissions(policy, &additional_permissions)?
             } else {
-                policy
+                policy.clone()
             };
         let mut env = spec.env;
         if !effective_policy.has_full_network_access() {
