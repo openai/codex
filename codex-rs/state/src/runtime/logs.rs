@@ -13,7 +13,7 @@ impl StateRuntime {
 
         let mut tx = self.logs_pool.begin().await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, process_uuid, module_path, file, line, estimated_bytes) ",
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, feedback_log_body, thread_id, process_uuid, module_path, file, line, estimated_bytes) ",
         );
         builder.push_values(entries, |mut row, entry| {
             let estimated_bytes = entry.message.as_ref().map_or(0, String::len) as i64
@@ -21,11 +21,13 @@ impl StateRuntime {
                 + entry.target.len() as i64
                 + entry.module_path.as_ref().map_or(0, String::len) as i64
                 + entry.file.as_ref().map_or(0, String::len) as i64;
+            let feedback_log_body = entry.feedback_log_body.as_ref().or(entry.message.as_ref());
             row.push_bind(entry.ts)
                 .push_bind(entry.ts_nanos)
                 .push_bind(&entry.level)
                 .push_bind(&entry.target)
                 .push_bind(&entry.message)
+                .push_bind(feedback_log_body)
                 .push_bind(&entry.thread_id)
                 .push_bind(&entry.process_uuid)
                 .push_bind(&entry.module_path)
@@ -311,9 +313,7 @@ WHERE id IN (
     /// Query per-thread feedback logs, capped to the per-thread SQLite retention budget.
     pub async fn query_feedback_logs(&self, thread_id: &str) -> anyhow::Result<Vec<u8>> {
         let max_bytes = LOG_PARTITION_SIZE_LIMIT_BYTES;
-        // TODO(ccunningham): Store rendered span/event fields in SQLite so this
-        // export can match feedback formatting beyond timestamp + level + message.
-        let lines = sqlx::query_scalar::<_, String>(
+        let rows = sqlx::query_as::<_, FeedbackLogRow>(&format!(
             r#"
 WITH latest_process AS (
     SELECT process_uuid
@@ -324,33 +324,13 @@ WITH latest_process AS (
 ),
 feedback_logs AS (
     SELECT
-        printf(
-            '%s.%06dZ %5s %s',
-            strftime('%Y-%m-%dT%H:%M:%S', ts, 'unixepoch'),
-            ts_nanos / 1000,
-            level,
-            message
-        ) || CASE
-            WHEN substr(message, -1, 1) = char(10) THEN ''
-            ELSE char(10)
-        END AS line,
-        length(CAST(
-            printf(
-                '%s.%06dZ %5s %s',
-                strftime('%Y-%m-%dT%H:%M:%S', ts, 'unixepoch'),
-                ts_nanos / 1000,
-                level,
-                message
-            ) || CASE
-                WHEN substr(message, -1, 1) = char(10) THEN ''
-                ELSE char(10)
-            END AS BLOB
-        )) AS line_bytes,
         ts,
         ts_nanos,
+        level,
+        feedback_log_body,
         id
     FROM logs
-    WHERE message IS NOT NULL AND (
+    WHERE feedback_log_body IS NOT NULL AND (
         thread_id = ?
         OR (
             thread_id IS NULL
@@ -358,29 +338,38 @@ feedback_logs AS (
         )
     )
 )
-SELECT line
+SELECT ts, ts_nanos, level, feedback_log_body
 FROM (
     SELECT
-        line,
         ts,
         ts_nanos,
+        level,
+        feedback_log_body,
         id,
-        SUM(line_bytes) OVER (
+        SUM(length(CAST(feedback_log_body AS BLOB)) + {FEEDBACK_LOG_FIXED_OVERHEAD_BYTES}) OVER (
             ORDER BY ts DESC, ts_nanos DESC, id DESC
         ) AS cumulative_bytes
     FROM feedback_logs
 )
 WHERE cumulative_bytes <= ?
 ORDER BY ts ASC, ts_nanos ASC, id ASC
-"#,
-        )
+"#
+        ))
         .bind(thread_id)
         .bind(thread_id)
         .bind(max_bytes)
         .fetch_all(self.logs_pool.as_ref())
         .await?;
 
-        Ok(lines.concat().into_bytes())
+        let mut bytes = Vec::new();
+        for row in rows {
+            bytes.extend_from_slice(
+                format_feedback_log_line(row.ts, row.ts_nanos, &row.level, &row.feedback_log_body)
+                    .as_bytes(),
+            );
+        }
+
+        Ok(bytes)
     }
 
     /// Return the max log id matching optional filters.
@@ -391,6 +380,37 @@ ORDER BY ts ASC, ts_nanos ASC, id ASC
         let row = builder.build().fetch_one(self.logs_pool.as_ref()).await?;
         let max_id: Option<i64> = row.try_get("max_id")?;
         Ok(max_id.unwrap_or(0))
+    }
+}
+
+// `tracing_subscriber`'s feedback formatter emits:
+// `{timestamp} {level} {feedback_log_body}\n`
+// where the timestamp is always `YYYY-MM-DDTHH:MM:SS.ffffffZ` (27 bytes).
+const FEEDBACK_LOG_FIXED_OVERHEAD_BYTES: i64 = 35;
+
+#[derive(sqlx::FromRow)]
+struct FeedbackLogRow {
+    ts: i64,
+    ts_nanos: i64,
+    level: String,
+    feedback_log_body: String,
+}
+
+fn format_feedback_log_line(
+    ts: i64,
+    ts_nanos: i64,
+    level: &str,
+    feedback_log_body: &str,
+) -> String {
+    let timestamp = format_feedback_timestamp(ts, ts_nanos);
+    format!("{timestamp} {level:>5} {feedback_log_body}\n")
+}
+
+fn format_feedback_timestamp(ts: i64, ts_nanos: i64) -> String {
+    let nanos = u32::try_from(ts_nanos).unwrap_or(0);
+    match DateTime::<Utc>::from_timestamp(ts, nanos) {
+        Some(dt) => dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        None => format!("{ts}.{ts_nanos:09}Z"),
     }
 }
 
@@ -462,6 +482,7 @@ fn push_like_filters<'a>(
 #[cfg(test)]
 mod tests {
     use super::StateRuntime;
+    use super::format_feedback_log_line;
     use super::test_support::unique_temp_dir;
     use crate::LogEntry;
     use crate::LogQuery;
@@ -539,6 +560,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("alpha".to_string()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: None,
                     file: Some("main.rs".to_string()),
@@ -551,6 +573,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("alphabet".to_string()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: None,
                     file: Some("main.rs".to_string()),
@@ -591,6 +614,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some(six_mebibytes.clone()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: Some("main.rs".to_string()),
@@ -603,6 +627,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some(six_mebibytes.clone()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: Some("main.rs".to_string()),
@@ -642,6 +667,7 @@ mod tests {
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
                 message: Some(eleven_mebibytes),
+                feedback_log_body: None,
                 thread_id: Some("thread-oversized".to_string()),
                 process_uuid: Some("proc-1".to_string()),
                 file: Some("main.rs".to_string()),
@@ -680,6 +706,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some(six_mebibytes.clone()),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: Some("proc-1".to_string()),
                     file: Some("main.rs".to_string()),
@@ -692,6 +719,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some(six_mebibytes.clone()),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: Some("proc-1".to_string()),
                     file: Some("main.rs".to_string()),
@@ -704,6 +732,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some(six_mebibytes),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: Some("main.rs".to_string()),
@@ -745,6 +774,7 @@ mod tests {
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
                 message: Some(eleven_mebibytes),
+                feedback_log_body: None,
                 thread_id: None,
                 process_uuid: Some("proc-oversized".to_string()),
                 file: Some("main.rs".to_string()),
@@ -783,6 +813,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some(six_mebibytes.clone()),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: None,
                     file: Some("main.rs".to_string()),
@@ -795,6 +826,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some(six_mebibytes),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: None,
                     file: Some("main.rs".to_string()),
@@ -807,6 +839,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("small".to_string()),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: Some("proc-1".to_string()),
                     file: Some("main.rs".to_string()),
@@ -847,6 +880,7 @@ mod tests {
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
                 message: Some(eleven_mebibytes),
+                feedback_log_body: None,
                 thread_id: None,
                 process_uuid: None,
                 file: Some("main.rs".to_string()),
@@ -1018,6 +1052,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("alpha".to_string()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: None,
@@ -1030,6 +1065,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("bravo".to_string()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: None,
@@ -1042,6 +1078,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("charlie".to_string()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: None,
@@ -1059,7 +1096,12 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
-            "1970-01-01T00:00:01.000000Z  INFO alpha\n1970-01-01T00:00:02.000000Z  INFO bravo\n1970-01-01T00:00:03.000000Z  INFO charlie\n"
+            [
+                format_feedback_log_line(1, 0, "INFO", "alpha"),
+                format_feedback_log_line(2, 0, "INFO", "bravo"),
+                format_feedback_log_line(3, 0, "INFO", "charlie"),
+            ]
+            .concat()
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -1081,6 +1123,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("small".to_string()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-oversized".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: None,
@@ -1093,6 +1136,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some(eleven_mebibytes),
+                    feedback_log_body: None,
                     thread_id: Some("thread-oversized".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: None,
@@ -1128,6 +1172,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("threadless-before".to_string()),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: Some("proc-1".to_string()),
                     file: None,
@@ -1140,6 +1185,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("thread-scoped".to_string()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: None,
@@ -1152,6 +1198,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("threadless-after".to_string()),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: Some("proc-1".to_string()),
                     file: None,
@@ -1164,6 +1211,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("other-process-threadless".to_string()),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: Some("proc-2".to_string()),
                     file: None,
@@ -1181,7 +1229,12 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
-            "1970-01-01T00:00:01.000000Z  INFO threadless-before\n1970-01-01T00:00:02.000000Z  INFO thread-scoped\n1970-01-01T00:00:03.000000Z  INFO threadless-after\n"
+            [
+                format_feedback_log_line(1, 0, "INFO", "threadless-before"),
+                format_feedback_log_line(2, 0, "INFO", "thread-scoped"),
+                format_feedback_log_line(3, 0, "INFO", "threadless-after"),
+            ]
+            .concat()
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -1202,6 +1255,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("old-process-threadless".to_string()),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: Some("proc-old".to_string()),
                     file: None,
@@ -1214,6 +1268,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("old-process-thread".to_string()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-old".to_string()),
                     file: None,
@@ -1226,6 +1281,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("new-process-thread".to_string()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-new".to_string()),
                     file: None,
@@ -1238,6 +1294,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("new-process-threadless".to_string()),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: Some("proc-new".to_string()),
                     file: None,
@@ -1255,7 +1312,12 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
-            "1970-01-01T00:00:02.000000Z  INFO old-process-thread\n1970-01-01T00:00:03.000000Z  INFO new-process-thread\n1970-01-01T00:00:04.000000Z  INFO new-process-threadless\n"
+            [
+                format_feedback_log_line(2, 0, "INFO", "old-process-thread"),
+                format_feedback_log_line(3, 0, "INFO", "new-process-thread"),
+                format_feedback_log_line(4, 0, "INFO", "new-process-threadless"),
+            ]
+            .concat()
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -1285,6 +1347,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some(one_mebibyte.clone()),
+                    feedback_log_body: None,
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: None,
@@ -1297,6 +1360,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some(five_mebibytes),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: Some("proc-1".to_string()),
                     file: None,
@@ -1309,6 +1373,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some(four_and_half_mebibytes),
+                    feedback_log_body: None,
                     thread_id: None,
                     process_uuid: Some("proc-1".to_string()),
                     file: None,
