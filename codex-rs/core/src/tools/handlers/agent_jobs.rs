@@ -755,23 +755,7 @@ async fn run_agent_job_loop(
         let message = format!("agent job completed with {failed_items} failed items");
         let _ = session.notify_background_event(&turn, message).await;
     }
-    if !db.mark_agent_job_completed(job_id.as_str()).await? {
-        let job = db
-            .get_agent_job(job_id.as_str())
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("agent job {job_id} was not found after completion"))?;
-        if !matches!(
-            job.status,
-            codex_state::AgentJobStatus::Cancelled
-                | codex_state::AgentJobStatus::Failed
-                | codex_state::AgentJobStatus::Completed
-        ) {
-            return Err(anyhow::anyhow!(
-                "agent job {job_id} could not transition to completed from {:?}",
-                job.status
-            ));
-        }
-    }
+    db.mark_agent_job_completed(job_id.as_str()).await?;
     let progress = db.get_agent_job_progress(job_id.as_str()).await?;
     progress_emitter
         .maybe_emit(&session, &turn, job_id.as_str(), &progress, true)
