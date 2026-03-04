@@ -43,6 +43,10 @@ impl SessionTask for ReviewTask {
         TaskKind::Review
     }
 
+    fn span_name(&self) -> &'static str {
+        "session_task.review"
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,

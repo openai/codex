@@ -4066,13 +4066,8 @@ mod handlers {
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
-            sess.spawn_task(
-                Arc::clone(&current_context),
-                items,
-                regular_task,
-                Some("turn/start"),
-            )
-            .await;
+            sess.spawn_task(Arc::clone(&current_context), items, regular_task)
+                .await;
         }
     }
 
@@ -4099,7 +4094,6 @@ mod handlers {
             Arc::clone(&turn_context),
             Vec::new(),
             UserShellCommandTask::new(command),
-            None,
         )
         .await;
     }
@@ -4426,7 +4420,7 @@ mod handlers {
 
     pub async fn undo(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        sess.spawn_task(turn_context, Vec::new(), UndoTask::new(), None)
+        sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
             .await;
     }
 
@@ -4441,7 +4435,6 @@ mod handlers {
                 text_elements: Vec::new(),
             }],
             CompactTask,
-            None,
         )
         .await;
     }
@@ -4832,8 +4825,7 @@ async fn spawn_review_thread(
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
     // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
     // (TurnStarted + TurnComplete) for consistency with other standalone tasks.
-    sess.spawn_task(tc.clone(), input, ReviewTask::new(), Some("review/start"))
-        .await;
+    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
     let review_request = ReviewRequest {
@@ -8609,6 +8601,10 @@ mod tests {
                 TaskKind::Regular
             }
 
+            fn span_name(&self) -> &'static str {
+                "session_task.trace_capture"
+            }
+
             async fn run(
                 self: Arc<Self>,
                 _session: Arc<SessionTaskContext>,
@@ -8664,7 +8660,6 @@ mod tests {
                 TraceCaptureTask {
                     captured_trace: Arc::clone(&captured_trace),
                 },
-                Some("turn/start"),
             )
             .await;
         }
@@ -8962,7 +8957,6 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: true,
             },
-            None,
         )
         .await;
 
@@ -9502,6 +9496,10 @@ mod tests {
             self.kind
         }
 
+        fn span_name(&self) -> &'static str {
+            "session_task.never_ending"
+        }
+
         async fn run(
             self: Arc<Self>,
             _session: Arc<SessionTaskContext>,
@@ -9534,7 +9532,6 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: false,
             },
-            None,
         )
         .await;
 
@@ -9568,7 +9565,6 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: true,
             },
-            None,
         )
         .await;
 
@@ -9602,7 +9598,6 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: false,
             },
-            None,
         )
         .await;
 
@@ -9730,7 +9725,6 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: false,
             },
-            None,
         )
         .await;
 
@@ -9768,7 +9762,6 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: false,
             },
-            None,
         )
         .await;
 
@@ -9792,7 +9785,7 @@ mod tests {
             text: "start review".to_string(),
             text_elements: Vec::new(),
         }];
-        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new(), None)
+        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
             .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
