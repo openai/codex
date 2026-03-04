@@ -242,6 +242,7 @@ impl Session {
         }
         // Emit token usage metrics.
         if let Some(token_usage_at_turn_start) = token_usage_at_turn_start {
+            // TODO(jif): drop this
             let tmp_mem = (
                 "tmp_mem_enabled",
                 if self.enabled(Feature::MemoryTool) {
