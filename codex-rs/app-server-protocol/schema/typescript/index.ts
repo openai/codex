@@ -115,6 +115,7 @@ export type { ModelRerouteReason } from "./ModelRerouteReason";
 export type { NetworkAccess } from "./NetworkAccess";
 export type { NetworkApprovalContext } from "./NetworkApprovalContext";
 export type { NetworkApprovalProtocol } from "./NetworkApprovalProtocol";
+export type { NetworkPermissions } from "./NetworkPermissions";
 export type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
 export type { NetworkPolicyRuleAction } from "./NetworkPolicyRuleAction";
 export type { ParsedCommand } from "./ParsedCommand";

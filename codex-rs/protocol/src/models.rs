@@ -84,6 +84,17 @@ impl MacOsPermissions {
     }
 }
 
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct NetworkPermissions {
+    pub enabled: Option<bool>,
+}
+
+impl NetworkPermissions {
+    pub fn is_empty(&self) -> bool {
+        self.enabled.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(untagged)]
 pub enum MacOsPreferencesValue {
@@ -126,14 +137,17 @@ pub struct MacOsSeatbeltProfileExtensions {
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct PermissionProfile {
-    pub network: Option<bool>,
+    pub network: Option<NetworkPermissions>,
     pub file_system: Option<FileSystemPermissions>,
     pub macos: Option<MacOsPermissions>,
 }
 
 impl PermissionProfile {
     pub fn is_empty(&self) -> bool {
-        self.network.is_none()
+        self.network
+            .as_ref()
+            .map(NetworkPermissions::is_empty)
+            .unwrap_or(true)
             && self
                 .file_system
                 .as_ref()

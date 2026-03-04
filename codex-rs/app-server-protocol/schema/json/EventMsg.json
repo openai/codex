@@ -3888,6 +3888,17 @@
       ],
       "type": "string"
     },
+    "NetworkPermissions": {
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "NetworkPolicyAmendment": {
       "properties": {
         "action": {
@@ -4052,9 +4063,13 @@
           ]
         },
         "network": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },

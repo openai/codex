@@ -44,7 +44,7 @@ pub(crate) fn compile_permission_profile(
         file_system,
         macos,
     } = permissions?;
-    let network_access = network.unwrap_or_default();
+    let network_access = network.and_then(|value| value.enabled).unwrap_or_default();
     let file_system = file_system.unwrap_or_default();
     let fs_read = normalize_permission_paths(
         file_system.read.as_deref().unwrap_or_default(),
@@ -232,6 +232,7 @@ mod tests {
     use codex_protocol::models::MacOsPermissions;
     #[cfg(target_os = "macos")]
     use codex_protocol::models::MacOsPreferencesValue;
+    use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -251,7 +252,9 @@ mod tests {
         fs::create_dir_all(&read_dir).expect("read dir");
 
         let profile = compile_permission_profile(Some(PermissionProfile {
-            network: Some(true),
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
             file_system: Some(FileSystemPermissions {
                 read: Some(vec![
                     absolute_path(&skill_dir.join("data")),
@@ -318,7 +321,9 @@ mod tests {
         fs::create_dir_all(&skill_dir).expect("skill dir");
 
         let profile = compile_permission_profile(Some(PermissionProfile {
-            network: Some(true),
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
             ..Default::default()
         }))
         .expect("profile");
@@ -353,7 +358,9 @@ mod tests {
         fs::create_dir_all(&read_dir).expect("read dir");
 
         let profile = compile_permission_profile(Some(PermissionProfile {
-            network: Some(true),
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
             file_system: Some(FileSystemPermissions {
                 read: Some(vec![absolute_path(&skill_dir.join("data"))]),
                 write: Some(Vec::new()),

@@ -193,7 +193,12 @@ fn merge_network_access(
     base_network_access: bool,
     additional_permissions: &PermissionProfile,
 ) -> bool {
-    base_network_access || matches!(additional_permissions.network, Some(true))
+    base_network_access
+        || additional_permissions
+            .network
+            .as_ref()
+            .and_then(|network| network.enabled)
+            .unwrap_or(false)
 }
 
 fn sandbox_policy_with_additional_permissions(
@@ -431,6 +436,7 @@ mod tests {
     use crate::tools::sandboxing::SandboxablePreference;
     use codex_protocol::config_types::WindowsSandboxLevel;
     use codex_protocol::models::FileSystemPermissions;
+    use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use dunce::canonicalize;
@@ -470,7 +476,9 @@ mod tests {
         )
         .expect("absolute temp dir");
         let permissions = normalize_additional_permissions(PermissionProfile {
-            network: Some(true),
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
             file_system: Some(FileSystemPermissions {
                 read: Some(vec![path.clone()]),
                 write: Some(vec![path.clone()]),
@@ -479,7 +487,12 @@ mod tests {
         })
         .expect("permissions");
 
-        assert_eq!(permissions.network, Some(true));
+        assert_eq!(
+            permissions.network,
+            Some(NetworkPermissions {
+                enabled: Some(true),
+            })
+        );
         assert_eq!(
             permissions.file_system,
             Some(FileSystemPermissions {
@@ -505,7 +518,9 @@ mod tests {
                 network_access: false,
             },
             &PermissionProfile {
-                network: Some(true),
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
                 file_system: Some(FileSystemPermissions {
                     read: Some(vec![path.clone()]),
                     write: Some(Vec::new()),
