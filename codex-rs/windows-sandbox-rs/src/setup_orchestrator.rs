@@ -679,7 +679,9 @@ mod tests {
         let policy = SandboxPolicy::new_read_only_policy();
 
         let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        let expected =
+            dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
-        assert!(roots.contains(&helper_bin_dir(&codex_home)));
+        assert!(roots.contains(&expected));
     }
 }

@@ -294,12 +294,13 @@ mod tests {
         let source = tmp.path().join("source.exe");
         let destination = tmp.path().join("destination.exe");
 
-        fs::write(&source, b"same-size").expect("write source");
         fs::write(&destination, b"same-size").expect("write destination");
-        assert!(destination_is_fresh(&source, &destination).expect("fresh metadata"));
-
-        fs::write(&source, b"new-bytes").expect("rewrite source");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        fs::write(&source, b"same-size").expect("write source");
         assert!(!destination_is_fresh(&source, &destination).expect("stale metadata"));
+
+        fs::write(&destination, b"same-size").expect("rewrite destination");
+        assert!(destination_is_fresh(&source, &destination).expect("fresh metadata"));
     }
 
     #[test]
