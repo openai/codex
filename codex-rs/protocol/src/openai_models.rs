@@ -706,6 +706,7 @@ mod tests {
                 "limit": 10000
             },
             "supports_parallel_tool_calls": false,
+            "supports_image_detail_original": false,
             "context_window": null,
             "auto_compact_token_limit": null,
             "effective_context_window_percent": 95,
