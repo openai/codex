@@ -396,6 +396,48 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
 }
 
 #[test]
+fn for_prompt_keeps_image_generation_calls() {
+    let history = create_history_with_items(vec![
+        ResponseItem::ImageGenerationCall {
+            id: Some("ig_123".to_string()),
+            status: Some("generating".to_string()),
+            revised_prompt: Some("lobster".to_string()),
+            result: Some("Zm9v".to_string()),
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hi".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+    ]);
+
+    assert_eq!(
+        history.for_prompt(&default_input_modalities()),
+        vec![
+            ResponseItem::ImageGenerationCall {
+                id: Some("ig_123".to_string()),
+                status: Some("generating".to_string()),
+                revised_prompt: Some("lobster".to_string()),
+                result: Some("Zm9v".to_string()),
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hi".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            }
+        ]
+    );
+}
+
+#[test]
 fn get_history_for_prompt_drops_ghost_commits() {
     let items = vec![ResponseItem::GhostSnapshot {
         ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),

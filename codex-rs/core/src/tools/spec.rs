@@ -35,6 +35,17 @@ use std::collections::HashMap;
 
 const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
+const IMAGE_GENERATION_SUPPORTED_MODELS: [&str; 9] = [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "o3",
+    "gpt-5",
+    "gpt-5-nano",
+    "gpt-5.2",
+];
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
@@ -49,6 +60,8 @@ pub(crate) struct ToolsConfig {
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
+    pub image_generation_enabled: bool,
+    pub image_generation_supported: bool,
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub request_permission_enabled: bool,
@@ -135,6 +148,8 @@ impl ToolsConfig {
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
+            image_generation_enabled: false,
+            image_generation_supported: supports_image_generation(model_info),
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             request_permission_enabled,
@@ -158,6 +173,15 @@ impl ToolsConfig {
         self.allow_login_shell = allow_login_shell;
         self
     }
+
+    pub fn with_image_generation_enabled(mut self, image_generation_enabled: bool) -> Self {
+        self.image_generation_enabled = image_generation_enabled;
+        self
+    }
+}
+
+fn supports_image_generation(model_info: &ModelInfo) -> bool {
+    IMAGE_GENERATION_SUPPORTED_MODELS.contains(&model_info.slug.as_str())
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -1917,6 +1941,10 @@ pub(crate) fn build_specs(
         Some(WebSearchMode::Disabled) | None => {}
     }
 
+    if config.image_generation_enabled && config.image_generation_supported {
+        builder.push_spec(ToolSpec::ImageGeneration {});
+    }
+
     builder.push_spec_with_parallel_support(create_view_image_tool(), true);
     builder.register_handler("view_image", view_image_handler);
 
@@ -2047,6 +2075,7 @@ mod tests {
         match tool {
             ToolSpec::Function(ResponsesApiTool { name, .. }) => name,
             ToolSpec::LocalShell {} => "local_shell",
+            ToolSpec::ImageGeneration {} => "image_generation",
             ToolSpec::WebSearch { .. } => "web_search",
             ToolSpec::Freeform(FreeformTool { name, .. }) => name,
         }
@@ -2125,7 +2154,10 @@ mod tests {
             ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
                 strip_descriptions_schema(parameters);
             }
-            ToolSpec::Freeform(_) | ToolSpec::LocalShell {} | ToolSpec::WebSearch { .. } => {}
+            ToolSpec::Freeform(_)
+            | ToolSpec::LocalShell {}
+            | ToolSpec::ImageGeneration {}
+            | ToolSpec::WebSearch { .. } => {}
         }
     }
 
@@ -2372,6 +2404,55 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
+    }
+
+    #[test]
+    fn image_generation_tools_require_feature_and_supported_model() {
+        let config = test_config();
+        let supported_model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5.2", &config);
+        let unsupported_model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5.2-codex", &config);
+        let features = Features::with_defaults();
+
+        let default_tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &supported_model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (default_tools, _) = build_specs(&default_tools_config, None, None, &[]).build();
+        assert!(
+            !default_tools
+                .iter()
+                .any(|tool| tool.spec.name() == "image_generation"),
+            "image_generation should be disabled by default"
+        );
+
+        let supported_tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &supported_model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        })
+        .with_image_generation_enabled(true);
+        let (supported_tools, _) = build_specs(&supported_tools_config, None, None, &[]).build();
+        assert_contains_tool_names(&supported_tools, &["image_generation"]);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &unsupported_model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        })
+        .with_image_generation_enabled(true);
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.spec.name() == "image_generation"),
+            "image_generation should be disabled for unsupported models"
+        );
     }
 
     #[test]

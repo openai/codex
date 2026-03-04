@@ -131,6 +131,8 @@ pub enum Feature {
     Apps,
     /// Enable plugins.
     Plugins,
+    /// Allow the model to invoke the built-in image generation tool.
+    ImageGeneration,
     /// Route apps MCP calls through the configured gateway.
     AppsMcpGateway,
     /// Allow prompting and installing missing MCP dependencies.
@@ -647,6 +649,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Plugins,
         key: "plugins",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ImageGeneration,
+        key: "image_generation",
+        stage: Stage::Experimental {
+            name: "Image generation",
+            menu_description: "Enable the built-in image generation tool for supported Responses API models.",
+            announcement: "NEW: Image generation is available as an experimental built-in tool. Enable it in /experimental to receive image-generation responses from supported models.",
+        },
         default_enabled: false,
     },
     FeatureSpec {
