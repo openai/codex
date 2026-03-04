@@ -77,7 +77,8 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

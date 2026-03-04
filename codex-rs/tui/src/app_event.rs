@@ -25,9 +25,32 @@ use crate::history_cell::HistoryCell;
 use codex_core::features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RealtimeAudioDeviceKind {
+    Microphone,
+    Speaker,
+}
+
+impl RealtimeAudioDeviceKind {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::Microphone => "Microphone",
+            Self::Speaker => "Speaker",
+        }
+    }
+
+    pub(crate) fn noun(self) -> &'static str {
+        match self {
+            Self::Microphone => "microphone",
+            Self::Speaker => "speaker",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -51,8 +74,17 @@ pub(crate) enum AppEvent {
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
 
-    /// Recompute the list of inactive threads that still need approval.
-    RefreshPendingThreadApprovals,
+    /// Submit an op to the specified thread, regardless of current focus.
+    SubmitThreadOp {
+        thread_id: ThreadId,
+        op: codex_protocol::protocol::Op,
+    },
+
+    /// Forward an event from a non-primary thread into the app-level thread router.
+    ThreadEvent {
+        thread_id: ThreadId,
+        event: Event,
+    },
 
     /// Start a new session.
     NewSession,
@@ -164,6 +196,31 @@ pub(crate) enum AppEvent {
     /// Persist the selected personality to the appropriate config.
     PersistPersonalitySelection {
         personality: Personality,
+    },
+
+    /// Persist the selected service tier to the appropriate config.
+    PersistServiceTierSelection {
+        service_tier: Option<ServiceTier>,
+    },
+
+    /// Open the device picker for a realtime microphone or speaker.
+    OpenRealtimeAudioDeviceSelection {
+        kind: RealtimeAudioDeviceKind,
+    },
+
+    /// Persist the selected realtime microphone or speaker to top-level config.
+    #[cfg_attr(
+        any(target_os = "linux", not(feature = "voice-input")),
+        allow(dead_code)
+    )]
+    PersistRealtimeAudioDeviceSelection {
+        kind: RealtimeAudioDeviceKind,
+        name: Option<String>,
+    },
+
+    /// Restart the selected realtime microphone or speaker locally.
+    RestartRealtimeAudioDevice {
+        kind: RealtimeAudioDeviceKind,
     },
 
     /// Open the reasoning selection popup after picking a model.

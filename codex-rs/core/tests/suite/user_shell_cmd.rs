@@ -1,6 +1,5 @@
 use anyhow::Context;
 use codex_core::features::Feature;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandEndEvent;
@@ -178,7 +177,8 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: fixture.session_configured.model.clone(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -250,7 +250,10 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     let server = responses::start_mock_server().await;
     // Disable it to ease command matching.
     let mut builder = core_test_support::test_codex::test_codex().with_config(move |config| {
-        config.features.disable(Feature::ShellSnapshot);
+        config
+            .features
+            .disable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 

@@ -331,6 +331,7 @@ impl NetworkApprovalService {
             protocol,
         };
 
+        let available_decisions = None;
         let approval_decision = session
             .request_command_approval(
                 turn_context.as_ref(),
@@ -342,6 +343,7 @@ impl NetworkApprovalService {
                 Some(network_approval_context.clone()),
                 None,
                 None,
+                available_decisions,
             )
             .await;
 

@@ -605,7 +605,9 @@ async fn review_input_isolated_from_parent_history() {
 
     let env_text = input
         .iter()
-        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .filter_map(|msg| msg.get("content").and_then(|content| content.as_array()))
+        .flat_map(|content| content.iter())
+        .filter_map(|entry| entry.get("text").and_then(|text| text.as_str()))
         .find(|text| text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG))
         .expect("env text");
     assert!(
@@ -615,7 +617,9 @@ async fn review_input_isolated_from_parent_history() {
 
     let review_text = input
         .iter()
-        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .filter_map(|msg| msg.get("content").and_then(|content| content.as_array()))
+        .flat_map(|content| content.iter())
+        .filter_map(|entry| entry.get("text").and_then(|text| text.as_str()))
         .find(|text| *text == review_prompt)
         .expect("review prompt text");
     assert_eq!(
@@ -826,6 +830,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

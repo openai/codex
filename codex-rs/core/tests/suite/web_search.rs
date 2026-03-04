@@ -74,7 +74,10 @@ async fn web_search_mode_takes_precedence_over_legacy_flags() {
     let mut builder = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
-            config.features.enable(Feature::WebSearchRequest);
+            config
+                .features
+                .enable(Feature::WebSearchRequest)
+                .expect("test config should allow feature update");
             config
                 .web_search_mode
                 .set(WebSearchMode::Cached)
@@ -119,8 +122,14 @@ async fn web_search_mode_defaults_to_cached_when_features_disabled() {
                 .web_search_mode
                 .set(WebSearchMode::Cached)
                 .expect("test web_search_mode should satisfy constraints");
-            config.features.disable(Feature::WebSearchCached);
-            config.features.disable(Feature::WebSearchRequest);
+            config
+                .features
+                .disable(Feature::WebSearchCached)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .disable(Feature::WebSearchRequest)
+                .expect("test config should allow feature update");
         });
     let test = builder
         .build(&server)
@@ -170,8 +179,14 @@ async fn web_search_mode_updates_between_turns_with_sandbox_policy() {
                 .web_search_mode
                 .set(WebSearchMode::Cached)
                 .expect("test web_search_mode should satisfy constraints");
-            config.features.disable(Feature::WebSearchCached);
-            config.features.disable(Feature::WebSearchRequest);
+            config
+                .features
+                .disable(Feature::WebSearchCached)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .disable(Feature::WebSearchRequest)
+                .expect("test config should allow feature update");
         });
     let test = builder
         .build(&server)

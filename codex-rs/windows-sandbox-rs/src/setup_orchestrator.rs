@@ -11,6 +11,7 @@ use std::process::Stdio;
 
 use crate::allow::compute_allow_paths;
 use crate::allow::AllowDenyPaths;
+use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
@@ -38,9 +39,25 @@ pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
+const USERPROFILE_READ_ROOT_EXCLUSIONS: &[&str] = &[
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".docker",
+    ".config",
+    ".npm",
+    ".pki",
+    ".terraform.d",
+];
 
 pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
+}
+
+pub fn sandbox_bin_dir(codex_home: &Path) -> PathBuf {
+    codex_home.join(".sandbox-bin")
 }
 
 pub fn sandbox_secrets_dir(codex_home: &Path) -> PathBuf {
@@ -81,7 +98,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
     codex_home: &Path,
     extra_read_roots: Vec<PathBuf>,
 ) -> Result<()> {
-    let mut read_roots = gather_read_roots(command_cwd, policy);
+    let mut read_roots = gather_read_roots(command_cwd, policy, codex_home);
     read_roots.extend(extra_read_roots);
     run_setup_refresh_inner(
         policy,
@@ -245,13 +262,39 @@ fn canonical_existing(paths: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-pub(crate) fn gather_read_roots(command_cwd: &Path, policy: &SandboxPolicy) -> Vec<PathBuf> {
+fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
+    let entries = match std::fs::read_dir(user_profile) {
+        Ok(entries) => entries,
+        Err(_) => return vec![user_profile.to_path_buf()],
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| (entry.file_name(), entry.path()))
+        .filter(|(name, _)| {
+            let name = name.to_string_lossy();
+            !USERPROFILE_READ_ROOT_EXCLUSIONS
+                .iter()
+                .any(|excluded| name.eq_ignore_ascii_case(excluded))
+        })
+        .map(|(_, path)| path)
+        .collect()
+}
+
+pub(crate) fn gather_read_roots(
+    command_cwd: &Path,
+    policy: &SandboxPolicy,
+    codex_home: &Path,
+) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             roots.push(dir.to_path_buf());
         }
     }
+    let helper_dir = helper_bin_dir(codex_home);
+    let _ = std::fs::create_dir_all(&helper_dir);
+    roots.push(helper_dir);
     for p in [
         PathBuf::from(r"C:\Windows"),
         PathBuf::from(r"C:\Program Files"),
@@ -261,7 +304,7 @@ pub(crate) fn gather_read_roots(command_cwd: &Path, policy: &SandboxPolicy) -> V
         roots.push(p);
     }
     if let Ok(up) = std::env::var("USERPROFILE") {
-        roots.push(PathBuf::from(up));
+        roots.extend(profile_read_roots(Path::new(&up)));
     }
     roots.push(command_cwd.to_path_buf());
     if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
@@ -552,7 +595,7 @@ fn build_payload_roots(
     let mut read_roots = if let Some(roots) = read_roots_override {
         canonical_existing(&roots)
     } else {
-        gather_read_roots(command_cwd, policy)
+        gather_read_roots(command_cwd, policy, codex_home)
     };
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
@@ -560,11 +603,14 @@ fn build_payload_roots(
 }
 
 fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
-    // Never grant capability write access to CODEX_HOME or anything under CODEX_HOME/.sandbox.
-    // These locations contain sandbox control/state and must remain tamper-resistant.
+    // Never grant capability write access to CODEX_HOME or anything under CODEX_HOME/.sandbox,
+    // CODEX_HOME/.sandbox-bin, or CODEX_HOME/.sandbox-secrets. These locations contain sandbox
+    // control/state and helper binaries and must remain tamper-resistant.
     let codex_home_key = canonical_path_key(codex_home);
     let sbx_dir_key = canonical_path_key(&sandbox_dir(codex_home));
     let sbx_dir_prefix = format!("{}/", sbx_dir_key.trim_end_matches('/'));
+    let sbx_bin_dir_key = canonical_path_key(&sandbox_bin_dir(codex_home));
+    let sbx_bin_dir_prefix = format!("{}/", sbx_bin_dir_key.trim_end_matches('/'));
     let secrets_dir_key = canonical_path_key(&sandbox_secrets_dir(codex_home));
     let secrets_dir_prefix = format!("{}/", secrets_dir_key.trim_end_matches('/'));
 
@@ -573,8 +619,69 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
         key != codex_home_key
             && key != sbx_dir_key
             && !key.starts_with(&sbx_dir_prefix)
+            && key != sbx_bin_dir_key
+            && !key.starts_with(&sbx_bin_dir_prefix)
             && key != secrets_dir_key
             && !key.starts_with(&secrets_dir_prefix)
     });
     roots
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gather_read_roots;
+    use super::profile_read_roots;
+    use crate::helper_materialization::helper_bin_dir;
+    use crate::policy::SandboxPolicy;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashSet;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    #[test]
+    fn profile_read_roots_excludes_configured_top_level_entries() {
+        let tmp = TempDir::new().expect("tempdir");
+        let user_profile = tmp.path();
+        let allowed_dir = user_profile.join("Documents");
+        let allowed_file = user_profile.join(".gitconfig");
+        let excluded_dir = user_profile.join(".ssh");
+        let excluded_case_variant = user_profile.join(".AWS");
+
+        fs::create_dir_all(&allowed_dir).expect("create allowed dir");
+        fs::write(&allowed_file, "safe").expect("create allowed file");
+        fs::create_dir_all(&excluded_dir).expect("create excluded dir");
+        fs::create_dir_all(&excluded_case_variant).expect("create excluded case variant");
+
+        let roots = profile_read_roots(user_profile);
+        let actual: HashSet<PathBuf> = roots.into_iter().collect();
+        let expected: HashSet<PathBuf> = [allowed_dir, allowed_file].into_iter().collect();
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn profile_read_roots_falls_back_to_profile_root_when_enumeration_fails() {
+        let tmp = TempDir::new().expect("tempdir");
+        let missing_profile = tmp.path().join("missing-user-profile");
+
+        let roots = profile_read_roots(&missing_profile);
+
+        assert_eq!(vec![missing_profile], roots);
+    }
+
+    #[test]
+    fn gather_read_roots_includes_helper_bin_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        let policy = SandboxPolicy::new_read_only_policy();
+
+        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        let expected =
+            dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
+
+        assert!(roots.contains(&expected));
+    }
 }

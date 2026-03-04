@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/pending_input_preview.rs
+assertion_line: 237
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 48, height: 1 },
+    content: [
+        "  ! pending steer: Please continue.             ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 35, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

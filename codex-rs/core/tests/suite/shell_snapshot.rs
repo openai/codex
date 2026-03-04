@@ -1,6 +1,5 @@
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
@@ -120,8 +119,14 @@ async fn run_snapshot_command_with_options(
     } = options;
     let builder = test_codex().with_config(move |config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
-        config.features.enable(Feature::ShellSnapshot);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
         config.permissions.shell_environment_policy.r#set = shell_environment_set;
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
@@ -162,7 +167,8 @@ async fn run_snapshot_command_with_options(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -207,7 +213,10 @@ async fn run_shell_command_snapshot_with_options(
         shell_environment_set,
     } = options;
     let builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::ShellSnapshot);
+        config
+            .features
+            .enable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
         config.permissions.shell_environment_policy.r#set = shell_environment_set;
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
@@ -248,7 +257,8 @@ async fn run_shell_command_snapshot_with_options(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -317,7 +327,8 @@ async fn run_tool_turn_on_harness(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -397,7 +408,10 @@ async fn linux_shell_command_uses_shell_snapshot() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_command_snapshot_preserves_shell_environment_policy_set() -> Result<()> {
     let builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::ShellSnapshot);
+        config
+            .features
+            .enable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
         config.permissions.shell_environment_policy.r#set = policy_set_path_for_test();
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
@@ -444,8 +458,14 @@ async fn shell_command_snapshot_preserves_shell_environment_policy_set() -> Resu
 async fn linux_unified_exec_snapshot_preserves_shell_environment_policy_set() -> Result<()> {
     let builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
-        config.features.enable(Feature::ShellSnapshot);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
         config.permissions.shell_environment_policy.r#set = policy_set_path_for_test();
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
@@ -491,7 +511,10 @@ async fn linux_unified_exec_snapshot_preserves_shell_environment_policy_set() ->
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::ShellSnapshot);
+        config
+            .features
+            .enable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
         config.include_apply_patch_tool = true;
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
@@ -535,7 +558,8 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -559,7 +583,10 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_snapshot_deleted_after_shutdown_with_skills() -> Result<()> {
     let builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::ShellSnapshot);
+        config
+            .features
+            .enable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
     let home = harness.test().home.clone();

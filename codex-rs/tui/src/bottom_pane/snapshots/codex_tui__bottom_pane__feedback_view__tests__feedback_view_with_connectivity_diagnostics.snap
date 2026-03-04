@@ -1,0 +1,17 @@
+---
+source: tui/src/bottom_pane/feedback_view.rs
+assertion_line: 749
+expression: rendered
+---
+▌ Tell us more (bug)
+▌
+▌ Connectivity diagnostics
+▌   - Proxy environment variables are set and may affect
+▌     connectivity.
+▌     - HTTP_PROXY = http://proxy.example.com:8080
+▌   - OPENAI_BASE_URL is set and may affect connectivity.
+▌     - OPENAI_BASE_URL = https://example.com/v1
+▌
+▌ (optional) Write a short description to help us further
+
+Press enter to confirm or esc to go back

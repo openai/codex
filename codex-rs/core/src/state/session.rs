@@ -1,10 +1,13 @@
 //! Session-wide mutable state.
 
+use codex_artifact_presentation::PresentationArtifactManager;
+use codex_artifact_spreadsheet::SpreadsheetArtifactManager;
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use tokio::task::JoinHandle;
 
+use crate::codex::PreviousTurnSettings;
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
 use crate::error::Result as CodexResult;
@@ -15,6 +18,12 @@ use crate::tasks::RegularTask;
 use crate::truncate::TruncationPolicy;
 use codex_protocol::protocol::TurnContextItem;
 
+#[derive(Default)]
+pub(crate) struct SessionArtifacts {
+    pub(crate) presentation: PresentationArtifactManager,
+    pub(crate) spreadsheet: SpreadsheetArtifactManager,
+}
+
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
@@ -23,14 +32,15 @@ pub(crate) struct SessionState {
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
-    /// Model used by the latest regular user turn, used for model-switch handling
-    /// on subsequent regular turns (including full-context reinjection after
-    /// resume or `/compact`).
-    previous_model: Option<String>,
+    /// Settings used by the latest regular user turn, used for turn-to-turn
+    /// model/realtime handling on subsequent regular turns (including full-context
+    /// reinjection after resume or `/compact`).
+    previous_turn_settings: Option<PreviousTurnSettings>,
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<JoinHandle<CodexResult<RegularTask>>>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
     pub(crate) active_connector_selection: HashSet<String>,
+    pub(crate) artifacts: SessionArtifacts,
 }
 
 impl SessionState {
@@ -44,10 +54,11 @@ impl SessionState {
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
-            previous_model: None,
+            previous_turn_settings: None,
             startup_regular_task: None,
             active_mcp_tool_selection: None,
             active_connector_selection: HashSet::new(),
+            artifacts: SessionArtifacts::default(),
         }
     }
 
@@ -60,11 +71,14 @@ impl SessionState {
         self.history.record_items(items, policy);
     }
 
-    pub(crate) fn previous_model(&self) -> Option<String> {
-        self.previous_model.clone()
+    pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
+        self.previous_turn_settings.clone()
     }
-    pub(crate) fn set_previous_model(&mut self, previous_model: Option<String>) {
-        self.previous_model = previous_model;
+    pub(crate) fn set_previous_turn_settings(
+        &mut self,
+        previous_turn_settings: Option<PreviousTurnSettings>,
+    ) {
+        self.previous_turn_settings = previous_turn_settings;
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {

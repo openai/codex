@@ -1,32 +1,42 @@
+#[cfg(any(unix, test))]
 use std::collections::HashSet;
-use std::path::Component;
-use std::path::Path;
-use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsAutomationValue;
+#[cfg(any(unix, test))]
 use codex_protocol::models::MacOsPermissions;
 #[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsPreferencesValue;
+#[cfg(any(unix, test))]
+use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+#[cfg(any(unix, test))]
 use codex_protocol::models::PermissionProfile;
+#[cfg(any(unix, test))]
 use codex_utils_absolute_path::AbsolutePathBuf;
-use dirs::home_dir;
+#[cfg(any(unix, test))]
 use dunce::canonicalize as canonicalize_path;
+#[cfg(any(unix, test))]
 use tracing::warn;
 
+#[cfg(any(unix, test))]
 use crate::config::Constrained;
+#[cfg(any(unix, test))]
 use crate::config::Permissions;
+#[cfg(any(unix, test))]
 use crate::config::types::ShellEnvironmentPolicy;
+#[cfg(any(unix, test))]
 use crate::protocol::AskForApproval;
+#[cfg(any(unix, test))]
 use crate::protocol::ReadOnlyAccess;
+#[cfg(any(unix, test))]
 use crate::protocol::SandboxPolicy;
-#[cfg(target_os = "macos")]
-use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
-#[cfg(not(target_os = "macos"))]
-type MacOsSeatbeltProfileExtensions = ();
 
+/// Compiles a skill `PermissionProfile` for the Unix shell escalation path.
+///
+/// Normal Windows builds do not currently call this helper, so it is only
+/// compiled on Unix and in tests.
+#[cfg(any(unix, test))]
 pub(crate) fn compile_permission_profile(
-    skill_dir: &Path,
     permissions: Option<PermissionProfile>,
 ) -> Option<Permissions> {
     let PermissionProfile {
@@ -34,14 +44,13 @@ pub(crate) fn compile_permission_profile(
         file_system,
         macos,
     } = permissions?;
+    let network_access = network.and_then(|value| value.enabled).unwrap_or_default();
     let file_system = file_system.unwrap_or_default();
     let fs_read = normalize_permission_paths(
-        skill_dir,
         file_system.read.as_deref().unwrap_or_default(),
         "permissions.file_system.read",
     );
     let fs_write = normalize_permission_paths(
-        skill_dir,
         file_system.write.as_deref().unwrap_or_default(),
         "permissions.file_system.write",
     );
@@ -56,7 +65,7 @@ pub(crate) fn compile_permission_profile(
                     readable_roots: fs_read,
                 }
             },
-            network_access: network.unwrap_or_default(),
+            network_access,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
@@ -66,6 +75,12 @@ pub(crate) fn compile_permission_profile(
                 include_platform_defaults: true,
                 readable_roots: fs_read,
             },
+            network_access,
+        }
+    } else if network_access {
+        SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            network_access: true,
         }
     } else {
         // Default sandbox policy
@@ -86,16 +101,13 @@ pub(crate) fn compile_permission_profile(
     })
 }
 
-fn normalize_permission_paths(
-    skill_dir: &Path,
-    values: &[PathBuf],
-    field: &str,
-) -> Vec<AbsolutePathBuf> {
+#[cfg(any(unix, test))]
+fn normalize_permission_paths(values: &[AbsolutePathBuf], field: &str) -> Vec<AbsolutePathBuf> {
     let mut paths = Vec::new();
     let mut seen = HashSet::new();
 
     for value in values {
-        let Some(path) = normalize_permission_path(skill_dir, value, field) else {
+        let Some(path) = normalize_permission_path(value, field) else {
             continue;
         };
         if seen.insert(path.clone()) {
@@ -106,26 +118,9 @@ fn normalize_permission_paths(
     paths
 }
 
-fn normalize_permission_path(
-    skill_dir: &Path,
-    value: &Path,
-    field: &str,
-) -> Option<AbsolutePathBuf> {
-    let value = value.to_string_lossy();
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        warn!("ignoring {field}: value is empty");
-        return None;
-    }
-
-    let expanded = expand_home(trimmed);
-    let absolute = if expanded.is_absolute() {
-        expanded
-    } else {
-        skill_dir.join(expanded)
-    };
-    let normalized = normalize_lexically(&absolute);
-    let canonicalized = canonicalize_path(&normalized).unwrap_or(normalized);
+#[cfg(any(unix, test))]
+fn normalize_permission_path(value: &AbsolutePathBuf, field: &str) -> Option<AbsolutePathBuf> {
+    let canonicalized = canonicalize_path(value.as_path()).unwrap_or_else(|_| value.to_path_buf());
     match AbsolutePathBuf::from_absolute_path(&canonicalized) {
         Ok(path) => Some(path),
         Err(error) => {
@@ -133,21 +128,6 @@ fn normalize_permission_path(
             None
         }
     }
-}
-
-fn expand_home(path: &str) -> PathBuf {
-    if path == "~" {
-        if let Some(home) = home_dir() {
-            return home;
-        }
-        return PathBuf::from(path);
-    }
-    if let Some(rest) = path.strip_prefix("~/")
-        && let Some(home) = home_dir()
-    {
-        return home.join(rest);
-    }
-    PathBuf::from(path)
 }
 
 #[cfg(target_os = "macos")]
@@ -229,27 +209,11 @@ fn resolve_macos_automation_permission(
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), any(unix, test)))]
 fn build_macos_seatbelt_profile_extensions(
     _: &MacOsPermissions,
 ) -> Option<MacOsSeatbeltProfileExtensions> {
     None
-}
-
-fn normalize_lexically(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
-                normalized.push(component.as_os_str());
-            }
-        }
-    }
-    normalized
 }
 
 #[cfg(test)]
@@ -268,11 +232,16 @@ mod tests {
     use codex_protocol::models::MacOsPermissions;
     #[cfg(target_os = "macos")]
     use codex_protocol::models::MacOsPreferencesValue;
+    use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::Path;
+
+    fn absolute_path(path: &Path) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(path).expect("absolute path")
+    }
 
     #[test]
     fn compile_permission_profile_normalizes_paths() {
@@ -282,21 +251,20 @@ mod tests {
         let read_dir = skill_dir.join("data");
         fs::create_dir_all(&read_dir).expect("read dir");
 
-        let profile = compile_permission_profile(
-            &skill_dir,
-            Some(PermissionProfile {
-                network: Some(true),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![
-                        PathBuf::from("./data"),
-                        PathBuf::from("./data"),
-                        PathBuf::from("scripts/../data"),
-                    ]),
-                    write: Some(vec![PathBuf::from("./output")]),
-                }),
-                ..Default::default()
+        let profile = compile_permission_profile(Some(PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
             }),
-        )
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![
+                    absolute_path(&skill_dir.join("data")),
+                    absolute_path(&skill_dir.join("data")),
+                    absolute_path(&skill_dir.join("scripts/../data")),
+                ]),
+                write: Some(vec![absolute_path(&skill_dir.join("output"))]),
+            }),
+            ..Default::default()
+        }))
         .expect("profile");
 
         assert_eq!(
@@ -341,7 +309,7 @@ mod tests {
         let skill_dir = tempdir.path().join("skill");
         fs::create_dir_all(&skill_dir).expect("skill dir");
 
-        let profile = compile_permission_profile(&skill_dir, None);
+        let profile = compile_permission_profile(None);
 
         assert_eq!(profile, None);
     }
@@ -352,20 +320,22 @@ mod tests {
         let skill_dir = tempdir.path().join("skill");
         fs::create_dir_all(&skill_dir).expect("skill dir");
 
-        let profile = compile_permission_profile(
-            &skill_dir,
-            Some(PermissionProfile {
-                network: Some(true),
-                ..Default::default()
+        let profile = compile_permission_profile(Some(PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
             }),
-        )
+            ..Default::default()
+        }))
         .expect("profile");
 
         assert_eq!(
             profile,
             Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::ReadOnly {
+                    access: ReadOnlyAccess::FullAccess,
+                    network_access: true,
+                }),
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -387,17 +357,16 @@ mod tests {
         let read_dir = skill_dir.join("data");
         fs::create_dir_all(&read_dir).expect("read dir");
 
-        let profile = compile_permission_profile(
-            &skill_dir,
-            Some(PermissionProfile {
-                network: Some(true),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![PathBuf::from("./data")]),
-                    write: Some(Vec::new()),
-                }),
-                ..Default::default()
+        let profile = compile_permission_profile(Some(PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
             }),
-        )
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![absolute_path(&skill_dir.join("data"))]),
+                write: Some(Vec::new()),
+            }),
+            ..Default::default()
+        }))
         .expect("profile");
 
         assert_eq!(
@@ -414,6 +383,7 @@ mod tests {
                             .expect("absolute read path")
                         ],
                     },
+                    network_access: true,
                 }),
                 network: None,
                 allow_login_shell: true,
@@ -436,20 +406,17 @@ mod tests {
         let skill_dir = tempdir.path().join("skill");
         fs::create_dir_all(&skill_dir).expect("skill dir");
 
-        let profile = compile_permission_profile(
-            &skill_dir,
-            Some(PermissionProfile {
-                macos: Some(MacOsPermissions {
-                    preferences: Some(MacOsPreferencesValue::Mode("readwrite".to_string())),
-                    automations: Some(MacOsAutomationValue::BundleIds(vec![
-                        "com.apple.Notes".to_string(),
-                    ])),
-                    accessibility: Some(true),
-                    calendar: Some(true),
-                }),
-                ..Default::default()
+        let profile = compile_permission_profile(Some(PermissionProfile {
+            macos: Some(MacOsPermissions {
+                preferences: Some(MacOsPreferencesValue::Mode("readwrite".to_string())),
+                automations: Some(MacOsAutomationValue::BundleIds(vec![
+                    "com.apple.Notes".to_string(),
+                ])),
+                accessibility: Some(true),
+                calendar: Some(true),
             }),
-        )
+            ..Default::default()
+        }))
         .expect("profile");
 
         assert_eq!(
@@ -476,8 +443,8 @@ mod tests {
         let skill_dir = tempdir.path().join("skill");
         fs::create_dir_all(&skill_dir).expect("skill dir");
 
-        let profile = compile_permission_profile(&skill_dir, Some(PermissionProfile::default()))
-            .expect("profile");
+        let profile =
+            compile_permission_profile(Some(PermissionProfile::default())).expect("profile");
 
         assert_eq!(
             profile.macos_seatbelt_profile_extensions,

@@ -22,7 +22,8 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
-use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::parse_arguments_with_base_path;
+use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -176,7 +177,9 @@ impl ToolHandler for ShellHandler {
 
         match payload {
             ToolPayload::Function { arguments } => {
-                let params: ShellToolCallParams = parse_arguments(&arguments)?;
+                let cwd = resolve_workdir_base_path(&arguments, turn.cwd.as_path())?;
+                let params: ShellToolCallParams =
+                    parse_arguments_with_base_path(&arguments, cwd.as_path())?;
                 let prefix_rule = params.prefix_rule.clone();
                 let exec_params =
                     Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
@@ -266,7 +269,9 @@ impl ToolHandler for ShellCommandHandler {
             )));
         };
 
-        let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
+        let cwd = resolve_workdir_base_path(&arguments, turn.cwd.as_path())?;
+        let params: ShellCommandToolCallParams =
+            parse_arguments_with_base_path(&arguments, cwd.as_path())?;
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),

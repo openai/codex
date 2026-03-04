@@ -46,6 +46,16 @@
               "type": "null"
             }
           ]
+        },
+        "planType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PlanType"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
@@ -1422,6 +1432,32 @@
       ],
       "type": "object"
     },
+    "RequestId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        }
+      ]
+    },
+    "ServerRequestResolvedNotification": {
+      "properties": {
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "SessionSource": {
       "oneOf": [
         {
@@ -1448,6 +1484,10 @@
           "type": "object"
         }
       ]
+    },
+    "SkillsChangedNotification": {
+      "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "type": "object"
     },
     "SubAgentSource": {
       "oneOf": [
@@ -1629,6 +1669,10 @@
           "description": "Working directory captured for the thread.",
           "type": "string"
         },
+        "ephemeral": {
+          "description": "Whether the thread is ephemeral and should not be materialized on disk.",
+          "type": "boolean"
+        },
         "gitInfo": {
           "anyOf": [
             {
@@ -1698,6 +1742,7 @@
         "cliVersion",
         "createdAt",
         "cwd",
+        "ephemeral",
         "id",
         "modelProvider",
         "preview",
@@ -3165,6 +3210,26 @@
       "properties": {
         "method": {
           "enum": [
+            "skills/changed"
+          ],
+          "title": "Skills/changedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsChangedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Skills/changedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "thread/name/updated"
           ],
           "title": "Thread/name/updatedNotificationMethod",
@@ -3420,6 +3485,26 @@
         "params"
       ],
       "title": "Item/fileChange/outputDeltaNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "serverRequest/resolved"
+          ],
+          "title": "ServerRequest/resolvedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ServerRequestResolvedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "ServerRequest/resolvedNotification",
       "type": "object"
     },
     {

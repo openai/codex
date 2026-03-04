@@ -115,7 +115,10 @@ function isDeniedBuiltin(specifier) {
 
 /** @type {Map<string, (msg: any) => void>} */
 const pendingTool = new Map();
+/** @type {Map<string, (msg: any) => void>} */
+const pendingEmitImage = new Map();
 let toolCounter = 0;
+let emitImageCounter = 0;
 const tmpDir = process.env.CODEX_JS_TMP_DIR || process.cwd();
 const nodeModuleDirEnv = process.env.CODEX_JS_REPL_NODE_MODULE_DIRS ?? "";
 const moduleSearchBases = (() => {
@@ -480,8 +483,255 @@ function withCapturedConsole(ctx, fn) {
   });
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toByteArray(value) {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  return null;
+}
+
+function encodeByteImage(bytes, mimeType, detail) {
+  if (bytes.byteLength === 0) {
+    throw new Error("codex.emitImage expected non-empty bytes");
+  }
+  if (typeof mimeType !== "string" || !mimeType) {
+    throw new Error("codex.emitImage expected a non-empty mimeType");
+  }
+  const image_url = `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`;
+  return { image_url, detail };
+}
+
+function parseImageDetail(detail) {
+  if (typeof detail === "undefined") {
+    return undefined;
+  }
+  if (typeof detail !== "string" || !detail) {
+    throw new Error("codex.emitImage expected detail to be a non-empty string");
+  }
+  if (
+    detail !== "auto" &&
+    detail !== "low" &&
+    detail !== "high" &&
+    detail !== "original"
+  ) {
+    throw new Error(
+      'codex.emitImage expected detail to be one of "auto", "low", "high", or "original"',
+    );
+  }
+  return detail;
+}
+
+function parseInputImageItem(value) {
+  if (!isPlainObject(value) || value.type !== "input_image") {
+    return null;
+  }
+  if (typeof value.image_url !== "string" || !value.image_url) {
+    throw new Error("codex.emitImage expected a non-empty image_url");
+  }
+  return {
+    images: [{ image_url: value.image_url, detail: parseImageDetail(value.detail) }],
+    textCount: 0,
+  };
+}
+
+function parseContentItems(items) {
+  if (!Array.isArray(items)) {
+    return null;
+  }
+
+  const images = [];
+  let textCount = 0;
+  for (const item of items) {
+    if (!isPlainObject(item) || typeof item.type !== "string") {
+      throw new Error("codex.emitImage received malformed content items");
+    }
+    if (item.type === "input_image") {
+      if (typeof item.image_url !== "string" || !item.image_url) {
+        throw new Error("codex.emitImage expected a non-empty image_url");
+      }
+      images.push({
+        image_url: item.image_url,
+        detail: parseImageDetail(item.detail),
+      });
+      continue;
+    }
+    if (item.type === "input_text" || item.type === "output_text") {
+      textCount += 1;
+      continue;
+    }
+    throw new Error(
+      `codex.emitImage does not support content item type "${item.type}"`,
+    );
+  }
+
+  return { images, textCount };
+}
+
+function parseByteImageValue(value) {
+  if (!isPlainObject(value) || !("bytes" in value)) {
+    return null;
+  }
+  const bytes = toByteArray(value.bytes);
+  if (!bytes) {
+    throw new Error(
+      "codex.emitImage expected bytes to be Buffer, Uint8Array, ArrayBuffer, or ArrayBufferView",
+    );
+  }
+  const detail = parseImageDetail(value.detail);
+  return encodeByteImage(bytes, value.mimeType, detail);
+}
+
+function parseToolOutput(output) {
+  if (typeof output === "string") {
+    return {
+      images: [],
+      textCount: output.length > 0 ? 1 : 0,
+    };
+  }
+
+  const parsedItems = parseContentItems(output);
+  if (parsedItems) {
+    return parsedItems;
+  }
+
+  throw new Error("codex.emitImage received an unsupported tool output shape");
+}
+
+function normalizeMcpImageData(data, mimeType) {
+  if (typeof data !== "string" || !data) {
+    throw new Error("codex.emitImage expected MCP image data");
+  }
+  if (data.startsWith("data:")) {
+    return data;
+  }
+  const normalizedMimeType =
+    typeof mimeType === "string" && mimeType ? mimeType : "application/octet-stream";
+  return `data:${normalizedMimeType};base64,${data}`;
+}
+
+function parseMcpToolResult(result) {
+  if (typeof result === "string") {
+    return { images: [], textCount: result.length > 0 ? 1 : 0 };
+  }
+
+  if (!isPlainObject(result)) {
+    throw new Error("codex.emitImage received an unsupported MCP result");
+  }
+
+  if ("Err" in result) {
+    const error = result.Err;
+    return { images: [], textCount: typeof error === "string" && error ? 1 : 0 };
+  }
+
+  if (!("Ok" in result)) {
+    throw new Error("codex.emitImage received an unsupported MCP result");
+  }
+
+  const ok = result.Ok;
+  if (!isPlainObject(ok) || !Array.isArray(ok.content)) {
+    throw new Error("codex.emitImage received malformed MCP content");
+  }
+
+  const images = [];
+  let textCount = 0;
+  for (const item of ok.content) {
+    if (!isPlainObject(item) || typeof item.type !== "string") {
+      throw new Error("codex.emitImage received malformed MCP content");
+    }
+    if (item.type === "image") {
+      images.push({
+        image_url: normalizeMcpImageData(item.data, item.mimeType ?? item.mime_type),
+      });
+      continue;
+    }
+    if (item.type === "text") {
+      textCount += 1;
+      continue;
+    }
+    throw new Error(
+      `codex.emitImage does not support MCP content type "${item.type}"`,
+    );
+  }
+
+  return { images, textCount };
+}
+
+function requireSingleImage(parsed) {
+  if (parsed.textCount > 0) {
+    throw new Error("codex.emitImage does not accept mixed text and image content");
+  }
+  if (parsed.images.length !== 1) {
+    throw new Error("codex.emitImage expected exactly one image");
+  }
+  return parsed.images[0];
+}
+
+function normalizeEmitImageValue(value) {
+  if (typeof value === "string") {
+    if (!value) {
+      throw new Error("codex.emitImage expected a non-empty image URL");
+    }
+    return { image_url: value };
+  }
+
+  const directItem = parseInputImageItem(value);
+  if (directItem) {
+    return requireSingleImage(directItem);
+  }
+
+  const byteImage = parseByteImageValue(value);
+  if (byteImage) {
+    return byteImage;
+  }
+
+  const directItems = parseContentItems(value);
+  if (directItems) {
+    return requireSingleImage(directItems);
+  }
+
+  if (!isPlainObject(value)) {
+    throw new Error("codex.emitImage received an unsupported value");
+  }
+
+  if (value.type === "message") {
+    return requireSingleImage(parseContentItems(value.content));
+  }
+
+  if (
+    value.type === "function_call_output" ||
+    value.type === "custom_tool_call_output"
+  ) {
+    return requireSingleImage(parseToolOutput(value.output));
+  }
+
+  if (value.type === "mcp_tool_call_output") {
+    return requireSingleImage(parseMcpToolResult(value.result));
+  }
+
+  if ("output" in value) {
+    return requireSingleImage(parseToolOutput(value.output));
+  }
+
+  if ("content" in value) {
+    return requireSingleImage(parseContentItems(value.content));
+  }
+
+  throw new Error("codex.emitImage received an unsupported value");
+}
+
 async function handleExec(message) {
   activeExecId = message.id;
+  const pendingBackgroundTasks = new Set();
   const tool = (toolName, args) => {
     if (typeof toolName !== "string" || !toolName) {
       return Promise.reject(new Error("codex.tool expects a tool name string"));
@@ -512,13 +762,57 @@ async function handleExec(message) {
       });
     });
   };
+  const emitImage = (imageLike) => {
+    const operation = (async () => {
+      const normalized = normalizeEmitImageValue(await imageLike);
+      const id = `${message.id}-emit-image-${emitImageCounter++}`;
+      const payload = {
+        type: "emit_image",
+        id,
+        exec_id: message.id,
+        image_url: normalized.image_url,
+        detail: normalized.detail ?? null,
+      };
+      send(payload);
+      return new Promise((resolve, reject) => {
+        pendingEmitImage.set(id, (res) => {
+          if (!res.ok) {
+            reject(new Error(res.error || "emitImage failed"));
+            return;
+          }
+          resolve();
+        });
+      });
+    })();
+
+    const observation = { observed: false };
+    const trackedOperation = operation.then(
+      () => ({ ok: true, error: null, observation }),
+      (error) => ({ ok: false, error, observation }),
+    );
+    pendingBackgroundTasks.add(trackedOperation);
+    return {
+      then(onFulfilled, onRejected) {
+        observation.observed = true;
+        return operation.then(onFulfilled, onRejected);
+      },
+      catch(onRejected) {
+        observation.observed = true;
+        return operation.catch(onRejected);
+      },
+      finally(onFinally) {
+        observation.observed = true;
+        return operation.finally(onFinally);
+      },
+    };
+  };
 
   try {
     const code = typeof message.code === "string" ? message.code : "";
     const { source, nextBindings } = await buildModuleSource(code);
     let output = "";
 
-    context.codex = { tmpDir, tool };
+    context.codex = { tmpDir, tool, emitImage };
     context.tmpDir = tmpDir;
 
     await withCapturedConsole(context, async (logs) => {
@@ -558,6 +852,15 @@ async function handleExec(message) {
       });
 
       await module.evaluate();
+      if (pendingBackgroundTasks.size > 0) {
+        const backgroundResults = await Promise.all([...pendingBackgroundTasks]);
+        const firstUnhandledBackgroundError = backgroundResults.find(
+          (result) => !result.ok && !result.observation.observed,
+        );
+        if (firstUnhandledBackgroundError) {
+          throw firstUnhandledBackgroundError.error;
+        }
+      }
       previousModule = module;
       previousBindings = nextBindings;
       output = logs.join("\n");
@@ -593,6 +896,14 @@ function handleToolResult(message) {
   }
 }
 
+function handleEmitImageResult(message) {
+  const resolver = pendingEmitImage.get(message.id);
+  if (resolver) {
+    pendingEmitImage.delete(message.id);
+    resolver(message);
+  }
+}
+
 let queue = Promise.resolve();
 
 process.on("uncaughtException", (error) => {
@@ -622,5 +933,9 @@ input.on("line", (line) => {
   }
   if (message.type === "run_tool_result") {
     handleToolResult(message);
+    return;
+  }
+  if (message.type === "emit_image_result") {
+    handleEmitImageResult(message);
   }
 });

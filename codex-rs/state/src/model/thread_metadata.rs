@@ -45,6 +45,8 @@ pub struct ThreadsPage {
 pub struct ExtractionOutcome {
     /// The extracted thread metadata.
     pub metadata: ThreadMetadata,
+    /// The explicit thread memory mode from rollout metadata, if present.
+    pub memory_mode: Option<String>,
     /// The number of rollout lines that failed to parse.
     pub parse_errors: usize,
 }
@@ -195,6 +197,19 @@ impl ThreadMetadataBuilder {
 }
 
 impl ThreadMetadata {
+    /// Preserve existing non-null Git fields when rollout-derived metadata is reconciled.
+    pub fn prefer_existing_git_info(&mut self, existing: &Self) {
+        if existing.git_sha.is_some() {
+            self.git_sha = existing.git_sha.clone();
+        }
+        if existing.git_branch.is_some() {
+            self.git_branch = existing.git_branch.clone();
+        }
+        if existing.git_origin_url.is_some() {
+            self.git_origin_url = existing.git_origin_url.clone();
+        }
+    }
+
     /// Return the list of field names that differ between `self` and `other`.
     pub fn diff_fields(&self, other: &Self) -> Vec<&'static str> {
         let mut diffs = Vec::new();

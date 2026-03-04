@@ -1,6 +1,7 @@
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
+use crate::executable_name::executable_path_lookup_key;
 use crate::rule::NetworkRule;
 use crate::rule::NetworkRuleProtocol;
 use crate::rule::PatternToken;
@@ -9,31 +10,41 @@ use crate::rule::PrefixRule;
 use crate::rule::RuleMatch;
 use crate::rule::RuleRef;
 use crate::rule::normalize_network_rule_host;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use multimap::MultiMap;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 type HeuristicsFallback<'a> = Option<&'a dyn Fn(&[String]) -> Decision>;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MatchOptions {
+    pub resolve_host_executables: bool,
+}
 
 #[derive(Clone, Debug)]
 pub struct Policy {
     rules_by_program: MultiMap<String, RuleRef>,
     network_rules: Vec<NetworkRule>,
+    host_executables_by_name: HashMap<String, Arc<[AbsolutePathBuf]>>,
 }
 
 impl Policy {
     pub fn new(rules_by_program: MultiMap<String, RuleRef>) -> Self {
-        Self::from_parts(rules_by_program, Vec::new())
+        Self::from_parts(rules_by_program, Vec::new(), HashMap::new())
     }
 
     pub fn from_parts(
         rules_by_program: MultiMap<String, RuleRef>,
         network_rules: Vec<NetworkRule>,
+        host_executables_by_name: HashMap<String, Arc<[AbsolutePathBuf]>>,
     ) -> Self {
         Self {
             rules_by_program,
             network_rules,
+            host_executables_by_name,
         }
     }
 
@@ -47,6 +58,10 @@ impl Policy {
 
     pub fn network_rules(&self) -> &[NetworkRule] {
         &self.network_rules
+    }
+
+    pub fn host_executables(&self) -> &HashMap<String, Arc<[AbsolutePathBuf]>> {
+        &self.host_executables_by_name
     }
 
     pub fn get_allowed_prefixes(&self) -> Vec<Vec<String>> {
@@ -119,6 +134,36 @@ impl Policy {
         Ok(())
     }
 
+    pub fn set_host_executable_paths(&mut self, name: String, paths: Vec<AbsolutePathBuf>) {
+        self.host_executables_by_name.insert(name, paths.into());
+    }
+
+    pub fn merge_overlay(&self, overlay: &Policy) -> Policy {
+        let mut combined_rules = self.rules_by_program.clone();
+        for (program, rules) in overlay.rules_by_program.iter_all() {
+            for rule in rules {
+                combined_rules.insert(program.clone(), rule.clone());
+            }
+        }
+
+        let mut combined_network_rules = self.network_rules.clone();
+        combined_network_rules.extend(overlay.network_rules.iter().cloned());
+
+        let mut host_executables_by_name = self.host_executables_by_name.clone();
+        host_executables_by_name.extend(
+            overlay
+                .host_executables_by_name
+                .iter()
+                .map(|(name, paths)| (name.clone(), paths.clone())),
+        );
+
+        Policy::from_parts(
+            combined_rules,
+            combined_network_rules,
+            host_executables_by_name,
+        )
+    }
+
     pub fn compiled_network_domains(&self) -> (Vec<String>, Vec<String>) {
         let mut allowed = Vec::new();
         let mut denied = Vec::new();
@@ -144,7 +189,25 @@ impl Policy {
     where
         F: Fn(&[String]) -> Decision,
     {
-        let matched_rules = self.matches_for_command(cmd, Some(heuristics_fallback));
+        let matched_rules = self.matches_for_command_with_options(
+            cmd,
+            Some(heuristics_fallback),
+            &MatchOptions::default(),
+        );
+        Evaluation::from_matches(matched_rules)
+    }
+
+    pub fn check_with_options<F>(
+        &self,
+        cmd: &[String],
+        heuristics_fallback: &F,
+        options: &MatchOptions,
+    ) -> Evaluation
+    where
+        F: Fn(&[String]) -> Decision,
+    {
+        let matched_rules =
+            self.matches_for_command_with_options(cmd, Some(heuristics_fallback), options);
         Evaluation::from_matches(matched_rules)
     }
 
@@ -159,10 +222,28 @@ impl Policy {
         Commands::Item: AsRef<[String]>,
         F: Fn(&[String]) -> Decision,
     {
+        self.check_multiple_with_options(commands, heuristics_fallback, &MatchOptions::default())
+    }
+
+    pub fn check_multiple_with_options<Commands, F>(
+        &self,
+        commands: Commands,
+        heuristics_fallback: &F,
+        options: &MatchOptions,
+    ) -> Evaluation
+    where
+        Commands: IntoIterator,
+        Commands::Item: AsRef<[String]>,
+        F: Fn(&[String]) -> Decision,
+    {
         let matched_rules: Vec<RuleMatch> = commands
             .into_iter()
             .flat_map(|command| {
-                self.matches_for_command(command.as_ref(), Some(heuristics_fallback))
+                self.matches_for_command_with_options(
+                    command.as_ref(),
+                    Some(heuristics_fallback),
+                    options,
+                )
             })
             .collect();
 
@@ -181,14 +262,25 @@ impl Policy {
         cmd: &[String],
         heuristics_fallback: HeuristicsFallback<'_>,
     ) -> Vec<RuleMatch> {
-        let matched_rules: Vec<RuleMatch> = match cmd.first() {
-            Some(first) => self
-                .rules_by_program
-                .get_vec(first)
-                .map(|rules| rules.iter().filter_map(|rule| rule.matches(cmd)).collect())
-                .unwrap_or_default(),
-            None => Vec::new(),
-        };
+        self.matches_for_command_with_options(cmd, heuristics_fallback, &MatchOptions::default())
+    }
+
+    pub fn matches_for_command_with_options(
+        &self,
+        cmd: &[String],
+        heuristics_fallback: HeuristicsFallback<'_>,
+        options: &MatchOptions,
+    ) -> Vec<RuleMatch> {
+        let matched_rules = self
+            .match_exact_rules(cmd)
+            .filter(|matched_rules| !matched_rules.is_empty())
+            .or_else(|| {
+                options
+                    .resolve_host_executables
+                    .then(|| self.match_host_executable_rules(cmd))
+                    .filter(|matched_rules| !matched_rules.is_empty())
+            })
+            .unwrap_or_default();
 
         if matched_rules.is_empty()
             && let Some(heuristics_fallback) = heuristics_fallback
@@ -200,6 +292,45 @@ impl Policy {
         } else {
             matched_rules
         }
+    }
+
+    fn match_exact_rules(&self, cmd: &[String]) -> Option<Vec<RuleMatch>> {
+        let first = cmd.first()?;
+        Some(
+            self.rules_by_program
+                .get_vec(first)
+                .map(|rules| rules.iter().filter_map(|rule| rule.matches(cmd)).collect())
+                .unwrap_or_default(),
+        )
+    }
+
+    fn match_host_executable_rules(&self, cmd: &[String]) -> Vec<RuleMatch> {
+        let Some(first) = cmd.first() else {
+            return Vec::new();
+        };
+        let Ok(program) = AbsolutePathBuf::try_from(first.clone()) else {
+            return Vec::new();
+        };
+        let Some(basename) = executable_path_lookup_key(program.as_path()) else {
+            return Vec::new();
+        };
+        let Some(rules) = self.rules_by_program.get_vec(&basename) else {
+            return Vec::new();
+        };
+        if let Some(paths) = self.host_executables_by_name.get(&basename)
+            && !paths.iter().any(|path| path == &program)
+        {
+            return Vec::new();
+        }
+
+        let basename_command = std::iter::once(basename)
+            .chain(cmd.iter().skip(1).cloned())
+            .collect::<Vec<_>>();
+        rules
+            .iter()
+            .filter_map(|rule| rule.matches(&basename_command))
+            .map(|rule_match| rule_match.with_resolved_program(&program))
+            .collect()
     }
 }
 

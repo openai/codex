@@ -8,17 +8,22 @@ mod mcp;
 mod mcp_resource;
 pub(crate) mod multi_agents;
 mod plan;
+mod presentation_artifact;
 mod read_file;
 mod request_user_input;
 mod search_tool_bm25;
 mod shell;
+mod spreadsheet_artifact;
 mod test_sync;
 pub(crate) mod unified_exec;
 mod view_image;
 
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 pub use plan::PLAN_TOOL;
 use serde::Deserialize;
+use serde_json::Value;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
@@ -35,6 +40,7 @@ pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
 pub use multi_agents::MultiAgentHandler;
 pub use plan::PlanHandler;
+pub use presentation_artifact::PresentationArtifactHandler;
 pub use read_file::ReadFileHandler;
 pub use request_user_input::RequestUserInputHandler;
 pub(crate) use request_user_input::request_user_input_tool_description;
@@ -43,6 +49,7 @@ pub(crate) use search_tool_bm25::SEARCH_TOOL_BM25_TOOL_NAME;
 pub use search_tool_bm25::SearchToolBm25Handler;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;
+pub use spreadsheet_artifact::SpreadsheetArtifactHandler;
 pub use test_sync::TestSyncHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
@@ -56,6 +63,33 @@ where
     })
 }
 
+fn parse_arguments_with_base_path<T>(
+    arguments: &str,
+    base_path: &Path,
+) -> Result<T, FunctionCallError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let _guard = AbsolutePathBufGuard::new(base_path);
+    parse_arguments(arguments)
+}
+
+fn resolve_workdir_base_path(
+    arguments: &str,
+    default_cwd: &Path,
+) -> Result<PathBuf, FunctionCallError> {
+    let arguments: Value = parse_arguments(arguments)?;
+    Ok(arguments
+        .get("workdir")
+        .and_then(Value::as_str)
+        .filter(|workdir| !workdir.is_empty())
+        .map(PathBuf::from)
+        .map_or_else(
+            || default_cwd.to_path_buf(),
+            |workdir| crate::util::resolve_path(default_cwd, &workdir),
+        ))
+}
+
 /// Validates feature/policy constraints for `with_additional_permissions` and
 /// returns normalized absolute paths. Errors if paths are invalid.
 pub(super) fn normalize_and_validate_additional_permissions(
@@ -63,7 +97,7 @@ pub(super) fn normalize_and_validate_additional_permissions(
     approval_policy: AskForApproval,
     sandbox_permissions: SandboxPermissions,
     additional_permissions: Option<PermissionProfile>,
-    cwd: &Path,
+    _cwd: &Path,
 ) -> Result<Option<PermissionProfile>, String> {
     let uses_additional_permissions = matches!(
         sandbox_permissions,
@@ -91,7 +125,7 @@ pub(super) fn normalize_and_validate_additional_permissions(
                     .to_string(),
             );
         };
-        let normalized = normalize_additional_permissions(additional_permissions, cwd)?;
+        let normalized = normalize_additional_permissions(additional_permissions)?;
         if normalized.is_empty() {
             return Err(
                 "`additional_permissions` must include at least one path in `file_system.read` or `file_system.write`"

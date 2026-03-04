@@ -7,6 +7,7 @@ use crate::config_loader::RequirementSource;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
+pub use codex_protocol::config_types::ServiceTier;
 pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
@@ -26,7 +27,8 @@ pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 16;
 pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
-pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 1_024;
+pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
+pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -98,6 +100,10 @@ pub struct McpServerConfig {
     /// Optional OAuth scopes to request during MCP login.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<String>>,
+
+    /// Optional OAuth resource parameter to include during MCP login (RFC 8707).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_resource: Option<String>,
 }
 
 // Raw MCP config shape used for deserialization and JSON Schema generation.
@@ -142,6 +148,8 @@ pub(crate) struct RawMcpServerConfig {
     pub disabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub scopes: Option<Vec<String>>,
+    #[serde(default)]
+    pub oauth_resource: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for McpServerConfig {
@@ -165,6 +173,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         let enabled_tools = raw.enabled_tools.clone();
         let disabled_tools = raw.disabled_tools.clone();
         let scopes = raw.scopes.clone();
+        let oauth_resource = raw.oauth_resource.clone();
 
         fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
         where
@@ -188,6 +197,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             throw_if_set("stdio", "bearer_token", raw.bearer_token.as_ref())?;
             throw_if_set("stdio", "http_headers", raw.http_headers.as_ref())?;
             throw_if_set("stdio", "env_http_headers", raw.env_http_headers.as_ref())?;
+            throw_if_set("stdio", "oauth_resource", raw.oauth_resource.as_ref())?;
             McpServerTransportConfig::Stdio {
                 command,
                 args: raw.args.clone().unwrap_or_default(),
@@ -221,6 +231,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             enabled_tools,
             disabled_tools,
             scopes,
+            oauth_resource,
         })
     }
 }
@@ -361,8 +372,16 @@ pub struct FeedbackConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct MemoriesToml {
+    /// When `true`, web searches and MCP tool calls mark the thread `memory_mode` as `"polluted"`.
+    pub no_memories_if_mcp_or_web_search: Option<bool>,
+    /// When `false`, newly created threads are stored with `memory_mode = "disabled"` in the state DB.
+    pub generate_memories: Option<bool>,
+    /// When `false`, skip injecting memory usage instructions into developer prompts.
+    pub use_memories: Option<bool>,
     /// Maximum number of recent raw memories retained for global consolidation.
-    pub max_raw_memories_for_global: Option<usize>,
+    pub max_raw_memories_for_consolidation: Option<usize>,
+    /// Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.
+    pub max_unused_days: Option<i64>,
     /// Maximum age of the threads used for memories.
     pub max_rollout_age_days: Option<i64>,
     /// Maximum number of rollout candidates processed per pass.
@@ -370,31 +389,39 @@ pub struct MemoriesToml {
     /// Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.
     pub min_rollout_idle_hours: Option<i64>,
     /// Model used for thread summarisation.
-    pub phase_1_model: Option<String>,
+    pub extract_model: Option<String>,
     /// Model used for memory consolidation.
-    pub phase_2_model: Option<String>,
+    pub consolidation_model: Option<String>,
 }
 
 /// Effective memories settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoriesConfig {
-    pub max_raw_memories_for_global: usize,
+    pub no_memories_if_mcp_or_web_search: bool,
+    pub generate_memories: bool,
+    pub use_memories: bool,
+    pub max_raw_memories_for_consolidation: usize,
+    pub max_unused_days: i64,
     pub max_rollout_age_days: i64,
     pub max_rollouts_per_startup: usize,
     pub min_rollout_idle_hours: i64,
-    pub phase_1_model: Option<String>,
-    pub phase_2_model: Option<String>,
+    pub extract_model: Option<String>,
+    pub consolidation_model: Option<String>,
 }
 
 impl Default for MemoriesConfig {
     fn default() -> Self {
         Self {
-            max_raw_memories_for_global: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+            no_memories_if_mcp_or_web_search: false,
+            generate_memories: true,
+            use_memories: true,
+            max_raw_memories_for_consolidation: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+            max_unused_days: DEFAULT_MEMORIES_MAX_UNUSED_DAYS,
             max_rollout_age_days: DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS,
             max_rollouts_per_startup: DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
             min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
-            phase_1_model: None,
-            phase_2_model: None,
+            extract_model: None,
+            consolidation_model: None,
         }
     }
 }
@@ -403,10 +430,19 @@ impl From<MemoriesToml> for MemoriesConfig {
     fn from(toml: MemoriesToml) -> Self {
         let defaults = Self::default();
         Self {
-            max_raw_memories_for_global: toml
-                .max_raw_memories_for_global
-                .unwrap_or(defaults.max_raw_memories_for_global)
+            no_memories_if_mcp_or_web_search: toml
+                .no_memories_if_mcp_or_web_search
+                .unwrap_or(defaults.no_memories_if_mcp_or_web_search),
+            generate_memories: toml.generate_memories.unwrap_or(defaults.generate_memories),
+            use_memories: toml.use_memories.unwrap_or(defaults.use_memories),
+            max_raw_memories_for_consolidation: toml
+                .max_raw_memories_for_consolidation
+                .unwrap_or(defaults.max_raw_memories_for_consolidation)
                 .min(4096),
+            max_unused_days: toml
+                .max_unused_days
+                .unwrap_or(defaults.max_unused_days)
+                .clamp(0, 365),
             max_rollout_age_days: toml
                 .max_rollout_age_days
                 .unwrap_or(defaults.max_rollout_age_days)
@@ -419,8 +455,8 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .min_rollout_idle_hours
                 .unwrap_or(defaults.min_rollout_idle_hours)
                 .clamp(1, 48),
-            phase_1_model: toml.phase_1_model,
-            phase_2_model: toml.phase_2_model,
+            extract_model: toml.extract_model,
+            consolidation_model: toml.consolidation_model,
         }
     }
 }
@@ -639,6 +675,14 @@ impl fmt::Display for NotificationMethod {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelAvailabilityNuxConfig {
+    /// Number of times a startup availability NUX has been shown per model slug.
+    #[serde(default, flatten)]
+    pub shown_count: HashMap<String, u32>,
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -688,6 +732,10 @@ pub struct Tui {
     /// Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.
     #[serde(default)]
     pub theme: Option<String>,
+
+    /// Startup tooltip availability NUX state persisted by the TUI.
+    #[serde(default)]
+    pub model_availability_nux: ModelAvailabilityNuxConfig,
 }
 
 const fn default_true() -> bool {
@@ -724,6 +772,13 @@ impl Notice {
 #[schemars(deny_unknown_fields)]
 pub struct SkillConfig {
     pub path: AbsolutePathBuf,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PluginConfig {
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
 
@@ -1085,6 +1140,22 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_streamable_http_server_config_with_oauth_resource() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            url = "https://example.com/mcp"
+            oauth_resource = "https://api.example.com"
+        "#,
+        )
+        .expect("should deserialize http config with oauth_resource");
+
+        assert_eq!(
+            cfg.oauth_resource,
+            Some("https://api.example.com".to_string())
+        );
+    }
+
+    #[test]
     fn deserialize_server_config_with_tool_filters() {
         let cfg: McpServerConfig = toml::from_str(
             r#"
@@ -1138,6 +1209,20 @@ mod tests {
         "#,
         )
         .expect_err("should reject env_http_headers for stdio transport");
+
+        let err = toml::from_str::<McpServerConfig>(
+            r#"
+            command = "echo"
+            oauth_resource = "https://api.example.com"
+        "#,
+        )
+        .expect_err("should reject oauth_resource for stdio transport");
+
+        assert!(
+            err.to_string()
+                .contains("oauth_resource is not supported for stdio"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

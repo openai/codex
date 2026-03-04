@@ -8,10 +8,9 @@ import type { ChatgptAuthTokensRefreshParams } from "./v2/ChatgptAuthTokensRefre
 import type { CommandExecutionRequestApprovalParams } from "./v2/CommandExecutionRequestApprovalParams";
 import type { DynamicToolCallParams } from "./v2/DynamicToolCallParams";
 import type { FileChangeRequestApprovalParams } from "./v2/FileChangeRequestApprovalParams";
-import type { SkillRequestApprovalParams } from "./v2/SkillRequestApprovalParams";
 import type { ToolRequestUserInputParams } from "./v2/ToolRequestUserInputParams";
 
 /**
  * Request initiated from the server and sent to the client.
  */
-export type ServerRequest = { "method": "item/commandExecution/requestApproval", id: RequestId, params: CommandExecutionRequestApprovalParams, } | { "method": "item/fileChange/requestApproval", id: RequestId, params: FileChangeRequestApprovalParams, } | { "method": "item/tool/requestUserInput", id: RequestId, params: ToolRequestUserInputParams, } | { "method": "skill/requestApproval", id: RequestId, params: SkillRequestApprovalParams, } | { "method": "item/tool/call", id: RequestId, params: DynamicToolCallParams, } | { "method": "account/chatgptAuthTokens/refresh", id: RequestId, params: ChatgptAuthTokensRefreshParams, } | { "method": "applyPatchApproval", id: RequestId, params: ApplyPatchApprovalParams, } | { "method": "execCommandApproval", id: RequestId, params: ExecCommandApprovalParams, };
+export type ServerRequest = { "method": "item/commandExecution/requestApproval", id: RequestId, params: CommandExecutionRequestApprovalParams, } | { "method": "item/fileChange/requestApproval", id: RequestId, params: FileChangeRequestApprovalParams, } | { "method": "item/tool/requestUserInput", id: RequestId, params: ToolRequestUserInputParams, } | { "method": "item/tool/call", id: RequestId, params: DynamicToolCallParams, } | { "method": "account/chatgptAuthTokens/refresh", id: RequestId, params: ChatgptAuthTokensRefreshParams, } | { "method": "applyPatchApproval", id: RequestId, params: ApplyPatchApprovalParams, } | { "method": "execCommandApproval", id: RequestId, params: ExecCommandApprovalParams, };
