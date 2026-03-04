@@ -1475,7 +1475,7 @@ dependencies = [
  "serde_with",
  "shlex",
  "similar",
- "strum_macros 0.27.2",
+ "strum_macros 0.28.0",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -2193,7 +2193,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "strum_macros 0.27.2",
+ "strum_macros 0.28.0",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
@@ -2248,7 +2248,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "strum 0.27.2",
- "strum_macros 0.27.2",
+ "strum_macros 0.28.0",
  "sys-locale",
  "tempfile",
  "tracing",
@@ -2480,7 +2480,7 @@ dependencies = [
  "serial_test",
  "shlex",
  "strum 0.27.2",
- "strum_macros 0.27.2",
+ "strum_macros 0.28.0",
  "supports-color 3.0.2",
  "syntect",
  "tempfile",
@@ -9203,9 +9203,9 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.27.2"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
+checksum = "ab85eea0270ee17587ed4156089e10b9e6880ee688791d45a905f5b1ca36f664"
 dependencies = [
  "heck",
  "proc-macro2",
