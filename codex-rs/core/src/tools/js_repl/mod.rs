@@ -117,7 +117,7 @@ struct KernelState {
     stdin: Arc<Mutex<ChildStdin>>,
     pending_execs: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ExecResultMessage>>>>,
     exec_contexts: Arc<Mutex<HashMap<String, ExecContext>>>,
-    pending_owner_turn: Option<String>,
+    top_level_exec_state: TopLevelExecState,
     shutdown: CancellationToken,
 }
 
@@ -128,10 +128,52 @@ struct ExecContext {
     tracker: SharedTurnDiffTracker,
 }
 
-struct CurrentExec {
-    exec_id: String,
-    submitted: bool,
-    turn_id: String,
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum TopLevelExecState {
+    #[default]
+    Idle,
+    FreshKernel {
+        turn_id: String,
+        exec_id: Option<String>,
+    },
+    ReusedKernelPending {
+        turn_id: String,
+        exec_id: String,
+    },
+    Submitted {
+        turn_id: String,
+        exec_id: String,
+    },
+}
+
+impl TopLevelExecState {
+    fn registered_exec_id(&self) -> Option<&str> {
+        match self {
+            Self::Idle => None,
+            Self::FreshKernel {
+                exec_id: Some(exec_id),
+                ..
+            }
+            | Self::ReusedKernelPending { exec_id, .. }
+            | Self::Submitted { exec_id, .. } => Some(exec_id.as_str()),
+            Self::FreshKernel { exec_id: None, .. } => None,
+        }
+    }
+
+    fn should_reset_for_interrupt(&self, turn_id: &str) -> bool {
+        match self {
+            Self::Idle => false,
+            Self::FreshKernel {
+                turn_id: active_turn_id,
+                ..
+            }
+            | Self::Submitted {
+                turn_id: active_turn_id,
+                ..
+            } => active_turn_id == turn_id,
+            Self::ReusedKernelPending { .. } => false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -320,7 +362,6 @@ pub struct JsReplManager {
     kernel: Arc<Mutex<Option<KernelState>>>,
     exec_lock: Arc<tokio::sync::Semaphore>,
     exec_tool_calls: Arc<Mutex<HashMap<String, ExecToolCalls>>>,
-    current_exec: Arc<Mutex<Option<CurrentExec>>>,
 }
 
 impl JsReplManager {
@@ -339,7 +380,6 @@ impl JsReplManager {
             kernel: Arc::new(Mutex::new(None)),
             exec_lock: Arc::new(tokio::sync::Semaphore::new(1)),
             exec_tool_calls: Arc::new(Mutex::new(HashMap::new())),
-            current_exec: Arc::new(Mutex::new(None)),
         });
 
         Ok(manager)
@@ -466,58 +506,92 @@ impl JsReplManager {
         }
     }
 
-    async fn register_current_exec(&self, exec_id: String, turn_id: String) {
-        *self.current_exec.lock().await = Some(CurrentExec {
-            exec_id,
-            submitted: false,
-            turn_id,
-        });
+    async fn register_top_level_exec(&self, exec_id: String, turn_id: String) {
+        let mut kernel = self.kernel.lock().await;
+        let Some(state) = kernel.as_mut() else {
+            return;
+        };
+        state.top_level_exec_state = match &state.top_level_exec_state {
+            TopLevelExecState::FreshKernel {
+                turn_id: active_turn_id,
+                ..
+            } if active_turn_id == &turn_id => TopLevelExecState::FreshKernel {
+                turn_id,
+                exec_id: Some(exec_id),
+            },
+            TopLevelExecState::Idle
+            | TopLevelExecState::ReusedKernelPending { .. }
+            | TopLevelExecState::Submitted { .. }
+            | TopLevelExecState::FreshKernel { .. } => {
+                TopLevelExecState::ReusedKernelPending { turn_id, exec_id }
+            }
+        };
     }
 
-    async fn clear_current_exec_if_matches(&self, exec_id: &str) {
-        Self::clear_current_exec_if_matches_map(&self.current_exec, exec_id).await;
+    async fn mark_top_level_exec_submitted(&self, exec_id: &str) {
+        let mut kernel = self.kernel.lock().await;
+        let Some(state) = kernel.as_mut() else {
+            return;
+        };
+        let next_state = match &state.top_level_exec_state {
+            TopLevelExecState::FreshKernel {
+                turn_id,
+                exec_id: Some(active_exec_id),
+            }
+            | TopLevelExecState::ReusedKernelPending {
+                turn_id,
+                exec_id: active_exec_id,
+            } if active_exec_id == exec_id => Some(TopLevelExecState::Submitted {
+                turn_id: turn_id.clone(),
+                exec_id: active_exec_id.clone(),
+            }),
+            TopLevelExecState::Idle
+            | TopLevelExecState::FreshKernel { .. }
+            | TopLevelExecState::ReusedKernelPending { .. }
+            | TopLevelExecState::Submitted { .. } => None,
+        };
+        if let Some(next_state) = next_state {
+            state.top_level_exec_state = next_state;
+        }
     }
 
-    async fn clear_current_exec_if_matches_map(
-        current_exec: &Arc<Mutex<Option<CurrentExec>>>,
+    async fn clear_top_level_exec_if_matches(&self, exec_id: &str) {
+        Self::clear_top_level_exec_if_matches_map(&self.kernel, exec_id).await;
+    }
+
+    async fn clear_top_level_exec_if_matches_map(
+        kernel: &Arc<Mutex<Option<KernelState>>>,
         exec_id: &str,
     ) {
-        let mut current_exec = current_exec.lock().await;
-        if current_exec
-            .as_ref()
-            .is_some_and(|current_exec| current_exec.exec_id == exec_id)
-        {
-            current_exec.take();
-        }
-    }
-
-    async fn clear_current_exec(&self) {
-        self.current_exec.lock().await.take();
-    }
-
-    async fn clear_pending_kernel_owner(&self, turn_id: &str) {
-        let mut kernel = self.kernel.lock().await;
+        let mut kernel = kernel.lock().await;
         if let Some(state) = kernel.as_mut()
-            && state.pending_owner_turn.as_deref() == Some(turn_id)
+            && state.top_level_exec_state.registered_exec_id() == Some(exec_id)
         {
-            state.pending_owner_turn = None;
+            state.top_level_exec_state = TopLevelExecState::Idle;
         }
     }
 
-    async fn turn_owns_pending_kernel(&self, turn_id: &str) -> bool {
-        self.kernel
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|state| state.pending_owner_turn.as_deref() == Some(turn_id))
+    async fn clear_top_level_exec_if_matches_any_map(
+        kernel: &Arc<Mutex<Option<KernelState>>>,
+        exec_ids: &[String],
+    ) {
+        let mut kernel = kernel.lock().await;
+        if let Some(state) = kernel.as_mut()
+            && state
+                .top_level_exec_state
+                .registered_exec_id()
+                .is_some_and(|exec_id| exec_ids.iter().any(|pending_id| pending_id == exec_id))
+        {
+            state.top_level_exec_state = TopLevelExecState::Idle;
+        }
     }
 
-    async fn turn_has_submitted_exec(&self, turn_id: &str) -> bool {
-        self.current_exec
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|current_exec| current_exec.submitted && current_exec.turn_id == turn_id)
+    async fn turn_interrupt_requires_reset(&self, turn_id: &str) -> bool {
+        self.kernel.lock().await.as_ref().is_some_and(|state| {
+            state
+                .top_level_exec_state
+                .should_reset_for_interrupt(turn_id)
+        })
     }
 
     fn log_tool_call_response(
@@ -725,7 +799,6 @@ impl JsReplManager {
         })?;
         self.reset_kernel().await;
         Self::clear_all_exec_tool_calls_map(&self.exec_tool_calls).await;
-        self.clear_current_exec().await;
         Ok(())
     }
 
@@ -733,14 +806,11 @@ impl JsReplManager {
         let _permit = self.exec_lock.clone().acquire_owned().await.map_err(|_| {
             FunctionCallError::RespondToModel("js_repl execution unavailable".to_string())
         })?;
-        if !self.turn_has_submitted_exec(turn_id).await
-            && !self.turn_owns_pending_kernel(turn_id).await
-        {
+        if !self.turn_interrupt_requires_reset(turn_id).await {
             return Ok(false);
         }
         self.reset_kernel().await;
         Self::clear_all_exec_tool_calls_map(&self.exec_tool_calls).await;
-        self.clear_current_exec().await;
         Ok(true)
     }
 
@@ -776,7 +846,10 @@ impl JsReplManager {
                     Ok(state) => state,
                     Err(err) => return Err(FunctionCallError::RespondToModel(err)),
                 };
-                state.pending_owner_turn = Some(turn.sub_id.clone());
+                state.top_level_exec_state = TopLevelExecState::FreshKernel {
+                    turn_id: turn.sub_id.clone(),
+                    exec_id: None,
+                };
                 *kernel = Some(state);
             }
 
@@ -812,7 +885,7 @@ impl JsReplManager {
             );
             (req_id, rx)
         };
-        self.register_current_exec(req_id.clone(), turn.sub_id.clone())
+        self.register_top_level_exec(req_id.clone(), turn.sub_id.clone())
             .await;
         self.register_exec_tool_calls(&req_id).await;
 
@@ -822,27 +895,16 @@ impl JsReplManager {
             timeout_ms: args.timeout_ms,
         };
 
-        self.clear_pending_kernel_owner(&turn.sub_id).await;
         let write_result = {
-            let mut current_exec = self.current_exec.lock().await;
             // Treat the exec as submitted before the async pipe writes begin: once we start
             // awaiting `write_all`, the kernel may already observe runnable JS even if the turn is
             // aborted before control returns here.
-            if let Some(current_exec) = current_exec.as_mut()
-                && current_exec.exec_id == req_id
-            {
-                current_exec.submitted = true;
-            }
+            self.mark_top_level_exec_submitted(&req_id).await;
             let write_result = Self::write_message(&stdin, &payload).await;
             match write_result {
                 Ok(()) => Ok(()),
                 Err(err) => {
-                    if current_exec
-                        .as_ref()
-                        .is_some_and(|current_exec| current_exec.exec_id == req_id)
-                    {
-                        current_exec.take();
-                    }
+                    self.clear_top_level_exec_if_matches(&req_id).await;
                     Err(err)
                 }
             }
@@ -850,7 +912,7 @@ impl JsReplManager {
 
         if let Err(err) = write_result {
             if pending_execs.lock().await.remove(&req_id).is_some() {
-                self.clear_current_exec_if_matches(&req_id).await;
+                self.clear_top_level_exec_if_matches(&req_id).await;
             }
             exec_contexts.lock().await.remove(&req_id);
             self.clear_exec_tool_calls(&req_id).await;
@@ -886,7 +948,7 @@ impl JsReplManager {
                 let removed = pending.remove(&req_id).is_some();
                 drop(pending);
                 if removed {
-                    self.clear_current_exec_if_matches(&req_id).await;
+                    self.clear_top_level_exec_if_matches(&req_id).await;
                 }
                 exec_contexts.lock().await.remove(&req_id);
                 self.wait_for_exec_tool_calls(&req_id).await;
@@ -908,7 +970,7 @@ impl JsReplManager {
                 self.reset_kernel().await;
                 self.wait_for_exec_tool_calls(&req_id).await;
                 self.exec_tool_calls.lock().await.clear();
-                self.clear_current_exec_if_matches(&req_id).await;
+                self.clear_top_level_exec_if_matches(&req_id).await;
                 return Err(FunctionCallError::RespondToModel(
                     "js_repl execution timed out; kernel reset, rerun your request".to_string(),
                 ));
@@ -1048,7 +1110,6 @@ impl JsReplManager {
             stdout,
             Arc::clone(&child),
             Arc::clone(&self.kernel),
-            Arc::clone(&self.current_exec),
             Arc::clone(&recent_stderr),
             Arc::clone(&pending_execs),
             Arc::clone(&exec_contexts),
@@ -1072,7 +1133,7 @@ impl JsReplManager {
             stdin: stdin_arc,
             pending_execs,
             exec_contexts,
-            pending_owner_turn: None,
+            top_level_exec_state: TopLevelExecState::Idle,
             shutdown,
         })
     }
@@ -1193,7 +1254,6 @@ impl JsReplManager {
         stdout: tokio::process::ChildStdout,
         child: Arc<Mutex<Child>>,
         manager_kernel: Arc<Mutex<Option<KernelState>>>,
-        current_exec: Arc<Mutex<Option<CurrentExec>>>,
         recent_stderr: Arc<Mutex<VecDeque<String>>>,
         pending_execs: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ExecResultMessage>>>>,
         exec_contexts: Arc<Mutex<HashMap<String, ExecContext>>>,
@@ -1241,7 +1301,7 @@ impl JsReplManager {
                         pending.remove(&id)
                     };
                     if let Some(tx) = tx {
-                        Self::clear_current_exec_if_matches_map(&current_exec, &id).await;
+                        Self::clear_top_level_exec_if_matches_map(&manager_kernel, &id).await;
                         let payload = if ok {
                             ExecResultMessage::Ok {
                                 content_items: build_exec_result_content_items(
@@ -1386,13 +1446,7 @@ impl JsReplManager {
         }
         drop(pending);
         if !pending_exec_ids.is_empty() {
-            let mut current_exec = current_exec.lock().await;
-            if current_exec
-                .as_ref()
-                .is_some_and(|current_exec| pending_exec_ids.contains(&current_exec.exec_id))
-            {
-                current_exec.take();
-            }
+            Self::clear_top_level_exec_if_matches_any_map(&manager_kernel, &pending_exec_ids).await;
         }
 
         if !matches!(end_reason, KernelStreamEnd::Shutdown) {
@@ -2090,31 +2144,49 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn interrupt_turn_exec_clears_matching_submitted_exec() {
-        let manager = JsReplManager {
-            node_path: None,
-            node_module_dirs: Vec::new(),
-            tmp_dir: tempfile::tempdir().expect("tempdir should initialize"),
-            kernel: Arc::new(Mutex::new(None)),
-            exec_lock: Arc::new(tokio::sync::Semaphore::new(1)),
-            exec_tool_calls: Arc::new(Mutex::new(HashMap::new())),
-            current_exec: Arc::new(Mutex::new(Some(CurrentExec {
-                exec_id: "exec-1".to_string(),
-                submitted: true,
-                turn_id: "turn-1".to_string(),
-            }))),
+    #[tokio::test]
+    async fn interrupt_turn_exec_clears_matching_submitted_exec() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let manager = JsReplManager::new(None, Vec::new())
+            .await
+            .expect("manager should initialize");
+        let (_session, turn) = make_session_and_context().await;
+        let turn = Arc::new(turn);
+        let mut state = manager
+            .start_kernel(Arc::clone(&turn), None)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        let child = Arc::clone(&state.child);
+        state.top_level_exec_state = TopLevelExecState::Submitted {
+            turn_id: turn.sub_id.clone(),
+            exec_id: "exec-1".to_string(),
         };
+        *manager.kernel.lock().await = Some(state);
         manager.register_exec_tool_calls("exec-1").await;
 
-        assert!(
-            manager
-                .interrupt_turn_exec("turn-1")
-                .await
-                .expect("interrupt cleanup should succeed")
-        );
-        assert!(!manager.turn_has_submitted_exec("turn-1").await);
+        assert!(manager.interrupt_turn_exec(&turn.sub_id).await?);
+        assert!(manager.kernel.lock().await.is_none());
         assert!(manager.exec_tool_calls.lock().await.is_empty());
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let exited = {
+                    let mut child = child.lock().await;
+                    child.try_wait()?.is_some()
+                };
+                if exited {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("kernel should exit after interrupt cleanup")?;
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -2132,7 +2204,10 @@ mod tests {
             .start_kernel(Arc::clone(&turn), None)
             .await
             .map_err(anyhow::Error::msg)?;
-        state.pending_owner_turn = Some(turn.sub_id.clone());
+        state.top_level_exec_state = TopLevelExecState::FreshKernel {
+            turn_id: turn.sub_id.clone(),
+            exec_id: None,
+        };
         let child = Arc::clone(&state.child);
         *manager.kernel.lock().await = Some(state);
 
@@ -2155,6 +2230,34 @@ mod tests {
         .expect("kernel should exit after interrupt cleanup")?;
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn interrupt_turn_exec_does_not_reset_reused_kernel_before_submit() -> anyhow::Result<()>
+    {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let manager = JsReplManager::new(None, Vec::new())
+            .await
+            .expect("manager should initialize");
+        let (_session, turn) = make_session_and_context().await;
+        let turn = Arc::new(turn);
+        let mut state = manager
+            .start_kernel(Arc::clone(&turn), None)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        state.top_level_exec_state = TopLevelExecState::ReusedKernelPending {
+            turn_id: turn.sub_id.clone(),
+            exec_id: "exec-1".to_string(),
+        };
+        *manager.kernel.lock().await = Some(state);
+
+        assert!(!manager.interrupt_turn_exec(&turn.sub_id).await?);
+        assert!(manager.kernel.lock().await.is_some());
+
+        manager.reset().await.map_err(anyhow::Error::msg)
     }
 
     #[test]
