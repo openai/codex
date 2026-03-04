@@ -1656,6 +1656,9 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+        self.notify(Notification::PlanModePrompt {
+            title: PLAN_IMPLEMENTATION_TITLE.to_string(),
+        });
     }
 
     pub(crate) fn open_multi_agent_enable_prompt(&mut self) {
@@ -2872,6 +2875,10 @@ impl ChatWidget {
 
     pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
         self.flush_answer_stream_with_separator();
+        self.notify(Notification::UserInputRequested {
+            question_count: ev.questions.len(),
+            summary: Notification::user_input_request_summary(&ev.questions),
+        });
         self.bottom_pane.push_user_input_request(ev);
         self.request_redraw();
     }
@@ -4976,6 +4983,11 @@ impl ChatWidget {
         if !notification.allowed_for(&self.config.tui_notifications) {
             return;
         }
+        if let Some(existing) = self.pending_notification.as_ref()
+            && existing.priority() > notification.priority()
+        {
+            return;
+        }
         self.pending_notification = Some(notification);
         self.request_redraw();
     }
@@ -6171,6 +6183,9 @@ impl ChatWidget {
                 },
             ],
             ..Default::default()
+        });
+        self.notify(Notification::PlanModePrompt {
+            title: PLAN_MODE_REASONING_SCOPE_TITLE.to_string(),
         });
     }
 
@@ -8383,11 +8398,28 @@ impl Renderable for ChatWidget {
     }
 }
 
+#[derive(Debug)]
 enum Notification {
-    AgentTurnComplete { response: String },
-    ExecApprovalRequested { command: String },
-    EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
-    ElicitationRequested { server_name: String },
+    AgentTurnComplete {
+        response: String,
+    },
+    ExecApprovalRequested {
+        command: String,
+    },
+    EditApprovalRequested {
+        cwd: PathBuf,
+        changes: Vec<PathBuf>,
+    },
+    ElicitationRequested {
+        server_name: String,
+    },
+    PlanModePrompt {
+        title: String,
+    },
+    UserInputRequested {
+        question_count: usize,
+        summary: Option<String>,
+    },
 }
 
 impl Notification {
@@ -8414,6 +8446,17 @@ impl Notification {
             Notification::ElicitationRequested { server_name } => {
                 format!("Approval requested by {server_name}")
             }
+            Notification::PlanModePrompt { title } => {
+                format!("Plan mode prompt: {title}")
+            }
+            Notification::UserInputRequested {
+                question_count,
+                summary,
+            } => match (*question_count, summary.as_deref()) {
+                (1, Some(summary)) => format!("Question requested: {summary}"),
+                (1, None) => "Question requested".to_string(),
+                (count, _) => format!("Questions requested: {count}"),
+            },
         }
     }
 
@@ -8423,6 +8466,19 @@ impl Notification {
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. } => "approval-requested",
+            Notification::PlanModePrompt { .. } => "plan-mode-prompt",
+            Notification::UserInputRequested { .. } => "user-input-requested",
+        }
+    }
+
+    fn priority(&self) -> u8 {
+        match self {
+            Notification::AgentTurnComplete { .. } => 0,
+            Notification::ExecApprovalRequested { .. }
+            | Notification::EditApprovalRequested { .. }
+            | Notification::ElicitationRequested { .. }
+            | Notification::PlanModePrompt { .. }
+            | Notification::UserInputRequested { .. } => 1,
         }
     }
 
@@ -8446,6 +8502,22 @@ impl Notification {
             None
         } else {
             Some(truncate_text(trimmed, AGENT_NOTIFICATION_PREVIEW_GRAPHEMES))
+        }
+    }
+
+    fn user_input_request_summary(
+        questions: &[codex_protocol::request_user_input::RequestUserInputQuestion],
+    ) -> Option<String> {
+        let first_question = questions.first()?;
+        let summary = if first_question.header.trim().is_empty() {
+            first_question.question.trim()
+        } else {
+            first_question.header.trim()
+        };
+        if summary.is_empty() {
+            None
+        } else {
+            Some(truncate_text(summary, 30))
         }
     }
 }
