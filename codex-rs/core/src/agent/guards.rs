@@ -39,10 +39,10 @@ fn format_agent_nickname(name: &str, nickname_reset_count: usize) -> String {
             let suffix = match value % 100 {
                 11..=13 => "th",
                 _ => match value % 10 {
-                    1 => "st",
-                    2 => "nd",
-                    3 => "rd",
-                    _ => "th",
+                    1 => "st", // codespell:ignore
+                    2 => "nd", // codespell:ignore
+                    3 => "rd", // codespell:ignore
+                    _ => "th", // codespell:ignore
                 },
             };
             format!("{name} the {value}{suffix}")
