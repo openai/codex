@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/request_user_input/mod.rs
+expression: "render_snapshot(&overlay, area)"
+---
+                                                                                                    
+  Question 1/1 (1 unanswered)                                                                       
+  Approve Gmail: Send Email?                                                                        
+  The Gmail app wants to run the tool "Send Email" (send_email), which may modify data and access   
+  external systems.                                                                                 
+                                                                                                    
+  Tool call details:                                                                                
+  - to: ["user@example.com"]                                                                        
+  - subject: "Quarterly update"                                                                     
+  - body: "Draft email body"                                                                        
+                                                                                                    
+  Allow this action?                                                                                
+                                                                                                    
+  › 1. Approve Once  Run the tool and continue.                                                     
+    2. Deny          Decline this tool call and continue.                                           
+                                                                                                    
+  option 1/3 | tab to add notes | enter to submit answer | esc to interrupt

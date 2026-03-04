@@ -4,9 +4,9 @@ expression: "render_snapshot(&overlay, area)"
 ---
                                                                                 
   Question 1/1 (1 unanswered)                                                   
+  Next Step                                                                     
   What would you like to do next?                                               
                                                                                 
-    2. Run tests      Pick a crate and run its tests.                           
     3. Review a diff  Summarize or review current changes.                      
   › 4. Refactor       Tighten structure and remove dead code.                   
                                                                                 

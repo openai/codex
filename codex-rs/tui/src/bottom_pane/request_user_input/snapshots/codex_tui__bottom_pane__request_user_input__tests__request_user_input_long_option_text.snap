@@ -4,6 +4,7 @@ expression: "render_snapshot(&overlay, area)"
 ---
                                                                                                                         
   Question 1/1 (1 unanswered)                                                                                           
+  Status                                                                                                                
   Choose one option.                                                                                                    
                                                                                                                         
   › 1. Job: running/completed/failed/expired; Run/Experiment: succeeded/failed/    Keep async job statuses for          

@@ -4,6 +4,7 @@ expression: "render_snapshot(&overlay, area)"
 ---
                                                                                                               
   Question 1/1 (1 unanswered)                                                                                 
+  Next Step                                                                                                   
   Choose the next step for this task.                                                                         
                                                                                                               
   › 1. Discuss a code change  Walk through a plan, then implement it together with careful checks.            
