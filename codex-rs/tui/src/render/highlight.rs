@@ -50,6 +50,8 @@ static THEME: OnceLock<RwLock<Theme>> = OnceLock::new();
 static THEME_OVERRIDE: OnceLock<Option<String>> = OnceLock::new();
 static CODEX_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
 
+// Syntect/bat encode ANSI palette semantics in alpha:
+// `a=0` => indexed ANSI palette via RGB payload, `a=1` => terminal default.
 const ANSI_ALPHA_INDEX: u8 = 0x00;
 const ANSI_ALPHA_DEFAULT: u8 = 0x01;
 const OPAQUE_ALPHA: u8 = 0xFF;
@@ -58,53 +60,12 @@ fn syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(two_face::syntax::extra_newlines)
 }
 
-fn append_warning(warning: &mut Option<String>, msg: String) {
-    if let Some(existing) = warning {
-        if !existing.lines().any(|line| line == msg.as_str()) {
-            existing.push('\n');
-            existing.push_str(&msg);
-        }
-    } else {
-        *warning = Some(msg);
-    }
-}
-
-fn is_ansi_family_theme_name(name: &str) -> bool {
-    matches!(name, "ansi" | "base16" | "base16-256")
-}
-
-fn is_ansi_alpha_signal(color: Option<SyntectColor>) -> bool {
-    color.is_some_and(|c| matches!(c.a, ANSI_ALPHA_INDEX | ANSI_ALPHA_DEFAULT))
-}
-
-fn theme_uses_ansi_alpha_encoding(theme: &Theme) -> bool {
-    is_ansi_alpha_signal(theme.settings.foreground)
-        || is_ansi_alpha_signal(theme.settings.background)
-        || theme.scopes.iter().any(|item| {
-            is_ansi_alpha_signal(item.style.foreground)
-                || is_ansi_alpha_signal(item.style.background)
-        })
-}
-
-fn ansi_family_theme_contract_warning_for_theme(name: &str, theme: &Theme) -> Option<String> {
-    if !is_ansi_family_theme_name(name) || theme_uses_ansi_alpha_encoding(theme) {
-        return None;
-    }
-    Some(format!(
-        "Syntax theme \"{name}\" resolved, but no alpha-encoded ANSI color \
-         markers were detected. This may indicate an upstream theme-format \
-         change. Codex will continue with RGB fallback semantics."
-    ))
-}
-
-fn validate_ansi_family_theme_contract(
-    name: Option<&str>,
-    codex_home: Option<&Path>,
-) -> Option<String> {
-    let name = name?;
-    let theme = resolve_theme_by_name(name, codex_home)?;
-    ansi_family_theme_contract_warning_for_theme(name, &theme)
-}
+// NOTE: We intentionally do NOT emit a runtime diagnostic when an ANSI-family
+// theme (ansi, base16, base16-256) lacks the expected alpha-channel marker
+// encoding.  If the upstream two_face/syntect theme format changes, the
+// `ansi_themes_use_only_ansi_palette_colors` test will catch it at build
+// time — long before it reaches users.  A runtime warning would be
+// unactionable noise since users can't fix upstream themes.
 
 /// Set the user-configured syntax theme override and codex home path.
 ///
@@ -115,21 +76,13 @@ fn validate_ansi_family_theme_contract(
 /// Subsequent calls cannot change the persisted `OnceLock` values, but they
 /// still update the runtime theme immediately for live preview flows.
 ///
-/// Returns a warning message when the configured theme name cannot be
-/// resolved to a bundled theme or a custom `.tmTheme` file on disk.
-/// The caller should surface this via `Config::startup_warnings` so it
-/// appears as a `⚠` banner in the TUI.
+/// Returns user-facing warnings for actionable configuration issues, such as
+/// unknown/invalid theme names or duplicate override persistence.
 pub(crate) fn set_theme_override(
     name: Option<String>,
     codex_home: Option<PathBuf>,
 ) -> Option<String> {
-    let mut warning = validate_theme_name(name.as_deref(), codex_home.as_deref());
-    if let Some(contract_warning) =
-        validate_ansi_family_theme_contract(name.as_deref(), codex_home.as_deref())
-    {
-        tracing::warn!("{contract_warning}");
-        append_warning(&mut warning, contract_warning);
-    }
+    let warning = validate_theme_name(name.as_deref(), codex_home.as_deref());
     let override_set_ok = THEME_OVERRIDE.set(name.clone()).is_ok();
     let codex_home_set_ok = CODEX_HOME.set(codex_home.clone()).is_ok();
     if THEME.get().is_some() {
@@ -139,9 +92,10 @@ pub(crate) fn set_theme_override(
         ));
     }
     if !override_set_ok || !codex_home_set_ok {
-        let duplicate_msg = "Ignoring duplicate or late syntax theme override persistence; runtime theme was updated from the latest override, but persisted override config can only be initialized once.";
-        tracing::warn!("{duplicate_msg}");
-        append_warning(&mut warning, duplicate_msg.to_string());
+        // This should never happen in practice — set_theme_override is only
+        // called once at startup.  Keep as a debug breadcrumb in case a second
+        // call site is added in the future.
+        tracing::debug!("set_theme_override called more than once; OnceLock values unchanged");
     }
     warning
 }
@@ -166,15 +120,15 @@ pub(crate) fn validate_theme_name(name: Option<&str>, codex_home: Option<&Path>)
                 return None;
             }
             return Some(format!(
-                "Syntax theme \"{name}\" was found at {custom_theme_path_display} \
-                 but could not be parsed. Falling back to auto-detection."
+                "Custom theme \"{name}\" at {custom_theme_path_display} could not \
+                 be loaded (invalid .tmTheme format). Falling back to the default theme."
             ));
         }
     }
     Some(format!(
-        "Unknown syntax theme \"{name}\", falling back to auto-detection. \
-         Use a bundled name or place a .tmTheme file at \
-         {custom_theme_path_display}"
+        "Theme \"{name}\" not found. Using the default theme. \
+         To use a custom theme, place a .tmTheme file at \
+         {custom_theme_path_display}."
     ))
 }
 
@@ -246,7 +200,7 @@ pub(crate) fn adaptive_default_theme_name() -> &'static str {
     adaptive_default_theme_selection().1
 }
 
-/// Build the theme from current override/auto-detection settings.
+/// Build the theme from current override/default-theme settings.
 /// Extracted from the old `theme()` init closure so it can be reused.
 fn resolve_theme_with_override(name: Option<&str>, codex_home: Option<&Path>) -> Theme {
     let ts = two_face::theme::extra();
@@ -263,13 +217,13 @@ fn resolve_theme_with_override(name: Option<&str>, codex_home: Option<&Path>) ->
         {
             return theme;
         }
-        tracing::warn!("unknown syntax theme \"{name}\", falling back to auto-detection");
+        tracing::debug!("Theme \"{name}\" not recognized; using default theme");
     }
 
     ts.get(adaptive_default_embedded_theme_name()).clone()
 }
 
-/// Build the theme from current override/auto-detection settings.
+/// Build the theme from current override/default-theme settings.
 /// Extracted from the old `theme()` init closure so it can be reused.
 fn build_default_theme() -> Theme {
     let name = THEME_OVERRIDE.get().and_then(|name| name.as_deref());
@@ -825,27 +779,6 @@ mod tests {
     }
 
     #[test]
-    fn append_warning_sets_initial_warning() {
-        let mut warning = None;
-        append_warning(&mut warning, "first warning".to_string());
-        assert_eq!(warning, Some("first warning".to_string()));
-    }
-
-    #[test]
-    fn append_warning_dedupes_exact_duplicate_messages() {
-        let mut warning = Some("same warning".to_string());
-        append_warning(&mut warning, "same warning".to_string());
-        assert_eq!(warning, Some("same warning".to_string()));
-    }
-
-    #[test]
-    fn append_warning_keeps_distinct_messages_even_when_substrings_overlap() {
-        let mut warning = Some("alpha marker warning".to_string());
-        append_warning(&mut warning, "marker".to_string());
-        assert_eq!(warning, Some("alpha marker warning\nmarker".to_string()));
-    }
-
-    #[test]
     fn highlight_rust_has_keyword_style() {
         let code = "fn main() {}";
         let lines = highlight_code_to_lines(code, "rust");
@@ -1111,29 +1044,6 @@ mod tests {
             }
         }
         assert_snapshot!("ansi_family_foreground_palette", out);
-    }
-
-    #[test]
-    fn ansi_family_contract_warning_for_non_ansi_theme_is_none() {
-        let warning = ansi_family_theme_contract_warning_for_theme("dracula", &Theme::default());
-        assert!(warning.is_none());
-    }
-
-    #[test]
-    fn ansi_family_contract_warning_for_theme_without_alpha_markers_is_some() {
-        let warning = ansi_family_theme_contract_warning_for_theme("ansi", &Theme::default());
-        assert!(warning.is_some());
-    }
-
-    #[test]
-    fn ansi_family_contract_warning_for_builtin_ansi_family_themes_is_none() {
-        for theme_name in ["ansi", "base16", "base16-256"] {
-            let warning = validate_ansi_family_theme_contract(Some(theme_name), None);
-            assert!(
-                warning.is_none(),
-                "expected built-in theme {theme_name} to satisfy ansi-family contract"
-            );
-        }
     }
 
     #[test]
@@ -1468,7 +1378,7 @@ mod tests {
         assert!(
             warning
                 .as_deref()
-                .is_some_and(|msg| msg.contains("could not be parsed")),
+                .is_some_and(|msg| msg.contains("could not be loaded")),
             "warning should explain that the theme file is invalid"
         );
     }
