@@ -7,6 +7,7 @@
 - Tokens are matched in order; any `pattern` element may be a list to denote alternatives. `decision` defaults to `allow`; valid values: `allow`, `prompt`, `forbidden`.
 - `justification` is an optional human-readable rationale for why a rule exists. It can be provided for any `decision` and may be surfaced in different contexts (for example, in approval prompts or rejection messages). When `decision = "forbidden"` is used, include a recommended alternative in the `justification`, when appropriate (e.g., ``"Use `jj` instead of `git`."``).
 - `match` / `not_match` supply example invocations that are validated at load time (think of them as unit tests); examples can be token arrays or strings (strings are tokenized with `shlex`).
+- Prefer token arrays when the exact tokens matter, such as Windows absolute paths (`C:\...\git.exe`) or shell-specific quoting; string examples are shorthand for simple cases like `git status`.
 - The CLI always prints the JSON serialization of the evaluation result.
 - The legacy rule matcher lives in `codex-execpolicy-legacy`.
 
@@ -19,8 +20,8 @@ prefix_rule(
     pattern = ["cmd", ["alt1", "alt2"]], # ordered tokens; list entries denote alternatives
     decision = "prompt",                 # allow | prompt | forbidden; defaults to allow
     justification = "explain why this rule exists",
-    match = [["cmd", "alt1"], "cmd alt2"],           # examples that must match this rule
-    not_match = [["cmd", "oops"], "cmd alt3"],       # examples that must not match this rule
+    match = [["cmd", "alt1"], "cmd alt2"],           # token arrays are the exact, lossless form
+    not_match = [["cmd", "oops"], "cmd alt3"],       # strings are convenient shlex shorthand
 )
 ```
 
