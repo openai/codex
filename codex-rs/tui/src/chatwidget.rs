@@ -1294,7 +1294,9 @@ impl ChatWidget {
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
-            !snapshot.feedback_diagnostics().is_empty(),
+            snapshot
+                .feedback_diagnostics_attachment_text(true)
+                .is_some(),
         );
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();

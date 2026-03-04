@@ -225,6 +225,14 @@ impl FeedbackSnapshot {
         self
     }
 
+    pub fn feedback_diagnostics_attachment_text(&self, include_logs: bool) -> Option<String> {
+        if !include_logs {
+            return None;
+        }
+
+        self.feedback_diagnostics.attachment_text()
+    }
+
     pub fn save_to_temp_file(&self) -> io::Result<PathBuf> {
         let dir = std::env::temp_dir();
         let filename = format!("codex-feedback-{}.log", self.thread_id);
@@ -352,7 +360,7 @@ impl FeedbackSnapshot {
             });
         }
 
-        if include_logs && let Some(text) = self.feedback_diagnostics.attachment_text() {
+        if let Some(text) = self.feedback_diagnostics_attachment_text(include_logs) {
             attachments.push(Attachment {
                 buffer: text.into_bytes(),
                 filename: FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME.to_string(),
@@ -544,5 +552,52 @@ mod tests {
             OsStr::new(extra_filename.as_str())
         );
         fs::remove_file(extra_path).expect("extra attachment should be removed");
+    }
+
+    #[test]
+    fn feedback_attachments_omit_connectivity_diagnostics_when_none_detected() {
+        let snapshot = CodexFeedback::new().snapshot(None);
+
+        let attachments = snapshot.feedback_attachments(true, &[], Some(vec![1]));
+
+        assert_eq!(
+            attachments
+                .iter()
+                .map(|attachment| attachment.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec!["codex-logs.log"]
+        );
+        assert_eq!(attachments[0].buffer, vec![1]);
+    }
+
+    #[test]
+    fn feedback_diagnostics_attachment_text_matches_upload_conditions() {
+        let snapshot_without_diagnostics = CodexFeedback::new().snapshot(None);
+        assert_eq!(
+            snapshot_without_diagnostics.feedback_diagnostics_attachment_text(true),
+            None
+        );
+        assert_eq!(
+            snapshot_without_diagnostics.feedback_diagnostics_attachment_text(false),
+            None
+        );
+
+        let snapshot_with_diagnostics =
+            snapshot_without_diagnostics.with_feedback_diagnostics(FeedbackDiagnostics::new(vec![
+                FeedbackDiagnostic {
+                    headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                    details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
+                },
+            ]));
+        assert_eq!(
+            snapshot_with_diagnostics.feedback_diagnostics_attachment_text(false),
+            None
+        );
+        assert_eq!(
+            snapshot_with_diagnostics.feedback_diagnostics_attachment_text(true),
+            Some(
+                "Connectivity diagnostics\n\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1".to_string()
+            )
+        );
     }
 }
