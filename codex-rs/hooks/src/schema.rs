@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 use std::path::Path;
+use std::path::PathBuf;
 
 const GENERATED_DIR: &str = "generated";
 const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.json";
@@ -20,6 +21,16 @@ const STOP_OUTPUT_FIXTURE: &str = "stop.command.output.schema.json";
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
 pub(crate) struct NullableString(Option<String>);
+
+impl NullableString {
+    fn from_path(path: Option<PathBuf>) -> Self {
+        Self(path.map(|path| path.display().to_string()))
+    }
+
+    fn from_string(value: Option<String>) -> Self {
+        Self(value)
+    }
+}
 
 impl JsonSchema for NullableString {
     fn schema_name() -> String {
@@ -111,6 +122,27 @@ pub(crate) struct SessionStartCommandInput {
     pub source: String,
 }
 
+impl SessionStartCommandInput {
+    pub(crate) fn new(
+        session_id: impl Into<String>,
+        transcript_path: Option<PathBuf>,
+        cwd: impl Into<String>,
+        model: impl Into<String>,
+        permission_mode: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            transcript_path: NullableString::from_path(transcript_path),
+            cwd: cwd.into(),
+            hook_event_name: "SessionStart".to_string(),
+            model: model.into(),
+            permission_mode: permission_mode.into(),
+            source: source.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "stop.command.input")]
@@ -125,6 +157,29 @@ pub(crate) struct StopCommandInput {
     pub permission_mode: String,
     pub stop_hook_active: bool,
     pub last_assistant_message: NullableString,
+}
+
+impl StopCommandInput {
+    pub(crate) fn new(
+        session_id: impl Into<String>,
+        transcript_path: Option<PathBuf>,
+        cwd: impl Into<String>,
+        model: impl Into<String>,
+        permission_mode: impl Into<String>,
+        stop_hook_active: bool,
+        last_assistant_message: Option<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            transcript_path: NullableString::from_path(transcript_path),
+            cwd: cwd.into(),
+            hook_event_name: "Stop".to_string(),
+            model: model.into(),
+            permission_mode: permission_mode.into(),
+            stop_hook_active,
+            last_assistant_message: NullableString::from_string(last_assistant_message),
+        }
+    }
 }
 
 pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
