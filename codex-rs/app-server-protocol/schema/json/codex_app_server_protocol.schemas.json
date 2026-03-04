@@ -833,6 +833,30 @@
             },
             "method": {
               "enum": [
+                "plugin/install"
+              ],
+              "title": "Plugin/installRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginInstallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/installRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "turn/start"
               ],
               "title": "Turn/startRequestMethod",
@@ -10896,6 +10920,34 @@
           "unknown"
         ],
         "type": "string"
+      },
+      "PluginInstallParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "marketplaceName": {
+            "type": "string"
+          },
+          "pluginName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "marketplaceName",
+          "pluginName"
+        ],
+        "title": "PluginInstallParams",
+        "type": "object"
+      },
+      "PluginInstallResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "PluginInstallResponse",
+        "type": "object"
       },
       "ProductSurface": {
         "enum": [
