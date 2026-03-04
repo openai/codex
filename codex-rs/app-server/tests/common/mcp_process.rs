@@ -11,11 +11,8 @@ use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 
 use anyhow::Context;
-use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AppsListParams;
-use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::CancelLoginAccountParams;
-use codex_app_server_protocol::CancelLoginChatGptParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::CollaborationModeListParams;
@@ -24,38 +21,30 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::FeedbackUploadParams;
-use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAuthStatusParams;
+use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
-use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::LoginAccountParams;
-use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ReviewStartParams;
-use codex_app_server_protocol::SendUserMessageParams;
-use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
@@ -112,7 +101,7 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
-        cmd.env("RUST_LOG", "debug");
+        cmd.env("RUST_LOG", "info");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
 
         for (k, v) in env_overrides {
@@ -243,71 +232,6 @@ impl McpProcess {
         }
     }
 
-    /// Send a `newConversation` JSON-RPC request.
-    pub async fn send_new_conversation_request(
-        &mut self,
-        params: NewConversationParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("newConversation", params).await
-    }
-
-    /// Send an `archiveConversation` JSON-RPC request.
-    pub async fn send_archive_conversation_request(
-        &mut self,
-        params: ArchiveConversationParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("archiveConversation", params).await
-    }
-
-    /// Send an `addConversationListener` JSON-RPC request.
-    pub async fn send_add_conversation_listener_request(
-        &mut self,
-        params: AddConversationListenerParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("addConversationListener", params).await
-    }
-
-    /// Send a `sendUserMessage` JSON-RPC request with a single text item.
-    pub async fn send_send_user_message_request(
-        &mut self,
-        params: SendUserMessageParams,
-    ) -> anyhow::Result<i64> {
-        // Wire format expects variants in camelCase; text item uses external tagging.
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("sendUserMessage", params).await
-    }
-
-    /// Send a `removeConversationListener` JSON-RPC request.
-    pub async fn send_remove_thread_listener_request(
-        &mut self,
-        params: RemoveConversationListenerParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("removeConversationListener", params)
-            .await
-    }
-
-    /// Send a `sendUserTurn` JSON-RPC request.
-    pub async fn send_send_user_turn_request(
-        &mut self,
-        params: SendUserTurnParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("sendUserTurn", params).await
-    }
-
-    /// Send a `interruptConversation` JSON-RPC request.
-    pub async fn send_interrupt_conversation_request(
-        &mut self,
-        params: InterruptConversationParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("interruptConversation", params).await
-    }
-
     /// Send a `getAuthStatus` JSON-RPC request.
     pub async fn send_get_auth_status_request(
         &mut self,
@@ -317,14 +241,13 @@ impl McpProcess {
         self.send_request("getAuthStatus", params).await
     }
 
-    /// Send a `getUserSavedConfig` JSON-RPC request.
-    pub async fn send_get_user_saved_config_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("getUserSavedConfig", None).await
-    }
-
-    /// Send a `getUserAgent` JSON-RPC request.
-    pub async fn send_get_user_agent_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("getUserAgent", None).await
+    /// Send a `getConversationSummary` JSON-RPC request.
+    pub async fn send_get_conversation_summary_request(
+        &mut self,
+        params: GetConversationSummaryParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("getConversationSummary", params).await
     }
 
     /// Send an `account/rateLimits/read` JSON-RPC request.
@@ -364,29 +287,6 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("feedback/upload", params).await
-    }
-
-    /// Send a `userInfo` JSON-RPC request.
-    pub async fn send_user_info_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("userInfo", None).await
-    }
-
-    /// Send a `setDefaultModel` JSON-RPC request.
-    pub async fn send_set_default_model_request(
-        &mut self,
-        params: SetDefaultModelParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("setDefaultModel", params).await
-    }
-
-    /// Send a `listConversations` JSON-RPC request.
-    pub async fn send_list_conversations_request(
-        &mut self,
-        params: ListConversationsParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("listConversations", params).await
     }
 
     /// Send a `thread/start` JSON-RPC request.
@@ -432,6 +332,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/name/set", params).await
+    }
+
+    /// Send a `thread/metadata/update` JSON-RPC request.
+    pub async fn send_thread_metadata_update_request(
+        &mut self,
+        params: ThreadMetadataUpdateParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/metadata/update", params).await
     }
 
     /// Send a `thread/unsubscribe` JSON-RPC request.
@@ -546,38 +455,6 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("mock/experimentalMethod", params).await
-    }
-
-    /// Send a `resumeConversation` JSON-RPC request.
-    pub async fn send_resume_conversation_request(
-        &mut self,
-        params: ResumeConversationParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("resumeConversation", params).await
-    }
-
-    /// Send a `forkConversation` JSON-RPC request.
-    pub async fn send_fork_conversation_request(
-        &mut self,
-        params: ForkConversationParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("forkConversation", params).await
-    }
-
-    /// Send a `loginApiKey` JSON-RPC request.
-    pub async fn send_login_api_key_request(
-        &mut self,
-        params: LoginApiKeyParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("loginApiKey", params).await
-    }
-
-    /// Send a `loginChatGpt` JSON-RPC request.
-    pub async fn send_login_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("loginChatGpt", None).await
     }
 
     /// Send a `turn/start` JSON-RPC request (v2).
@@ -717,20 +594,6 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("windowsSandbox/setupStart", params).await
-    }
-
-    /// Send a `cancelLoginChatGpt` JSON-RPC request.
-    pub async fn send_cancel_login_chat_gpt_request(
-        &mut self,
-        params: CancelLoginChatGptParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("cancelLoginChatGpt", params).await
-    }
-
-    /// Send a `logoutChatGpt` JSON-RPC request.
-    pub async fn send_logout_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("logoutChatGpt", None).await
     }
 
     pub async fn send_config_read_request(

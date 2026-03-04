@@ -127,6 +127,9 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             }
             normalized
         }),
+        feature_requirements: requirements
+            .feature_requirements
+            .map(|requirements| requirements.entries),
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
@@ -212,6 +215,12 @@ mod tests {
             allowed_web_search_modes: Some(vec![
                 codex_core::config_loader::WebSearchModeRequirement::Cached,
             ]),
+            feature_requirements: Some(codex_core::config_loader::FeatureRequirementsToml {
+                entries: std::collections::BTreeMap::from([
+                    ("apps".to_string(), false),
+                    ("personality".to_string(), true),
+                ]),
+            }),
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
@@ -248,6 +257,13 @@ mod tests {
             Some(vec![WebSearchMode::Cached, WebSearchMode::Disabled]),
         );
         assert_eq!(
+            mapped.feature_requirements,
+            Some(std::collections::BTreeMap::from([
+                ("apps".to_string(), false),
+                ("personality".to_string(), true),
+            ])),
+        );
+        assert_eq!(
             mapped.enforce_residency,
             Some(codex_app_server_protocol::ResidencyRequirement::Us),
         );
@@ -275,6 +291,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
+            feature_requirements: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,

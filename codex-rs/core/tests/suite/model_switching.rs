@@ -20,8 +20,10 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_completed;
@@ -31,6 +33,47 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use wiremock::MockServer;
+
+fn test_model_info(
+    slug: &str,
+    display_name: &str,
+    description: &str,
+    input_modalities: Vec<InputModality>,
+) -> ModelInfo {
+    ModelInfo {
+        slug: slug.to_string(),
+        display_name: display_name.to_string(),
+        description: Some(description.to_string()),
+        default_reasoning_level: Some(ReasoningEffort::Medium),
+        supported_reasoning_levels: vec![ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: ReasoningEffort::Medium.to_string(),
+        }],
+        shell_type: ConfigShellToolType::ShellCommand,
+        visibility: ModelVisibility::List,
+        supported_in_api: true,
+        input_modalities,
+        prefer_websockets: false,
+        used_fallback_model_metadata: false,
+        priority: 1,
+        upgrade: None,
+        base_instructions: "base instructions".to_string(),
+        model_messages: None,
+        supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
+        support_verbosity: false,
+        default_verbosity: None,
+        availability_nux: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
+        context_window: Some(272_000),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn model_change_appends_model_instructions_developer_message() -> Result<()> {
@@ -133,7 +176,10 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.features.enable(Feature::Personality);
+            config
+                .features
+                .enable(Feature::Personality)
+                .expect("test config should allow feature update");
         });
     let test = builder.build(&server).await?;
     let next_model = "exp-codex-personality";
@@ -245,49 +291,43 @@ async fn service_tier_change_is_applied_on_next_http_turn() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn flex_service_tier_is_applied_to_http_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+
+    let test = test_codex().build(&server).await?;
+
+    test.submit_turn_with_service_tier("flex turn", Some(ServiceTier::Flex))
+        .await?;
+
+    let request = resp_mock.single_request();
+    let body = request.body_json();
+    assert_eq!(body["service_tier"].as_str(), Some("flex"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
     let image_model_slug = "test-image-model";
     let text_model_slug = "test-text-only-model";
-    let image_model = ModelInfo {
-        slug: image_model_slug.to_string(),
-        display_name: "Test Image Model".to_string(),
-        description: Some("supports image input".to_string()),
-        default_reasoning_level: Some(ReasoningEffort::Medium),
-        supported_reasoning_levels: vec![ReasoningEffortPreset {
-            effort: ReasoningEffort::Medium,
-            description: ReasoningEffort::Medium.to_string(),
-        }],
-        shell_type: ConfigShellToolType::ShellCommand,
-        visibility: ModelVisibility::List,
-        supported_in_api: true,
-        input_modalities: default_input_modalities(),
-        prefer_websockets: false,
-        used_fallback_model_metadata: false,
-        priority: 1,
-        upgrade: None,
-        base_instructions: "base instructions".to_string(),
-        model_messages: None,
-        supports_reasoning_summaries: false,
-        default_reasoning_summary: ReasoningSummary::Auto,
-        support_verbosity: false,
-        default_verbosity: None,
-        availability_nux: None,
-        apply_patch_tool_type: None,
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
-        supports_parallel_tool_calls: false,
-        context_window: Some(272_000),
-        auto_compact_token_limit: None,
-        effective_context_window_percent: 95,
-        experimental_supported_tools: Vec::new(),
-    };
-    let mut text_model = image_model.clone();
-    text_model.slug = text_model_slug.to_string();
-    text_model.display_name = "Test Text Model".to_string();
-    text_model.description = Some("text only".to_string());
-    text_model.input_modalities = vec![InputModality::Text];
+    let image_model = test_model_info(
+        image_model_slug,
+        "Test Image Model",
+        "supports image input",
+        default_input_modalities(),
+    );
+    let text_model = test_model_info(
+        text_model_slug,
+        "Test Text Model",
+        "text only",
+        vec![InputModality::Text],
+    );
     mount_models_once(
         &server,
         ModelsResponse {
@@ -398,6 +438,213 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let image_model_slug = "test-image-model";
+    let image_model = test_model_info(
+        image_model_slug,
+        "Test Image Model",
+        "supports image input",
+        default_input_modalities(),
+    );
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![image_model],
+        },
+    )
+    .await;
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_image_generation_call("ig_123", "completed", "lobster", "Zm9v"),
+                ev_completed_with_tokens("resp-1", 10),
+            ]),
+            sse_completed("resp-2"),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.model = Some(image_model_slug.to_string());
+        });
+    let test = builder.build(&server).await?;
+    let models_manager = test.thread_manager.get_models_manager();
+    let _ = models_manager
+        .list_models(RefreshStrategy::OnlineIfUncached)
+        .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "generate a lobster".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: image_model_slug.to_string(),
+            effort: test.config.model_reasoning_effort,
+            service_tier: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "describe the generated image".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: image_model_slug.to_string(),
+            effort: test.config.model_reasoning_effort,
+            service_tier: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let second_request = requests.last().expect("expected second request");
+    assert_eq!(
+        second_request.message_input_image_urls("user"),
+        vec!["data:image/png;base64,Zm9v".to_string()]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_change_from_generated_image_to_text_strips_prior_generated_image_content()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let image_model_slug = "test-image-model";
+    let text_model_slug = "test-text-only-model";
+    let image_model = test_model_info(
+        image_model_slug,
+        "Test Image Model",
+        "supports image input",
+        default_input_modalities(),
+    );
+    let text_model = test_model_info(
+        text_model_slug,
+        "Test Text Model",
+        "text only",
+        vec![InputModality::Text],
+    );
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![image_model, text_model],
+        },
+    )
+    .await;
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_image_generation_call("ig_123", "completed", "lobster", "Zm9v"),
+                ev_completed_with_tokens("resp-1", 10),
+            ]),
+            sse_completed("resp-2"),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.model = Some(image_model_slug.to_string());
+        });
+    let test = builder.build(&server).await?;
+    let models_manager = test.thread_manager.get_models_manager();
+    let _ = models_manager
+        .list_models(RefreshStrategy::OnlineIfUncached)
+        .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "generate a lobster".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: image_model_slug.to_string(),
+            effort: test.config.model_reasoning_effort,
+            service_tier: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "describe the generated image".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: text_model_slug.to_string(),
+            effort: test.config.model_reasoning_effort,
+            service_tier: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let second_request = requests.last().expect("expected second request");
+    assert!(
+        second_request.message_input_image_urls("user").is_empty(),
+        "second request should strip generated image content for text-only models"
+    );
+    assert!(
+        second_request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == "image content omitted because you do not support image input"),
+        "second request should include the image-omitted placeholder text"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -439,6 +686,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
         context_window: Some(large_context_window),
         auto_compact_token_limit: None,
         effective_context_window_percent,

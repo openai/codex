@@ -32,6 +32,8 @@ use tracing::error;
 
 #[cfg(test)]
 use crate::config::Config;
+#[cfg(test)]
+use codex_protocol::models::NetworkPermissions;
 
 #[derive(Debug, Deserialize)]
 struct SkillFrontmatter {
@@ -1387,7 +1389,8 @@ policy: {}
             skill_dir,
             r#"
 permissions:
-  network: true
+  network:
+    enabled: true
   file_system:
     read:
       - "./data"
@@ -1408,7 +1411,9 @@ permissions:
         assert_eq!(
             outcome.skills[0].permission_profile,
             Some(PermissionProfile {
-                network: Some(true),
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
                 file_system: Some(FileSystemPermissions {
                     read: Some(vec![
                         AbsolutePathBuf::try_from(normalized(skill_dir.join("data").as_path()))

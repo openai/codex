@@ -166,8 +166,14 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
     let db = init_state_db(&home).await?;
 
     let mut initial_builder = test_codex().with_home(home.clone()).with_config(|config| {
-        config.features.enable(Feature::Sqlite);
-        config.features.enable(Feature::MemoryTool);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::MemoryTool)
+            .expect("test config should allow feature update");
         config.memories.max_raw_memories_for_consolidation = 1;
         config.memories.no_memories_if_mcp_or_web_search = true;
     });
@@ -232,8 +238,14 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
     .await;
 
     let mut resumed_builder = test_codex().with_home(home.clone()).with_config(|config| {
-        config.features.enable(Feature::Sqlite);
-        config.features.enable(Feature::MemoryTool);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::MemoryTool)
+            .expect("test config should allow feature update");
         config.memories.max_raw_memories_for_consolidation = 1;
         config.memories.no_memories_if_mcp_or_web_search = true;
     });
@@ -310,9 +322,16 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
 }
 
 async fn build_test_codex(server: &wiremock::MockServer, home: Arc<TempDir>) -> Result<TestCodex> {
+    #[allow(clippy::expect_used)]
     let mut builder = test_codex().with_home(home).with_config(|config| {
-        config.features.enable(Feature::Sqlite);
-        config.features.enable(Feature::MemoryTool);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::MemoryTool)
+            .expect("test config should allow feature update");
         config.memories.max_raw_memories_for_consolidation = 1;
     });
     builder.build(server).await

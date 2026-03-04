@@ -115,6 +115,7 @@ pub async fn run_codex_tool_session(
             }],
             final_output_json_schema: None,
         },
+        trace: None,
     };
 
     if let Err(e) = thread.submit_with_id(submission).await {

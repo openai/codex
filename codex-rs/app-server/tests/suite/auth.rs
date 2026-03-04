@@ -6,8 +6,7 @@ use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoginApiKeyParams;
-use codex_app_server_protocol::LoginApiKeyResponse;
+use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -72,18 +71,15 @@ forced_login_method = "{forced_method}"
 }
 
 async fn login_with_api_key_via_request(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
-    let request_id = mcp
-        .send_login_api_key_request(LoginApiKeyParams {
-            api_key: api_key.to_string(),
-        })
-        .await?;
+    let request_id = mcp.send_login_account_api_key_request(api_key).await?;
 
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let _: LoginApiKeyResponse = to_response(resp)?;
+    let response: LoginAccountResponse = to_response(resp)?;
+    assert_eq!(response, LoginAccountResponse::ApiKey {});
     Ok(())
 }
 
@@ -211,9 +207,7 @@ async fn login_api_key_rejected_when_forced_chatgpt() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_login_api_key_request(LoginApiKeyParams {
-            api_key: "sk-test-key".to_string(),
-        })
+        .send_login_account_api_key_request("sk-test-key")
         .await?;
 
     let err: JSONRPCError = timeout(

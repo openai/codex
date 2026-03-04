@@ -12,7 +12,12 @@ export type SandboxPolicy = { "type": "danger-full-access" } | { "type": "read-o
 /**
  * Read access granted while running under this policy.
  */
-access?: ReadOnlyAccess, } | { "type": "external-sandbox", 
+access?: ReadOnlyAccess, 
+/**
+ * When set to `true`, outbound network access is allowed. `false` by
+ * default.
+ */
+network_access?: boolean, } | { "type": "external-sandbox", 
 /**
  * Whether the external sandbox permits outbound network traffic.
  */

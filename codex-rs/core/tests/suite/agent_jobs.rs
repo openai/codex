@@ -222,8 +222,14 @@ fn parse_simple_csv_line(line: &str) -> Vec<String> {
 async fn report_agent_job_result_rejects_wrong_thread() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Collab);
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -282,8 +288,14 @@ async fn report_agent_job_result_rejects_wrong_thread() -> Result<()> {
 async fn spawn_agents_on_csv_runs_and_exports() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Collab);
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -319,8 +331,14 @@ async fn spawn_agents_on_csv_dedupes_item_ids() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Collab);
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -371,8 +389,14 @@ async fn spawn_agents_on_csv_dedupes_item_ids() -> Result<()> {
 async fn spawn_agents_on_csv_stop_halts_future_items() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Collab);
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 

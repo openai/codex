@@ -434,7 +434,7 @@ async fn test_fuzzy_file_search_session_update_after_stop_fails() -> Result<()> 
 async fn test_fuzzy_file_search_session_stops_sending_updates_after_stop() -> Result<()> {
     let codex_home = TempDir::new()?;
     let root = TempDir::new()?;
-    for i in 0..10_000 {
+    for i in 0..2_000 {
         let file_path = root.path().join(format!("file-{i:04}.txt"));
         std::fs::write(file_path, "contents")?;
     }

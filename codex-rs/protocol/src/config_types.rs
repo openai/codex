@@ -117,9 +117,8 @@ pub enum WebSearchMode {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum ServiceTier {
-    /// Legacy compatibility value for older local config files.
-    Standard,
     Fast,
+    Flex,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]

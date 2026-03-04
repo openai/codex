@@ -22,6 +22,7 @@ use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
+use crate::event_mapping::parse_turn_item;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
@@ -30,6 +31,7 @@ use crate::protocol::TurnCompleteEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -213,8 +215,25 @@ impl Session {
                 .into_iter()
                 .map(ResponseItem::from)
                 .collect::<Vec<_>>();
-            self.record_conversation_items(turn_context.as_ref(), &pending_response_items)
-                .await;
+            for response_item in pending_response_items {
+                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
+                    // Keep leftover user input on the same persistence + lifecycle path as the
+                    // normal pre-sampling drain. This helper records the response item once, then
+                    // emits ItemStarted/UserMessage and ItemCompleted/UserMessage for clients.
+                    self.record_user_prompt_and_emit_turn_item(
+                        turn_context.as_ref(),
+                        &user_message.content,
+                        response_item,
+                    )
+                    .await;
+                } else {
+                    self.record_conversation_items(
+                        turn_context.as_ref(),
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await;
+                }
+            }
         }
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),

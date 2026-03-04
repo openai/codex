@@ -157,7 +157,7 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     Some(codex_state::Anchor { ts, id })
 }
 
-fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
+pub(crate) fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
     normalize_for_path_comparison(cwd).unwrap_or_else(|_| cwd.to_path_buf())
 }
 
@@ -390,6 +390,9 @@ pub async fn reconcile_rollout(
     let mut metadata = outcome.metadata;
     let memory_mode = outcome.memory_mode.unwrap_or_else(|| "enabled".to_string());
     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
+    if let Ok(Some(existing_metadata)) = ctx.get_thread(metadata.id).await {
+        metadata.prefer_existing_git_info(&existing_metadata);
+    }
     match archived_only {
         Some(true) if metadata.archived_at.is_none() => {
             metadata.archived_at = Some(metadata.updated_at);

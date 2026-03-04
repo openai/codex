@@ -266,7 +266,7 @@ mod agent {
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
         // Consolidation runs as an internal sub-agent and must not recursively delegate.
-        agent_config.features.disable(Feature::Collab);
+        let _ = agent_config.features.disable(Feature::Collab);
 
         // Sandbox policy
         let mut writable_roots = Vec::new();

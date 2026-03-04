@@ -2835,25 +2835,31 @@ impl App {
                     .with_profile(self.active_profile.as_deref());
                 for (feature, enabled) in &updates {
                     let feature_key = feature.key();
-                    if *enabled {
-                        // Update the in-memory configs.
-                        self.config.features.enable(*feature);
-                        self.chat_widget.set_feature_enabled(*feature, true);
+                    if let Err(err) = self.config.features.set_enabled(*feature, *enabled) {
+                        tracing::error!(
+                            error = %err,
+                            feature = feature_key,
+                            "failed to update constrained feature flags"
+                        );
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to update experimental feature `{feature_key}`: {err}"
+                        ));
+                        continue;
+                    }
+                    let effective_enabled = self.config.features.enabled(*feature);
+                    self.chat_widget
+                        .set_feature_enabled(*feature, effective_enabled);
+                    if effective_enabled {
                         builder = builder.set_feature_enabled(feature_key, true);
+                    } else if feature.default_enabled() {
+                        builder = builder.set_feature_enabled(feature_key, false);
                     } else {
-                        // Update the in-memory configs.
-                        self.config.features.disable(*feature);
-                        self.chat_widget.set_feature_enabled(*feature, false);
-                        if feature.default_enabled() {
-                            builder = builder.set_feature_enabled(feature_key, false);
-                        } else {
-                            // If the feature already default to `false`, we drop the key
-                            // in the config file so that the user does not miss the feature
-                            // once it gets globally released.
-                            builder = builder.with_edits(vec![ConfigEdit::ClearPath {
-                                segments: vec!["features".to_string(), feature_key.to_string()],
-                            }]);
-                        }
+                        // If the feature already default to `false`, we drop the key
+                        // in the config file so that the user does not miss the feature
+                        // once it gets globally released.
+                        builder = builder.with_edits(vec![ConfigEdit::ClearPath {
+                            segments: vec!["features".to_string(), feature_key.to_string()],
+                        }]);
                     }
                 }
                 if windows_sandbox_changed {
@@ -3353,6 +3359,7 @@ impl App {
                 thread_name: None,
                 model: config_snapshot.model,
                 model_provider_id: config_snapshot.model_provider_id,
+                service_tier: config_snapshot.service_tier,
                 approval_policy: config_snapshot.approval_policy,
                 sandbox_policy: config_snapshot.sandbox_policy,
                 cwd: config_snapshot.cwd,
@@ -3814,6 +3821,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
@@ -4146,6 +4154,7 @@ mod tests {
                         thread_name: None,
                         model: "gpt-5".to_string(),
                         model_provider_id: "test-provider".to_string(),
+                        service_tier: None,
                         approval_policy: AskForApproval::OnRequest,
                         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
                         cwd: PathBuf::from("/tmp/agent"),
@@ -4366,6 +4375,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
@@ -5003,6 +5013,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
@@ -5060,6 +5071,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
@@ -5151,6 +5163,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
@@ -5215,6 +5228,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
@@ -5294,6 +5308,7 @@ mod tests {
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
@@ -5420,6 +5435,7 @@ mod tests {
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
+            service_tier: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
@@ -5488,6 +5504,7 @@ mod tests {
                 thread_name: Some("keep me".to_string()),
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),

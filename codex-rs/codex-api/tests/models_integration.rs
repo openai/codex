@@ -86,6 +86,7 @@ async fn models_client_hits_models_endpoint() {
             apply_patch_tool_type: None,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
+            supports_image_detail_original: false,
             context_window: Some(272_000),
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,

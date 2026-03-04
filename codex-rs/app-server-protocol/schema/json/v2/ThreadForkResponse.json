@@ -653,6 +653,10 @@
                 "type": "fullAccess"
               }
             },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
+            },
             "type": {
               "enum": [
                 "readOnly"
@@ -737,6 +741,13 @@
           "type": "object"
         }
       ]
+    },
+    "ServiceTier": {
+      "enum": [
+        "fast",
+        "flex"
+      ],
+      "type": "string"
     },
     "SessionSource": {
       "oneOf": [
@@ -1905,6 +1916,16 @@
     },
     "sandbox": {
       "$ref": "#/definitions/SandboxPolicy"
+    },
+    "serviceTier": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ServiceTier"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "thread": {
       "$ref": "#/definitions/Thread"

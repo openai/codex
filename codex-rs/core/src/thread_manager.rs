@@ -312,8 +312,9 @@ impl ThreadManager {
     }
 
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
-        self.start_thread_with_tools(config, Vec::new(), false)
-            .await
+        // Box delegated thread-spawn futures so these convenience wrappers do
+        // not inline the full spawn path into every caller's async state.
+        Box::pin(self.start_thread_with_tools(config, Vec::new(), false)).await
     }
 
     pub async fn start_thread_with_tools(
@@ -322,12 +323,12 @@ impl ThreadManager {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
-        self.start_thread_with_tools_and_service_name(
+        Box::pin(self.start_thread_with_tools_and_service_name(
             config,
             dynamic_tools,
             persist_extended_history,
             None,
-        )
+        ))
         .await
     }
 
@@ -338,17 +339,16 @@ impl ThreadManager {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
     ) -> CodexResult<NewThread> {
-        self.state
-            .spawn_thread(
-                config,
-                InitialHistory::New,
-                Arc::clone(&self.state.auth_manager),
-                self.agent_control(),
-                dynamic_tools,
-                persist_extended_history,
-                metrics_service_name,
-            )
-            .await
+        Box::pin(self.state.spawn_thread(
+            config,
+            InitialHistory::New,
+            Arc::clone(&self.state.auth_manager),
+            self.agent_control(),
+            dynamic_tools,
+            persist_extended_history,
+            metrics_service_name,
+        ))
+        .await
     }
 
     pub async fn resume_thread_from_rollout(
@@ -358,7 +358,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        self.resume_thread_with_history(config, initial_history, auth_manager, false)
+        Box::pin(self.resume_thread_with_history(config, initial_history, auth_manager, false))
             .await
     }
 
@@ -369,17 +369,16 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
-        self.state
-            .spawn_thread(
-                config,
-                initial_history,
-                auth_manager,
-                self.agent_control(),
-                Vec::new(),
-                persist_extended_history,
-                None,
-            )
-            .await
+        Box::pin(self.state.spawn_thread(
+            config,
+            initial_history,
+            auth_manager,
+            self.agent_control(),
+            Vec::new(),
+            persist_extended_history,
+            None,
+        ))
+        .await
     }
 
     /// Removes the thread from the manager's internal map, though the thread is stored
@@ -411,17 +410,16 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
         let history = truncate_before_nth_user_message(history, nth_user_message);
-        self.state
-            .spawn_thread(
-                config,
-                history,
-                Arc::clone(&self.state.auth_manager),
-                self.agent_control(),
-                Vec::new(),
-                persist_extended_history,
-                None,
-            )
-            .await
+        Box::pin(self.state.spawn_thread(
+            config,
+            history,
+            Arc::clone(&self.state.auth_manager),
+            self.agent_control(),
+            Vec::new(),
+            persist_extended_history,
+            None,
+        ))
+        .await
     }
 
     pub(crate) fn agent_control(&self) -> AgentControl {
@@ -474,14 +472,14 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
-        self.spawn_new_thread_with_source(
+        Box::pin(self.spawn_new_thread_with_source(
             config,
             agent_control,
             self.session_source.clone(),
             false,
             None,
             None,
-        )
+        ))
         .await
     }
 
@@ -494,7 +492,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
-        self.spawn_thread_with_source(
+        Box::pin(self.spawn_thread_with_source(
             config,
             InitialHistory::New,
             Arc::clone(&self.auth_manager),
@@ -504,7 +502,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
-        )
+        ))
         .await
     }
 
@@ -517,7 +515,7 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        self.spawn_thread_with_source(
+        Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
             Arc::clone(&self.auth_manager),
@@ -527,7 +525,7 @@ impl ThreadManagerState {
             false,
             None,
             inherited_shell_snapshot,
-        )
+        ))
         .await
     }
 
@@ -540,7 +538,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
-        self.spawn_thread_with_source(
+        Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
             Arc::clone(&self.auth_manager),
@@ -550,7 +548,7 @@ impl ThreadManagerState {
             persist_extended_history,
             None,
             inherited_shell_snapshot,
-        )
+        ))
         .await
     }
 
@@ -566,7 +564,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
     ) -> CodexResult<NewThread> {
-        self.spawn_thread_with_source(
+        Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
             auth_manager,
@@ -576,7 +574,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             None,
-        )
+        ))
         .await
     }
 

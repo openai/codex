@@ -140,8 +140,12 @@ async fn setup_turn_one_with_spawned_child(
     )
     .await;
 
+    #[allow(clippy::expect_used)]
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Collab);
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(server).await?;
     test.submit_turn(TURN_1_PROMPT).await?;
@@ -252,7 +256,10 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Collab);
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 

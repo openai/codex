@@ -478,6 +478,7 @@ mod tests {
                         .expect("absolute readable root"),
                 ],
             },
+            network_access: false,
         };
 
         let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
@@ -503,6 +504,7 @@ mod tests {
                 include_platform_defaults: true,
                 readable_roots: Vec::new(),
             },
+            network_access: false,
         };
 
         // `ReadOnlyAccess::Restricted` always includes `cwd` as a readable

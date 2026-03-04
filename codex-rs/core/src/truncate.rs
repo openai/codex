@@ -138,9 +138,10 @@ pub(crate) fn truncate_function_output_items_with_policy(
                     remaining_budget = 0;
                 }
             }
-            FunctionCallOutputContentItem::InputImage { image_url } => {
+            FunctionCallOutputContentItem::InputImage { image_url, detail } => {
                 out.push(FunctionCallOutputContentItem::InputImage {
                     image_url: image_url.clone(),
+                    detail: *detail,
                 });
             }
         }
@@ -491,6 +492,7 @@ mod tests {
             FunctionCallOutputContentItem::InputText { text: t2.clone() },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "img:mid".to_string(),
+                detail: None,
             },
             FunctionCallOutputContentItem::InputText { text: t3 },
             FunctionCallOutputContentItem::InputText { text: t4 },
@@ -518,7 +520,8 @@ mod tests {
         assert_eq!(
             output[2],
             FunctionCallOutputContentItem::InputImage {
-                image_url: "img:mid".to_string()
+                image_url: "img:mid".to_string(),
+                detail: None,
             }
         );
 

@@ -1,18 +1,22 @@
 use std::time::Duration;
 
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::SkillsListExtraRootsForCwd;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::ThreadStartParams;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const WATCHER_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn write_skill(root: &TempDir, name: &str) -> Result<()> {
     let skill_dir = root.path().join("skills").join(name);
@@ -212,5 +216,62 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
             .iter()
             .any(|skill| skill.name == "late-extra-skill")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_skill(&codex_home, "demo")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread_start_request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: None,
+            model_provider: None,
+            service_tier: None,
+            cwd: None,
+            approval_policy: None,
+            sandbox: None,
+            config: None,
+            service_name: None,
+            base_instructions: None,
+            developer_instructions: None,
+            personality: None,
+            ephemeral: None,
+            dynamic_tools: None,
+            mock_experimental_field: None,
+            experimental_raw_events: false,
+            persist_extended_history: false,
+        })
+        .await?;
+    let _: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
+    )
+    .await??;
+
+    let skill_path = codex_home
+        .path()
+        .join("skills")
+        .join("demo")
+        .join("SKILL.md");
+    std::fs::write(
+        &skill_path,
+        "---\nname: demo\ndescription: updated\n---\n\n# Updated\n",
+    )?;
+
+    let notification = timeout(
+        WATCHER_TIMEOUT,
+        mcp.read_stream_until_notification_message("skills/changed"),
+    )
+    .await??;
+    let params = notification
+        .params
+        .context("skills/changed params must be present")?;
+    let notification: SkillsChangedNotification = serde_json::from_value(params)?;
+
+    assert_eq!(notification, SkillsChangedNotification {});
     Ok(())
 }
