@@ -3295,22 +3295,50 @@ impl CodexMessageProcessor {
         rollout_path: &Path,
         fallback_provider: &str,
     ) -> Option<Thread> {
-        let mut thread = match load_thread_for_cold_resume_response(
-            &self.config,
-            thread_id,
-            thread,
-            thread_history,
-            rollout_path,
-            fallback_provider,
-        )
-        .await
-        {
+        let thread = match thread_history {
+            InitialHistory::Resumed(resumed) => {
+                load_thread_summary_for_rollout(
+                    &self.config,
+                    resumed.conversation_id,
+                    resumed.rollout_path.as_path(),
+                    fallback_provider,
+                )
+                .await
+            }
+            InitialHistory::Forked(items) => {
+                let config_snapshot = thread.config_snapshot().await;
+                let mut thread = build_thread_from_snapshot(
+                    thread_id,
+                    &config_snapshot,
+                    Some(rollout_path.into()),
+                );
+                thread.preview = preview_from_rollout_items(items);
+                Ok(thread)
+            }
+            InitialHistory::New => Err(format!(
+                "failed to build resume response for thread {thread_id}: initial history missing"
+            )),
+        };
+        let mut thread = match thread {
             Ok(thread) => thread,
             Err(message) => {
                 self.send_internal_error(request_id, message).await;
                 return None;
             }
         };
+        thread.id = thread_id.to_string();
+        thread.path = Some(rollout_path.to_path_buf());
+        let history_items = thread_history.get_rollout_items();
+        if let Err(message) = populate_resume_turns(
+            &mut thread,
+            ResumeTurnSource::HistoryItems(&history_items),
+            None,
+        )
+        .await
+        {
+            self.send_internal_error(request_id, message).await;
+            return None;
+        }
         self.attach_thread_name(thread_id, &mut thread).await;
         Some(thread)
     }
@@ -6248,28 +6276,26 @@ async fn handle_pending_thread_resume_request(
 
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
-    let mut thread = match load_thread_for_running_resume_response(
-        pending.thread_summary,
-        pending.rollout_path.as_path(),
+    let mut thread = pending.thread_summary;
+    if let Err(message) = populate_resume_turns(
+        &mut thread,
+        ResumeTurnSource::RolloutPath(pending.rollout_path.as_path()),
         active_turn.as_ref(),
     )
     .await
     {
-        Ok(thread) => thread,
-        Err(message) => {
-            outgoing
-                .send_error(
-                    request_id,
-                    JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message,
-                        data: None,
-                    },
-                )
-                .await;
-            return;
-        }
-    };
+        outgoing
+            .send_error(
+                request_id,
+                JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message,
+                    data: None,
+                },
+            )
+            .await;
+        return;
+    }
 
     has_in_progress_turn = has_in_progress_turn
         || thread
@@ -6319,6 +6345,38 @@ async fn handle_pending_thread_resume_request(
         .await;
 }
 
+enum ResumeTurnSource<'a> {
+    RolloutPath(&'a Path),
+    HistoryItems(&'a [RolloutItem]),
+}
+
+async fn populate_resume_turns(
+    thread: &mut Thread,
+    turn_source: ResumeTurnSource<'_>,
+    active_turn: Option<&Turn>,
+) -> std::result::Result<(), String> {
+    let mut turns = match turn_source {
+        ResumeTurnSource::RolloutPath(rollout_path) => {
+            read_rollout_items_from_rollout(rollout_path)
+                .await
+                .map(|items| build_turns_from_rollout_items(&items))
+                .map_err(|err| {
+                    format!(
+                        "failed to load rollout `{}` for thread {}: {err}",
+                        rollout_path.display(),
+                        thread.id
+                    )
+                })?
+        }
+        ResumeTurnSource::HistoryItems(items) => build_turns_from_rollout_items(items),
+    };
+    if let Some(active_turn) = active_turn {
+        merge_turn_history_with_active_turn(&mut turns, active_turn.clone());
+    }
+    thread.turns = turns;
+    Ok(())
+}
+
 async fn resolve_pending_server_request(
     conversation_id: ThreadId,
     thread_state_manager: &ThreadStateManager,
@@ -6342,66 +6400,6 @@ async fn resolve_pending_server_request(
             },
         ))
         .await;
-}
-
-async fn load_thread_for_running_resume_response(
-    mut thread: Thread,
-    rollout_path: &Path,
-    active_turn: Option<&Turn>,
-) -> std::result::Result<Thread, String> {
-    let mut turns = read_rollout_items_from_rollout(rollout_path)
-        .await
-        .map(|items| build_turns_from_rollout_items(&items))
-        .map_err(|err| {
-            format!(
-                "failed to load rollout `{}` for thread {}: {err}",
-                rollout_path.display(),
-                thread.id
-            )
-        })?;
-    if let Some(active_turn) = active_turn {
-        merge_turn_history_with_active_turn(&mut turns, active_turn.clone());
-    }
-    thread.turns = turns;
-    Ok(thread)
-}
-
-async fn load_thread_for_cold_resume_response(
-    config: &Config,
-    thread_id: ThreadId,
-    thread: &CodexThread,
-    thread_history: &InitialHistory,
-    rollout_path: &Path,
-    fallback_provider: &str,
-) -> std::result::Result<Thread, String> {
-    let mut response_thread = match thread_history {
-        InitialHistory::Resumed(resumed) => {
-            load_thread_summary_for_rollout(
-                config,
-                resumed.conversation_id,
-                resumed.rollout_path.as_path(),
-                fallback_provider,
-            )
-            .await?
-        }
-        InitialHistory::Forked(items) => {
-            let config_snapshot = thread.config_snapshot().await;
-            let mut thread =
-                build_thread_from_snapshot(thread_id, &config_snapshot, Some(rollout_path.into()));
-            thread.preview = preview_from_rollout_items(items);
-            thread
-        }
-        InitialHistory::New => {
-            return Err(format!(
-                "failed to build resume response for thread {thread_id}: initial history missing"
-            ));
-        }
-    };
-
-    response_thread.id = thread_id.to_string();
-    response_thread.path = Some(rollout_path.to_path_buf());
-    response_thread.turns = build_turns_from_rollout_items(&thread_history.get_rollout_items());
-    Ok(response_thread)
 }
 
 fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {
