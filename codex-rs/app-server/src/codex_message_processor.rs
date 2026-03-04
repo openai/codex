@@ -2952,6 +2952,7 @@ impl CodexMessageProcessor {
         };
 
         let fallback_model_provider = config.model_provider_id.clone();
+        let response_history = thread_history.clone();
 
         match self
             .thread_manager
@@ -2965,8 +2966,8 @@ impl CodexMessageProcessor {
         {
             Ok(NewThread {
                 thread_id,
+                thread,
                 session_configured,
-                ..
             }) => {
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
@@ -2992,9 +2993,11 @@ impl CodexMessageProcessor {
                 );
 
                 let Some(mut thread) = self
-                    .load_thread_from_rollout_or_send_internal(
+                    .load_thread_from_resume_source_or_send_internal(
                         request_id.clone(),
                         thread_id,
+                        thread.as_ref(),
+                        &response_history,
                         rollout_path.as_path(),
                         fallback_model_provider.as_str(),
                     )
@@ -3283,16 +3286,20 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn load_thread_from_rollout_or_send_internal(
+    async fn load_thread_from_resume_source_or_send_internal(
         &self,
         request_id: ConnectionRequestId,
         thread_id: ThreadId,
+        thread: &CodexThread,
+        thread_history: &InitialHistory,
         rollout_path: &Path,
         fallback_provider: &str,
     ) -> Option<Thread> {
-        let mut thread = match load_thread_summary_for_rollout(
+        let mut thread = match load_thread_for_cold_resume_response(
             &self.config,
             thread_id,
+            thread,
+            thread_history,
             rollout_path,
             fallback_provider,
         )
@@ -3304,24 +3311,8 @@ impl CodexMessageProcessor {
                 return None;
             }
         };
-        match read_rollout_items_from_rollout(rollout_path).await {
-            Ok(items) => {
-                thread.turns = build_turns_from_rollout_items(&items);
-                self.attach_thread_name(thread_id, &mut thread).await;
-                Some(thread)
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!(
-                        "failed to load rollout `{}` for thread {thread_id}: {err}",
-                        rollout_path.display()
-                    ),
-                )
-                .await;
-                None
-            }
-        }
+        self.attach_thread_name(thread_id, &mut thread).await;
+        Some(thread)
     }
 
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
@@ -6375,6 +6366,44 @@ async fn load_thread_for_running_resume_response(
     Ok(thread)
 }
 
+async fn load_thread_for_cold_resume_response(
+    config: &Config,
+    thread_id: ThreadId,
+    thread: &CodexThread,
+    thread_history: &InitialHistory,
+    rollout_path: &Path,
+    fallback_provider: &str,
+) -> std::result::Result<Thread, String> {
+    let mut response_thread = match thread_history {
+        InitialHistory::Resumed(resumed) => {
+            load_thread_summary_for_rollout(
+                config,
+                resumed.conversation_id,
+                resumed.rollout_path.as_path(),
+                fallback_provider,
+            )
+            .await?
+        }
+        InitialHistory::Forked(items) => {
+            let config_snapshot = thread.config_snapshot().await;
+            let mut thread =
+                build_thread_from_snapshot(thread_id, &config_snapshot, Some(rollout_path.into()));
+            thread.preview = preview_from_rollout_items(items);
+            thread
+        }
+        InitialHistory::New => {
+            return Err(format!(
+                "failed to build resume response for thread {thread_id}: initial history missing"
+            ));
+        }
+    };
+
+    response_thread.id = thread_id.to_string();
+    response_thread.path = Some(rollout_path.to_path_buf());
+    response_thread.turns = build_turns_from_rollout_items(&thread_history.get_rollout_items());
+    Ok(response_thread)
+}
+
 fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {
     turns.retain(|turn| turn.id != active_turn.id);
     turns.push(active_turn);
@@ -6978,11 +7007,7 @@ async fn load_thread_summary_for_rollout(
     rollout_path: &Path,
     fallback_provider: &str,
 ) -> std::result::Result<Thread, String> {
-    if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
-        return Ok(summary_to_thread(summary));
-    }
-
-    read_summary_from_rollout(rollout_path, fallback_provider)
+    let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
         .await
         .map(summary_to_thread)
         .map_err(|err| {
@@ -6990,7 +7015,32 @@ async fn load_thread_summary_for_rollout(
                 "failed to load rollout `{}` for thread {thread_id}: {err}",
                 rollout_path.display()
             )
+        })?;
+    if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
+        merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
+    }
+    Ok(thread)
+}
+
+fn merge_mutable_thread_metadata(thread: &mut Thread, persisted_thread: Thread) {
+    thread.git_info = persisted_thread.git_info;
+}
+
+fn preview_from_rollout_items(items: &[RolloutItem]) -> String {
+    items
+        .iter()
+        .find_map(|item| match item {
+            RolloutItem::ResponseItem(item) => match codex_core::parse_turn_item(item) {
+                Some(codex_protocol::items::TurnItem::UserMessage(user)) => Some(user.message()),
+                _ => None,
+            },
+            _ => None,
         })
+        .map(|preview| match preview.find(USER_MESSAGE_BEGIN) {
+            Some(idx) => preview[idx + USER_MESSAGE_BEGIN.len()..].trim().to_string(),
+            None => preview,
+        })
+        .unwrap_or_default()
 }
 
 fn with_thread_spawn_agent_metadata(
