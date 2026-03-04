@@ -168,6 +168,41 @@
       "description": "Tool settings for a single app.",
       "type": "object"
     },
+    "ApprovalHandlerOnError": {
+      "enum": [
+        "fallback",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "ApprovalHandlerToml": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "description": "Command argv used to resolve approval requests over stdin/stdout.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "on_error": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalHandlerOnError"
+            }
+          ],
+          "default": null,
+          "description": "Behavior when the handler exits non-zero, times out, or returns invalid JSON."
+        },
+        "timeout_ms": {
+          "description": "Timeout for the handler process, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "AppsConfigToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AppConfig"
@@ -1609,6 +1644,15 @@
         }
       ],
       "description": "When `false`, disables analytics across Codex product surfaces in this machine. Defaults to `true`."
+    },
+    "approval_handler": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ApprovalHandlerToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional external command to synchronously resolve approvals over stdin/stdout."
     },
     "approval_policy": {
       "allOf": [

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_channel::unbounded;
+use codex_protocol::ThreadId;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::mcp::Tool;
@@ -247,6 +248,9 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries.clone(),
         &config.permissions.approval_policy,
+        config.approval_handler.clone(),
+        ThreadId::default(),
+        None,
         tx_event,
         sandbox_state,
         config.codex_home.clone(),

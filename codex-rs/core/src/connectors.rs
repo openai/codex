@@ -11,6 +11,7 @@ use async_channel::unbounded;
 pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::SandboxPolicy;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
@@ -158,6 +159,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries,
         &config.permissions.approval_policy,
+        config.approval_handler.clone(),
+        ThreadId::default(),
+        None,
         tx_event,
         sandbox_state,
         config.codex_home.clone(),

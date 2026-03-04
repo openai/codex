@@ -16,6 +16,7 @@ use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
+use crate::approval_handler;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
@@ -147,6 +148,7 @@ use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
+use crate::config::types::ApprovalHandlerOnError;
 use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
@@ -1495,6 +1497,9 @@ impl Session {
             // setup is straightforward enough and performs well.
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
                 &config.permissions.approval_policy,
+                config.approval_handler.clone(),
+                conversation_id,
+                Some(session_configuration.session_source.default_thread_label()),
             ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
@@ -1527,6 +1532,7 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
+            approval_handler: config.approval_handler.clone(),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
@@ -1615,6 +1621,9 @@ impl Session {
             config.mcp_oauth_credentials_store_mode,
             auth_statuses.clone(),
             &session_configuration.approval_policy,
+            sess.services.approval_handler.clone(),
+            sess.conversation_id,
+            Some(session_configuration.session_source.default_thread_label()),
             tx_event.clone(),
             sandbox_state,
             config.codex_home.clone(),
@@ -2676,25 +2685,6 @@ impl Session {
         additional_permissions: Option<PermissionProfile>,
         available_decisions: Option<Vec<ReviewDecision>>,
     ) -> ReviewDecision {
-        //  command-level approvals use `call_id`.
-        // `approval_id` is only present for subcommand callbacks (execve intercept)
-        let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
-        // Add the tx_approve callback to the map before sending the request.
-        let (tx_approve, rx_approve) = oneshot::channel();
-        let prev_entry = {
-            let mut active = self.active_turn.lock().await;
-            match active.as_mut() {
-                Some(at) => {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
-                }
-                None => None,
-            }
-        };
-        if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for call_id: {effective_approval_id}");
-        }
-
         let parsed_cmd = parse_command(&command);
         let proposed_network_policy_amendments = network_approval_context.as_ref().map(|context| {
             vec![
@@ -2716,7 +2706,7 @@ impl Session {
                 additional_permissions.as_ref(),
             )
         });
-        let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+        let request = ExecApprovalRequestEvent {
             call_id,
             approval_id,
             turn_id: turn_context.sub_id.clone(),
@@ -2729,7 +2719,64 @@ impl Session {
             additional_permissions,
             available_decisions: Some(available_decisions),
             parsed_cmd,
-        });
+        };
+
+        if let Some(config) = self.services.approval_handler.as_ref() {
+            let thread_label = turn_context.session_source.default_thread_label();
+            match approval_handler::request_exec_approval(
+                config,
+                self.conversation_id,
+                Some(&thread_label),
+                &request,
+            )
+            .await
+            {
+                Ok(decision) => return decision,
+                Err(err) => match config.on_error {
+                    ApprovalHandlerOnError::Fallback => {
+                        self.send_event(
+                            turn_context,
+                            EventMsg::Warning(WarningEvent {
+                                message: approval_handler::fallback_warning_message("exec", &err),
+                            }),
+                        )
+                        .await;
+                        warn!("external exec approval handler failed; falling back: {err:#}");
+                    }
+                    ApprovalHandlerOnError::Deny => {
+                        self.send_event(
+                            turn_context,
+                            EventMsg::Warning(WarningEvent {
+                                message: approval_handler::deny_warning_message(
+                                    "exec", "denying", &err,
+                                ),
+                            }),
+                        )
+                        .await;
+                        warn!("external exec approval handler failed; denying request: {err:#}");
+                        return ReviewDecision::Denied;
+                    }
+                },
+            }
+        }
+
+        let effective_approval_id = request.effective_approval_id();
+        let (tx_approve, rx_approve) = oneshot::channel();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending approval for call_id: {effective_approval_id}");
+        }
+
+        let event = EventMsg::ExecApprovalRequest(request);
         self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or_default()
     }
@@ -2742,9 +2789,61 @@ impl Session {
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
-        // Add the tx_approve callback to the map before sending the request.
+        let request = ApplyPatchApprovalRequestEvent {
+            call_id,
+            turn_id: turn_context.sub_id.clone(),
+            changes,
+            reason,
+            grant_root,
+        };
+
+        if let Some(config) = self.services.approval_handler.as_ref() {
+            let thread_label = turn_context.session_source.default_thread_label();
+            match approval_handler::request_patch_approval(
+                config,
+                self.conversation_id,
+                Some(&thread_label),
+                &request,
+            )
+            .await
+            {
+                Ok(decision) => {
+                    let (tx_approve, rx_approve) = oneshot::channel();
+                    let _ = tx_approve.send(decision);
+                    return rx_approve;
+                }
+                Err(err) => match config.on_error {
+                    ApprovalHandlerOnError::Fallback => {
+                        self.send_event(
+                            turn_context,
+                            EventMsg::Warning(WarningEvent {
+                                message: approval_handler::fallback_warning_message("patch", &err),
+                            }),
+                        )
+                        .await;
+                        warn!("external patch approval handler failed; falling back: {err:#}");
+                    }
+                    ApprovalHandlerOnError::Deny => {
+                        self.send_event(
+                            turn_context,
+                            EventMsg::Warning(WarningEvent {
+                                message: approval_handler::deny_warning_message(
+                                    "patch", "denying", &err,
+                                ),
+                            }),
+                        )
+                        .await;
+                        warn!("external patch approval handler failed; denying request: {err:#}");
+                        let (tx_approve, rx_approve) = oneshot::channel();
+                        let _ = tx_approve.send(ReviewDecision::Denied);
+                        return rx_approve;
+                    }
+                },
+            }
+        }
+
         let (tx_approve, rx_approve) = oneshot::channel();
-        let approval_id = call_id.clone();
+        let approval_id = request.call_id.clone();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -2759,13 +2858,7 @@ impl Session {
             warn!("Overwriting existing pending approval for call_id: {approval_id}");
         }
 
-        let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-            call_id,
-            turn_id: turn_context.sub_id.clone(),
-            changes,
-            reason,
-            grant_root,
-        });
+        let event = EventMsg::ApplyPatchApprovalRequest(request);
         self.send_event(turn_context, event).await;
         rx_approve
     }
@@ -3587,6 +3680,9 @@ impl Session {
             store_mode,
             auth_statuses,
             &turn_context.config.permissions.approval_policy,
+            self.services.approval_handler.clone(),
+            self.conversation_id,
+            Some(turn_context.session_source.default_thread_label()),
             self.get_tx_event(),
             sandbox_state,
             config.codex_home.clone(),
@@ -8414,6 +8510,9 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(
                 McpConnectionManager::new_mcp_connection_manager_for_tests(
                     &config.permissions.approval_policy,
+                    config.approval_handler.clone(),
+                    conversation_id,
+                    Some(session_configuration.session_source.default_thread_label()),
                 ),
             )),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -8447,6 +8546,7 @@ mod tests {
             network_proxy: None,
             network_approval: Arc::clone(&network_approval),
             state_db: None,
+            approval_handler: config.approval_handler.clone(),
             model_client: ModelClient::new(
                 Some(auth_manager.clone()),
                 conversation_id,
@@ -8763,6 +8863,9 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(
                 McpConnectionManager::new_mcp_connection_manager_for_tests(
                     &config.permissions.approval_policy,
+                    config.approval_handler.clone(),
+                    conversation_id,
+                    Some(session_configuration.session_source.default_thread_label()),
                 ),
             )),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -8796,6 +8899,7 @@ mod tests {
             network_proxy: None,
             network_approval: Arc::clone(&network_approval),
             state_db: None,
+            approval_handler: config.approval_handler.clone(),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,

@@ -52,6 +52,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::EXTERNAL_APPROVAL_HANDLER_WARNING_PREFIX;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpInvocation;
@@ -1643,7 +1644,11 @@ fn decode_mcp_image(block: &serde_json::Value) -> Option<DynamicImage> {
 
 #[allow(clippy::disallowed_methods)]
 pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
-    PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
+    if message.starts_with(EXTERNAL_APPROVAL_HANDLER_WARNING_PREFIX) {
+        PrefixedWrappedHistoryCell::new(message.red(), "⚠ ".red(), "  ")
+    } else {
+        PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
+    }
 }
 
 #[derive(Debug)]
@@ -2420,6 +2425,7 @@ mod tests {
 
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::mcp::Tool;
+    use codex_protocol::protocol::EXTERNAL_APPROVAL_HANDLER_WARNING_PREFIX;
     use codex_protocol::protocol::ExecCommandSource;
     use rmcp::model::Content;
 
@@ -2711,6 +2717,32 @@ mod tests {
         );
         let rendered = render_lines(&cell.display_lines(120)).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn external_approval_handler_warning_snapshot() {
+        let cell = new_warning_event(format!(
+            "{EXTERNAL_APPROVAL_HANDLER_WARNING_PREFIX}: exec approval dialog failed; falling back to the built-in prompt. approval handler timed out after 1000 ms"
+        ));
+        let rendered = render_lines(&cell.display_lines(120)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn external_approval_handler_warning_uses_red_style() {
+        let cell = new_warning_event(format!(
+            "{EXTERNAL_APPROVAL_HANDLER_WARNING_PREFIX}: exec approval dialog failed; falling back to the built-in prompt. approval handler timed out after 1000 ms"
+        ));
+        let rendered = cell.display_lines(120);
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[0].spans[0].style.fg, Some(Color::Red));
+        assert_eq!(rendered[0].spans[1].style.fg, Some(Color::Red));
+        let continuation = rendered[1]
+            .spans
+            .iter()
+            .find(|span| !span.content.trim().is_empty())
+            .expect("wrapped continuation span");
+        assert_eq!(continuation.style.fg, Some(Color::Red));
     }
 
     #[tokio::test]

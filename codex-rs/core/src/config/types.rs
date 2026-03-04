@@ -351,6 +351,59 @@ pub enum HistoryPersistence {
     None,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovalHandlerOnError {
+    #[default]
+    Fallback,
+    Deny,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ApprovalHandlerToml {
+    /// Command argv used to resolve approval requests over stdin/stdout.
+    pub command: Option<Vec<String>>,
+
+    /// Timeout for the handler process, in milliseconds.
+    pub timeout_ms: Option<u64>,
+
+    /// Behavior when the handler exits non-zero, times out, or returns invalid JSON.
+    #[serde(default)]
+    pub on_error: Option<ApprovalHandlerOnError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalHandlerConfig {
+    pub command: Vec<String>,
+    pub timeout_ms: u64,
+    pub on_error: ApprovalHandlerOnError,
+}
+
+pub const DEFAULT_APPROVAL_HANDLER_TIMEOUT_MS: u64 = 300_000;
+
+impl ApprovalHandlerToml {
+    pub fn try_into_config(self) -> anyhow::Result<Option<ApprovalHandlerConfig>> {
+        let Some(command) = self.command else {
+            return Ok(None);
+        };
+        let Some((program, _)) = command.split_first() else {
+            anyhow::bail!("approval_handler.command must not be empty");
+        };
+        if program.trim().is_empty() {
+            anyhow::bail!("approval_handler.command[0] must not be empty");
+        }
+
+        Ok(Some(ApprovalHandlerConfig {
+            command,
+            timeout_ms: self
+                .timeout_ms
+                .unwrap_or(DEFAULT_APPROVAL_HANDLER_TIMEOUT_MS),
+            on_error: self.on_error.unwrap_or_default(),
+        }))
+    }
+}
+
 // ===== Analytics configuration =====
 
 /// Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.

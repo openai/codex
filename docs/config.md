@@ -26,6 +26,28 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
+## Approval handler
+
+Codex can delegate exec, patch, and MCP elicitation approvals to an external
+command via `[approval_handler]` in `config.toml`.
+
+Example:
+
+```toml
+[approval_handler]
+command = ["python3", "/path/to/codex/scripts/macos_approval_dialog.py"]
+timeout_ms = 300000
+on_error = "fallback"
+```
+
+Codex writes each approval request as JSON to the handler's stdin and expects a
+single approval `Op` JSON object on stdout. The request payload includes
+`thread_id` and, when available, `thread_label`. `thread_label` is optional and
+should be treated as best-effort metadata.
+
+On macOS, this repository includes a native approval helper at
+[`scripts/macos_approval_dialog.py`](../scripts/macos_approval_dialog.py).
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

@@ -2,6 +2,8 @@
 
 use anyhow::Result;
 use codex_core::config::Constrained;
+use codex_core::config::types::ApprovalHandlerConfig;
+use codex_core::config::types::ApprovalHandlerOnError;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::NetworkConstraints;
@@ -1981,6 +1983,88 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
         "",
         "unexpected file contents after second run"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_exec_approval_handler_approves_without_emitting_prompt() -> Result<()> {
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let home = Arc::new(TempDir::new()?);
+
+    let mut builder = test_codex().with_home(Arc::clone(&home)).with_config({
+        move |config| {
+            let _ = config.features.enable(Feature::UnifiedExec);
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config.approval_handler = Some(ApprovalHandlerConfig {
+                command: vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "cat >/dev/null\nprintf '{\"type\":\"exec_approval\",\"id\":\"external-handler-approval\",\"turn_id\":\"external-handler-approval\",\"decision\":\"approved\"}'\n".to_string(),
+                ],
+                timeout_ms: 5_000,
+                on_error: ApprovalHandlerOnError::Fallback,
+            });
+        }
+    });
+    let server = start_mock_server().await;
+    let test = builder.build(&server).await?;
+
+    let call_id = "external-handler-approval";
+    let (event, expected_command) = ActionKind::RunUnifiedExecCommand {
+        command: "echo handled-by-external-approval",
+        justification: Some(DEFAULT_UNIFIED_EXEC_JUSTIFICATION),
+    }
+    .prepare(
+        &test,
+        &server,
+        call_id,
+        SandboxPermissions::RequireEscalated,
+    )
+    .await?;
+    let expected_command = expected_command.expect("prepared shell command");
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-external-approval-1"),
+            event,
+            ev_completed("resp-external-approval-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-external-approval-1", "done"),
+            ev_completed("resp-external-approval-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "external approval handler",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+    wait_for_completion_without_approval(&test).await;
+
+    let output = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(
+        output.exit_code.unwrap_or(0),
+        0,
+        "unexpected shell output: {}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("handled-by-external-approval"),
+        "unexpected stdout: {}",
+        output.stdout
+    );
+    assert_eq!(expected_command, "echo handled-by-external-approval");
 
     Ok(())
 }

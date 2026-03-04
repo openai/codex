@@ -7,6 +7,7 @@ use crate::agent::AgentControl;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
+use crate::config::types::ApprovalHandlerConfig;
 use crate::exec_policy::ExecPolicyManager;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
@@ -57,6 +58,7 @@ pub(crate) struct SessionServices {
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
+    pub(crate) approval_handler: Option<ApprovalHandlerConfig>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
 }

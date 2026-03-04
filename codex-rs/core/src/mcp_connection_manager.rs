@@ -18,6 +18,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::approval_handler;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::McpAuthStatusEntry;
 use anyhow::Context;
@@ -27,6 +28,7 @@ use async_channel::Sender;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
+use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
@@ -38,6 +40,7 @@ use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::WarningEvent;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rmcp_client::RmcpClient;
@@ -76,6 +79,8 @@ use tracing::warn;
 use url::Url;
 
 use crate::codex::INITIAL_SUBMIT_ID;
+use crate::config::types::ApprovalHandlerConfig;
+use crate::config::types::ApprovalHandlerOnError;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::connectors::is_connector_id_allowed;
@@ -250,13 +255,24 @@ fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
 struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
     approval_policy: Arc<StdMutex<AskForApproval>>,
+    approval_handler: Arc<StdMutex<Option<ApprovalHandlerConfig>>>,
+    thread_id: ThreadId,
+    thread_label: Option<String>,
 }
 
 impl ElicitationRequestManager {
-    fn new(approval_policy: AskForApproval) -> Self {
+    fn new(
+        approval_policy: AskForApproval,
+        approval_handler: Option<ApprovalHandlerConfig>,
+        thread_id: ThreadId,
+        thread_label: Option<String>,
+    ) -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
+            approval_handler: Arc::new(StdMutex::new(approval_handler)),
+            thread_id,
+            thread_label,
         }
     }
 
@@ -278,11 +294,17 @@ impl ElicitationRequestManager {
     fn make_sender(&self, server_name: String, tx_event: Sender<Event>) -> SendElicitation {
         let elicitation_requests = self.requests.clone();
         let approval_policy = self.approval_policy.clone();
+        let approval_handler = self.approval_handler.clone();
+        let thread_id = self.thread_id;
+        let thread_label = self.thread_label.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
             let approval_policy = approval_policy.clone();
+            let approval_handler = approval_handler.clone();
+            let thread_id = thread_id;
+            let thread_label = thread_label.clone();
             async move {
                 if approval_policy
                     .lock()
@@ -294,6 +316,97 @@ impl ElicitationRequestManager {
                     });
                 }
 
+                let request_event = ElicitationRequestEvent {
+                    server_name: server_name.clone(),
+                    id: match id.clone() {
+                        rmcp::model::NumberOrString::String(value) => {
+                            ProtocolRequestId::String(value.to_string())
+                        }
+                        rmcp::model::NumberOrString::Number(value) => {
+                            ProtocolRequestId::Integer(value)
+                        }
+                    },
+                    message: match elicitation {
+                        CreateElicitationRequestParams::FormElicitationParams {
+                            message,
+                            ..
+                        }
+                        | CreateElicitationRequestParams::UrlElicitationParams {
+                            message,
+                            ..
+                        } => message,
+                    },
+                };
+
+                let handler_config = approval_handler.lock().ok().and_then(|config| config.clone());
+                if let Some(config) = handler_config.as_ref() {
+                    match approval_handler::request_elicitation_approval(
+                        config,
+                        thread_id,
+                        thread_label.as_deref(),
+                        &request_event,
+                    )
+                    .await
+                    {
+                        Ok(action) => {
+                            let action = match action {
+                                codex_protocol::protocol::ElicitationAction::Accept => {
+                                    ElicitationAction::Accept
+                                }
+                                codex_protocol::protocol::ElicitationAction::Decline => {
+                                    ElicitationAction::Decline
+                                }
+                                codex_protocol::protocol::ElicitationAction::Cancel => {
+                                    ElicitationAction::Cancel
+                                }
+                            };
+                            return Ok(ElicitationResponse {
+                                action,
+                                content: None,
+                            });
+                        }
+                        Err(err) => match config.on_error {
+                            ApprovalHandlerOnError::Fallback => {
+                                let _ = tx_event
+                                    .send(Event {
+                                        id: thread_id.to_string(),
+                                        msg: EventMsg::Warning(WarningEvent {
+                                            message: approval_handler::fallback_warning_message(
+                                                "elicitation",
+                                                &err,
+                                            ),
+                                        }),
+                                    })
+                                    .await;
+                                warn!(
+                                    "external elicitation approval handler failed; falling back: {err:#}"
+                                );
+                            }
+                            ApprovalHandlerOnError::Deny => {
+                                let _ = tx_event
+                                    .send(Event {
+                                        id: thread_id.to_string(),
+                                        msg: EventMsg::Warning(WarningEvent {
+                                            message: approval_handler::deny_warning_message(
+                                                "elicitation",
+                                                "declining",
+                                                &err,
+                                            ),
+                                        }),
+                                    })
+                                    .await;
+                                warn!(
+                                    "external elicitation approval handler failed; declining request: {err:#}"
+                                );
+                                return Ok(ElicitationResponse {
+                                    action: ElicitationAction::Decline,
+                                    content: None,
+                                });
+                            }
+                        },
+                    }
+                }
+
                 let (tx, rx) = oneshot::channel();
                 {
                     let mut lock = elicitation_requests.lock().await;
@@ -302,27 +415,7 @@ impl ElicitationRequestManager {
                 let _ = tx_event
                     .send(Event {
                         id: "mcp_elicitation_request".to_string(),
-                        msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
-                            server_name,
-                            id: match id.clone() {
-                                rmcp::model::NumberOrString::String(value) => {
-                                    ProtocolRequestId::String(value.to_string())
-                                }
-                                rmcp::model::NumberOrString::Number(value) => {
-                                    ProtocolRequestId::Integer(value)
-                                }
-                            },
-                            message: match elicitation {
-                                CreateElicitationRequestParams::FormElicitationParams {
-                                    message,
-                                    ..
-                                }
-                                | CreateElicitationRequestParams::UrlElicitationParams {
-                                    message,
-                                    ..
-                                } => message,
-                            },
-                        }),
+                        msg: EventMsg::ElicitationRequest(request_event),
                     })
                     .await;
                 rx.await
@@ -513,19 +606,32 @@ pub(crate) struct McpConnectionManager {
 }
 
 impl McpConnectionManager {
-    pub(crate) fn new_uninitialized(approval_policy: &Constrained<AskForApproval>) -> Self {
+    pub(crate) fn new_uninitialized(
+        approval_policy: &Constrained<AskForApproval>,
+        approval_handler: Option<ApprovalHandlerConfig>,
+        thread_id: ThreadId,
+        thread_label: Option<String>,
+    ) -> Self {
         Self {
             clients: HashMap::new(),
             server_origins: HashMap::new(),
-            elicitation_requests: ElicitationRequestManager::new(approval_policy.value()),
+            elicitation_requests: ElicitationRequestManager::new(
+                approval_policy.value(),
+                approval_handler,
+                thread_id,
+                thread_label,
+            ),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn new_mcp_connection_manager_for_tests(
         approval_policy: &Constrained<AskForApproval>,
+        approval_handler: Option<ApprovalHandlerConfig>,
+        thread_id: ThreadId,
+        thread_label: Option<String>,
     ) -> Self {
-        Self::new_uninitialized(approval_policy)
+        Self::new_uninitialized(approval_policy, approval_handler, thread_id, thread_label)
     }
 
     pub(crate) fn has_servers(&self) -> bool {
@@ -548,6 +654,9 @@ impl McpConnectionManager {
         store_mode: OAuthCredentialsStoreMode,
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         approval_policy: &Constrained<AskForApproval>,
+        approval_handler: Option<ApprovalHandlerConfig>,
+        thread_id: ThreadId,
+        thread_label: Option<String>,
         tx_event: Sender<Event>,
         initial_sandbox_state: SandboxState,
         codex_home: PathBuf,
@@ -557,7 +666,12 @@ impl McpConnectionManager {
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests = ElicitationRequestManager::new(approval_policy.value());
+        let elicitation_requests = ElicitationRequestManager::new(
+            approval_policy.value(),
+            approval_handler,
+            thread_id,
+            thread_label,
+        );
         let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             if let Some(origin) = transport_origin(&cfg.transport) {
@@ -1984,7 +2098,12 @@ mod tests {
                 .boxed()
                 .shared();
         let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+        let mut manager = McpConnectionManager::new_uninitialized(
+            &approval_policy,
+            None,
+            ThreadId::default(),
+            None,
+        );
         manager.clients.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             AsyncManagedClient {
@@ -2009,7 +2128,12 @@ mod tests {
                 .boxed()
                 .shared();
         let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+        let mut manager = McpConnectionManager::new_uninitialized(
+            &approval_policy,
+            None,
+            ThreadId::default(),
+            None,
+        );
         manager.clients.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             AsyncManagedClient {
@@ -2031,7 +2155,12 @@ mod tests {
                 .boxed()
                 .shared();
         let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+        let mut manager = McpConnectionManager::new_uninitialized(
+            &approval_policy,
+            None,
+            ThreadId::default(),
+            None,
+        );
         manager.clients.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             AsyncManagedClient {
@@ -2061,7 +2190,12 @@ mod tests {
         .boxed()
         .shared();
         let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+        let mut manager = McpConnectionManager::new_uninitialized(
+            &approval_policy,
+            None,
+            ThreadId::default(),
+            None,
+        );
         let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
         manager.clients.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),

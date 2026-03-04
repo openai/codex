@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell.rs
+assertion_line: 2728
+expression: rendered
+---
+⚠ External approval handler failed: exec approval dialog failed; falling back to the built-in prompt. approval handler
+  timed out after 1000 ms

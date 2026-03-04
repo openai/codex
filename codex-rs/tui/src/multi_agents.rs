@@ -12,6 +12,7 @@ use codex_protocol::protocol::CollabResumeBeginEvent;
 use codex_protocol::protocol::CollabResumeEndEvent;
 use codex_protocol::protocol::CollabWaitingBeginEvent;
 use codex_protocol::protocol::CollabWaitingEndEvent;
+pub(crate) use codex_protocol::protocol::format_thread_label as format_agent_picker_item_name;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -43,27 +44,6 @@ pub(crate) fn agent_picker_status_dot_spans(is_closed: bool) -> Vec<Span<'static
         "•".green()
     };
     vec![dot, " ".into()]
-}
-
-pub(crate) fn format_agent_picker_item_name(
-    agent_nickname: Option<&str>,
-    agent_role: Option<&str>,
-    is_primary: bool,
-) -> String {
-    if is_primary {
-        return "Main [default]".to_string();
-    }
-
-    let agent_nickname = agent_nickname
-        .map(str::trim)
-        .filter(|nickname| !nickname.is_empty());
-    let agent_role = agent_role.map(str::trim).filter(|role| !role.is_empty());
-    match (agent_nickname, agent_role) {
-        (Some(agent_nickname), Some(agent_role)) => format!("{agent_nickname} [{agent_role}]"),
-        (Some(agent_nickname), None) => agent_nickname.to_string(),
-        (None, Some(agent_role)) => format!("[{agent_role}]"),
-        (None, None) => "Agent".to_string(),
-    }
 }
 
 pub(crate) fn sort_agent_picker_threads(agent_threads: &mut [(ThreadId, AgentPickerThreadEntry)]) {

@@ -8,6 +8,7 @@
 mod analytics_client;
 pub mod api_bridge;
 mod apply_patch;
+mod approval_handler;
 mod apps;
 pub mod auth;
 mod client;

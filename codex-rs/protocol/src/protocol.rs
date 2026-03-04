@@ -1500,6 +1500,8 @@ pub struct WarningEvent {
     pub message: String,
 }
 
+pub const EXTERNAL_APPROVAL_HANDLER_WARNING_PREFIX: &str = "External approval handler failed";
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -2043,6 +2045,27 @@ impl fmt::Display for SessionSource {
     }
 }
 
+pub fn format_thread_label(
+    agent_nickname: Option<&str>,
+    agent_role: Option<&str>,
+    is_primary: bool,
+) -> String {
+    if is_primary {
+        return "Main [default]".to_string();
+    }
+
+    let agent_nickname = agent_nickname
+        .map(str::trim)
+        .filter(|nickname| !nickname.is_empty());
+    let agent_role = agent_role.map(str::trim).filter(|role| !role.is_empty());
+    match (agent_nickname, agent_role) {
+        (Some(agent_nickname), Some(agent_role)) => format!("{agent_nickname} [{agent_role}]"),
+        (Some(agent_nickname), None) => agent_nickname.to_string(),
+        (None, Some(agent_role)) => format!("[{agent_role}]"),
+        (None, None) => "Agent".to_string(),
+    }
+}
+
 impl SessionSource {
     pub fn get_nickname(&self) -> Option<String> {
         match self {
@@ -2066,6 +2089,14 @@ impl SessionSource {
             }
             _ => None,
         }
+    }
+
+    pub fn default_thread_label(&self) -> String {
+        format_thread_label(
+            self.get_nickname().as_deref(),
+            self.get_agent_role().as_deref(),
+            !matches!(self, SessionSource::SubAgent(_)),
+        )
     }
 }
 
@@ -3167,6 +3198,31 @@ mod tests {
             }
             .rejects_mcp_elicitations()
         );
+    }
+
+    #[test]
+    fn format_thread_label_prefers_primary_thread_name() {
+        assert_eq!(
+            format_thread_label(Some("Robie"), Some("explorer"), true),
+            "Main [default]".to_string()
+        );
+    }
+
+    #[test]
+    fn format_thread_label_formats_agent_metadata_variants() {
+        assert_eq!(
+            format_thread_label(Some("Robie"), Some("explorer"), false),
+            "Robie [explorer]".to_string()
+        );
+        assert_eq!(
+            format_thread_label(Some("Robie"), None, false),
+            "Robie".to_string()
+        );
+        assert_eq!(
+            format_thread_label(None, Some("explorer"), false),
+            "[explorer]".to_string()
+        );
+        assert_eq!(format_thread_label(None, None, false), "Agent".to_string());
     }
 
     #[test]
