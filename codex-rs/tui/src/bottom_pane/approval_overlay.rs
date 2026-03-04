@@ -668,6 +668,37 @@ fn format_additional_permissions_rule(
             parts.push(format!("write {writes}"));
         }
     }
+    if let Some(macos) = additional_permissions.macos.as_ref() {
+        if let Some(preferences) = macos.preferences.as_ref() {
+            let value = match preferences {
+                codex_protocol::models::MacOsPreferencesValue::Bool(true) => "readonly",
+                codex_protocol::models::MacOsPreferencesValue::Bool(false) => "none",
+                codex_protocol::models::MacOsPreferencesValue::Mode(mode) => mode.as_str(),
+            };
+            parts.push(format!("macOS preferences {value}"));
+        }
+        if let Some(automations) = macos.automations.as_ref() {
+            match automations {
+                codex_protocol::models::MacOsAutomationValue::Bool(true) => {
+                    parts.push("macOS automation all".to_string());
+                }
+                codex_protocol::models::MacOsAutomationValue::Bool(false) => {
+                    parts.push("macOS automation none".to_string());
+                }
+                codex_protocol::models::MacOsAutomationValue::BundleIds(bundle_ids) => {
+                    if !bundle_ids.is_empty() {
+                        parts.push(format!("macOS automation {}", bundle_ids.join(", ")));
+                    }
+                }
+            }
+        }
+        if macos.accessibility.unwrap_or(false) {
+            parts.push("macOS accessibility".to_string());
+        }
+        if macos.calendar.unwrap_or(false) {
+            parts.push("macOS calendar".to_string());
+        }
+    }
 
     if parts.is_empty() {
         None
@@ -727,6 +758,9 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_protocol::models::FileSystemPermissions;
+    use codex_protocol::models::MacOsAutomationValue;
+    use codex_protocol::models::MacOsPermissions;
+    use codex_protocol::models::MacOsPreferencesValue;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::protocol::ExecPolicyAmendment;
     use codex_protocol::protocol::NetworkApprovalProtocol;
@@ -1147,6 +1181,39 @@ mod tests {
         assert_snapshot!(
             "approval_overlay_additional_permissions_prompt",
             normalize_snapshot_paths(render_overlay_lines(&view, 120))
+        );
+    }
+
+    #[test]
+    fn additional_permissions_macos_prompt_snapshot() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let exec_request = ApprovalRequest::Exec {
+            thread_id: ThreadId::new(),
+            thread_label: None,
+            id: "test".into(),
+            command: vec!["osascript".into(), "-e".into(), "tell application".into()],
+            reason: Some("need macOS automation".into()),
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
+            network_approval_context: None,
+            additional_permissions: Some(PermissionProfile {
+                macos: Some(MacOsPermissions {
+                    preferences: Some(MacOsPreferencesValue::Mode("readwrite".to_string())),
+                    automations: Some(MacOsAutomationValue::BundleIds(vec![
+                        "com.apple.Calendar".to_string(),
+                        "com.apple.Notes".to_string(),
+                    ])),
+                    accessibility: Some(true),
+                    calendar: Some(true),
+                }),
+                ..Default::default()
+            }),
+        };
+
+        let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
+        assert_snapshot!(
+            "approval_overlay_additional_permissions_macos_prompt",
+            render_overlay_lines(&view, 120)
         );
     }
 
