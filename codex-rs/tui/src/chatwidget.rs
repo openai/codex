@@ -4983,6 +4983,11 @@ impl ChatWidget {
         if !notification.allowed_for(&self.config.tui_notifications) {
             return;
         }
+        if let Some(existing) = self.pending_notification.as_ref()
+            && existing.priority() > notification.priority()
+        {
+            return;
+        }
         self.pending_notification = Some(notification);
         self.request_redraw();
     }
@@ -8463,6 +8468,17 @@ impl Notification {
             | Notification::ElicitationRequested { .. } => "approval-requested",
             Notification::PlanModePrompt { .. } => "plan-mode-prompt",
             Notification::UserInputRequested { .. } => "user-input-requested",
+        }
+    }
+
+    fn priority(&self) -> u8 {
+        match self {
+            Notification::AgentTurnComplete { .. } => 0,
+            Notification::ExecApprovalRequested { .. }
+            | Notification::EditApprovalRequested { .. }
+            | Notification::ElicitationRequested { .. }
+            | Notification::PlanModePrompt { .. }
+            | Notification::UserInputRequested { .. } => 1,
         }
     }
 
