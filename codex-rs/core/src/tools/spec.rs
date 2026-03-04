@@ -57,6 +57,7 @@ pub(crate) struct ToolsConfig {
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
     pub artifact_tools: bool,
+    pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
@@ -83,8 +84,9 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
-            features.enabled(Feature::DefaultModeRequestUserInput);
+            include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
         let include_artifact_tools = features.enabled(Feature::Artifact);
         let include_image_gen_tool =
@@ -146,6 +148,7 @@ impl ToolsConfig {
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
             artifact_tools: include_artifact_tools,
+            request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
@@ -1877,10 +1880,12 @@ pub(crate) fn build_specs(
         builder.register_handler("js_repl_reset", js_repl_reset_handler);
     }
 
-    builder.push_spec(create_request_user_input_tool(CollaborationModesConfig {
-        default_mode_request_user_input: config.default_mode_request_user_input,
-    }));
-    builder.register_handler("request_user_input", request_user_input_handler);
+    if config.request_user_input {
+        builder.push_spec(create_request_user_input_tool(CollaborationModesConfig {
+            default_mode_request_user_input: config.default_mode_request_user_input,
+        }));
+        builder.register_handler("request_user_input", request_user_input_handler);
+    }
 
     if config.search_tool
         && let Some(app_tools) = app_tools
@@ -2115,6 +2120,14 @@ mod tests {
         }
     }
 
+    fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
+        let names = tools.iter().map(|tool| tool_name(&tool.spec)).collect::<Vec<_>>();
+        assert!(
+            !names.contains(&expected_absent),
+            "expected tool {expected_absent} to be absent; had: {names:?}"
+        );
+    }
+
     fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
         match config.shell_type {
             ConfigShellToolType::Default => Some("shell"),
@@ -2317,6 +2330,7 @@ mod tests {
                 "report_agent_job_result",
             ],
         );
+        assert_lacks_tool_name(&tools, "request_user_input");
     }
 
     #[test]
