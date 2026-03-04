@@ -227,22 +227,23 @@ WHERE id = ?
         Ok(())
     }
 
-    pub async fn mark_agent_job_completed(&self, job_id: &str) -> anyhow::Result<()> {
+    pub async fn mark_agent_job_completed(&self, job_id: &str) -> anyhow::Result<bool> {
         let now = Utc::now().timestamp();
-        sqlx::query(
+        let result = sqlx::query(
             r#"
 UPDATE agent_jobs
 SET status = ?, updated_at = ?, completed_at = ?, last_error = NULL
-WHERE id = ?
+WHERE id = ? AND status = ?
             "#,
         )
         .bind(AgentJobStatus::Completed.as_str())
         .bind(now)
         .bind(now)
         .bind(job_id)
+        .bind(AgentJobStatus::Running.as_str())
         .execute(self.pool.as_ref())
         .await?;
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn mark_agent_job_failed(
