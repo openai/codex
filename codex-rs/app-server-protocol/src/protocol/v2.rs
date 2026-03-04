@@ -3927,6 +3927,8 @@ pub enum WindowsSandboxSetupMode {
 #[ts(export_to = "v2/")]
 pub struct WindowsSandboxSetupStartParams {
     pub mode: WindowsSandboxSetupMode,
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

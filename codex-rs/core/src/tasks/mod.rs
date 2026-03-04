@@ -14,7 +14,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
-use tracing::Span;
+use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
@@ -38,6 +38,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 
+use crate::features::Feature;
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
@@ -88,6 +89,9 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// surface it in telemetry and UI.
     fn kind(&self) -> TaskKind;
 
+    /// Returns the tracing name for a spawned task span.
+    fn span_name(&self) -> &'static str;
+
     /// Executes the task until completion or cancellation.
     ///
     /// Implementations typically stream protocol events using `session` and
@@ -126,6 +130,7 @@ impl Session {
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
+        let span_name = task.span_name();
 
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
@@ -136,7 +141,15 @@ impl Session {
             let ctx = Arc::clone(&turn_context);
             let task_for_run = Arc::clone(&task);
             let task_cancellation_token = cancellation_token.child_token();
-            let session_span = Span::current();
+            // Task-owned turn spans keep a core-owned span open for the
+            // full task lifecycle after the submission dispatch span ends.
+            let task_span = info_span!(
+                "turn",
+                otel.name = span_name,
+                thread.id = %self.conversation_id,
+                turn.id = %turn_context.sub_id,
+                model = %turn_context.model_info.slug,
+            );
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
@@ -157,7 +170,7 @@ impl Session {
                     }
                     done_clone.notify_waiters();
                 }
-                .instrument(session_span),
+                .instrument(task_span),
             )
         };
 
@@ -200,11 +213,13 @@ impl Session {
         let mut pending_input = Vec::<ResponseInputItem>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
+        let mut turn_tool_calls = 0_u64;
         if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
             let mut ts = at.turn_state.lock().await;
             pending_input = ts.take_pending_input();
+            turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
             should_clear_active_turn = true;
         }
@@ -239,6 +254,20 @@ impl Session {
         }
         // Emit token usage metrics.
         if let Some(token_usage_at_turn_start) = token_usage_at_turn_start {
+            // TODO(jif): drop this
+            let tmp_mem = (
+                "tmp_mem_enabled",
+                if self.enabled(Feature::MemoryTool) {
+                    "true"
+                } else {
+                    "false"
+                },
+            );
+            self.services.otel_manager.histogram(
+                "codex.turn.tool.call",
+                i64::try_from(turn_tool_calls).unwrap_or(i64::MAX),
+                &[tmp_mem],
+            );
             let total_token_usage = self.total_token_usage().await.unwrap_or_default();
             let turn_token_usage = crate::protocol::TokenUsage {
                 input_tokens: (total_token_usage.input_tokens
@@ -260,27 +289,27 @@ impl Session {
             self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.total_tokens,
-                &[("token_type", "total")],
+                &[("token_type", "total"), tmp_mem],
             );
             self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.input_tokens,
-                &[("token_type", "input")],
+                &[("token_type", "input"), tmp_mem],
             );
             self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.cached_input(),
-                &[("token_type", "cached_input")],
+                &[("token_type", "cached_input"), tmp_mem],
             );
             self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.output_tokens,
-                &[("token_type", "output")],
+                &[("token_type", "output"), tmp_mem],
             );
             self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.reasoning_output_tokens,
-                &[("token_type", "reasoning_output")],
+                &[("token_type", "reasoning_output"), tmp_mem],
             );
         }
         let event = EventMsg::TurnComplete(TurnCompleteEvent {

@@ -6119,21 +6119,39 @@ impl CodexMessageProcessor {
             WindowsSandboxSetupMode::Unelevated => CoreWindowsSandboxSetupMode::Unelevated,
         };
         let config = Arc::clone(&self.config);
+        let cli_overrides = self.cli_overrides.clone();
+        let cloud_requirements = self.current_cloud_requirements();
+        let command_cwd = params.cwd.unwrap_or_else(|| config.cwd.clone());
         let outgoing = Arc::clone(&self.outgoing);
         let connection_id = request_id.connection_id;
 
         tokio::spawn(async move {
-            let setup_request = WindowsSandboxSetupRequest {
-                mode,
-                policy: config.permissions.sandbox_policy.get().clone(),
-                policy_cwd: config.cwd.clone(),
-                command_cwd: config.cwd.clone(),
-                env_map: std::env::vars().collect(),
-                codex_home: config.codex_home.clone(),
-                active_profile: config.active_profile.clone(),
+            let derived_config = derive_config_for_cwd(
+                &cli_overrides,
+                None,
+                ConfigOverrides {
+                    cwd: Some(command_cwd.clone()),
+                    ..Default::default()
+                },
+                Some(command_cwd.clone()),
+                &cloud_requirements,
+            )
+            .await;
+            let setup_result = match derived_config {
+                Ok(config) => {
+                    let setup_request = WindowsSandboxSetupRequest {
+                        mode,
+                        policy: config.permissions.sandbox_policy.get().clone(),
+                        policy_cwd: config.cwd.clone(),
+                        command_cwd,
+                        env_map: std::env::vars().collect(),
+                        codex_home: config.codex_home.clone(),
+                        active_profile: config.active_profile.clone(),
+                    };
+                    codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await
+                }
+                Err(err) => Err(err.into()),
             };
-            let setup_result =
-                codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await;
             let notification = WindowsSandboxSetupCompletedNotification {
                 mode: match mode {
                     CoreWindowsSandboxSetupMode::Elevated => WindowsSandboxSetupMode::Elevated,

@@ -37,6 +37,7 @@ async fn windows_sandbox_setup_start_emits_completion_notification() -> Result<(
     let request_id = mcp
         .send_windows_sandbox_setup_start_request(WindowsSandboxSetupStartParams {
             mode: WindowsSandboxSetupMode::Unelevated,
+            cwd: None,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
