@@ -2864,6 +2864,12 @@
     },
     "WindowsSandboxSetupStartParams": {
       "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mode": {
           "$ref": "#/definitions/WindowsSandboxSetupMode"
         }

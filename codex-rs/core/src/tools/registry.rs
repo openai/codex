@@ -118,6 +118,14 @@ impl ToolRegistry {
         let mcp_server_ref = mcp_server.as_deref();
         let mcp_server_origin_ref = mcp_server_origin.as_deref();
 
+        {
+            let mut active = invocation.session.active_turn.lock().await;
+            if let Some(active_turn) = active.as_mut() {
+                let mut turn_state = active_turn.turn_state.lock().await;
+                turn_state.tool_calls = turn_state.tool_calls.saturating_add(1);
+            }
+        }
+
         let handler = match self.handler(tool_name.as_ref()) {
             Some(handler) => handler,
             None => {
