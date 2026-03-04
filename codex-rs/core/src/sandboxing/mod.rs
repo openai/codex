@@ -330,7 +330,7 @@ impl SandboxManager {
             if let Some(additional_permissions) = spec.additional_permissions.take() {
                 sandbox_policy_with_additional_permissions(policy, &additional_permissions)?
             } else {
-                policy.clone()
+                policy
             };
         let mut env = spec.env;
         if !effective_policy.has_full_network_access() {
