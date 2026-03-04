@@ -466,6 +466,7 @@ model_provider = "test-provider"
             AgentRoleConfig {
                 description: None,
                 config_file: Some(role_path),
+                nickname_candidates: None,
             },
         );
 
@@ -522,6 +523,7 @@ model_provider = "role-provider"
             AgentRoleConfig {
                 description: None,
                 config_file: Some(role_path),
+                nickname_candidates: None,
             },
         );
 
@@ -579,6 +581,7 @@ model_provider = "base-provider"
             AgentRoleConfig {
                 description: None,
                 config_file: Some(role_path),
+                nickname_candidates: None,
             },
         );
 
@@ -640,6 +643,7 @@ model_reasoning_effort = "high"
             AgentRoleConfig {
                 description: None,
                 config_file: Some(role_path),
+                nickname_candidates: None,
             },
         );
 
