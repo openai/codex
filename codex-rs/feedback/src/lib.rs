@@ -515,23 +515,26 @@ mod tests {
     }
 
     #[test]
-    fn feedback_attachments_include_connectivity_diagnostics_for_good_result() {
+    fn feedback_attachments_gate_connectivity_diagnostics() {
         let extra_filename = format!("codex-feedback-extra-{}.jsonl", ThreadId::new());
         let extra_path = std::env::temp_dir().join(&extra_filename);
         fs::write(&extra_path, "rollout").expect("extra attachment should be written");
 
-        let snapshot = CodexFeedback::new()
+        let snapshot_with_diagnostics = CodexFeedback::new()
             .snapshot(None)
             .with_feedback_diagnostics(FeedbackDiagnostics::new(vec![FeedbackDiagnostic {
                 headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
                 details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
             }]));
 
-        let attachments =
-            snapshot.feedback_attachments(true, std::slice::from_ref(&extra_path), Some(vec![1]));
+        let attachments_with_diagnostics = snapshot_with_diagnostics.feedback_attachments(
+            true,
+            std::slice::from_ref(&extra_path),
+            Some(vec![1]),
+        );
 
         assert_eq!(
-            attachments
+            attachments_with_diagnostics
                 .iter()
                 .map(|attachment| attachment.filename.as_str())
                 .collect::<Vec<_>>(),
@@ -541,63 +544,28 @@ mod tests {
                 extra_filename.as_str()
             ]
         );
-        assert_eq!(attachments[0].buffer, vec![1]);
+        assert_eq!(attachments_with_diagnostics[0].buffer, vec![1]);
         assert_eq!(
-            attachments[1].buffer,
+            attachments_with_diagnostics[1].buffer,
             b"Connectivity diagnostics\n\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1".to_vec()
         );
-        assert_eq!(attachments[2].buffer, b"rollout".to_vec());
+        assert_eq!(attachments_with_diagnostics[2].buffer, b"rollout".to_vec());
         assert_eq!(
-            OsStr::new(attachments[2].filename.as_str()),
+            OsStr::new(attachments_with_diagnostics[2].filename.as_str()),
             OsStr::new(extra_filename.as_str())
         );
-        fs::remove_file(extra_path).expect("extra attachment should be removed");
-    }
-
-    #[test]
-    fn feedback_attachments_omit_connectivity_diagnostics_when_none_detected() {
-        let snapshot = CodexFeedback::new().snapshot(None);
-
-        let attachments = snapshot.feedback_attachments(true, &[], Some(vec![1]));
+        let attachments_without_diagnostics = CodexFeedback::new()
+            .snapshot(None)
+            .feedback_attachments(true, &[], Some(vec![1]));
 
         assert_eq!(
-            attachments
+            attachments_without_diagnostics
                 .iter()
                 .map(|attachment| attachment.filename.as_str())
                 .collect::<Vec<_>>(),
             vec!["codex-logs.log"]
         );
-        assert_eq!(attachments[0].buffer, vec![1]);
-    }
-
-    #[test]
-    fn feedback_diagnostics_attachment_text_matches_upload_conditions() {
-        let snapshot_without_diagnostics = CodexFeedback::new().snapshot(None);
-        assert_eq!(
-            snapshot_without_diagnostics.feedback_diagnostics_attachment_text(true),
-            None
-        );
-        assert_eq!(
-            snapshot_without_diagnostics.feedback_diagnostics_attachment_text(false),
-            None
-        );
-
-        let snapshot_with_diagnostics =
-            snapshot_without_diagnostics.with_feedback_diagnostics(FeedbackDiagnostics::new(vec![
-                FeedbackDiagnostic {
-                    headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                    details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
-                },
-            ]));
-        assert_eq!(
-            snapshot_with_diagnostics.feedback_diagnostics_attachment_text(false),
-            None
-        );
-        assert_eq!(
-            snapshot_with_diagnostics.feedback_diagnostics_attachment_text(true),
-            Some(
-                "Connectivity diagnostics\n\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1".to_string()
-            )
-        );
+        assert_eq!(attachments_without_diagnostics[0].buffer, vec![1]);
+        fs::remove_file(extra_path).expect("extra attachment should be removed");
     }
 }

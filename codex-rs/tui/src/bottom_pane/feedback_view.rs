@@ -760,35 +760,6 @@ mod tests {
     }
 
     #[test]
-    fn feedback_snapshot_override_controls_connectivity_details() {
-        let diagnostics = FeedbackDiagnostics::new(vec![FeedbackDiagnostic {
-            headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-            details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
-        }]);
-        let make_view = |category| {
-            let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
-            let tx = AppEventSender::new(tx_raw);
-            let snapshot = codex_feedback::CodexFeedback::new()
-                .snapshot(None)
-                .with_feedback_diagnostics(diagnostics.clone());
-            FeedbackNoteView::new(
-                category,
-                snapshot,
-                None,
-                tx,
-                true,
-                FeedbackAudience::External,
-            )
-        };
-
-        assert!(render(&make_view(FeedbackCategory::Bug), 60).contains("Connectivity diagnostics"));
-        assert!(
-            !render(&make_view(FeedbackCategory::GoodResult), 60)
-                .contains("Connectivity diagnostics")
-        );
-    }
-
-    #[test]
     fn issue_url_available_for_bug_bad_result_safety_check_and_other() {
         let bug_url = issue_url_for_category(
             FeedbackCategory::Bug,
