@@ -1232,7 +1232,7 @@ function normalizeEmitImageUrl(value) {
   if (typeof value !== "string" || !value) {
     throw new Error("codex.emitImage expected a non-empty image_url");
   }
-  if (!value.startsWith("data:")) {
+  if (!/^data:/i.test(value)) {
     throw new Error("codex.emitImage only accepts data URLs");
   }
   return value;
@@ -1317,7 +1317,7 @@ function normalizeMcpImageData(data, mimeType) {
   if (typeof data !== "string" || !data) {
     throw new Error("codex.emitImage expected MCP image data");
   }
-  if (data.startsWith("data:")) {
+  if (/^data:/i.test(data)) {
     return data;
   }
   const normalizedMimeType =

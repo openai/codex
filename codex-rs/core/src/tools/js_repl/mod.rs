@@ -1477,7 +1477,10 @@ fn emitted_image_content_item(
 }
 
 fn validate_emitted_image_url(image_url: &str) -> Result<(), String> {
-    if image_url.starts_with("data:") {
+    if image_url
+        .get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+    {
         Ok(())
     } else {
         Err("codex.emitImage only accepts data URLs".to_string())
@@ -2019,6 +2022,22 @@ mod tests {
                 image_url: "data:image/png;base64,AAA".to_string(),
                 detail: Some(ImageDetail::Original),
             }
+        );
+    }
+
+    #[test]
+    fn validate_emitted_image_url_accepts_case_insensitive_data_scheme() {
+        assert_eq!(
+            validate_emitted_image_url("DATA:image/png;base64,AAA"),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validate_emitted_image_url_rejects_non_data_scheme() {
+        assert_eq!(
+            validate_emitted_image_url("https://example.com/image.png"),
+            Err("codex.emitImage only accepts data URLs".to_string())
         );
     }
 
@@ -2960,6 +2979,55 @@ await codex.emitImage("https://example.com/image.png");
             .await
             .expect_err("non-data URLs should fail");
         assert!(err.to_string().contains("only accepts data URLs"));
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_emit_image_accepts_case_insensitive_data_url() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+await codex.emitImage("DATA:image/png;base64,AAA");
+"#;
+
+        let result = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await?;
+        assert_eq!(
+            result.content_items.as_slice(),
+            [FunctionCallOutputContentItem::InputImage {
+                image_url: "DATA:image/png;base64,AAA".to_string(),
+                detail: None,
+            }]
+            .as_slice()
+        );
         assert!(session.get_pending_input().await.is_empty());
 
         Ok(())
