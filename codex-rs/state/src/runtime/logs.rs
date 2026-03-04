@@ -17,6 +17,8 @@ impl StateRuntime {
         );
         builder.push_values(entries, |mut row, entry| {
             let feedback_log_body = entry.feedback_log_body.as_ref().or(entry.message.as_ref());
+            // This is a retained-content budget, not an exact on-disk SQLite byte count:
+            // `query_logs` reads `message`, while `/feedback` exports `feedback_log_body`.
             let estimated_bytes = entry
                 .message
                 .as_ref()
@@ -46,7 +48,7 @@ impl StateRuntime {
         Ok(())
     }
 
-    /// Enforce per-partition log size caps after a successful batch insert.
+    /// Enforce per-partition retained-log-content caps after a successful batch insert.
     ///
     /// We maintain two independent budgets:
     /// - Thread logs: rows with `thread_id IS NOT NULL`, capped per `thread_id`.
