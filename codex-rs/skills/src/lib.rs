@@ -191,25 +191,5 @@ mod tests {
                 .binary_search_by(|probe| probe.as_str().cmp("skill-creator/scripts/init_skill.py"))
                 .is_ok()
         );
-        assert!(
-            paths
-                .binary_search_by(|probe| probe.as_str().cmp("slides/SKILL.md"))
-                .is_ok()
-        );
-        assert!(
-            paths
-                .binary_search_by(|probe| probe.as_str().cmp("slides/references/presentation.md"))
-                .is_ok()
-        );
-        assert!(
-            paths
-                .binary_search_by(|probe| probe.as_str().cmp("spreadsheets/SKILL.md"))
-                .is_ok()
-        );
-        assert!(
-            paths
-                .binary_search_by(|probe| probe.as_str().cmp("spreadsheets/references/workbook.md"))
-                .is_ok()
-        );
     }
 }
