@@ -16,12 +16,17 @@ impl StateRuntime {
             "INSERT INTO logs (ts, ts_nanos, level, target, message, feedback_log_body, thread_id, process_uuid, module_path, file, line, estimated_bytes) ",
         );
         builder.push_values(entries, |mut row, entry| {
-            let estimated_bytes = entry.message.as_ref().map_or(0, String::len) as i64
+            let feedback_log_body = entry.feedback_log_body.as_ref().or(entry.message.as_ref());
+            let estimated_bytes = entry
+                .message
+                .as_ref()
+                .map_or(0, String::len)
+                .max(feedback_log_body.map_or(0, String::len))
+                as i64
                 + entry.level.len() as i64
                 + entry.target.len() as i64
                 + entry.module_path.as_ref().map_or(0, String::len) as i64
                 + entry.file.as_ref().map_or(0, String::len) as i64;
-            let feedback_log_body = entry.feedback_log_body.as_ref().or(entry.message.as_ref());
             row.push_bind(entry.ts)
                 .push_bind(entry.ts_nanos)
                 .push_bind(&entry.level)
@@ -613,8 +618,8 @@ mod tests {
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
-                    message: Some(six_mebibytes.clone()),
-                    feedback_log_body: None,
+                    message: Some("small".to_string()),
+                    feedback_log_body: Some(six_mebibytes.clone()),
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: Some("main.rs".to_string()),
@@ -626,8 +631,8 @@ mod tests {
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
-                    message: Some(six_mebibytes.clone()),
-                    feedback_log_body: None,
+                    message: Some("small".to_string()),
+                    feedback_log_body: Some(six_mebibytes.clone()),
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: Some("proc-1".to_string()),
                     file: Some("main.rs".to_string()),
@@ -666,8 +671,8 @@ mod tests {
                 ts_nanos: 0,
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
-                message: Some(eleven_mebibytes),
-                feedback_log_body: None,
+                message: Some("small".to_string()),
+                feedback_log_body: Some(eleven_mebibytes),
                 thread_id: Some("thread-oversized".to_string()),
                 process_uuid: Some("proc-1".to_string()),
                 file: Some("main.rs".to_string()),
@@ -773,8 +778,8 @@ mod tests {
                 ts_nanos: 0,
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
-                message: Some(eleven_mebibytes),
-                feedback_log_body: None,
+                message: Some("small".to_string()),
+                feedback_log_body: Some(eleven_mebibytes),
                 thread_id: None,
                 process_uuid: Some("proc-oversized".to_string()),
                 file: Some("main.rs".to_string()),
@@ -879,8 +884,8 @@ mod tests {
                 ts_nanos: 0,
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
-                message: Some(eleven_mebibytes),
-                feedback_log_body: None,
+                message: Some("small".to_string()),
+                feedback_log_body: Some(eleven_mebibytes),
                 thread_id: None,
                 process_uuid: None,
                 file: Some("main.rs".to_string()),
