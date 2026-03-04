@@ -3171,6 +3171,11 @@ impl CodexMessageProcessor {
                     request_id: request_id.clone(),
                     rollout_path,
                     config_snapshot,
+                    persisted_git_info: read_persisted_thread_git_info_by_thread_id(
+                        &self.config,
+                        existing_thread_id,
+                    )
+                    .await,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -3293,6 +3298,10 @@ impl CodexMessageProcessor {
             Ok(items) => {
                 thread.turns = build_turns_from_rollout_items(&items);
                 self.attach_thread_name(thread_id, &mut thread).await;
+                apply_persisted_thread_git_info(
+                    &mut thread,
+                    read_persisted_thread_git_info_by_thread_id(&self.config, thread_id).await,
+                );
                 Some(thread)
             }
             Err(err) => {
@@ -6279,6 +6288,7 @@ async fn handle_pending_thread_resume_request(
         has_in_progress_turn,
     );
     thread.status = status;
+    apply_persisted_thread_git_info(&mut thread, pending.persisted_git_info);
 
     match find_thread_name_by_id(codex_home, &conversation_id).await {
         Ok(thread_name) => thread.name = thread_name,
@@ -6965,6 +6975,27 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
         sha: git_info.commit_hash.clone(),
         branch: git_info.branch.clone(),
         origin_url: git_info.repository_url.clone(),
+    }
+}
+
+async fn read_persisted_thread_git_info_by_thread_id(
+    config: &Config,
+    thread_id: ThreadId,
+) -> Option<Option<ApiGitInfo>> {
+    let summary = read_summary_from_state_db_by_thread_id(config, thread_id).await?;
+    Some(summary.git_info.map(|info| ApiGitInfo {
+        sha: info.sha,
+        branch: info.branch,
+        origin_url: info.origin_url,
+    }))
+}
+
+fn apply_persisted_thread_git_info(
+    thread: &mut Thread,
+    persisted_git_info: Option<Option<ApiGitInfo>>,
+) {
+    if let Some(git_info) = persisted_git_info {
+        thread.git_info = git_info;
     }
 }
 
