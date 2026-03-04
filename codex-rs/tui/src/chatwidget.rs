@@ -2119,7 +2119,7 @@ impl ChatWidget {
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
         self.update_task_running_state();
-        self.refresh_queued_user_messages();
+        self.refresh_pending_input_preview();
         self.request_redraw();
     }
 
