@@ -317,8 +317,10 @@ WHERE id IN (
 
     /// Query per-thread feedback logs, capped to the per-thread SQLite retention budget.
     pub async fn query_feedback_logs(&self, thread_id: &str) -> anyhow::Result<Vec<u8>> {
-        let max_bytes = LOG_PARTITION_SIZE_LIMIT_BYTES;
-        let rows = sqlx::query_as::<_, FeedbackLogRow>(&format!(
+        let max_bytes = usize::try_from(LOG_PARTITION_SIZE_LIMIT_BYTES).unwrap_or(usize::MAX);
+        // Bound the fetched rows in SQL first so over-retained partitions do not have to load
+        // every row into memory, then apply the exact whole-line byte cap after formatting.
+        let rows = sqlx::query_as::<_, FeedbackLogRow>(
             r#"
 WITH latest_process AS (
     SELECT process_uuid
@@ -328,12 +330,7 @@ WITH latest_process AS (
     LIMIT 1
 ),
 feedback_logs AS (
-    SELECT
-        ts,
-        ts_nanos,
-        level,
-        feedback_log_body,
-        id
+    SELECT ts, ts_nanos, level, feedback_log_body, estimated_bytes, id
     FROM logs
     WHERE feedback_log_body IS NOT NULL AND (
         thread_id = ?
@@ -342,39 +339,49 @@ feedback_logs AS (
             AND process_uuid IN (SELECT process_uuid FROM latest_process)
         )
     )
-)
-SELECT ts, ts_nanos, level, feedback_log_body
-FROM (
+),
+bounded_feedback_logs AS (
     SELECT
         ts,
         ts_nanos,
         level,
         feedback_log_body,
         id,
-        SUM(length(CAST(feedback_log_body AS BLOB)) + {FEEDBACK_LOG_FIXED_OVERHEAD_BYTES}) OVER (
+        SUM(estimated_bytes) OVER (
             ORDER BY ts DESC, ts_nanos DESC, id DESC
-        ) AS cumulative_bytes
+        ) AS cumulative_estimated_bytes
     FROM feedback_logs
 )
-WHERE cumulative_bytes <= ?
-ORDER BY ts ASC, ts_nanos ASC, id ASC
-"#
-        ))
+SELECT ts, ts_nanos, level, feedback_log_body
+FROM bounded_feedback_logs
+WHERE cumulative_estimated_bytes <= ?
+ORDER BY ts DESC, ts_nanos DESC, id DESC
+"#,
+        )
         .bind(thread_id)
         .bind(thread_id)
-        .bind(max_bytes)
+        .bind(LOG_PARTITION_SIZE_LIMIT_BYTES)
         .fetch_all(self.logs_pool.as_ref())
         .await?;
 
-        let mut bytes = Vec::new();
+        let mut lines = Vec::new();
+        let mut total_bytes = 0usize;
         for row in rows {
-            bytes.extend_from_slice(
-                format_feedback_log_line(row.ts, row.ts_nanos, &row.level, &row.feedback_log_body)
-                    .as_bytes(),
-            );
+            let line =
+                format_feedback_log_line(row.ts, row.ts_nanos, &row.level, &row.feedback_log_body);
+            if total_bytes.saturating_add(line.len()) > max_bytes {
+                break;
+            }
+            total_bytes += line.len();
+            lines.push(line);
         }
 
-        Ok(bytes)
+        let mut ordered_bytes = Vec::with_capacity(total_bytes);
+        for line in lines.into_iter().rev() {
+            ordered_bytes.extend_from_slice(line.as_bytes());
+        }
+
+        Ok(ordered_bytes)
     }
 
     /// Return the max log id matching optional filters.
@@ -387,11 +394,6 @@ ORDER BY ts ASC, ts_nanos ASC, id ASC
         Ok(max_id.unwrap_or(0))
     }
 }
-
-// `tracing_subscriber`'s feedback formatter emits:
-// `{timestamp} {level} {feedback_log_body}\n`
-// where the timestamp is always `YYYY-MM-DDTHH:MM:SS.ffffffZ` (27 bytes).
-const FEEDBACK_LOG_FIXED_OVERHEAD_BYTES: i64 = 35;
 
 #[derive(sqlx::FromRow)]
 struct FeedbackLogRow {
@@ -407,16 +409,16 @@ fn format_feedback_log_line(
     level: &str,
     feedback_log_body: &str,
 ) -> String {
-    let timestamp = format_feedback_timestamp(ts, ts_nanos);
-    format!("{timestamp} {level:>5} {feedback_log_body}\n")
-}
-
-fn format_feedback_timestamp(ts: i64, ts_nanos: i64) -> String {
     let nanos = u32::try_from(ts_nanos).unwrap_or(0);
-    match DateTime::<Utc>::from_timestamp(ts, nanos) {
+    let timestamp = match DateTime::<Utc>::from_timestamp(ts, nanos) {
         Some(dt) => dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
         None => format!("{ts}.{ts_nanos:09}Z"),
+    };
+    let mut line = format!("{timestamp} {level:>5} {feedback_log_body}");
+    if !line.ends_with('\n') {
+        line.push('\n');
     }
+    line
 }
 
 fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQuery) {
@@ -532,6 +534,7 @@ mod tests {
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
                 message: Some("dedicated-log-db".to_string()),
+                feedback_log_body: Some("dedicated-log-db".to_string()),
                 thread_id: Some("thread-1".to_string()),
                 process_uuid: Some("proc-1".to_string()),
                 module_path: Some("mod".to_string()),
@@ -548,6 +551,14 @@ mod tests {
         assert_eq!(logs_count, 1);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[test]
+    fn format_feedback_log_line_matches_feedback_formatter_shape() {
+        assert_eq!(
+            format_feedback_log_line(1, 123_456_000, "INFO", "alpha"),
+            "1970-01-01T00:00:01.123456Z  INFO alpha\n"
+        );
     }
 
     #[tokio::test]
