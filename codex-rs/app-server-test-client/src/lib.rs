@@ -70,7 +70,6 @@ use codex_utils_cli::CliConfigOverrides;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::runtime::Builder as RuntimeBuilder;
 use tracing::info_span;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -248,7 +247,7 @@ enum CliCommand {
     },
 }
 
-pub fn run() -> Result<()> {
+pub async fn run() -> Result<()> {
     let Cli {
         codex_bin,
         url,
@@ -268,7 +267,7 @@ pub fn run() -> Result<()> {
         CliCommand::SendMessage { user_message } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "send-message")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            send_message(&endpoint, &config_overrides, user_message)
+            send_message(&endpoint, &config_overrides, user_message).await
         }
         CliCommand::SendMessageV2 {
             experimental_api,
@@ -282,6 +281,7 @@ pub fn run() -> Result<()> {
                 experimental_api,
                 &dynamic_tools,
             )
+            .await
         }
         CliCommand::ResumeMessageV2 {
             thread_id,
@@ -295,28 +295,30 @@ pub fn run() -> Result<()> {
                 user_message,
                 &dynamic_tools,
             )
+            .await
         }
         CliCommand::ThreadResume { thread_id } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "thread-resume")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            thread_resume_follow(&endpoint, &config_overrides, thread_id)
+            thread_resume_follow(&endpoint, &config_overrides, thread_id).await
         }
         CliCommand::Watch => {
             ensure_dynamic_tools_unused(&dynamic_tools, "watch")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            watch(&endpoint, &config_overrides)
+            watch(&endpoint, &config_overrides).await
         }
         CliCommand::TriggerCmdApproval { user_message } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            trigger_cmd_approval(&endpoint, &config_overrides, user_message, &dynamic_tools)
+            trigger_cmd_approval(&endpoint, &config_overrides, user_message, &dynamic_tools).await
         }
         CliCommand::TriggerPatchApproval { user_message } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
             trigger_patch_approval(&endpoint, &config_overrides, user_message, &dynamic_tools)
+                .await
         }
         CliCommand::NoTriggerCmdApproval => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            no_trigger_cmd_approval(&endpoint, &config_overrides, &dynamic_tools)
+            no_trigger_cmd_approval(&endpoint, &config_overrides, &dynamic_tools).await
         }
         CliCommand::SendFollowUpV2 {
             first_message,
@@ -330,6 +332,7 @@ pub fn run() -> Result<()> {
                 follow_up_message,
                 &dynamic_tools,
             )
+            .await
         }
         CliCommand::TriggerZshForkMultiCmdApproval {
             user_message,
@@ -345,26 +348,27 @@ pub fn run() -> Result<()> {
                 abort_on,
                 &dynamic_tools,
             )
+            .await
         }
         CliCommand::TestLogin => {
             ensure_dynamic_tools_unused(&dynamic_tools, "test-login")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            test_login(&endpoint, &config_overrides)
+            test_login(&endpoint, &config_overrides).await
         }
         CliCommand::GetAccountRateLimits => {
             ensure_dynamic_tools_unused(&dynamic_tools, "get-account-rate-limits")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            get_account_rate_limits(&endpoint, &config_overrides)
+            get_account_rate_limits(&endpoint, &config_overrides).await
         }
         CliCommand::ModelList => {
             ensure_dynamic_tools_unused(&dynamic_tools, "model-list")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            model_list(&endpoint, &config_overrides)
+            model_list(&endpoint, &config_overrides).await
         }
         CliCommand::ThreadList { limit } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "thread-list")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            thread_list(&endpoint, &config_overrides, limit)
+            thread_list(&endpoint, &config_overrides, limit).await
         }
     }
 }
@@ -507,7 +511,7 @@ struct SendMessagePolicies<'a> {
     dynamic_tools: &'a Option<Vec<DynamicToolSpec>>,
 }
 
-fn send_message(
+async fn send_message(
     endpoint: &Endpoint,
     config_overrides: &[String],
     user_message: String,
@@ -525,9 +529,10 @@ fn send_message(
             dynamic_tools: &dynamic_tools,
         },
     )
+    .await
 }
 
-pub fn send_message_v2(
+pub async fn send_message_v2(
     codex_bin: &Path,
     config_overrides: &[String],
     user_message: String,
@@ -541,9 +546,10 @@ pub fn send_message_v2(
         true,
         dynamic_tools,
     )
+    .await
 }
 
-fn send_message_v2_endpoint(
+async fn send_message_v2_endpoint(
     endpoint: &Endpoint,
     config_overrides: &[String],
     user_message: String,
@@ -566,9 +572,10 @@ fn send_message_v2_endpoint(
             dynamic_tools,
         },
     )
+    .await
 }
 
-fn trigger_zsh_fork_multi_cmd_approval(
+async fn trigger_zsh_fork_multi_cmd_approval(
     endpoint: &Endpoint,
     config_overrides: &[String],
     user_message: Option<String>,
@@ -671,9 +678,10 @@ fn trigger_zsh_fork_multi_cmd_approval(
             Ok(())
         },
     )
+    .await
 }
 
-fn resume_message_v2(
+async fn resume_message_v2(
     endpoint: &Endpoint,
     config_overrides: &[String],
     thread_id: String,
@@ -706,9 +714,10 @@ fn resume_message_v2(
 
         Ok(())
     })
+    .await
 }
 
-fn thread_resume_follow(
+async fn thread_resume_follow(
     endpoint: &Endpoint,
     config_overrides: &[String],
     thread_id: String,
@@ -726,9 +735,10 @@ fn thread_resume_follow(
 
         client.stream_notifications_forever()
     })
+    .await
 }
 
-fn watch(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
+async fn watch(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
     with_client("watch", endpoint, config_overrides, |client| {
         let initialize = client.initialize()?;
         println!("< initialize response: {initialize:?}");
@@ -736,9 +746,10 @@ fn watch(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
 
         client.stream_notifications_forever()
     })
+    .await
 }
 
-fn trigger_cmd_approval(
+async fn trigger_cmd_approval(
     endpoint: &Endpoint,
     config_overrides: &[String],
     user_message: Option<String>,
@@ -762,9 +773,10 @@ fn trigger_cmd_approval(
             dynamic_tools,
         },
     )
+    .await
 }
 
-fn trigger_patch_approval(
+async fn trigger_patch_approval(
     endpoint: &Endpoint,
     config_overrides: &[String],
     user_message: Option<String>,
@@ -788,9 +800,10 @@ fn trigger_patch_approval(
             dynamic_tools,
         },
     )
+    .await
 }
 
-fn no_trigger_cmd_approval(
+async fn no_trigger_cmd_approval(
     endpoint: &Endpoint,
     config_overrides: &[String],
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
@@ -808,9 +821,10 @@ fn no_trigger_cmd_approval(
             dynamic_tools,
         },
     )
+    .await
 }
 
-fn send_message_v2_with_policies(
+async fn send_message_v2_with_policies(
     endpoint: &Endpoint,
     config_overrides: &[String],
     user_message: String,
@@ -849,9 +863,10 @@ fn send_message_v2_with_policies(
             Ok(())
         },
     )
+    .await
 }
 
-fn send_follow_up_v2(
+async fn send_follow_up_v2(
     endpoint: &Endpoint,
     config_overrides: &[String],
     first_message: String,
@@ -896,9 +911,10 @@ fn send_follow_up_v2(
 
         Ok(())
     })
+    .await
 }
 
-fn test_login(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
+async fn test_login(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
     with_client("test-login", endpoint, config_overrides, |client| {
         let initialize = client.initialize()?;
         println!("< initialize response: {initialize:?}");
@@ -926,9 +942,10 @@ fn test_login(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
             );
         }
     })
+    .await
 }
 
-fn get_account_rate_limits(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
+async fn get_account_rate_limits(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
     with_client(
         "get-account-rate-limits",
         endpoint,
@@ -943,9 +960,10 @@ fn get_account_rate_limits(endpoint: &Endpoint, config_overrides: &[String]) -> 
             Ok(())
         },
     )
+    .await
 }
 
-fn model_list(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
+async fn model_list(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
     with_client("model-list", endpoint, config_overrides, |client| {
         let initialize = client.initialize()?;
         println!("< initialize response: {initialize:?}");
@@ -955,9 +973,14 @@ fn model_list(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
 
         Ok(())
     })
+    .await
 }
 
-fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u32) -> Result<()> {
+async fn thread_list(
+    endpoint: &Endpoint,
+    config_overrides: &[String],
+    limit: u32,
+) -> Result<()> {
     with_client("thread-list", endpoint, config_overrides, |client| {
         let initialize = client.initialize()?;
         println!("< initialize response: {initialize:?}");
@@ -976,15 +999,16 @@ fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u32) -> 
 
         Ok(())
     })
+    .await
 }
 
-fn with_client<T>(
+async fn with_client<T>(
     command_name: &'static str,
     endpoint: &Endpoint,
     config_overrides: &[String],
     f: impl FnOnce(&mut CodexClient) -> Result<T>,
 ) -> Result<T> {
-    let tracing = TestClientTracing::initialize(config_overrides)?;
+    let tracing = TestClientTracing::initialize(config_overrides).await?;
     let command_span = info_span!(
         "app_server_test_client.command",
         otel.kind = "client",
@@ -1657,18 +1681,14 @@ struct TestClientTracing {
 }
 
 impl TestClientTracing {
-    fn initialize(config_overrides: &[String]) -> Result<Self> {
+    async fn initialize(config_overrides: &[String]) -> Result<Self> {
         let cli_kv_overrides = CliConfigOverrides {
             raw_overrides: config_overrides.to_vec(),
         }
         .parse_overrides()
         .map_err(|e| anyhow::anyhow!("error parsing -c overrides: {e}"))?;
-        let runtime = RuntimeBuilder::new_current_thread()
-            .enable_all()
-            .build()
-            .context("failed to create config runtime")?;
-        let config = runtime
-            .block_on(Config::load_with_cli_overrides(cli_kv_overrides))
+        let config = Config::load_with_cli_overrides(cli_kv_overrides)
+            .await
             .context("error loading config")?;
         let otel_provider = codex_core::otel_init::build_provider(
             &config,
