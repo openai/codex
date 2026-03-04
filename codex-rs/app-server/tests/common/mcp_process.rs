@@ -77,6 +77,7 @@ pub struct McpProcess {
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
+const MAX_LOGGED_JSONRPC_MESSAGE_CHARS: usize = 512;
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
@@ -795,11 +796,14 @@ impl McpProcess {
     }
 
     async fn send_jsonrpc_message(&mut self, message: JSONRPCMessage) -> anyhow::Result<()> {
-        eprintln!("writing message to stdin: {message:?}");
         let Some(stdin) = self.stdin.as_mut() else {
             anyhow::bail!("mcp stdin closed");
         };
         let payload = serde_json::to_string(&message)?;
+        eprintln!(
+            "writing message to stdin: {}",
+            truncate_log_message(&payload)
+        );
         stdin.write_all(payload.as_bytes()).await?;
         stdin.write_all(b"\n").await?;
         stdin.flush().await?;
@@ -809,8 +813,8 @@ impl McpProcess {
     async fn read_jsonrpc_message(&mut self) -> anyhow::Result<JSONRPCMessage> {
         let mut line = String::new();
         self.stdout.read_line(&mut line).await?;
+        eprintln!("read message from stdout: {}", truncate_log_message(&line));
         let message = serde_json::from_str::<JSONRPCMessage>(&line)?;
-        eprintln!("read message from stdout: {message:?}");
         Ok(message)
     }
 
@@ -952,6 +956,20 @@ impl McpProcess {
             JSONRPCMessage::Notification(_) => None,
         }
     }
+}
+
+fn truncate_log_message(message: &str) -> String {
+    let trimmed = message.trim_end();
+    let total_chars = trimmed.chars().count();
+    if total_chars <= MAX_LOGGED_JSONRPC_MESSAGE_CHARS {
+        return trimmed.to_string();
+    }
+
+    let preview = trimmed
+        .chars()
+        .take(MAX_LOGGED_JSONRPC_MESSAGE_CHARS)
+        .collect::<String>();
+    format!("{preview}... [truncated, {total_chars} chars total]")
 }
 
 impl Drop for McpProcess {
