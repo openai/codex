@@ -102,6 +102,34 @@ async fn clear_memory_root_contents_preserves_root_directory() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn clear_memory_root_contents_rejects_symlinked_root() {
+    let dir = tempdir().expect("tempdir");
+    let target = dir.path().join("outside");
+    tokio::fs::create_dir_all(&target)
+        .await
+        .expect("create symlink target dir");
+    let target_file = target.join("keep.txt");
+    tokio::fs::write(&target_file, "keep\n")
+        .await
+        .expect("write target file");
+
+    let root = dir.path().join("memory");
+    std::os::unix::fs::symlink(&target, &root).expect("create memory root symlink");
+
+    let err = clear_memory_root_contents(&root)
+        .await
+        .expect_err("symlinked memory root should be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        tokio::fs::try_exists(&target_file)
+            .await
+            .expect("check target file existence"),
+        "rejecting a symlinked memory root should not delete the symlink target"
+    );
+}
+
 #[tokio::test]
 async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only() {
     let dir = tempdir().expect("tempdir");
