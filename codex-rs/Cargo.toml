@@ -66,6 +66,8 @@ members = [
     "state",
     "codex-experimental-api-macros",
     "test-macros",
+    "package-manager",
+    "artifacts",
 ]
 resolver = "2"
 
@@ -83,6 +85,8 @@ license = "Apache-2.0"
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
+codex-artifacts = { path = "artifacts" }
+codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
@@ -181,6 +185,7 @@ encoding_rs = "0.8.35"
 env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
+flate2 = "1.1.4"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
 globset = "0.4"
@@ -267,6 +272,7 @@ supports-color = "3.0.2"
 syntect = "5"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
+tar = "0.4.44"
 test-log = "0.2.19"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
