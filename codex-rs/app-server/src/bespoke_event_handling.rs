@@ -61,6 +61,7 @@ use codex_app_server_protocol::ReasoningTextDeltaNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
@@ -219,6 +220,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
                 .await;
             handle_turn_complete(conversation_id, event_turn_id, &outgoing, &thread_state).await;
+        }
+        EventMsg::SkillsUpdateAvailable => {
+            if let ApiVersion::V2 = api_version {
+                outgoing
+                    .send_server_notification(ServerNotification::SkillsChanged(
+                        SkillsChangedNotification {},
+                    ))
+                    .await;
+            }
         }
         EventMsg::Warning(_warning_event) => {}
         EventMsg::ModelReroute(event) => {

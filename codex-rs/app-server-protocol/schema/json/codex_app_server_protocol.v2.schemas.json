@@ -9981,6 +9981,26 @@
           "properties": {
             "method": {
               "enum": [
+                "skills/changed"
+              ],
+              "title": "Skills/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SkillsChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Skills/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/name/updated"
               ],
               "title": "Thread/name/updatedNotificationMethod",
@@ -10970,6 +10990,12 @@
         "type",
         "value"
       ],
+      "type": "object"
+    },
+    "SkillsChangedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "title": "SkillsChangedNotification",
       "type": "object"
     },
     "SkillsConfigWriteParams": {

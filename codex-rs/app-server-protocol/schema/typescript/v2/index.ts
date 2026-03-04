@@ -150,6 +150,7 @@ export type { SkillInterface } from "./SkillInterface";
 export type { SkillMetadata } from "./SkillMetadata";
 export type { SkillScope } from "./SkillScope";
 export type { SkillToolDependency } from "./SkillToolDependency";
+export type { SkillsChangedNotification } from "./SkillsChangedNotification";
 export type { SkillsConfigWriteParams } from "./SkillsConfigWriteParams";
 export type { SkillsConfigWriteResponse } from "./SkillsConfigWriteResponse";
 export type { SkillsListEntry } from "./SkillsListEntry";

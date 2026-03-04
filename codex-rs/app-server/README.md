@@ -148,6 +148,7 @@ Example with notification opt-out:
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
+- `skills/changed` — notification emitted when watched local skill files change.
 - `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
 - `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
 - `app/list` — list available apps.
@@ -841,6 +842,7 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, wi
 You can also add `perCwdExtraUserRoots` to scan additional absolute paths as `user` scope for specific `cwd` entries.
 Entries whose `cwd` is not present in `cwds` are ignored.
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
+The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
@@ -874,6 +876,13 @@ Entries whose `cwd` is not present in `cwds` are ignored.
         "errors": []
     }]
 } }
+```
+
+```json
+{
+  "method": "skills/changed",
+  "params": {}
+}
 ```
 
 To enable or disable a skill by path:
