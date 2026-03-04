@@ -3301,6 +3301,51 @@ await codex.emitImage(out);
     }
 
     #[tokio::test]
+    async fn js_repl_imported_local_files_can_access_repl_globals() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "globals.js",
+            "console.log(codex.tmpDir === tmpDir);\nconsole.log(typeof codex.tool);\nconsole.log(\"local-file-console-ok\");\n",
+        )?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"./globals.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("true"));
+        assert!(result.output.contains("function"));
+        assert!(result.output.contains("local-file-console-ok"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn js_repl_local_files_expose_node_like_import_meta() -> anyhow::Result<()> {
         if !can_run_js_repl_runtime_tests().await {
             return Ok(());
@@ -3355,6 +3400,37 @@ await codex.emitImage(out);
         assert!(result.output.contains("false"));
         assert!(result.output.contains(&child_url));
         assert!(result.output.contains("node:fs"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_rejects_top_level_static_imports_with_clear_error() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let err = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "import \"./local.js\";".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected top-level static import to be rejected");
+        assert!(
+            err.to_string()
+                .contains("Top-level static import \"./local.js\" is not supported in js_repl")
+        );
         Ok(())
     }
 

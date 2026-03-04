@@ -1020,9 +1020,9 @@ async function handleExec(message) {
           );
           return synthetic;
         }
-
-        const resolved = resolveSpecifier(specifier);
-        return importResolved(resolved);
+        throw new Error(
+          `Top-level static import "${specifier}" is not supported in js_repl. Use await import("${specifier}") instead.`,
+        );
       });
 
       await module.evaluate();
