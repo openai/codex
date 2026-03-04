@@ -433,7 +433,9 @@ mod tests {
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use dunce::canonicalize;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[test]
     fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
@@ -462,7 +464,11 @@ mod tests {
 
     #[test]
     fn normalize_additional_permissions_preserves_network() {
-        let path = AbsolutePathBuf::current_dir().expect("current dir");
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let path = AbsolutePathBuf::from_absolute_path(
+            canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+        )
+        .expect("absolute temp dir");
         let permissions = normalize_additional_permissions(PermissionProfile {
             network: Some(true),
             file_system: Some(FileSystemPermissions {
@@ -485,7 +491,11 @@ mod tests {
 
     #[test]
     fn read_only_additional_permissions_can_enable_network_without_writes() {
-        let path = AbsolutePathBuf::current_dir().expect("current dir");
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let path = AbsolutePathBuf::from_absolute_path(
+            canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+        )
+        .expect("absolute temp dir");
         let policy = sandbox_policy_with_additional_permissions(
             &SandboxPolicy::ReadOnly {
                 access: ReadOnlyAccess::Restricted {
