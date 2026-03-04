@@ -74,7 +74,7 @@ fn resolve_marketplace_plugin_from_paths(
     marketplace_name: &str,
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
     for marketplace_path in marketplace_paths {
-        let marketplace = load_marketplace(&marketplace_path)?;
+        let marketplace = load_marketplace(marketplace_path)?;
         let discovered_marketplace_name = marketplace.name;
         let mut matches = marketplace
             .plugins
@@ -101,7 +101,7 @@ fn resolve_marketplace_plugin_from_paths(
             )?;
             return Ok(ResolvedMarketplacePlugin {
                 plugin_id,
-                source_path: resolve_plugin_source_path(&marketplace_path, plugin.source)?,
+                source_path: resolve_plugin_source_path(marketplace_path, plugin.source)?,
             });
         }
     }

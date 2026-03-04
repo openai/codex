@@ -228,7 +228,15 @@ impl PluginInstallError {
     }
 
     pub fn is_invalid_request(&self) -> bool {
-        matches!(self, Self::Marketplace(_) | Self::Store(_))
+        matches!(
+            self,
+            Self::Marketplace(
+                MarketplaceError::InvalidMarketplaceFile { .. }
+                    | MarketplaceError::PluginNotFound { .. }
+                    | MarketplaceError::DuplicatePlugin { .. }
+                    | MarketplaceError::InvalidPlugin(_)
+            ) | Self::Store(PluginStoreError::Invalid(_))
+        )
     }
 }
 
