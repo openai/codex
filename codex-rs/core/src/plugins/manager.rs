@@ -64,12 +64,139 @@ impl LoadedPlugin {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginCapabilitySummary {
+    pub config_name: String,
+    pub display_name: String,
+    pub has_skills: bool,
+    pub mcp_server_names: Vec<String>,
+    pub app_connector_ids: Vec<AppConnectorId>,
+}
+
+impl PluginCapabilitySummary {
+    fn from_plugin(plugin: &LoadedPlugin) -> Option<Self> {
+        if !plugin.is_active() {
+            return None;
+        }
+
+        let mut mcp_server_names: Vec<String> = plugin.mcp_servers.keys().cloned().collect();
+        mcp_server_names.sort_unstable();
+
+        let summary = Self {
+            config_name: plugin.config_name.clone(),
+            display_name: plugin
+                .manifest_name
+                .clone()
+                .unwrap_or_else(|| plugin.config_name.clone()),
+            has_skills: !plugin.skill_roots.is_empty(),
+            mcp_server_names,
+            app_connector_ids: plugin.apps.clone(),
+        };
+
+        (summary.has_skills
+            || !summary.mcp_server_names.is_empty()
+            || !summary.app_connector_ids.is_empty())
+        .then_some(summary)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginCapabilityIndex {
+    plugins: Vec<PluginCapabilitySummary>,
+    plugin_index_by_config_name: HashMap<String, usize>,
+    plugin_indexes_by_connector_id: HashMap<AppConnectorId, Vec<usize>>,
+    plugin_indexes_by_mcp_server_name: HashMap<String, Vec<usize>>,
+}
+
+impl PluginCapabilityIndex {
+    fn from_plugins(plugins: &[LoadedPlugin]) -> Self {
+        let mut capability_index = Self::default();
+
+        for plugin in plugins {
+            let Some(summary) = PluginCapabilitySummary::from_plugin(plugin) else {
+                continue;
+            };
+
+            let plugin_index = capability_index.plugins.len();
+            capability_index
+                .plugin_index_by_config_name
+                .insert(summary.config_name.clone(), plugin_index);
+
+            for connector_id in &summary.app_connector_ids {
+                capability_index
+                    .plugin_indexes_by_connector_id
+                    .entry(connector_id.clone())
+                    .or_default()
+                    .push(plugin_index);
+            }
+
+            for server_name in &summary.mcp_server_names {
+                capability_index
+                    .plugin_indexes_by_mcp_server_name
+                    .entry(server_name.clone())
+                    .or_default()
+                    .push(plugin_index);
+            }
+
+            capability_index.plugins.push(summary);
+        }
+
+        capability_index
+    }
+
+    pub fn plugins(&self) -> &[PluginCapabilitySummary] {
+        &self.plugins
+    }
+
+    pub fn plugin_for_config_name(&self, config_name: &str) -> Option<&PluginCapabilitySummary> {
+        self.plugin_index_by_config_name
+            .get(config_name)
+            .map(|plugin_index| &self.plugins[*plugin_index])
+    }
+
+    pub fn plugins_for_connector_id(
+        &self,
+        connector_id: &AppConnectorId,
+    ) -> Vec<&PluginCapabilitySummary> {
+        self.plugin_indexes_by_connector_id
+            .get(connector_id)
+            .into_iter()
+            .flatten()
+            .map(|plugin_index| &self.plugins[*plugin_index])
+            .collect()
+    }
+
+    pub fn plugins_for_mcp_server_name(&self, server_name: &str) -> Vec<&PluginCapabilitySummary> {
+        self.plugin_indexes_by_mcp_server_name
+            .get(server_name)
+            .into_iter()
+            .flatten()
+            .map(|plugin_index| &self.plugins[*plugin_index])
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct PluginLoadOutcome {
-    pub plugins: Vec<LoadedPlugin>,
+    plugins: Vec<LoadedPlugin>,
+    capability_index: PluginCapabilityIndex,
+}
+
+impl Default for PluginLoadOutcome {
+    fn default() -> Self {
+        Self::from_plugins(Vec::new())
+    }
 }
 
 impl PluginLoadOutcome {
+    fn from_plugins(plugins: Vec<LoadedPlugin>) -> Self {
+        let capability_index = PluginCapabilityIndex::from_plugins(&plugins);
+        Self {
+            plugins,
+            capability_index,
+        }
+    }
+
     pub fn effective_skill_roots(&self) -> Vec<PathBuf> {
         let mut skill_roots: Vec<PathBuf> = self
             .plugins
@@ -107,6 +234,14 @@ impl PluginLoadOutcome {
         }
 
         apps
+    }
+
+    pub fn capability_index(&self) -> &PluginCapabilityIndex {
+        &self.capability_index
+    }
+
+    pub fn plugins(&self) -> &[LoadedPlugin] {
+        &self.plugins
     }
 }
 
@@ -317,7 +452,7 @@ pub(crate) fn load_plugins_from_layer_stack(
         plugins.push(loaded_plugin);
     }
 
-    PluginLoadOutcome { plugins }
+    PluginLoadOutcome::from_plugins(plugins)
 }
 
 pub(crate) fn plugin_namespace_for_skill_path(path: &Path) -> Option<String> {
@@ -449,7 +584,8 @@ fn load_apps_from_file(plugin_root: &Path, app_config_path: &Path) -> Vec<AppCon
     let mut apps: Vec<PluginAppConfig> = parsed.apps.into_values().collect();
     apps.sort_unstable_by(|left, right| left.id.cmp(&right.id));
 
-    apps.into_iter()
+    let mut connector_ids: Vec<AppConnectorId> = apps
+        .into_iter()
         .filter_map(|app| {
             if app.id.trim().is_empty() {
                 warn!(
@@ -461,7 +597,9 @@ fn load_apps_from_file(plugin_root: &Path, app_config_path: &Path) -> Vec<AppCon
                 Some(AppConnectorId(app.id))
             }
         })
-        .collect()
+        .collect();
+    connector_ids.dedup();
+    connector_ids
 }
 
 fn load_mcp_servers_from_file(plugin_root: &Path, mcp_config_path: &Path) -> PluginMcpDiscovery {
@@ -822,6 +960,128 @@ mod tests {
                 AppConnectorId("connector_example".to_string()),
                 AppConnectorId("connector_gmail".to_string()),
             ]
+        );
+        assert_eq!(
+            outcome
+                .capability_index()
+                .plugins_for_connector_id(&AppConnectorId("connector_example".to_string()))
+                .into_iter()
+                .map(|plugin| plugin.config_name.clone())
+                .collect::<Vec<_>>(),
+            vec!["plugin-a@test".to_string(), "plugin-b@test".to_string()]
+        );
+    }
+
+    #[test]
+    fn capability_index_filters_inactive_and_zero_capability_plugins() {
+        let codex_home = TempDir::new().unwrap();
+        let connector = |id: &str| AppConnectorId(id.to_string());
+        let http_server = |url: &str| McpServerConfig {
+            transport: McpServerTransportConfig::StreamableHttp {
+                url: url.to_string(),
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
+            },
+            enabled: true,
+            required: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth_resource: None,
+        };
+        let plugin = |config_name: &str, dir_name: &str, manifest_name: &str| LoadedPlugin {
+            config_name: config_name.to_string(),
+            manifest_name: Some(manifest_name.to_string()),
+            root: AbsolutePathBuf::try_from(codex_home.path().join(dir_name)).unwrap(),
+            enabled: true,
+            skill_roots: Vec::new(),
+            mcp_servers: HashMap::new(),
+            apps: Vec::new(),
+            error: None,
+        };
+        let summary = |config_name: &str, display_name: &str| PluginCapabilitySummary {
+            config_name: config_name.to_string(),
+            display_name: display_name.to_string(),
+            ..PluginCapabilitySummary::default()
+        };
+        let outcome = PluginLoadOutcome::from_plugins(vec![
+            LoadedPlugin {
+                skill_roots: vec![codex_home.path().join("skills-plugin/skills")],
+                ..plugin("skills@test", "skills-plugin", "skills-plugin")
+            },
+            LoadedPlugin {
+                mcp_servers: HashMap::from([("alpha".to_string(), http_server("https://alpha"))]),
+                apps: vec![connector("connector_example")],
+                ..plugin("alpha@test", "alpha-plugin", "alpha-plugin")
+            },
+            LoadedPlugin {
+                mcp_servers: HashMap::from([("beta".to_string(), http_server("https://beta"))]),
+                apps: vec![connector("connector_example"), connector("connector_gmail")],
+                ..plugin("beta@test", "beta-plugin", "beta-plugin")
+            },
+            plugin("empty@test", "empty-plugin", "empty-plugin"),
+            LoadedPlugin {
+                enabled: false,
+                skill_roots: vec![codex_home.path().join("disabled-plugin/skills")],
+                apps: vec![connector("connector_hidden")],
+                ..plugin("disabled@test", "disabled-plugin", "disabled-plugin")
+            },
+            LoadedPlugin {
+                apps: vec![connector("connector_broken")],
+                error: Some("failed to load".to_string()),
+                ..plugin("broken@test", "broken-plugin", "broken-plugin")
+            },
+        ]);
+
+        assert_eq!(
+            outcome.capability_index().plugins(),
+            &[
+                PluginCapabilitySummary {
+                    has_skills: true,
+                    ..summary("skills@test", "skills-plugin")
+                },
+                PluginCapabilitySummary {
+                    mcp_server_names: vec!["alpha".to_string()],
+                    app_connector_ids: vec![connector("connector_example")],
+                    ..summary("alpha@test", "alpha-plugin")
+                },
+                PluginCapabilitySummary {
+                    mcp_server_names: vec!["beta".to_string()],
+                    app_connector_ids: vec![
+                        connector("connector_example"),
+                        connector("connector_gmail"),
+                    ],
+                    ..summary("beta@test", "beta-plugin")
+                },
+            ]
+        );
+        assert_eq!(
+            outcome
+                .capability_index()
+                .plugins_for_connector_id(&connector("connector_example"))
+                .into_iter()
+                .map(|plugin| plugin.config_name.clone())
+                .collect::<Vec<_>>(),
+            vec!["alpha@test".to_string(), "beta@test".to_string()]
+        );
+        assert_eq!(
+            outcome
+                .capability_index()
+                .plugins_for_mcp_server_name("alpha")
+                .into_iter()
+                .map(|plugin| plugin.config_name.clone())
+                .collect::<Vec<_>>(),
+            vec!["alpha@test".to_string()]
+        );
+        assert_eq!(
+            outcome
+                .capability_index()
+                .plugin_for_config_name("empty@test"),
+            None
         );
     }
 
