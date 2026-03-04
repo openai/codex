@@ -105,6 +105,7 @@ pub struct PluginCapabilityIndex {
     plugins: Vec<PluginCapabilitySummary>,
     plugin_index_by_config_name: HashMap<String, usize>,
     plugin_indexes_by_connector_id: HashMap<AppConnectorId, Vec<usize>>,
+    plugin_indexes_by_mcp_server_name: HashMap<String, Vec<usize>>,
 }
 
 impl PluginCapabilityIndex {
@@ -125,6 +126,14 @@ impl PluginCapabilityIndex {
                 capability_index
                     .plugin_indexes_by_connector_id
                     .entry(connector_id.clone())
+                    .or_default()
+                    .push(plugin_index);
+            }
+
+            for server_name in &summary.mcp_server_names {
+                capability_index
+                    .plugin_indexes_by_mcp_server_name
+                    .entry(server_name.clone())
                     .or_default()
                     .push(plugin_index);
             }
@@ -151,6 +160,15 @@ impl PluginCapabilityIndex {
     ) -> Vec<&PluginCapabilitySummary> {
         self.plugin_indexes_by_connector_id
             .get(connector_id)
+            .into_iter()
+            .flatten()
+            .map(|plugin_index| &self.plugins[*plugin_index])
+            .collect()
+    }
+
+    pub fn plugins_for_mcp_server_name(&self, server_name: &str) -> Vec<&PluginCapabilitySummary> {
+        self.plugin_indexes_by_mcp_server_name
+            .get(server_name)
             .into_iter()
             .flatten()
             .map(|plugin_index| &self.plugins[*plugin_index])
@@ -1049,6 +1067,15 @@ mod tests {
                 .map(|plugin| plugin.config_name.clone())
                 .collect::<Vec<_>>(),
             vec!["alpha@test".to_string(), "beta@test".to_string()]
+        );
+        assert_eq!(
+            outcome
+                .capability_index()
+                .plugins_for_mcp_server_name("alpha")
+                .into_iter()
+                .map(|plugin| plugin.config_name.clone())
+                .collect::<Vec<_>>(),
+            vec!["alpha@test".to_string()]
         );
         assert_eq!(
             outcome
