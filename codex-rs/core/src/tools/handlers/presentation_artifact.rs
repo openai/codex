@@ -19,6 +19,7 @@ use crate::path_utils::resolve_symlink_write_paths;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::artifact_path_access;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -111,8 +112,16 @@ async fn authorize_path_access(
         PathAccessKind::Write => effective_write_path(&access.path),
     };
     let allowed = match access.kind {
-        PathAccessKind::Read => path_is_readable(turn, &effective_path),
-        PathAccessKind::Write => path_is_writable(turn, &effective_path),
+        PathAccessKind::Read => artifact_path_access::path_is_readable(
+            &turn.file_system_sandbox_policy,
+            &turn.cwd,
+            &effective_path,
+        ),
+        PathAccessKind::Write => artifact_path_access::path_is_writable(
+            &turn.file_system_sandbox_policy,
+            &turn.cwd,
+            &effective_path,
+        ),
     };
     if allowed {
         return Ok(());
@@ -186,28 +195,6 @@ async fn authorize_path_access(
         access_kind_label(access.kind),
         access.path.display()
     )))
-}
-
-fn path_is_readable(turn: &TurnContext, path: &Path) -> bool {
-    if turn.sandbox_policy.has_full_disk_read_access() {
-        return true;
-    }
-
-    turn.sandbox_policy
-        .get_readable_roots_with_cwd(&turn.cwd)
-        .iter()
-        .any(|root| path.starts_with(root.as_path()))
-}
-
-fn path_is_writable(turn: &TurnContext, path: &Path) -> bool {
-    if turn.sandbox_policy.has_full_disk_write_access() {
-        return true;
-    }
-
-    turn.sandbox_policy
-        .get_writable_roots_with_cwd(&turn.cwd)
-        .iter()
-        .any(|root| root.is_path_writable(path))
 }
 
 fn effective_read_path(path: &Path) -> PathBuf {
