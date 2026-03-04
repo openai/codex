@@ -724,8 +724,14 @@ mod tests {
     #[tokio::test]
     async fn effective_apps_dedupes_connector_ids_across_plugins() {
         let codex_home = TempDir::new().unwrap();
-        let plugin_a_root = codex_home.path().join("plugin-a");
-        let plugin_b_root = codex_home.path().join("plugin-b");
+        let plugin_a_root = codex_home
+            .path()
+            .join("plugins/cache")
+            .join("test/plugin-a/local");
+        let plugin_b_root = codex_home
+            .path()
+            .join("plugins/cache")
+            .join("test/plugin-b/local");
 
         write_file(
             &plugin_a_root.join(".codex-plugin/plugin.json"),
@@ -767,20 +773,12 @@ mod tests {
         let mut plugins = toml::map::Map::new();
 
         let mut plugin_a = toml::map::Map::new();
-        plugin_a.insert(
-            "path".to_string(),
-            Value::String(plugin_a_root.display().to_string()),
-        );
         plugin_a.insert("enabled".to_string(), Value::Boolean(true));
-        plugins.insert("a".to_string(), Value::Table(plugin_a));
+        plugins.insert("plugin-a@test".to_string(), Value::Table(plugin_a));
 
         let mut plugin_b = toml::map::Map::new();
-        plugin_b.insert(
-            "path".to_string(),
-            Value::String(plugin_b_root.display().to_string()),
-        );
         plugin_b.insert("enabled".to_string(), Value::Boolean(true));
-        plugins.insert("b".to_string(), Value::Table(plugin_b));
+        plugins.insert("plugin-b@test".to_string(), Value::Table(plugin_b));
 
         root.insert("plugins".to_string(), Value::Table(plugins));
         let config_toml =

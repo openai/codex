@@ -191,7 +191,7 @@ async fn plugin_skills_append_to_instructions() -> Result<()> {
 async fn plugin_apps_expose_tools_after_canonical_name_mention() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
+    let apps_server = AppsTestServer::mount_with_connector_name(&server, "Google Calendar").await?;
     let mock = mount_sse_sequence(
         &server,
         vec![
@@ -231,7 +231,7 @@ async fn plugin_apps_expose_tools_after_canonical_name_mention() -> Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![codex_protocol::user_input::UserInput::Text {
-                text: "Use $calendar and then call tools.".into(),
+                text: "Use $google-calendar and then call tools.".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,

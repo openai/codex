@@ -714,6 +714,46 @@ mod tests {
     }
 
     #[test]
+    fn merge_connectors_replaces_plugin_placeholder_name_with_accessible_name() {
+        let plugin = plugin_app_to_app_info(AppConnectorId("calendar".to_string()));
+        let accessible = AppInfo {
+            id: "calendar".to_string(),
+            name: "Google Calendar".to_string(),
+            description: Some("Plan events".to_string()),
+            logo_url: Some("https://example.com/logo.png".to_string()),
+            logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
+            distribution_channel: Some("workspace".to_string()),
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: None,
+            is_accessible: true,
+            is_enabled: true,
+        };
+
+        let merged = merge_connectors(vec![plugin], vec![accessible]);
+
+        assert_eq!(
+            merged,
+            vec![AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Plan events".to_string()),
+                logo_url: Some("https://example.com/logo.png".to_string()),
+                logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
+                distribution_channel: Some("workspace".to_string()),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some(connector_install_url("calendar", "calendar")),
+                is_accessible: true,
+                is_enabled: true,
+            }]
+        );
+        assert_eq!(connector_mention_slug(&merged[0]), "google-calendar");
+    }
+
+    #[test]
     fn app_tool_policy_uses_global_defaults_for_destructive_hints() {
         let apps_config = AppsConfigToml {
             default: Some(AppsDefaultConfig {
