@@ -644,16 +644,10 @@
         {
           "properties": {
             "id": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "result": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "revised_prompt": {
               "type": [
@@ -662,10 +656,7 @@
               ]
             },
             "status": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "type": {
               "enum": [
@@ -676,6 +667,9 @@
             }
           },
           "required": [
+            "id",
+            "result",
+            "status",
             "type"
           ],
           "title": "ImageGenerationCallResponseItem",

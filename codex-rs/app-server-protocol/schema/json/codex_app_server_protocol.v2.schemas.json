@@ -9326,6 +9326,40 @@
         },
         {
           "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image_generation_call"
+              ],
+              "title": "ImageGenerationCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "ghost_commit": {
               "$ref": "#/definitions/GhostCommit"
             },
