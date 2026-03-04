@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 use tracing::Span;
+use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
@@ -120,6 +121,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
         task: T,
+        turn_operation: Option<&'static str>,
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
@@ -136,7 +138,19 @@ impl Session {
             let ctx = Arc::clone(&turn_context);
             let task_for_run = Arc::clone(&task);
             let task_cancellation_token = cancellation_token.child_token();
-            let session_span = Span::current();
+            let task_span = if let Some(turn_operation) = turn_operation {
+                // Turn-producing APIs keep a core-owned span open for the full
+                // task lifecycle after the submission dispatch span ends.
+                info_span!(
+                    "turn",
+                    otel.name = turn_operation,
+                    thread.id = %self.conversation_id,
+                    turn.id = %turn_context.sub_id,
+                    model = %turn_context.model_info.slug,
+                )
+            } else {
+                Span::current()
+            };
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
@@ -157,7 +171,7 @@ impl Session {
                     }
                     done_clone.notify_waiters();
                 }
-                .instrument(session_span),
+                .instrument(task_span),
             )
         };
 

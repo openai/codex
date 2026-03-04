@@ -4066,8 +4066,13 @@ mod handlers {
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
-            sess.spawn_task(Arc::clone(&current_context), items, regular_task)
-                .await;
+            sess.spawn_task(
+                Arc::clone(&current_context),
+                items,
+                regular_task,
+                Some("turn/start"),
+            )
+            .await;
         }
     }
 
@@ -4094,6 +4099,7 @@ mod handlers {
             Arc::clone(&turn_context),
             Vec::new(),
             UserShellCommandTask::new(command),
+            None,
         )
         .await;
     }
@@ -4420,7 +4426,7 @@ mod handlers {
 
     pub async fn undo(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
+        sess.spawn_task(turn_context, Vec::new(), UndoTask::new(), None)
             .await;
     }
 
@@ -4435,6 +4441,7 @@ mod handlers {
                 text_elements: Vec::new(),
             }],
             CompactTask,
+            None,
         )
         .await;
     }
@@ -4825,7 +4832,8 @@ async fn spawn_review_thread(
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
     // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
     // (TurnStarted + TurnComplete) for consistency with other standalone tasks.
-    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
+    sess.spawn_task(tc.clone(), input, ReviewTask::new(), Some("review/start"))
+        .await;
 
     // Announce entering review mode so UIs can switch modes.
     let review_request = ReviewRequest {
@@ -8589,6 +8597,106 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
+        struct TraceCaptureTask {
+            captured_trace: Arc<std::sync::Mutex<Option<W3cTraceContext>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl SessionTask for TraceCaptureTask {
+            fn kind(&self) -> TaskKind {
+                TaskKind::Regular
+            }
+
+            async fn run(
+                self: Arc<Self>,
+                _session: Arc<SessionTaskContext>,
+                _ctx: Arc<TurnContext>,
+                _input: Vec<UserInput>,
+                _cancellation_token: CancellationToken,
+            ) -> Option<String> {
+                let mut trace = self
+                    .captured_trace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *trace = current_span_w3c_trace_context();
+                None
+            }
+        }
+
+        let subscriber = test_tracing_subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let request_parent = W3cTraceContext {
+            traceparent: Some("00-00000000000000000000000000000011-0000000000000022-01".into()),
+            tracestate: Some("vendor=value".into()),
+        };
+        let request_span = tracing::info_span!("app_server.request");
+        assert!(set_parent_from_w3c_trace_context(
+            &request_span,
+            &request_parent
+        ));
+
+        let submission_trace = async {
+            current_span_w3c_trace_context().expect("request span should have trace context")
+        }
+        .instrument(request_span)
+        .await;
+
+        let dispatch_span = submission_dispatch_span(&Submission {
+            id: "sub-1".into(),
+            op: Op::Interrupt,
+            trace: Some(submission_trace.clone()),
+        });
+        let dispatch_span_id = dispatch_span.context().span().span_context().span_id();
+
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+        let captured_trace = Arc::new(std::sync::Mutex::new(None));
+
+        async {
+            sess.spawn_task(
+                Arc::clone(&tc),
+                vec![UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                TraceCaptureTask {
+                    captured_trace: Arc::clone(&captured_trace),
+                },
+                Some("turn/start"),
+            )
+            .await;
+        }
+        .instrument(dispatch_span)
+        .await;
+
+        let evt = tokio::time::timeout(StdDuration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for turn completion")
+            .expect("event");
+        assert!(matches!(evt.msg, EventMsg::TurnComplete(_)));
+
+        let task_trace = captured_trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .expect("turn task should capture the current span trace context");
+        let submission_context =
+            codex_otel::context_from_w3c_trace_context(&submission_trace).expect("submission");
+        let task_context =
+            codex_otel::context_from_w3c_trace_context(&task_trace).expect("task trace");
+
+        assert_eq!(
+            task_context.span().span_context().trace_id(),
+            submission_context.span().span_context().trace_id()
+        );
+        assert_ne!(
+            task_context.span().span_context().span_id(),
+            dispatch_span_id
+        );
+    }
+
     pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> (
@@ -8854,6 +8962,7 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: true,
             },
+            None,
         )
         .await;
 
@@ -9425,6 +9534,7 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: false,
             },
+            None,
         )
         .await;
 
@@ -9458,6 +9568,7 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: true,
             },
+            None,
         )
         .await;
 
@@ -9491,6 +9602,7 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: false,
             },
+            None,
         )
         .await;
 
@@ -9618,6 +9730,7 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: false,
             },
+            None,
         )
         .await;
 
@@ -9655,6 +9768,7 @@ mod tests {
                 kind: TaskKind::Regular,
                 listen_to_cancellation_token: false,
             },
+            None,
         )
         .await;
 
@@ -9678,7 +9792,7 @@ mod tests {
             text: "start review".to_string(),
             text_elements: Vec::new(),
         }];
-        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
+        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new(), None)
             .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
