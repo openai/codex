@@ -180,7 +180,6 @@ Start a fresh thread when you need a new Codex conversation.
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     "personality": "friendly",
-    "serviceTier": "flex",
     "serviceName": "my_app_server_client", // optional metrics tag (`service_name`)
     // Experimental: requires opt-in
     "dynamicTools": [
@@ -209,7 +208,6 @@ Start a fresh thread when you need a new Codex conversation.
 ```
 
 Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
-Valid `serviceTier` values are `"fast"` and `"flex"`.
 
 To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
 
@@ -417,7 +415,6 @@ You can optionally specify config overrides on the new turn. If specified, these
         "networkAccess": true
     },
     "model": "gpt-5.1-codex",
-    "serviceTier": "flex",
     "effort": "medium",
     "summary": "concise",
     "personality": "friendly",
