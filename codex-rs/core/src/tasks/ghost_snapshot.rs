@@ -32,6 +32,10 @@ impl SessionTask for GhostSnapshotTask {
         TaskKind::Regular
     }
 
+    fn span_name(&self) -> &'static str {
+        "session_task.ghost_snapshot"
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,

@@ -15325,6 +15325,12 @@
       "WindowsSandboxSetupStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mode": {
             "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
           }

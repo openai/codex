@@ -40,6 +40,7 @@ use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
+use crate::memories::memory_root;
 use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
@@ -1805,6 +1806,15 @@ impl Config {
             Some(&constrained_sandbox_policy),
         );
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
+            let memories_root = memory_root(&codex_home);
+            std::fs::create_dir_all(&memories_root)?;
+            let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
+            if !writable_roots
+                .iter()
+                .any(|existing| existing == &memories_root)
+            {
+                writable_roots.push(memories_root);
+            }
             for path in additional_writable_roots {
                 if !writable_roots.iter().any(|existing| existing == &path) {
                     writable_roots.push(path);
@@ -3152,6 +3162,56 @@ trust_level = "trusted"
         )?;
 
         assert_eq!(config.sqlite_home, codex_home.path().to_path_buf());
+
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_write_always_includes_memories_root_once() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let memories_root = codex_home.path().join("memories");
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                    writable_roots: vec![AbsolutePathBuf::from_absolute_path(&memories_root)?],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ConfigOverrides {
+                sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        if cfg!(target_os = "windows") {
+            match config.permissions.sandbox_policy.get() {
+                SandboxPolicy::ReadOnly { .. } => {}
+                other => panic!("expected read-only policy on Windows, got {other:?}"),
+            }
+        } else {
+            assert!(
+                memories_root.is_dir(),
+                "expected memories root directory to exist at {}",
+                memories_root.display()
+            );
+            let expected_memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
+            match config.permissions.sandbox_policy.get() {
+                SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                    assert_eq!(
+                        writable_roots
+                            .iter()
+                            .filter(|root| **root == expected_memories_root)
+                            .count(),
+                        1,
+                        "expected single writable root entry for {}",
+                        expected_memories_root.display()
+                    );
+                }
+                other => panic!("expected workspace-write policy, got {other:?}"),
+            }
+        }
 
         Ok(())
     }
