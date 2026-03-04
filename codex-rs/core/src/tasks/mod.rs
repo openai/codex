@@ -38,6 +38,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 
+use crate::features::Feature;
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
@@ -200,11 +201,13 @@ impl Session {
         let mut pending_input = Vec::<ResponseInputItem>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
+        let mut turn_tool_calls = 0_u64;
         if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
             let mut ts = at.turn_state.lock().await;
             pending_input = ts.take_pending_input();
+            turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
             should_clear_active_turn = true;
         }
@@ -239,6 +242,19 @@ impl Session {
         }
         // Emit token usage metrics.
         if let Some(token_usage_at_turn_start) = token_usage_at_turn_start {
+            let tmp_mem = (
+                "tmp_mem_enabled",
+                if self.enabled(Feature::MemoryTool) {
+                    "true"
+                } else {
+                    "false"
+                },
+            );
+            self.services.otel_manager.histogram(
+                "codex.turn.tool.call",
+                i64::try_from(turn_tool_calls).unwrap_or(i64::MAX),
+                &[tmp_mem],
+            );
             let total_token_usage = self.total_token_usage().await.unwrap_or_default();
             let turn_token_usage = crate::protocol::TokenUsage {
                 input_tokens: (total_token_usage.input_tokens
@@ -260,27 +276,27 @@ impl Session {
             self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.total_tokens,
-                &[("token_type", "total")],
+                &[("token_type", "total"), tmp_mem],
             );
             self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.input_tokens,
-                &[("token_type", "input")],
+                &[("token_type", "input"), tmp_mem],
             );
             self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.cached_input(),
-                &[("token_type", "cached_input")],
+                &[("token_type", "cached_input"), tmp_mem],
             );
             self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.output_tokens,
-                &[("token_type", "output")],
+                &[("token_type", "output"), tmp_mem],
             );
             self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.reasoning_output_tokens,
-                &[("token_type", "reasoning_output")],
+                &[("token_type", "reasoning_output"), tmp_mem],
             );
         }
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
