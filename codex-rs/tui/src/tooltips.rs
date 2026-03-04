@@ -84,27 +84,26 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>, fast_mode_enabled: bool) -> Op
     pick_tooltip(&mut rng).map(str::to_string)
 }
 
-fn paid_tooltip_pool(fast_mode_enabled: bool) -> &'static [&'static str] {
-    if fast_mode_enabled {
-        if IS_MACOS {
-            &[PAID_TOOLTIP]
-        } else if IS_WINDOWS {
-            &[PAID_TOOLTIP_WINDOWS]
-        } else {
-            &[PAID_TOOLTIP_NON_MAC]
-        }
-    } else if IS_MACOS {
-        &[PAID_TOOLTIP, FAST_TOOLTIP]
+fn paid_app_tooltip() -> &'static str {
+    if IS_MACOS {
+        PAID_TOOLTIP
     } else if IS_WINDOWS {
-        &[PAID_TOOLTIP_WINDOWS, FAST_TOOLTIP]
+        PAID_TOOLTIP_WINDOWS
     } else {
-        &[PAID_TOOLTIP_NON_MAC, FAST_TOOLTIP]
+        PAID_TOOLTIP_NON_MAC
     }
 }
 
+/// Paid users spend most startup sessions in a dedicated promo slot rather than the
+/// generic random tip pool. Keep this business logic explicit: we currently split
+/// that slot between the app promo and Fast mode, but suppress the Fast promo once
+/// the user already has Fast mode enabled.
 fn pick_paid_tooltip<R: Rng + ?Sized>(rng: &mut R, fast_mode_enabled: bool) -> &'static str {
-    let pool = paid_tooltip_pool(fast_mode_enabled);
-    pool[rng.random_range(0..pool.len())]
+    if fast_mode_enabled || rng.random_bool(0.5) {
+        paid_app_tooltip()
+    } else {
+        FAST_TOOLTIP
+    }
 }
 
 fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
@@ -293,8 +292,7 @@ mod tests {
             seen.insert(pick_paid_tooltip(&mut rng, false));
         }
 
-        let expected: std::collections::BTreeSet<_> =
-            paid_tooltip_pool(false).iter().copied().collect();
+        let expected = std::collections::BTreeSet::from([paid_app_tooltip(), FAST_TOOLTIP]);
         assert_eq!(seen, expected);
     }
 
@@ -306,8 +304,7 @@ mod tests {
             seen.insert(pick_paid_tooltip(&mut rng, true));
         }
 
-        let expected: std::collections::BTreeSet<_> =
-            paid_tooltip_pool(true).iter().copied().collect();
+        let expected = std::collections::BTreeSet::from([paid_app_tooltip()]);
         assert_eq!(seen, expected);
         assert!(!seen.contains(&FAST_TOOLTIP));
     }
