@@ -1,6 +1,28 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "NetworkPolicyAmendment": {
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/NetworkPolicyRuleAction"
+        },
+        "host": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "host"
+      ],
+      "type": "object"
+    },
+    "NetworkPolicyRuleAction": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
     "ReviewDecision": {
       "description": "User's decision in response to an ExecApprovalRequest.",
       "oneOf": [
@@ -37,11 +59,33 @@
           "type": "object"
         },
         {
-          "description": "User has approved this command and wants to automatically approve any future identical instances (`command` and `cwd` match exactly) for the remainder of the session.",
+          "description": "User has approved this request and wants future prompts in the same session-scoped approval cache to be automatically approved for the remainder of the session.",
           "enum": [
             "approved_for_session"
           ],
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "User chose to persist a network policy rule (allow/deny) for future requests to the same host.",
+          "properties": {
+            "network_policy_amendment": {
+              "properties": {
+                "network_policy_amendment": {
+                  "$ref": "#/definitions/NetworkPolicyAmendment"
+                }
+              },
+              "required": [
+                "network_policy_amendment"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "network_policy_amendment"
+          ],
+          "title": "NetworkPolicyAmendmentReviewDecision",
+          "type": "object"
         },
         {
           "description": "User has denied this command and the agent should not execute it, but it should continue the session and try something else.",

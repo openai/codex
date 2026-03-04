@@ -83,21 +83,11 @@ pub(crate) fn run_commit_tick(
         return CommitTickOutput::default();
     }
 
-    let output = apply_commit_tick_plan(
+    apply_commit_tick_plan(
         decision.drain_plan,
         stream_controller,
         plan_stream_controller,
-    );
-    tracing::trace!(
-        mode = ?decision.mode,
-        queued_lines = snapshot.queued_lines,
-        oldest_queued_age_ms = snapshot.oldest_age.map(|age| age.as_millis() as u64),
-        drain_plan = ?decision.drain_plan,
-        has_controller = output.has_controller,
-        all_idle = output.all_idle,
-        "stream chunking commit tick"
-    );
-    output
+    )
 }
 
 /// Builds the combined queue-pressure snapshot consumed by chunking policy.

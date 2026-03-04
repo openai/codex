@@ -6,20 +6,25 @@ Scenario: Pre-turn auto-compaction with a context override emits the context dif
 
 ## Local Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:USER_ONE
-04:message/assistant:FIRST_REPLY
-05:message/user:USER_TWO
-06:message/assistant:SECOND_REPLY
-07:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-08:message/user:<SUMMARIZATION_PROMPT>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:USER_ONE
+03:message/assistant:FIRST_REPLY
+04:message/user:USER_TWO
+05:message/assistant:SECOND_REPLY
+06:message/user:<SUMMARIZATION_PROMPT>
 
 ## Local Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-03:message/user:USER_ONE
-04:message/user:USER_TWO
-05:message/user:<COMPACTION_SUMMARY>\nPRE_TURN_SUMMARY
-06:message/user:<image> | <input_image:image_url> | </image> | USER_THREE
+00:message/user:USER_ONE
+01:message/user:USER_TWO
+02:message/user:<COMPACTION_SUMMARY>\nPRE_TURN_SUMMARY
+03:message/developer:<PERMISSIONS_INSTRUCTIONS>
+04:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+05:message/user[4]:
+    [01] <image>
+    [02] <input_image:image_url>
+    [03] </image>
+    [04] USER_THREE

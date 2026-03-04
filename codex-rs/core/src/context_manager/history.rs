@@ -1,25 +1,30 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
-use crate::instructions::SkillInstructions;
-use crate::instructions::UserInstructions;
-use crate::session_prefix::is_session_prefix;
+use crate::event_mapping::is_contextual_user_message_content;
 use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_bytes_for_tokens;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count_i64;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
-use crate::user_shell_command::is_user_shell_command_text;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
+use codex_utils_cache::BlockingLruCache;
+use codex_utils_cache::sha1_digest;
+use std::num::NonZeroUsize;
 use std::ops::Deref;
+use std::sync::LazyLock;
 
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]
@@ -27,12 +32,15 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
-    /// Previous turn context snapshot used for diffing context and producing
-    /// model-visible settings update items.
+    /// Reference context snapshot used for diffing and producing model-visible
+    /// settings update items.
+    ///
+    /// This is the baseline for the next regular model turn, and may already
+    /// match the current turn after context updates are persisted.
     ///
     /// When this is `None`, settings diffing treats the next turn as having no
     /// baseline and emits a full reinjection of context state.
-    previous_context_item: Option<TurnContextItem>,
+    reference_context_item: Option<TurnContextItem>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -48,7 +56,7 @@ impl ContextManager {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
-            previous_context_item: None,
+            reference_context_item: None,
         }
     }
 
@@ -60,12 +68,12 @@ impl ContextManager {
         self.token_info = info;
     }
 
-    pub(crate) fn set_previous_context_item(&mut self, item: Option<TurnContextItem>) {
-        self.previous_context_item = item;
+    pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.reference_context_item = item;
     }
 
-    pub(crate) fn previous_context_item(&self) -> Option<TurnContextItem> {
-        self.previous_context_item.clone()
+    pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
+        self.reference_context_item.clone()
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -336,6 +344,9 @@ impl ContextManager {
         // all outputs must have a corresponding function/tool call
         normalize::remove_orphan_outputs(&mut self.items);
 
+        //rewrite image_gen_calls to messages to support stateless input
+        normalize::rewrite_image_generation_calls_for_stateless_input(&mut self.items);
+
         // strip images when model does not support them
         normalize::strip_images_when_unsupported(input_modalities, &mut self.items);
     }
@@ -344,32 +355,21 @@ impl ContextManager {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let body = match &output.body {
-                    FunctionCallOutputBody::Text(content) => FunctionCallOutputBody::Text(
-                        truncate_text(content, policy_with_serialization_budget),
-                    ),
-                    FunctionCallOutputBody::ContentItems(items) => {
-                        FunctionCallOutputBody::ContentItems(
-                            truncate_function_output_items_with_policy(
-                                items,
-                                policy_with_serialization_budget,
-                            ),
-                        )
-                    }
-                };
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
-                        body,
-                        success: output.success,
-                    },
+                    output: truncate_function_output_payload(
+                        output,
+                        policy_with_serialization_budget,
+                    ),
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let truncated = truncate_text(output, policy_with_serialization_budget);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
-                    output: truncated,
+                    output: truncate_function_output_payload(
+                        output,
+                        policy_with_serialization_budget,
+                    ),
                 }
             }
             ResponseItem::Message { .. }
@@ -377,6 +377,7 @@ impl ContextManager {
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
             | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::CustomToolCall { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::GhostSnapshot { .. }
@@ -385,8 +386,28 @@ impl ContextManager {
     }
 }
 
+fn truncate_function_output_payload(
+    output: &FunctionCallOutputPayload,
+    policy: TruncationPolicy,
+) -> FunctionCallOutputPayload {
+    let body = match &output.body {
+        FunctionCallOutputBody::Text(content) => {
+            FunctionCallOutputBody::Text(truncate_text(content, policy))
+        }
+        FunctionCallOutputBody::ContentItems(items) => FunctionCallOutputBody::ContentItems(
+            truncate_function_output_items_with_policy(items, policy),
+        ),
+    };
+
+    FunctionCallOutputPayload {
+        body,
+        success: output.success,
+    }
+}
+
 /// API messages include every non-system item (user/assistant messages, reasoning,
-/// tool calls, tool outputs, shell calls, and web-search calls).
+/// tool calls, tool outputs, shell calls, web-search calls, and image-generation
+/// calls).
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
@@ -397,6 +418,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. } => true,
         ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
@@ -416,6 +438,24 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
     approx_tokens_from_byte_count_i64(model_visible_bytes)
 }
 
+/// Approximate model-visible byte cost for one image input.
+///
+/// The estimator later converts bytes to tokens using a 4-bytes/token heuristic
+/// with ceiling division, so 7,373 bytes maps to approximately 1,844 tokens.
+const RESIZED_IMAGE_BYTES_ESTIMATE: i64 = 7373;
+// See https://platform.openai.com/docs/guides/images-vision#calculating-costs.
+// Use a direct 32px patch count only for `detail: "original"`;
+// all other image inputs continue to use `RESIZED_IMAGE_BYTES_ESTIMATE`.
+const ORIGINAL_IMAGE_PATCH_SIZE: u32 = 32;
+const ORIGINAL_IMAGE_ESTIMATE_CACHE_SIZE: usize = 32;
+
+static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Option<i64>>> =
+    LazyLock::new(|| {
+        BlockingLruCache::new(
+            NonZeroUsize::new(ORIGINAL_IMAGE_ESTIMATE_CACHE_SIZE).unwrap_or(NonZeroUsize::MIN),
+        )
+    });
+
 pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
         ResponseItem::GhostSnapshot { .. } => 0,
@@ -426,10 +466,138 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
         | ResponseItem::Compaction {
             encrypted_content: content,
         } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
-        item => serde_json::to_string(item)
-            .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
-            .unwrap_or_default(),
+        item => {
+            let raw = serde_json::to_string(item)
+                .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
+                .unwrap_or_default();
+            let (payload_bytes, replacement_bytes) = image_data_url_estimate_adjustment(item);
+            if payload_bytes == 0 || replacement_bytes == 0 {
+                raw
+            } else {
+                // Replace raw base64 payload bytes with a per-image estimate.
+                // We intentionally preserve the data URL prefix and JSON
+                // wrapper bytes already included in `raw`.
+                raw.saturating_sub(payload_bytes)
+                    .saturating_add(replacement_bytes)
+            }
+        }
     }
+}
+
+/// Returns the base64 payload byte length for inline image data URLs that are
+/// eligible for token-estimation discounting.
+///
+/// We only discount payloads for `data:image/...;base64,...` URLs (case
+/// insensitive markers) and leave everything else at raw serialized size.
+fn parse_base64_image_data_url(url: &str) -> Option<&str> {
+    if !url
+        .get(.."data:".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+    {
+        return None;
+    }
+    let comma_index = url.find(',')?;
+    let metadata = &url[..comma_index];
+    let payload = &url[comma_index + 1..];
+    // Parse the media type and parameters without decoding. This keeps the
+    // estimator cheap while ensuring we only apply the fixed-cost image
+    // heuristic to image-typed base64 data URLs.
+    let metadata_without_scheme = &metadata["data:".len()..];
+    let mut metadata_parts = metadata_without_scheme.split(';');
+    let mime_type = metadata_parts.next().unwrap_or_default();
+    let has_base64_marker = metadata_parts.any(|part| part.eq_ignore_ascii_case("base64"));
+    if !mime_type
+        .get(.."image/".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
+    {
+        return None;
+    }
+    if !has_base64_marker {
+        return None;
+    }
+    Some(payload)
+}
+
+fn estimate_original_image_bytes(image_url: &str) -> Option<i64> {
+    let key = sha1_digest(image_url.as_bytes());
+    ORIGINAL_IMAGE_ESTIMATE_CACHE.get_or_insert_with(key, || {
+        let payload = match parse_base64_image_data_url(image_url) {
+            Some(payload) => payload,
+            None => {
+                tracing::trace!("skipping original-detail estimate for non-base64 image data URL");
+                return None;
+            }
+        };
+        let bytes = match BASE64_STANDARD.decode(payload) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::trace!("failed to decode original-detail image payload: {error}");
+                return None;
+            }
+        };
+        let dynamic = match image::load_from_memory(&bytes) {
+            Ok(dynamic) => dynamic,
+            Err(error) => {
+                tracing::trace!("failed to decode original-detail image bytes: {error}");
+                return None;
+            }
+        };
+        let width = i64::from(dynamic.width());
+        let height = i64::from(dynamic.height());
+        let patch_size = i64::from(ORIGINAL_IMAGE_PATCH_SIZE);
+        let patches_wide = width.saturating_add(patch_size.saturating_sub(1)) / patch_size;
+        let patches_high = height.saturating_add(patch_size.saturating_sub(1)) / patch_size;
+        let patch_count = patches_wide.saturating_mul(patches_high);
+        let patch_count = usize::try_from(patch_count).unwrap_or(usize::MAX);
+        Some(i64::try_from(approx_bytes_for_tokens(patch_count)).unwrap_or(i64::MAX))
+    })
+}
+
+/// Scans one response item for discount-eligible inline image data URLs and
+/// returns:
+/// - total base64 payload bytes to subtract from raw serialized size
+/// - total replacement byte estimate for those images
+fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
+    let mut payload_bytes = 0i64;
+    let mut replacement_bytes = 0i64;
+
+    let mut accumulate = |image_url: &str, detail: Option<ImageDetail>| {
+        if let Some(payload_len) = parse_base64_image_data_url(image_url).map(str::len) {
+            payload_bytes =
+                payload_bytes.saturating_add(i64::try_from(payload_len).unwrap_or(i64::MAX));
+            replacement_bytes = replacement_bytes.saturating_add(match detail {
+                Some(ImageDetail::Original) => {
+                    estimate_original_image_bytes(image_url).unwrap_or(RESIZED_IMAGE_BYTES_ESTIMATE)
+                }
+                _ => RESIZED_IMAGE_BYTES_ESTIMATE,
+            });
+        }
+    };
+
+    match item {
+        ResponseItem::Message { content, .. } => {
+            for content_item in content {
+                if let ContentItem::InputImage { image_url } = content_item {
+                    accumulate(image_url, None);
+                }
+            }
+        }
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => {
+            if let FunctionCallOutputBody::ContentItems(items) = &output.body {
+                for content_item in items {
+                    if let FunctionCallOutputContentItem::InputImage { image_url, detail } =
+                        content_item
+                    {
+                        accumulate(image_url, *detail);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    (payload_bytes, replacement_bytes)
 }
 
 fn is_model_generated_item(item: &ResponseItem) -> bool {
@@ -438,6 +606,7 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         ResponseItem::Reasoning { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Compaction { .. } => true,
@@ -460,33 +629,7 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
         return false;
     };
 
-    if role != "user" {
-        return false;
-    }
-
-    if UserInstructions::is_user_instructions(content)
-        || SkillInstructions::is_skill_instructions(content)
-    {
-        return false;
-    }
-
-    for content_item in content {
-        match content_item {
-            ContentItem::InputText { text } => {
-                if is_session_prefix(text) || is_user_shell_command_text(text) {
-                    return false;
-                }
-            }
-            ContentItem::OutputText { text } => {
-                if is_session_prefix(text) {
-                    return false;
-                }
-            }
-            ContentItem::InputImage { .. } => {}
-        }
-    }
-
-    true
+    role == "user" && !is_contextual_user_message_content(content)
 }
 
 fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {

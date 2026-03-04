@@ -7,16 +7,16 @@ use chrono::Utc;
 use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::CreditsSnapshot;
-use codex_core::protocol::RateLimitSnapshot;
-use codex_core::protocol::RateLimitWindow;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::TokenUsage;
-use codex_core::protocol::TokenUsageInfo;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
@@ -96,7 +96,7 @@ async fn status_snapshot_includes_reasoning_details() {
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
-    config.model_reasoning_summary = ReasoningSummary::Detailed;
+    config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
     config
         .permissions
         .sandbox_policy
@@ -596,7 +596,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
-    config.model_reasoning_summary = ReasoningSummary::Detailed;
+    config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
     config.cwd = PathBuf::from("/workspace/tests");
 
     let auth_manager = test_auth_manager(&config);

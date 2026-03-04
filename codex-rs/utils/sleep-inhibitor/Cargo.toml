@@ -7,7 +7,19 @@ license.workspace = true
 [lints]
 workspace = true
 
+[dependencies]
+tracing = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
+
+[target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }
-tracing = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_Power",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }

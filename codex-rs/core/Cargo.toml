@@ -3,7 +3,6 @@ edition.workspace = true
 license.workspace = true
 name = "codex-core"
 version.workspace = true
-build = "build.rs"
 
 [lib]
 doctest = false
@@ -22,6 +21,7 @@ anyhow = { workspace = true }
 arc-swap = "1.8.2"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
+askama = { workspace = true }
 base64 = { workspace = true }
 bm25 = { workspace = true }
 chardetng = { workspace = true }
@@ -34,6 +34,7 @@ codex-async-utils = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
 codex-shell-command = { workspace = true }
+codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
@@ -41,16 +42,22 @@ codex-hooks = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
+codex-artifact-presentation = { workspace = true }
+codex-artifact-spreadsheet = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-cache = { workspace = true }
+codex-utils-image = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
-codex-utils-sanitizer = { workspace = true }
+codex-secrets = { workspace = true }
 codex-utils-string = { workspace = true }
+codex-utils-stream-parser = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
+csv = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
 encoding_rs = { workspace = true }
@@ -58,9 +65,9 @@ env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-include_dir = { workspace = true }
+iana-time-zone = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png", "webp"] }
 indexmap = { workspace = true }
-indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 libc = { workspace = true }
 notify = { workspace = true }
@@ -78,14 +85,12 @@ rmcp = { workspace = true, default-features = false, features = [
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_path_to_error = { workspace = true }
 serde_yaml = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
 tempfile = { workspace = true }
-test-case = "3.3.1"
 test-log = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = [
@@ -140,6 +145,9 @@ windows-sys = { version = "0.52", features = [
 [target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service"] }
 
+[target.'cfg(unix)'.dependencies]
+codex-shell-escalation = { workspace = true }
+
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
@@ -147,20 +155,23 @@ codex-arg0 = { workspace = true }
 codex-otel = { workspace = true, features = [
     "disable-default-metrics-exporter",
 ] }
+codex-test-macros = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
-image = { workspace = true, features = ["jpeg", "png"] }
 insta = { workspace = true }
 maplit = { workspace = true }
+opentelemetry = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
+test-case = "3.3.1"
 opentelemetry_sdk = { workspace = true, features = [
     "experimental_metrics_custom_reader",
     "metrics",
 ] }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
 walkdir = { workspace = true }

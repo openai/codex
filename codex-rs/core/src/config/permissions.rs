@@ -24,6 +24,7 @@ pub struct NetworkToml {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub dangerously_allow_all_unix_sockets: Option<bool>,
     #[schemars(with = "Option<NetworkModeSchema>")]
     pub mode: Option<NetworkMode>,
     pub allowed_domains: Option<Vec<String>>,
@@ -73,6 +74,9 @@ impl NetworkToml {
         {
             config.network.dangerously_allow_non_loopback_admin =
                 dangerously_allow_non_loopback_admin;
+        }
+        if let Some(dangerously_allow_all_unix_sockets) = self.dangerously_allow_all_unix_sockets {
+            config.network.dangerously_allow_all_unix_sockets = dangerously_allow_all_unix_sockets;
         }
         if let Some(mode) = self.mode {
             config.network.mode = mode;

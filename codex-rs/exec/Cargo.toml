@@ -21,6 +21,7 @@ clap = { workspace = true, features = ["derive"] }
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-core = { workspace = true }
+codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }
@@ -51,13 +52,17 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
+codex-apply-patch = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 libc = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 rmcp = { workspace = true }
 tempfile = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }
 wiremock = { workspace = true }

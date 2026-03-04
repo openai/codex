@@ -1,14 +1,18 @@
+module(name = "codex")
+
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.5.3")
+bazel_dep(name = "llvm", version = "0.6.1")
 single_version_override(
-    module_name = "toolchains_llvm_bootstrapped",
+    module_name = "llvm",
     patch_strip = 1,
     patches = [
         "//patches:toolchains_llvm_bootstrapped_resource_dir.patch",
     ],
 )
 
-osx = use_extension("@toolchains_llvm_bootstrapped//extensions:osx.bzl", "osx")
+register_toolchains("@llvm//toolchain:all")
+
+osx = use_extension("@llvm//extensions:osx.bzl", "osx")
 osx.framework(name = "ApplicationServices")
 osx.framework(name = "AppKit")
 osx.framework(name = "ColorSync")
@@ -16,32 +20,26 @@ osx.framework(name = "CoreFoundation")
 osx.framework(name = "CoreGraphics")
 osx.framework(name = "CoreServices")
 osx.framework(name = "CoreText")
+osx.framework(name = "AudioToolbox")
 osx.framework(name = "CFNetwork")
 osx.framework(name = "FontServices")
+osx.framework(name = "AudioUnit")
+osx.framework(name = "CoreAudio")
+osx.framework(name = "CoreAudioTypes")
 osx.framework(name = "Foundation")
 osx.framework(name = "ImageIO")
+osx.framework(name = "IOKit")
 osx.framework(name = "Kernel")
 osx.framework(name = "OSLog")
 osx.framework(name = "Security")
 osx.framework(name = "SystemConfiguration")
-
-register_toolchains(
-    "@toolchains_llvm_bootstrapped//toolchain:all",
-)
+use_repo(osx, "macos_sdk")
 
 # Needed to disable xcode...
 bazel_dep(name = "apple_support", version = "2.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.16")
 bazel_dep(name = "rules_platform", version = "0.1.0")
-bazel_dep(name = "rules_rs", version = "0.0.23")
-
-# Special toolchains branch
-archive_override(
-    module_name = "rules_rs",
-    integrity = "sha256-YbDRjZos4UmfIPY98znK1BgBWRQ1/ui3CtL6RqxE30I=",
-    strip_prefix = "rules_rs-6cf3d940fdc48baf3ebd6c37daf8e0be8fc73ecb",
-    url = "https://github.com/dzbarsky/rules_rs/archive/6cf3d940fdc48baf3ebd6c37daf8e0be8fc73ecb.tar.gz",
-)
+bazel_dep(name = "rules_rs", version = "0.0.40")
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
 use_repo(rules_rust, "rules_rust")
@@ -51,13 +49,9 @@ toolchains.toolchain(
     edition = "2024",
     version = "1.93.0",
 )
-use_repo(
-    toolchains,
-    "experimental_rust_toolchains_1_93_0",
-    "rust_toolchain_artifacts_macos_aarch64_1_93_0",
-)
+use_repo(toolchains, "default_rust_toolchains")
 
-register_toolchains("@experimental_rust_toolchains_1_93_0//:all")
+register_toolchains("@default_rust_toolchains//:all")
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(
@@ -73,6 +67,7 @@ crate.from_cargo(
         "x86_64-apple-darwin",
         "x86_64-pc-windows-gnullvm",
     ],
+    use_experimental_platforms = True,
 )
 
 bazel_dep(name = "zstd", version = "1.5.7")
@@ -135,6 +130,7 @@ crate.annotation(
     },
     crate = "openssl-sys",
     data = ["@openssl//:gen_dir"],
+    gen_build_script = "on",
 )
 
 inject_repo(crate, "openssl")
@@ -143,6 +139,29 @@ crate.annotation(
     crate = "runfiles",
     workspace_cargo_toml = "rust/runfiles/Cargo.toml",
 )
+
+llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
+use_repo(llvm, "llvm-project")
+
+crate.annotation(
+    # Provide the hermetic SDK path so the build script doesn't try to invoke an unhermetic `xcrun --show-sdk-path`.
+    build_script_data = [
+        "@macos_sdk//sysroot",
+    ],
+    build_script_env = {
+        "BINDGEN_EXTRA_CLANG_ARGS": "-isystem $(location @llvm//:builtin_headers)",
+        "COREAUDIO_SDK_PATH": "$(location @macos_sdk//sysroot)",
+        "LIBCLANG_PATH": "$(location @llvm-project//clang:libclang_interface_output)",
+    },
+    build_script_tools = [
+        "@llvm-project//clang:libclang_interface_output",
+        "@llvm//:builtin_headers",
+    ],
+    crate = "coreaudio-sys",
+    gen_build_script = "on",
+)
+
+inject_repo(crate, "llvm", "llvm-project", "macos_sdk")
 
 # Fix readme inclusions
 crate.annotation(
@@ -153,27 +172,16 @@ crate.annotation(
     ],
 )
 
-WINDOWS_IMPORT_LIB = """
-load("@rules_cc//cc:defs.bzl", "cc_import")
-
-cc_import(
-    name = "windows_import_lib",
-    static_library = glob(["lib/*.a"])[0],
-)
-"""
+bazel_dep(name = "alsa_lib", version = "1.2.9.bcr.4")
 
 crate.annotation(
-    additive_build_file_content = WINDOWS_IMPORT_LIB,
-    crate = "windows_x86_64_gnullvm",
+    crate = "alsa-sys",
     gen_build_script = "off",
-    deps = [":windows_import_lib"],
+    deps = ["@alsa_lib"],
 )
-crate.annotation(
-    additive_build_file_content = WINDOWS_IMPORT_LIB,
-    crate = "windows_aarch64_gnullvm",
-    gen_build_script = "off",
-    deps = [":windows_import_lib"],
-)
+
+inject_repo(crate, "alsa_lib")
+
 use_repo(crate, "crates")
 
 rbe_platform_repository = use_repo_rule("//:rbe.bzl", "rbe_platform_repository")

@@ -6,12 +6,11 @@ use std::sync::OnceLock;
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::process::process_is_alive;
@@ -165,7 +164,10 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     let builder = test_codex().with_config(|config| {
         config.include_apply_patch_tool = true;
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
 
@@ -209,7 +211,8 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -294,7 +297,10 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     let mut builder = test_codex().with_model("gpt-5").with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -338,7 +344,8 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -369,7 +376,10 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
 
     let mut builder = test_codex().with_model("gpt-5").with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -416,7 +426,8 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -450,7 +461,10 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
 
     let mut builder = test_codex().with_model("gpt-5").with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -497,7 +511,8 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -532,7 +547,10 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -590,7 +608,8 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -622,7 +641,10 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -665,7 +687,8 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -697,7 +720,10 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -741,7 +767,8 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -807,7 +834,10 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -871,7 +901,8 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -910,7 +941,10 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -1008,7 +1042,8 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1104,7 +1139,10 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -1168,7 +1206,8 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1223,7 +1262,10 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -1266,7 +1308,8 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1341,7 +1384,10 @@ async fn unified_exec_defaults_to_pipe() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -1384,7 +1430,8 @@ async fn unified_exec_defaults_to_pipe() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1430,7 +1477,10 @@ async fn unified_exec_can_enable_tty() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -1474,7 +1524,8 @@ async fn unified_exec_can_enable_tty() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1513,7 +1564,10 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -1555,7 +1609,8 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1608,7 +1663,10 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -1686,7 +1744,8 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1774,7 +1833,10 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -1854,7 +1916,8 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1883,7 +1946,10 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -1931,7 +1997,8 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1978,7 +2045,10 @@ async fn unified_exec_interrupt_terminates_long_running_session() -> Result<()> 
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -2019,7 +2089,8 @@ async fn unified_exec_interrupt_terminates_long_running_session() -> Result<()> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -2053,7 +2124,10 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -2116,7 +2190,8 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -2169,7 +2244,10 @@ async fn unified_exec_streams_after_lagged_output() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -2251,7 +2329,8 @@ PY
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -2303,7 +2382,10 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -2365,7 +2447,8 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -2412,7 +2495,10 @@ async fn unified_exec_formats_large_output_summary() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -2461,7 +2547,8 @@ PY
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -2500,7 +2587,10 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -2543,7 +2633,8 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -2583,7 +2674,10 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -2647,7 +2741,8 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -2701,7 +2796,10 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -2742,7 +2840,8 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -2777,7 +2876,10 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -2877,7 +2979,8 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

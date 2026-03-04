@@ -63,12 +63,44 @@ For `CODEX_JS_REPL_NODE_MODULE_DIRS` and `js_repl_node_module_dirs`, module reso
 
 `js_repl` exposes these globals:
 
-- `codex.state`: mutable object persisted for the current kernel session.
 - `codex.tmpDir`: per-session scratch directory path.
 - `codex.tool(name, args?)`: executes a normal Codex tool call from inside `js_repl` (including shell tools like `shell` / `shell_command` when available).
-- To share generated images with the model, write a file under `codex.tmpDir`, call `await codex.tool("view_image", { path: "/absolute/path" })`, then delete the file.
+- `codex.emitImage(imageLike)`: explicitly adds exactly one image to the outer `js_repl` function output.
+- Each `codex.tool(...)` call emits a bounded summary at `info` level from the `codex_core::tools::js_repl` logger. At `trace` level, the same path also logs the exact raw response object or error string seen by JavaScript.
+- Nested `codex.tool(...)` outputs stay inside JavaScript unless you emit them explicitly.
+- `codex.emitImage(...)` accepts a direct image URL, a single `input_image` item, an object like `{ bytes, mimeType }`, or a raw tool response object that contains exactly one image and no text.
+- `codex.emitImage(...)` rejects mixed text-and-image content.
+- Example of sharing an in-memory Playwright screenshot: `await codex.emitImage({ bytes: await page.screenshot({ type: "jpeg", quality: 85 }), mimeType: "image/jpeg" })`.
+- Example of sharing a local image tool result: `await codex.emitImage(codex.tool("view_image", { path: "/absolute/path" }))`.
 
 Avoid writing directly to `process.stdout` / `process.stderr` / `process.stdin`; the kernel uses a JSON-line transport over stdio.
+
+## Debug logging
+
+Nested `codex.tool(...)` diagnostics are emitted through normal `tracing` output instead of rollout history.
+
+- `info` level logs a bounded summary.
+- `trace` level also logs the exact serialized response object or error string seen by JavaScript.
+
+For `codex app-server`, these logs are written to the server process `stderr`.
+
+Examples:
+
+```sh
+RUST_LOG=codex_core::tools::js_repl=info \
+LOG_FORMAT=json \
+codex app-server \
+2> /tmp/codex-app-server.log
+```
+
+```sh
+RUST_LOG=codex_core::tools::js_repl=trace \
+LOG_FORMAT=json \
+codex app-server \
+2> /tmp/codex-app-server.log
+```
+
+In both cases, inspect `/tmp/codex-app-server.log` or whatever sink captures the process `stderr`.
 
 ## Vendored parser asset (`meriyah.umd.min.js`)
 

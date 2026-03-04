@@ -6,11 +6,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use codex_core::config::types::Personality;
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -26,6 +25,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use serde_json::json;
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "PRETURN_CONTEXT_DIFF_CWD";
 
@@ -53,6 +53,30 @@ fn agents_message_count(request: &ResponsesRequest) -> usize {
         .count()
 }
 
+fn format_environment_context_subagents_snapshot(subagents: &[&str]) -> String {
+    let subagents_block = if subagents.is_empty() {
+        String::new()
+    } else {
+        let lines = subagents
+            .iter()
+            .map(|line| format!("    {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("\n  <subagents>\n{lines}\n  </subagents>")
+    };
+    let items = vec![json!({
+        "type": "message",
+        "role": "user",
+        "content": [{
+            "type": "input_text",
+            "text": format!(
+                "<environment_context>\n  <cwd>/tmp/example</cwd>\n  <shell>bash</shell>{subagents_block}\n</environment_context>"
+            ),
+        }],
+    })];
+    context_snapshot::format_response_items_snapshot(items.as_slice(), &context_snapshot_options())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -78,7 +102,10 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.features.enable(Feature::Personality);
+            config
+                .features
+                .enable(Feature::Personality)
+                .expect("test config should allow feature update");
             config.personality = Some(Personality::Pragmatic);
         });
     let test = builder.build(&server).await?;
@@ -97,7 +124,8 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -119,7 +147,8 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
         })
@@ -196,7 +225,8 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -218,7 +248,8 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -304,10 +335,15 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
 
     let mut resume_builder = test_codex().with_config(|config| {
         config.model = Some("gpt-5.2-codex".to_string());
-        config.features.enable(Feature::Personality);
+        config
+            .features
+            .enable(Feature::Personality)
+            .expect("test config should allow feature update");
         config.personality = Some(Personality::Pragmatic);
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
+    fs::create_dir_all(&resume_override_cwd)?;
     resumed
         .codex
         .submit(Op::UserTurn {
@@ -316,12 +352,13 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: resumed.cwd_path().to_path_buf(),
+            cwd: resume_override_cwd,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: resumed.session_configured.model.clone(),
             effort: resumed.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
         })
@@ -398,16 +435,19 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
         config.model = Some("gpt-5.2-codex".to_string());
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
+    fs::create_dir_all(&resume_override_cwd)?;
     resumed
         .codex
         .submit(Op::OverrideTurnContext {
-            cwd: None,
+            cwd: Some(resume_override_cwd),
             approval_policy: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: Some("gpt-5.2".to_string()),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -437,6 +477,26 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
                 ("First Request After Resume + Override", &resumed_request),
             ]
         )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_model_visible_layout_environment_context_includes_one_subagent() -> Result<()> {
+    insta::assert_snapshot!(
+        "model_visible_layout_environment_context_includes_one_subagent",
+        format_environment_context_subagents_snapshot(&["- agent-1: Atlas"])
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_model_visible_layout_environment_context_includes_two_subagents() -> Result<()> {
+    insta::assert_snapshot!(
+        "model_visible_layout_environment_context_includes_two_subagents",
+        format_environment_context_subagents_snapshot(&["- agent-1: Atlas", "- agent-2: Juniper"])
     );
 
     Ok(())

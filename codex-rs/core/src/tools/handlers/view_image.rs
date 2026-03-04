@@ -1,9 +1,15 @@
 use async_trait::async_trait;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ImageDetail;
+use codex_protocol::models::local_image_content_items_with_label_number;
 use codex_protocol::openai_models::InputModality;
+use codex_utils_image::PromptImageMode;
 use serde::Deserialize;
 use tokio::fs;
 
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
 use crate::protocol::ViewImageToolCallEvent;
@@ -13,9 +19,6 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::local_image_content_items_with_label_number;
 
 pub struct ViewImageHandler;
 
@@ -81,21 +84,32 @@ impl ToolHandler for ViewImageHandler {
         }
         let event_path = abs_path.clone();
 
-        let content: Vec<ContentItem> =
-            local_image_content_items_with_label_number(&abs_path, None);
-        let input = ResponseInputItem::Message {
-            role: "user".to_string(),
-            content,
+        let use_original_detail = turn.config.features.enabled(Feature::ImageDetailOriginal)
+            && turn.model_info.supports_image_detail_original;
+        let image_mode = if use_original_detail {
+            PromptImageMode::Original
+        } else {
+            PromptImageMode::ResizeToFit
         };
+        let image_detail = use_original_detail.then_some(ImageDetail::Original);
 
-        session
-            .inject_response_items(vec![input])
-            .await
-            .map_err(|_| {
-                FunctionCallError::RespondToModel(
-                    "unable to attach image (no active task)".to_string(),
-                )
-            })?;
+        let content = local_image_content_items_with_label_number(&abs_path, None, image_mode)
+            .into_iter()
+            .map(|item| match item {
+                ContentItem::InputText { text } => {
+                    FunctionCallOutputContentItem::InputText { text }
+                }
+                ContentItem::InputImage { image_url } => {
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url,
+                        detail: image_detail,
+                    }
+                }
+                ContentItem::OutputText { text } => {
+                    FunctionCallOutputContentItem::InputText { text }
+                }
+            })
+            .collect();
 
         session
             .send_event(
@@ -108,7 +122,7 @@ impl ToolHandler for ViewImageHandler {
             .await;
 
         Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text("attached local image path".to_string()),
+            body: FunctionCallOutputBody::ContentItems(content),
             success: Some(true),
         })
     }

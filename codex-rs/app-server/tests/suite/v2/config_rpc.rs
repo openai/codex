@@ -4,7 +4,7 @@ use app_test_support::test_path_buf_with_windows;
 use app_test_support::test_tmp_path_buf;
 use app_test_support::to_response;
 use codex_app_server_protocol::AppConfig;
-use codex_app_server_protocol::AppDisabledReason;
+use codex_app_server_protocol::AppToolApproval;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -156,7 +156,8 @@ async fn config_read_includes_apps() -> Result<()> {
         r#"
 [apps.app1]
 enabled = false
-disabled_reason = "user"
+destructive_enabled = false
+default_tools_approval_mode = "prompt"
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -185,11 +186,16 @@ disabled_reason = "user"
     assert_eq!(
         config.apps,
         Some(AppsConfig {
+            default: None,
             apps: std::collections::HashMap::from([(
                 "app1".to_string(),
                 AppConfig {
                     enabled: false,
-                    disabled_reason: Some(AppDisabledReason::User),
+                    destructive_enabled: Some(false),
+                    open_world_enabled: None,
+                    default_tools_approval_mode: Some(AppToolApproval::Prompt),
+                    default_tools_enabled: None,
+                    tools: None,
                 },
             )]),
         })
@@ -202,7 +208,16 @@ disabled_reason = "user"
     );
     assert_eq!(
         origins
-            .get("apps.app1.disabled_reason")
+            .get("apps.app1.destructive_enabled")
+            .expect("origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins
+            .get("apps.app1.default_tools_approval_mode")
             .expect("origin")
             .name,
         ConfigLayerSource::User {

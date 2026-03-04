@@ -1,12 +1,11 @@
 use anyhow::Result;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ModelRerouteReason;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ModelRerouteReason;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_function_call;
@@ -49,7 +48,8 @@ async fn openai_model_header_mismatch_emits_warning_event_and_warning_item() -> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: REQUESTED_MODEL.to_string(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -146,7 +146,8 @@ async fn response_model_field_mismatch_emits_warning_when_header_matches_request
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: REQUESTED_MODEL.to_string(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -230,7 +231,8 @@ async fn openai_model_header_mismatch_only_emits_one_warning_per_turn() -> Resul
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: REQUESTED_MODEL.to_string(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -278,7 +280,8 @@ async fn openai_model_header_casing_only_mismatch_does_not_warn() -> Result<()> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: REQUESTED_MODEL.to_string(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

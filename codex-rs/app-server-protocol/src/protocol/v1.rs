@@ -5,6 +5,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -234,8 +235,8 @@ pub struct GitDiffToRemoteResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ApplyPatchApprovalParams {
     pub conversation_id: ThreadId,
-    /// Use to correlate this with [codex_core::protocol::PatchApplyBeginEvent]
-    /// and [codex_core::protocol::PatchApplyEndEvent].
+    /// Use to correlate this with [codex_protocol::protocol::PatchApplyBeginEvent]
+    /// and [codex_protocol::protocol::PatchApplyEndEvent].
     pub call_id: String,
     pub file_changes: HashMap<PathBuf, FileChange>,
     /// Optional explanatory reason (e.g. request for extra write access).
@@ -255,8 +256,8 @@ pub struct ApplyPatchApprovalResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ExecCommandApprovalParams {
     pub conversation_id: ThreadId,
-    /// Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent]
-    /// and [codex_core::protocol::ExecCommandEndEvent].
+    /// Use to correlate this with [codex_protocol::protocol::ExecCommandBeginEvent]
+    /// and [codex_protocol::protocol::ExecCommandEndEvent].
     pub call_id: String,
     /// Identifier for this specific approval callback.
     pub approval_id: Option<String>,
@@ -419,6 +420,13 @@ pub struct SendUserTurnParams {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     pub model: String,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub service_tier: Option<Option<ServiceTier>>,
     pub effort: Option<ReasoningEffort>,
     pub summary: ReasoningSummary,
     /// Optional JSON Schema used to constrain the final assistant message for this turn.
@@ -428,6 +436,55 @@ pub struct SendUserTurnParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SendUserTurnResponse {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    #[test]
+    fn send_user_turn_params_preserve_explicit_null_service_tier() {
+        let params = SendUserTurnParams {
+            conversation_id: ThreadId::new(),
+            items: vec![],
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: "gpt-4.1".to_string(),
+            service_tier: Some(None),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            output_schema: None,
+        };
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(
+            serialized.get("serviceTier"),
+            Some(&serde_json::Value::Null)
+        );
+
+        let roundtrip: SendUserTurnParams =
+            serde_json::from_value(serialized).expect("params should deserialize");
+        assert_eq!(roundtrip.service_tier, Some(None));
+
+        let without_override = SendUserTurnParams {
+            conversation_id: ThreadId::new(),
+            items: vec![],
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: "gpt-4.1".to_string(),
+            service_tier: None,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            output_schema: None,
+        };
+        let serialized_without_override =
+            serde_json::to_value(&without_override).expect("params should serialize");
+        assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -531,32 +588,11 @@ impl From<V1TextElement> for CoreTextElement {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-/// Deprecated in favor of AccountLoginCompletedNotification.
-pub struct LoginChatGptCompleteNotification {
-    #[schemars(with = "String")]
-    pub login_id: Uuid,
-    pub success: bool,
-    pub error: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionConfiguredNotification {
-    pub session_id: ThreadId,
-    pub model: String,
-    pub reasoning_effort: Option<ReasoningEffort>,
-    pub history_log_id: u64,
-    #[ts(type = "number")]
-    pub history_entry_count: usize,
-    pub initial_messages: Option<Vec<EventMsg>>,
-    pub rollout_path: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-/// Deprecated notification. Use AccountUpdatedNotification instead.
-pub struct AuthStatusChangeNotification {
-    pub auth_method: Option<AuthMode>,
+impl InputItem {
+    pub fn text_char_count(&self) -> usize {
+        match self {
+            InputItem::Text { text, .. } => text.chars().count(),
+            InputItem::Image { .. } | InputItem::LocalImage { .. } => 0,
+        }
+    }
 }

@@ -11,6 +11,7 @@ windows_modules!(
     cap,
     dpapi,
     env,
+    helper_materialization,
     hide_users,
     identity,
     logging,
@@ -84,6 +85,8 @@ pub use setup::run_elevated_setup;
 pub use setup::run_setup_refresh;
 #[cfg(target_os = "windows")]
 pub use setup::run_setup_refresh_with_extra_read_roots;
+#[cfg(target_os = "windows")]
+pub use setup::sandbox_bin_dir;
 #[cfg(target_os = "windows")]
 pub use setup::sandbox_dir;
 #[cfg(target_os = "windows")]

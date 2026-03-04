@@ -9,7 +9,7 @@ use codex_core::config_loader::RequirementSource;
 use codex_core::config_loader::ResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement;
 use codex_core::config_loader::WebSearchModeRequirement;
-use codex_core::protocol::SessionNetworkProxyRuntime;
+use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use toml::Value as TomlValue;
@@ -332,6 +332,7 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy,
         dangerously_allow_non_loopback_admin,
+        dangerously_allow_all_unix_sockets,
         allowed_domains,
         denied_domains,
         allow_unix_sockets,
@@ -358,6 +359,11 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     if let Some(dangerously_allow_non_loopback_admin) = dangerously_allow_non_loopback_admin {
         parts.push(format!(
             "dangerously_allow_non_loopback_admin={dangerously_allow_non_loopback_admin}"
+        ));
+    }
+    if let Some(dangerously_allow_all_unix_sockets) = dangerously_allow_all_unix_sockets {
+        parts.push(format!(
+            "dangerously_allow_all_unix_sockets={dangerously_allow_all_unix_sockets}"
         ));
     }
     if let Some(allowed_domains) = allowed_domains {
@@ -398,9 +404,9 @@ mod tests {
     use codex_core::config_loader::SandboxModeRequirement;
     use codex_core::config_loader::Sourced;
     use codex_core::config_loader::WebSearchModeRequirement;
-    use codex_core::protocol::AskForApproval;
-    use codex_core::protocol::SandboxPolicy;
     use codex_protocol::config_types::WebSearchMode;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use ratatui::text::Line;
     use std::collections::BTreeMap;
@@ -521,6 +527,7 @@ mod tests {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
+            feature_requirements: None,
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
                 McpServerRequirement {
@@ -646,6 +653,7 @@ approval_policy = "never"
             allowed_approval_policies: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
+            feature_requirements: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,

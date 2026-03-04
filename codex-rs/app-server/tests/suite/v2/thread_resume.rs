@@ -1,13 +1,26 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_fake_rollout_with_text_elements;
+use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_shell_command_sse_response;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::Utc;
+use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::FileChangeRequestApprovalResponse;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -15,8 +28,6 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
-use codex_app_server_protocol::TurnInterruptParams;
-use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -317,9 +328,14 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let second_body = responses::sse(vec![responses::ev_response_created("resp-2")]);
+    let second_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]))
+    .set_delay(std::time::Duration::from_millis(500));
     let _first_response_mock = responses::mount_sse_once(&server, first_body).await;
-    let _second_response_mock = responses::mount_sse_once(&server, second_body).await;
+    let _second_response_mock = responses::mount_response_once(&server, second_response).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -413,28 +429,9 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         resume_err.error.message
     );
 
-    // This test intentionally keeps a turn running to exercise the resume error path.
-    // Keep this explicit interrupt + turn_aborted wait so teardown does not leave
-    // in-flight work behind (which can show up as LEAK in nextest).
-    let interrupt_id = primary
-        .send_turn_interrupt_request(TurnInterruptParams {
-            thread_id,
-            turn_id: running_turn.id,
-        })
+    primary
+        .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
         .await?;
-    let interrupt_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(interrupt_id)),
-    )
-    .await??;
-    let _turn_interrupt_response: TurnInterruptResponse =
-        to_response::<TurnInterruptResponse>(interrupt_resp)?;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("codex/event/turn_aborted"),
-    )
-    .await??;
 
     Ok(())
 }
@@ -447,9 +444,14 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let second_body = responses::sse(vec![responses::ev_response_created("resp-2")]);
+    let second_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]))
+    .set_delay(std::time::Duration::from_millis(500));
     let _first_response_mock = responses::mount_sse_once(&server, first_body).await;
-    let _second_response_mock = responses::mount_sse_once(&server, second_body).await;
+    let _second_response_mock = responses::mount_response_once(&server, second_response).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -533,28 +535,9 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         resume_err.error.message
     );
 
-    // This test intentionally keeps a turn running to exercise the resume error path.
-    // Keep this explicit interrupt + turn_aborted wait so teardown does not leave
-    // in-flight work behind (which can show up as LEAK in nextest).
-    let interrupt_id = primary
-        .send_turn_interrupt_request(TurnInterruptParams {
-            thread_id,
-            turn_id: running_turn.id,
-        })
+    primary
+        .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
         .await?;
-    let interrupt_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(interrupt_id)),
-    )
-    .await??;
-    let _turn_interrupt_response: TurnInterruptResponse =
-        to_response::<TurnInterruptResponse>(interrupt_resp)?;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("codex/event/turn_aborted"),
-    )
-    .await??;
 
     Ok(())
 }
@@ -659,6 +642,306 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
             active_flags: vec![],
         }
     );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_replays_pending_command_execution_request_approval() -> Result<()> {
+    let responses = vec![
+        create_final_assistant_message_sse_response("seeded")?,
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            None,
+            Some(5000),
+            "call-1",
+        )?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut primary = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
+
+    let start_id = primary
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.1-codex-max".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let seed_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "seed history".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(seed_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    primary.clear_message_buffer();
+
+    let running_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "run command".to_string(),
+                text_elements: Vec::new(),
+            }],
+            approval_policy: Some(AskForApproval::UnlessTrusted),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(running_turn_id)),
+    )
+    .await??;
+
+    let original_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { .. } = &original_request else {
+        panic!("expected CommandExecutionRequestApproval request, got {original_request:?}");
+    };
+
+    let resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_thread,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resumed_thread.id, thread.id);
+    assert!(
+        resumed_thread
+            .turns
+            .iter()
+            .any(|turn| matches!(turn.status, TurnStatus::InProgress))
+    );
+
+    let replayed_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_request_message(),
+    )
+    .await??;
+    pretty_assertions::assert_eq!(replayed_request, original_request);
+
+    let ServerRequest::CommandExecutionRequestApproval { request_id, .. } = replayed_request else {
+        panic!("expected CommandExecutionRequestApproval request");
+    };
+    primary
+        .send_response(
+            request_id,
+            serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                decision: CommandExecutionApprovalDecision::Accept,
+            })?,
+        )
+        .await?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_replays_pending_file_change_request_approval() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+
+    let patch = r#"*** Begin Patch
+*** Add File: README.md
++new line
+*** End Patch
+"#;
+    let responses = vec![
+        create_final_assistant_message_sse_response("seeded")?,
+        create_apply_patch_sse_response(patch, "patch-call")?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+    create_config_toml(&codex_home, &server.uri())?;
+
+    let mut primary = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
+
+    let start_id = primary
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.1-codex-max".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let seed_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "seed history".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(workspace.clone()),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(seed_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    primary.clear_message_buffer();
+
+    let running_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "apply patch".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(workspace.clone()),
+            approval_policy: Some(AskForApproval::UnlessTrusted),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(running_turn_id)),
+    )
+    .await??;
+
+    let original_started = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notification = primary
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(notification.params.clone().expect("item/started params"))?;
+            if let ThreadItem::FileChange { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let expected_readme_path = workspace.join("README.md");
+    let expected_file_change = ThreadItem::FileChange {
+        id: "patch-call".to_string(),
+        changes: vec![codex_app_server_protocol::FileUpdateChange {
+            path: expected_readme_path.to_string_lossy().into_owned(),
+            kind: PatchChangeKind::Add,
+            diff: "new line\n".to_string(),
+        }],
+        status: PatchApplyStatus::InProgress,
+    };
+    assert_eq!(original_started, expected_file_change);
+
+    let original_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::FileChangeRequestApproval { .. } = &original_request else {
+        panic!("expected FileChangeRequestApproval request, got {original_request:?}");
+    };
+    primary.clear_message_buffer();
+
+    let resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_thread,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resumed_thread.id, thread.id);
+    assert!(
+        resumed_thread
+            .turns
+            .iter()
+            .any(|turn| matches!(turn.status, TurnStatus::InProgress))
+    );
+
+    let replayed_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_request_message(),
+    )
+    .await??;
+    assert_eq!(replayed_request, original_request);
+
+    let ServerRequest::FileChangeRequestApproval { request_id, .. } = replayed_request else {
+        panic!("expected FileChangeRequestApproval request");
+    };
+    primary
+        .send_response(
+            request_id,
+            serde_json::to_value(FileChangeRequestApprovalResponse {
+                decision: FileChangeApprovalDecision::Accept,
+            })?,
+        )
+        .await?;
 
     timeout(
         DEFAULT_READ_TIMEOUT,

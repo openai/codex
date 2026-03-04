@@ -1,11 +1,11 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_execpolicy::Policy;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ev_completed;
@@ -120,6 +120,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -262,6 +263,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -361,6 +363,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -489,6 +492,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
         AskForApproval::OnRequest,
         &Policy::empty(),
         test.config.cwd.as_path(),
+        false,
     )
     .into_text();
     // Normalize line endings to handle Windows vs Unix differences

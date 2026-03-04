@@ -8,9 +8,9 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -293,9 +293,15 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
 
     let mut builder = test_codex().with_config(move |config| {
         if use_unified_exec {
-            config.features.enable(Feature::UnifiedExec);
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
         } else {
-            config.features.disable(Feature::UnifiedExec);
+            config
+                .features
+                .disable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
         }
     });
     let test = builder.build(&server).await?;

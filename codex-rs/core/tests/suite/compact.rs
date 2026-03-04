@@ -5,19 +5,18 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ItemCompletedEvent;
-use codex_core::protocol::ItemStartedEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::RolloutItem;
-use codex_core::protocol::RolloutLine;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::WarningEvent;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -363,7 +362,7 @@ async fn summarize_context_three_requests_and_instructions() {
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    // Verify rollout contains APITurn entries for each API call and a Compacted entry.
+    // Verify rollout contains user-turn TurnContext entries and a Compacted entry.
     println!("rollout path: {}", rollout_path.display());
     let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
         panic!(
@@ -371,7 +370,7 @@ async fn summarize_context_three_requests_and_instructions() {
             rollout_path.display()
         )
     });
-    let mut api_turn_count = 0usize;
+    let mut regular_turn_context_count = 0usize;
     let mut saw_compacted_summary = false;
     for line in text.lines() {
         let trimmed = line.trim();
@@ -383,7 +382,7 @@ async fn summarize_context_three_requests_and_instructions() {
         };
         match entry.item {
             RolloutItem::TurnContext(_) => {
-                api_turn_count += 1;
+                regular_turn_context_count += 1;
             }
             RolloutItem::Compacted(ci) => {
                 if ci.message == expected_summary_message {
@@ -394,9 +393,9 @@ async fn summarize_context_three_requests_and_instructions() {
         }
     }
 
-    assert!(
-        api_turn_count == 3,
-        "expected three APITurn entries in rollout"
+    assert_eq!(
+        regular_turn_context_count, 2,
+        "rollout should contain one TurnContext entry per real user turn"
     );
     assert!(
         saw_compacted_summary,
@@ -756,16 +755,40 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     let body = requests_payloads[0].body_json();
     let input = body.get("input").and_then(|v| v.as_array()).unwrap();
 
+    fn strip_agents_parts_from_user_message(
+        value: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        let content = value
+            .get("content")
+            .and_then(|content| content.as_array())?;
+        let filtered_content = content
+            .iter()
+            .filter(|item| {
+                !item
+                    .get("text")
+                    .and_then(|text| text.as_str())
+                    .is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if filtered_content.is_empty() {
+            return None;
+        }
+        let mut normalized = value.clone();
+        normalized["content"] = serde_json::Value::Array(filtered_content);
+        Some(normalized)
+    }
+
     fn normalize_inputs(values: &[serde_json::Value]) -> Vec<serde_json::Value> {
         values
             .iter()
-            .filter(|value| {
+            .filter_map(|value| {
                 if value
                     .get("type")
                     .and_then(|ty| ty.as_str())
                     .is_some_and(|ty| ty == "function_call_output")
                 {
-                    return false;
+                    return None;
                 }
 
                 let text = value
@@ -781,11 +804,13 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                 if role == Some("developer")
                     && text.is_some_and(|text| text.contains("`sandbox_mode`"))
                 {
-                    return false;
+                    return None;
                 }
-                !text.is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
+                if role == Some("user") {
+                    return strip_agents_parts_from_user_message(value);
+                }
+                Some(value.clone())
             })
-            .cloned()
             .collect()
     }
 
@@ -1633,7 +1658,8 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: resumed.session_configured.model.clone(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1722,7 +1748,8 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: previous_model.to_string(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1745,7 +1772,8 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: next_model.to_string(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1854,7 +1882,8 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: previous_model.to_string(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1901,7 +1930,8 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: next_model.to_string(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -2055,9 +2085,9 @@ async fn auto_compact_persists_rollout_entries() {
         }
     }
 
-    assert!(
-        turn_context_count >= 2,
-        "expected at least two turn context entries, got {turn_context_count}"
+    assert_eq!(
+        turn_context_count, 3,
+        "rollout should contain one TurnContext entry per real user turn"
     );
 }
 
@@ -2414,26 +2444,36 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         first_request_user_texts[first_turn_user_index], first_user_message,
         "first turn request should end with the submitted user message"
     );
-    let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
+    let initial_seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
 
     let final_request_user_texts = requests
         .last()
         .unwrap_or_else(|| panic!("final turn request missing for {final_user_message}"))
         .message_input_texts("user");
     assert!(
-        final_request_user_texts
-            .as_slice()
-            .starts_with(seeded_user_prefix),
-        "final request should start with seeded user prefix from first request: {seeded_user_prefix:?}"
+        !initial_seeded_user_prefix.is_empty(),
+        "first turn should include seeded user prefix before the submitted user message"
     );
-    let final_output = &final_request_user_texts[seeded_user_prefix.len()..];
-    let expected = vec![
+    let (final_request_last_user_text, final_request_before_last_user) = final_request_user_texts
+        .split_last()
+        .unwrap_or_else(|| panic!("final turn request missing user messages"));
+    assert_eq!(
+        final_request_last_user_text, final_user_message,
+        "final turn request should end with the submitted user message"
+    );
+    let history_before_seeded_prefix = final_request_before_last_user
+        .strip_suffix(initial_seeded_user_prefix)
+        .unwrap_or_else(|| {
+            panic!(
+                "final request should end with the seeded user prefix from the first request: {initial_seeded_user_prefix:?}"
+            )
+        });
+    let expected_history = vec![
         first_user_message.to_string(),
         second_user_message.to_string(),
         expected_second_summary,
-        final_user_message.to_string(),
     ];
-    assert_eq!(final_output, expected.as_slice());
+    assert_eq!(history_before_seeded_prefix, expected_history.as_slice());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2977,6 +3017,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -3071,7 +3112,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config
+            let _ = config
                 .features
                 .enable(codex_core::features::Feature::RemoteModels);
             config.model_auto_compact_token_limit = Some(200);
@@ -3092,7 +3133,8 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: previous_model.to_string(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -3115,7 +3157,8 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: next_model.to_string(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -3174,7 +3217,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     ]);
     let mut responses = vec![first_turn];
     responses.extend(
-        (0..6).map(|_| {
+        (0..5).map(|_| {
             sse_failed(
                 "compact-failed",
                 "context_length_exceeded",

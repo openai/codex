@@ -1,6 +1,8 @@
+use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_line;
+use crate::wrapping::adaptive_wrap_line;
+use codex_utils_string::normalize_markdown_hash_location_suffix;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
 use pulldown_cmark::Event;
@@ -13,6 +15,8 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use regex_lite::Regex;
+use std::sync::LazyLock;
 
 struct MarkdownStyles {
     h1: Style,
@@ -84,6 +88,48 @@ pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>)
     w.text
 }
 
+#[derive(Clone, Debug)]
+struct LinkState {
+    destination: String,
+    show_destination: bool,
+    hidden_location_suffix: Option<String>,
+    label_start_span_idx: usize,
+    label_styled: bool,
+}
+
+fn should_render_link_destination(dest_url: &str) -> bool {
+    !is_local_path_like_link(dest_url)
+}
+
+static COLON_LOCATION_SUFFIX_RE: LazyLock<Regex> =
+    LazyLock::new(
+        || match Regex::new(r":\d+(?::\d+)?(?:[-–]\d+(?::\d+)?)?$") {
+            Ok(regex) => regex,
+            Err(error) => panic!("invalid location suffix regex: {error}"),
+        },
+    );
+
+// Covered by load_location_suffix_regexes.
+static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> =
+    LazyLock::new(|| match Regex::new(r"^L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?$") {
+        Ok(regex) => regex,
+        Err(error) => panic!("invalid hash location regex: {error}"),
+    });
+
+fn is_local_path_like_link(dest_url: &str) -> bool {
+    dest_url.starts_with("file://")
+        || dest_url.starts_with('/')
+        || dest_url.starts_with("~/")
+        || dest_url.starts_with("./")
+        || dest_url.starts_with("../")
+        || dest_url.starts_with("\\\\")
+        || matches!(
+            dest_url.as_bytes(),
+            [drive, b':', separator, ..]
+                if drive.is_ascii_alphabetic() && matches!(separator, b'/' | b'\\')
+        )
+}
+
 struct Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
@@ -94,11 +140,13 @@ where
     inline_styles: Vec<Style>,
     indent_stack: Vec<IndentContext>,
     list_indices: Vec<Option<u64>>,
-    link: Option<String>,
+    link: Option<LinkState>,
     needs_newline: bool,
     pending_marker_line: bool,
     in_paragraph: bool,
     in_code_block: bool,
+    code_block_lang: Option<String>,
+    code_block_buffer: String,
     wrap_width: Option<usize>,
     current_line_content: Option<Line<'static>>,
     current_initial_indent: Vec<Span<'static>>,
@@ -124,6 +172,8 @@ where
             pending_marker_line: false,
             in_paragraph: false,
             in_code_block: false,
+            code_block_lang: None,
+            code_block_buffer: String::new(),
             wrap_width,
             current_line_content: None,
             current_initial_indent: Vec::new(),
@@ -278,6 +328,16 @@ where
             self.push_line(Line::default());
         }
         self.pending_marker_line = false;
+
+        // When inside a fenced code block with a known language, accumulate
+        // text into the buffer for batch highlighting in end_codeblock().
+        // Append verbatim — pulldown-cmark text events already contain the
+        // original line breaks, so inserting separators would double them.
+        if self.in_code_block && self.code_block_lang.is_some() {
+            self.code_block_buffer.push_str(&text);
+            return;
+        }
+
         if self.in_code_block && !self.needs_newline {
             let has_content = self
                 .current_line_content
@@ -394,12 +454,25 @@ where
         self.needs_newline = false;
     }
 
-    fn start_codeblock(&mut self, _lang: Option<String>, indent: Option<Span<'static>>) {
+    fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
         self.flush_current_line();
         if !self.text.lines.is_empty() {
             self.push_blank_line();
         }
         self.in_code_block = true;
+
+        // Extract the language token from the info string.  CommonMark info
+        // strings can contain metadata after the language, separated by commas,
+        // spaces, or other delimiters (e.g. "rust,no_run", "rust title=demo").
+        // Take only the first token so the syntax lookup succeeds.
+        let lang = lang
+            .as_deref()
+            .and_then(|s| s.split([',', ' ', '\t']).next())
+            .filter(|s| !s.is_empty())
+            .map(std::string::ToString::to_string);
+        self.code_block_lang = lang;
+        self.code_block_buffer.clear();
+
         self.indent_stack.push(IndentContext::new(
             vec![indent.unwrap_or_default()],
             None,
@@ -409,6 +482,20 @@ where
     }
 
     fn end_codeblock(&mut self) {
+        // If we buffered code for a known language, syntax-highlight it now.
+        if let Some(lang) = self.code_block_lang.take() {
+            let code = std::mem::take(&mut self.code_block_buffer);
+            if !code.is_empty() {
+                let highlighted = highlight_code_to_lines(&code, &lang);
+                for hl_line in highlighted {
+                    self.push_line(Line::default());
+                    for span in hl_line.spans {
+                        self.push_span(span);
+                    }
+                }
+            }
+        }
+
         self.needs_newline = true;
         self.in_code_block = false;
         self.indent_stack.pop();
@@ -425,14 +512,78 @@ where
     }
 
     fn push_link(&mut self, dest_url: String) {
-        self.link = Some(dest_url);
+        let show_destination = should_render_link_destination(&dest_url);
+        let label_styled = !show_destination;
+        let label_start_span_idx = self
+            .current_line_content
+            .as_ref()
+            .map(|line| line.spans.len())
+            .unwrap_or(0);
+        if label_styled {
+            self.push_inline_style(self.styles.code);
+        }
+        self.link = Some(LinkState {
+            show_destination,
+            hidden_location_suffix: if is_local_path_like_link(&dest_url) {
+                dest_url
+                    .rsplit_once('#')
+                    .and_then(|(_, fragment)| {
+                        HASH_LOCATION_SUFFIX_RE
+                            .is_match(fragment)
+                            .then(|| format!("#{fragment}"))
+                    })
+                    .and_then(|suffix| normalize_markdown_hash_location_suffix(&suffix))
+                    .or_else(|| {
+                        COLON_LOCATION_SUFFIX_RE
+                            .find(&dest_url)
+                            .map(|m| m.as_str().to_string())
+                    })
+            } else {
+                None
+            },
+            label_start_span_idx,
+            label_styled,
+            destination: dest_url,
+        });
     }
 
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
-            self.push_span(" (".into());
-            self.push_span(Span::styled(link, self.styles.link));
-            self.push_span(")".into());
+            if link.show_destination {
+                if link.label_styled {
+                    self.pop_inline_style();
+                }
+                self.push_span(" (".into());
+                self.push_span(Span::styled(link.destination, self.styles.link));
+                self.push_span(")".into());
+            } else if let Some(location_suffix) = link.hidden_location_suffix.as_deref() {
+                let label_text = self
+                    .current_line_content
+                    .as_ref()
+                    .and_then(|line| {
+                        line.spans.get(link.label_start_span_idx..).map(|spans| {
+                            spans
+                                .iter()
+                                .map(|span| span.content.as_ref())
+                                .collect::<String>()
+                        })
+                    })
+                    .unwrap_or_default();
+                if label_text
+                    .rsplit_once('#')
+                    .is_some_and(|(_, fragment)| HASH_LOCATION_SUFFIX_RE.is_match(fragment))
+                    || COLON_LOCATION_SUFFIX_RE.find(&label_text).is_some()
+                {
+                    // The label already carries a location suffix; don't duplicate it.
+                } else {
+                    self.push_span(Span::styled(location_suffix.to_string(), self.styles.code));
+                }
+                if link.label_styled {
+                    self.pop_inline_style();
+                }
+            } else if link.label_styled {
+                self.pop_inline_style();
+            }
         }
     }
 
@@ -446,7 +597,7 @@ where
                 let opts = RtOptions::new(width)
                     .initial_indent(self.current_initial_indent.clone().into())
                     .subsequent_indent(self.current_subsequent_indent.clone().into());
-                for wrapped in word_wrap_line(&line, opts) {
+                for wrapped in adaptive_wrap_line(&line, opts) {
                     let owned = line_to_static(&wrapped).style(style);
                     self.text.lines.push(owned);
                 }
@@ -673,6 +824,55 @@ mod tests {
         assert_eq!(
             lines,
             vec!["fn main() { println!(\"hi from a long line\"); }".to_string(),]
+        );
+    }
+
+    #[test]
+    fn does_not_split_long_url_like_token_without_scheme() {
+        let url_like =
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
+        let rendered = render_markdown_text_with_width(url_like, Some(24));
+        let lines = lines_to_strings(&rendered);
+
+        assert_eq!(
+            lines.iter().filter(|line| line.contains(url_like)).count(),
+            1,
+            "expected full URL-like token in one rendered line, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn fenced_code_info_string_with_metadata_highlights() {
+        // CommonMark info strings like "rust,no_run" or "rust title=demo"
+        // contain metadata after the language token.  The language must be
+        // extracted (first word / comma-separated token) so highlighting works.
+        for info in &["rust,no_run", "rust no_run", "rust title=\"demo\""] {
+            let markdown = format!("```{info}\nfn main() {{}}\n```\n");
+            let rendered = render_markdown_text(&markdown);
+            let has_rgb = rendered.lines.iter().any(|line| {
+                line.spans
+                    .iter()
+                    .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
+            });
+            assert!(
+                has_rgb,
+                "info string \"{info}\" should still produce syntax highlighting"
+            );
+        }
+    }
+
+    #[test]
+    fn crlf_code_block_no_extra_blank_lines() {
+        // pulldown-cmark can split CRLF code blocks into multiple Text events.
+        // The buffer must concatenate them verbatim — no inserted separators.
+        let markdown = "```rust\r\nfn main() {}\r\n    line2\r\n```\r\n";
+        let rendered = render_markdown_text(markdown);
+        let lines = lines_to_strings(&rendered);
+        // Should be exactly two code lines; no spurious blank line between them.
+        assert_eq!(
+            lines,
+            vec!["fn main() {}".to_string(), "    line2".to_string()],
+            "CRLF code block should not produce extra blank lines: {lines:?}"
         );
     }
 }

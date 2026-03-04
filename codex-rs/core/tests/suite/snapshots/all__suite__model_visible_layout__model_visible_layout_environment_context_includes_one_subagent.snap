@@ -1,0 +1,6 @@
+---
+source: core/tests/suite/model_visible_layout.rs
+assertion_line: 476
+expression: "format_environment_context_subagents_snapshot(&[\"- agent-1: Atlas\"])"
+---
+00:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>:subagents=1>

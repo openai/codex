@@ -11,7 +11,7 @@ pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
     lines.push("### Available skills".to_string());
 
     for skill in skills {
-        let path_str = skill.path.to_string_lossy().replace('\\', "/");
+        let path_str = skill.path_to_skills_md.to_string_lossy().replace('\\', "/");
         let name = skill.name.as_str();
         let description = skill.description.as_str();
         lines.push(format!("- {name}: {description} (file: {path_str})"));

@@ -102,6 +102,29 @@ impl ToolRegistry {
                 sandbox_policy_tag(&invocation.turn.sandbox_policy),
             ),
         ];
+        let (mcp_server, mcp_server_origin) = match &invocation.payload {
+            ToolPayload::Mcp { server, .. } => {
+                let manager = invocation
+                    .session
+                    .services
+                    .mcp_connection_manager
+                    .read()
+                    .await;
+                let origin = manager.server_origin(server).map(str::to_owned);
+                (Some(server.clone()), origin)
+            }
+            _ => (None, None),
+        };
+        let mcp_server_ref = mcp_server.as_deref();
+        let mcp_server_origin_ref = mcp_server_origin.as_deref();
+
+        {
+            let mut active = invocation.session.active_turn.lock().await;
+            if let Some(active_turn) = active.as_mut() {
+                let mut turn_state = active_turn.turn_state.lock().await;
+                turn_state.tool_calls = turn_state.tool_calls.saturating_add(1);
+            }
+        }
 
         let handler = match self.handler(tool_name.as_ref()) {
             Some(handler) => handler,
@@ -116,6 +139,8 @@ impl ToolRegistry {
                     false,
                     &message,
                     &metric_tags,
+                    mcp_server_ref,
+                    mcp_server_origin_ref,
                 );
                 return Err(FunctionCallError::RespondToModel(message));
             }
@@ -131,6 +156,8 @@ impl ToolRegistry {
                 false,
                 &message,
                 &metric_tags,
+                mcp_server_ref,
+                mcp_server_origin_ref,
             );
             return Err(FunctionCallError::Fatal(message));
         }
@@ -146,6 +173,8 @@ impl ToolRegistry {
                 &call_id_owned,
                 log_payload.as_ref(),
                 &metric_tags,
+                mcp_server_ref,
+                mcp_server_origin_ref,
                 || {
                     let handler = handler.clone();
                     let output_cell = &output_cell;
@@ -358,6 +387,7 @@ async fn dispatch_after_tool_use_hook(
         .dispatch(HookPayload {
             session_id: session.conversation_id,
             cwd: turn.cwd.clone(),
+            client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::AfterToolUse {
                 event: HookEventAfterToolUse {

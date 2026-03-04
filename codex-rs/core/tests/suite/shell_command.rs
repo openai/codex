@@ -251,9 +251,13 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
 async fn unicode_output(login: bool) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
+    #[allow(clippy::expect_used)]
     let harness = shell_command_harness_with(|builder| {
         builder.with_model("gpt-5.2").with_config(|config| {
-            config.features.enable(Feature::PowershellUtf8);
+            config
+                .features
+                .enable(Feature::PowershellUtf8)
+                .expect("test config should allow feature update");
         })
     })
     .await?;
@@ -281,9 +285,13 @@ async fn unicode_output(login: bool) -> anyhow::Result<()> {
 async fn unicode_output_with_newlines(login: bool) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
+    #[allow(clippy::expect_used)]
     let harness = shell_command_harness_with(|builder| {
         builder.with_model("gpt-5.2").with_config(|config| {
-            config.features.enable(Feature::PowershellUtf8);
+            config
+                .features
+                .enable(Feature::PowershellUtf8)
+                .expect("test config should allow feature update");
         })
     })
     .await?;

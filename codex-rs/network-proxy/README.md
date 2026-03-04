@@ -34,6 +34,9 @@ allow_upstream_proxy = true
 dangerously_allow_non_loopback_proxy = false
 dangerously_allow_non_loopback_admin = false
 mode = "full" # default when unset; use "limited" for read-only mode
+# When true, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
+mitm = false
+# CA cert/key are managed internally under $CODEX_HOME/proxy/ (ca.pem + ca.key).
 
 # Hosts must match the allowlist (unless denied).
 # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
@@ -47,6 +50,9 @@ allow_local_binding = true
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
 allow_unix_sockets = ["/tmp/example.sock"]
+# DANGEROUS (macOS-only): bypasses unix socket allowlisting and permits any
+# absolute socket path from `x-unix-socket`.
+dangerously_allow_all_unix_sockets = false
 ```
 
 ### 2) Run the proxy
@@ -82,8 +88,9 @@ When a request is blocked, the proxy responds with `403` and includes:
   - `blocked-by-method-policy`
   - `blocked-by-policy`
 
-In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` and SOCKS5 are
-blocked because they would bypass method enforcement.
+In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` requests require
+MITM to enforce limited-mode method policy; otherwise they are blocked. SOCKS5 remains blocked in
+limited mode.
 
 Websocket clients typically tunnel `wss://` through HTTPS `CONNECT`; those CONNECT targets still go
 through the same host allowlist/denylist checks.
@@ -116,8 +123,9 @@ let handle = proxy.run().await?;
 handle.shutdown().await?;
 ```
 
-When unix socket proxying is enabled, HTTP/admin bind overrides are still clamped to loopback
-to avoid turning the proxy into a remote bridge to local daemons.
+When unix socket proxying is enabled (`allow_unix_sockets` or
+`dangerously_allow_all_unix_sockets`), HTTP/admin bind overrides are still clamped to loopback to
+avoid turning the proxy into a remote bridge to local daemons.
 
 ### Policy hook (exec-policy mapping)
 
@@ -128,6 +136,45 @@ the decider can auto-allow network requests originating from that command.
 
 **Important:** Explicit deny rules still win. The decider only gets a chance to override
 `not_allowed` (allowlist misses), not `denied` or `not_allowed_local`.
+
+## OTEL Audit Events (embedded/managed)
+
+When `codex-network-proxy` is embedded in managed Codex runtime, policy decisions emit structured
+OTEL-compatible events with `target=codex_otel.network_proxy`.
+
+Event name:
+
+- `codex.network_proxy.policy_decision`
+  - emitted for each policy decision (`domain` and `non_domain`).
+  - `network.policy.scope = "domain"` for host-policy evaluations (`evaluate_host_policy`).
+  - `network.policy.scope = "non_domain"` for mode-guard/proxy-state checks (including unix-socket guard paths and unix-socket allow decisions).
+
+Common fields:
+
+- `event.name`
+- `event.timestamp` (RFC3339 UTC, millisecond precision)
+- optional metadata:
+  - `conversation.id`
+  - `app.version`
+  - `user.account_id`
+- policy/network:
+  - `network.policy.scope` (`domain` or `non_domain`)
+  - `network.policy.decision` (`allow`, `deny`, or `ask`)
+  - `network.policy.source` (`baseline_policy`, `mode_guard`, `proxy_state`, `decider`)
+  - `network.policy.reason`
+  - `network.transport.protocol`
+  - `server.address`
+  - `server.port`
+  - `http.request.method` (defaults to `"none"` when absent)
+  - `client.address` (defaults to `"unknown"` when absent)
+  - `network.policy.override` (`true` only when decider-allow overrides baseline `not_allowed`)
+
+Unix-socket block-path audits use sentinel endpoint values:
+
+- `server.address = "unix-socket"`
+- `server.port = 0`
+
+Audit events intentionally avoid logging full URL/path/query data.
 
 ## Admin API
 
@@ -176,6 +223,8 @@ what it can reasonably guarantee.
     `dangerously_allow_non_loopback_proxy`
 - when unix socket proxying is enabled, both listeners are forced to loopback to avoid turning the
     proxy into a remote bridge into local daemons.
+- `dangerously_allow_all_unix_sockets = true` bypasses the unix socket allowlist entirely (still
+  macOS-only and absolute-path-only). Use only in tightly controlled environments.
 - `enabled` is enforced at runtime; when false the proxy no-ops and does not bind listeners.
 Limitations:
 

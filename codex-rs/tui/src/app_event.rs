@@ -11,11 +11,11 @@
 use std::path::PathBuf;
 
 use codex_chatgpt::connectors::AppInfo;
-use codex_core::protocol::Event;
-use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -23,11 +23,34 @@ use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
 
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RealtimeAudioDeviceKind {
+    Microphone,
+    Speaker,
+}
+
+impl RealtimeAudioDeviceKind {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::Microphone => "Microphone",
+            Self::Speaker => "Speaker",
+        }
+    }
+
+    pub(crate) fn noun(self) -> &'static str {
+        match self {
+            Self::Microphone => "microphone",
+            Self::Speaker => "speaker",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -51,8 +74,24 @@ pub(crate) enum AppEvent {
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
 
+    /// Submit an op to the specified thread, regardless of current focus.
+    SubmitThreadOp {
+        thread_id: ThreadId,
+        op: codex_protocol::protocol::Op,
+    },
+
+    /// Forward an event from a non-primary thread into the app-level thread router.
+    ThreadEvent {
+        thread_id: ThreadId,
+        event: Event,
+    },
+
     /// Start a new session.
     NewSession,
+
+    /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
+    /// previous chat resumable.
+    ClearUi,
 
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
@@ -73,7 +112,7 @@ pub(crate) enum AppEvent {
 
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
-    CodexOp(codex_core::protocol::Op),
+    CodexOp(codex_protocol::protocol::Op),
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -159,9 +198,40 @@ pub(crate) enum AppEvent {
         personality: Personality,
     },
 
+    /// Persist the selected service tier to the appropriate config.
+    PersistServiceTierSelection {
+        service_tier: Option<ServiceTier>,
+    },
+
+    /// Open the device picker for a realtime microphone or speaker.
+    OpenRealtimeAudioDeviceSelection {
+        kind: RealtimeAudioDeviceKind,
+    },
+
+    /// Persist the selected realtime microphone or speaker to top-level config.
+    #[cfg_attr(
+        any(target_os = "linux", not(feature = "voice-input")),
+        allow(dead_code)
+    )]
+    PersistRealtimeAudioDeviceSelection {
+        kind: RealtimeAudioDeviceKind,
+        name: Option<String>,
+    },
+
+    /// Restart the selected realtime microphone or speaker locally.
+    RestartRealtimeAudioDevice {
+        kind: RealtimeAudioDeviceKind,
+    },
+
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+    },
+
+    /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
+    OpenPlanReasoningScopePrompt {
+        model: String,
+        effort: Option<ReasoningEffort>,
     },
 
     /// Open the full model picker (non-auto models).
@@ -258,6 +328,9 @@ pub(crate) enum AppEvent {
     /// Update whether the rate limit switch prompt has been acknowledged for the session.
     UpdateRateLimitSwitchPromptHidden(bool),
 
+    /// Update the Plan-mode-specific reasoning effort in memory.
+    UpdatePlanModeReasoningEffort(Option<ReasoningEffort>),
+
     /// Persist the acknowledgement flag for the full access warning prompt.
     PersistFullAccessWarningAcknowledged,
 
@@ -267,6 +340,9 @@ pub(crate) enum AppEvent {
 
     /// Persist the acknowledgement flag for the rate limit switch prompt.
     PersistRateLimitSwitchPromptHidden,
+
+    /// Persist the Plan-mode-specific reasoning effort.
+    PersistPlanModeReasoningEffort(Option<ReasoningEffort>),
 
     /// Persist the acknowledgement flag for the model migration prompt.
     PersistModelMigrationPromptAcknowledged {
@@ -304,6 +380,29 @@ pub(crate) enum AppEvent {
 
     /// Re-open the permissions presets popup.
     OpenPermissionsPopup,
+
+    /// Live update for the in-progress voice recording placeholder. Carries
+    /// the placeholder `id` and the text to display (e.g., an ASCII meter).
+    #[cfg(not(target_os = "linux"))]
+    UpdateRecordingMeter {
+        id: String,
+        text: String,
+    },
+
+    /// Voice transcription finished for the given placeholder id.
+    #[cfg(not(target_os = "linux"))]
+    TranscriptionComplete {
+        id: String,
+        text: String,
+    },
+
+    /// Voice transcription failed; remove the placeholder identified by `id`.
+    #[cfg(not(target_os = "linux"))]
+    TranscriptionFailed {
+        id: String,
+        #[allow(dead_code)]
+        error: String,
+    },
 
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),
@@ -348,6 +447,11 @@ pub(crate) enum AppEvent {
     },
     /// Dismiss the status-line setup UI without changing config.
     StatusLineSetupCancelled,
+
+    /// Apply a user-confirmed syntax theme selection.
+    SyntaxThemeSelected {
+        name: String,
+    },
 }
 
 /// The exit strategy requested by the UI layer.

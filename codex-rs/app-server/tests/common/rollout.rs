@@ -79,9 +79,12 @@ pub fn create_fake_rollout_with_source(
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
         source,
+        agent_nickname: None,
+        agent_role: None,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
         dynamic_tools: None,
+        memory_mode: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,
@@ -158,9 +161,12 @@ pub fn create_fake_rollout_with_text_elements(
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
         source: SessionSource::Cli,
+        agent_nickname: None,
+        agent_role: None,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
         dynamic_tools: None,
+        memory_mode: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,

@@ -123,6 +123,13 @@ impl ShellSnapshot {
         let path = codex_home
             .join(SNAPSHOT_DIR)
             .join(format!("{session_id}.{extension}"));
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let temp_path = codex_home
+            .join(SNAPSHOT_DIR)
+            .join(format!("{session_id}.tmp-{nonce}"));
 
         // Clean the (unlikely) leaked snapshot files.
         let codex_home = codex_home.to_path_buf();
@@ -134,31 +141,42 @@ impl ShellSnapshot {
         });
 
         // Make the new snapshot.
-        let path = match write_shell_snapshot(shell.shell_type.clone(), &path, session_cwd).await {
-            Ok(path) => {
-                tracing::info!("Shell snapshot successfully created: {}", path.display());
-                path
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to create shell snapshot for {}: {err:?}",
-                    shell.name()
-                );
-                return Err("write_failed");
-            }
-        };
+        let temp_path =
+            match write_shell_snapshot(shell.shell_type.clone(), &temp_path, session_cwd).await {
+                Ok(path) => {
+                    tracing::info!("Shell snapshot successfully created: {}", path.display());
+                    path
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to create shell snapshot for {}: {err:?}",
+                        shell.name()
+                    );
+                    return Err("write_failed");
+                }
+            };
 
-        let snapshot = Self {
-            path,
+        let temp_snapshot = Self {
+            path: temp_path.clone(),
             cwd: session_cwd.to_path_buf(),
         };
 
-        if let Err(err) = validate_snapshot(shell, &snapshot.path, session_cwd).await {
+        if let Err(err) = validate_snapshot(shell, &temp_snapshot.path, session_cwd).await {
             tracing::error!("Shell snapshot validation failed: {err:?}");
+            remove_snapshot_file(&temp_snapshot.path).await;
             return Err("validation_failed");
         }
 
-        Ok(snapshot)
+        if let Err(err) = fs::rename(&temp_snapshot.path, &path).await {
+            tracing::warn!("Failed to finalize shell snapshot: {err:?}");
+            remove_snapshot_file(&temp_snapshot.path).await;
+            return Err("write_failed");
+        }
+
+        Ok(Self {
+            path,
+            cwd: session_cwd.to_path_buf(),
+        })
     }
 }
 
@@ -342,19 +360,17 @@ alias_count=$(alias -p | wc -l | tr -d ' ')
 echo "# aliases $alias_count"
 alias -p
 echo ''
-export_lines=$(export -p | awk '
-/^(export|declare -x|typeset -x) / {
-  line=$0
-  name=line
-  sub(/^(export|declare -x|typeset -x) /, "", name)
-  sub(/=.*/, "", name)
-  if (name ~ /^(EXCLUDED_EXPORTS)$/) {
-    next
-  }
-  if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
-    print line
-  }
-}')
+export_lines=$(
+  while IFS= read -r name; do
+    if [[ "$name" =~ ^(EXCLUDED_EXPORTS)$ ]]; then
+      continue
+    fi
+    if [[ ! "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      continue
+    fi
+    declare -xp "$name" 2>/dev/null || true
+  done < <(compgen -e)
+)
 export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
 echo "# exports $export_count"
 if [ -n "$export_lines" ]; then
@@ -649,6 +665,46 @@ mod tests {
         assert!(!stdout.contains("PWD=/tmp/stale"));
         assert!(!stdout.contains("NEXTEST_BIN_EXE_codex-write-config-schema"));
         assert!(!stdout.contains("BAD-NAME"));
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_snapshot_preserves_multiline_exports() -> Result<()> {
+        let multiline_cert = "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----";
+        let output = Command::new("/bin/bash")
+            .arg("-c")
+            .arg(bash_snapshot_script())
+            .env("BASH_ENV", "/dev/null")
+            .env("MULTILINE_CERT", multiline_cert)
+            .output()?;
+
+        assert!(output.status.success());
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("MULTILINE_CERT=") || stdout.contains("MULTILINE_CERT"),
+            "snapshot should include the multiline export name"
+        );
+
+        let dir = tempdir()?;
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, stdout.as_bytes())?;
+
+        let validate = Command::new("/bin/bash")
+            .arg("-c")
+            .arg("set -e; . \"$1\"")
+            .arg("bash")
+            .arg(&snapshot_path)
+            .env("BASH_ENV", "/dev/null")
+            .output()?;
+
+        assert!(
+            validate.status.success(),
+            "snapshot validation failed: {}",
+            String::from_utf8_lossy(&validate.stderr)
+        );
 
         Ok(())
     }

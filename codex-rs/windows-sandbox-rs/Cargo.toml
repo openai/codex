@@ -29,6 +29,7 @@ codex-utils-string = { workspace = true }
 dunce = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tempfile = "3"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WindowsFirewall",
@@ -79,7 +80,6 @@ version = "0.52"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-tempfile = "3"
 
 [build-dependencies]
 winres = "0.1"

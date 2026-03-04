@@ -3,15 +3,15 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core::parse_command;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::ReviewDecision;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::ExecApprovalElicitRequestParams;
 use codex_mcp_server::ExecApprovalResponse;
 use codex_mcp_server::PatchApprovalElicitRequestParams;
 use codex_mcp_server::PatchApprovalResponse;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::ReviewDecision;
+use codex_shell_command::parse_command;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonRpcResponse;
 use rmcp::model::JsonRpcVersion2_0;

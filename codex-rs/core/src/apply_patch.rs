@@ -9,8 +9,6 @@ use codex_apply_patch::ApplyPatchFileChange;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-pub const CODEX_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
-
 pub(crate) enum InternalApplyPatchInvocation {
     /// The `apply_patch` call was handled programmatically, without any sort
     /// of sandbox, because the user explicitly approved it. This is the
@@ -20,7 +18,8 @@ pub(crate) enum InternalApplyPatchInvocation {
     /// The `apply_patch` call was approved, either automatically because it
     /// appears that it should be allowed based on the user's sandbox policy
     /// *or* because the user explicitly approved it. In either case, we use
-    /// exec with [`CODEX_APPLY_PATCH_ARG1`] to realize the `apply_patch` call,
+    /// exec with [`codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1`] to realize
+    /// the `apply_patch` call,
     /// but [`ApplyPatchExec::auto_approved`] is used to determine the sandbox
     /// used with the `exec()`.
     DelegateToExec(ApplyPatchExec),
@@ -39,8 +38,8 @@ pub(crate) async fn apply_patch(
 ) -> InternalApplyPatchInvocation {
     match assess_patch_safety(
         &action,
-        turn_context.approval_policy,
-        &turn_context.sandbox_policy,
+        turn_context.approval_policy.value(),
+        turn_context.sandbox_policy.get(),
         &turn_context.cwd,
         turn_context.windows_sandbox_level,
     ) {

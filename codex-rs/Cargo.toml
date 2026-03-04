@@ -17,11 +17,12 @@ members = [
     "cli",
     "config",
     "shell-command",
+    "shell-escalation",
+    "skills",
     "core",
     "hooks",
     "secrets",
     "exec",
-    "exec-server",
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
@@ -32,6 +33,8 @@ members = [
     "mcp-server",
     "network-proxy",
     "ollama",
+    "artifact-presentation",
+    "artifact-spreadsheet",
     "process-hardening",
     "protocol",
     "rmcp-client",
@@ -53,15 +56,16 @@ members = [
     "utils/cli",
     "utils/elapsed",
     "utils/sandbox-summary",
-    "utils/sanitizer",
     "utils/sleep-inhibitor",
     "utils/approval-presets",
     "utils/oss",
     "utils/fuzzy-match",
+    "utils/stream-parser",
     "codex-client",
     "codex-api",
     "state",
     "codex-experimental-api-macros",
+    "test-macros",
 ]
 resolver = "2"
 
@@ -107,14 +111,19 @@ codex-mcp-server = { path = "mcp-server" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
+codex-artifact-presentation = { path = "artifact-presentation" }
+codex-artifact-spreadsheet = { path = "artifact-spreadsheet" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
+codex-shell-escalation = { path = "shell-escalation" }
+codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
+codex-test-macros = { path = "test-macros" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
@@ -131,12 +140,11 @@ codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
-codex-utils-sanitizer = { path = "utils/sanitizer" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
+codex-utils-stream-parser = { path = "utils/stream-parser" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
-exec_server_test_support = { path = "exec-server/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
 # External
@@ -145,6 +153,7 @@ allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
+askama = "0.15.4"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -161,6 +170,7 @@ clap_complete = "4"
 color-eyre = "0.6.3"
 crossbeam-channel = "0.5.15"
 crossterm = "0.28.1"
+csv = "1.3.1"
 ctor = "0.6.3"
 derive_more = "2"
 diffy = "0.4.2"
@@ -172,6 +182,7 @@ env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
+gethostname = "1.1.0"
 globset = "0.4"
 http = "1.3.1"
 icu_decimal = "2.1"
@@ -179,16 +190,16 @@ icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
+iana-time-zone = "0.1.64"
 include_dir = "0.7.4"
 indexmap = "2.12.0"
-indoc = "2.0"
 insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
 lazy_static = "1"
-libc = "0.2.177"
+libc = "0.2.182"
 log = "0.4"
 lru = "0.16.3"
 maplit = "1.0.2"
@@ -204,10 +215,11 @@ opentelemetry-otlp = "0.31.0"
 opentelemetry-semantic-conventions = "0.31.0"
 opentelemetry_sdk = "0.31.0"
 os_info = "3.12.0"
-owo-colors = "4.2.0"
+owo-colors = "4.3.0"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
 portable-pty = "0.9.0"
+ppt-rs = "0.2.6"
 predicates = "3"
 pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
@@ -252,6 +264,7 @@ starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
 supports-color = "3.0.2"
+syntect = "5"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
 test-log = "0.2.19"
@@ -276,7 +289,6 @@ tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
 tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
-tree-sitter-highlight = "0.25.10"
 ts-rs = "11"
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uds_windows = "1.1.0"
@@ -342,10 +354,12 @@ ignored = [
     "openssl-sys",
     "codex-utils-readiness",
     "codex-secrets",
+    "codex-artifact-spreadsheet"
 ]
 
 [profile.release]
 lto = "fat"
+split-debuginfo = "off"
 # Because we bundle some of these executables with the TypeScript CLI, we
 # remove everything to make the binary as small as possible.
 strip = "symbols"

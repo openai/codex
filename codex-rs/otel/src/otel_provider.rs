@@ -3,12 +3,11 @@ use crate::config::OtelHttpProtocol;
 use crate::config::OtelSettings;
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
+use crate::trace_context::context_from_trace_headers;
+use gethostname::gethostname;
 use opentelemetry::Context;
 use opentelemetry::KeyValue;
-use opentelemetry::context::ContextGuard;
 use opentelemetry::global;
-use opentelemetry::propagation::TextMapPropagator;
-use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::LogExporter;
@@ -28,8 +27,6 @@ use opentelemetry_sdk::trace::BatchSpanProcessor;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::Tracer;
 use opentelemetry_semantic_conventions as semconv;
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::sync::OnceLock;
@@ -40,13 +37,10 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::registry::LookupSpan;
 
 const ENV_ATTRIBUTE: &str = "env";
+const HOST_NAME_ATTRIBUTE: &str = "host.name";
 const TRACEPARENT_ENV_VAR: &str = "TRACEPARENT";
 const TRACESTATE_ENV_VAR: &str = "TRACESTATE";
 static TRACEPARENT_CONTEXT: OnceLock<Option<Context>> = OnceLock::new();
-
-thread_local! {
-    static TRACEPARENT_GUARD: RefCell<Option<ContextGuard>> = const { RefCell::new(None) };
-}
 pub struct OtelProvider {
     pub logger: Option<SdkLoggerProvider>,
     pub tracer_provider: Option<SdkTracerProvider>,
@@ -113,10 +107,6 @@ impl OtelProvider {
             global::set_tracer_provider(provider);
             global::set_text_map_propagator(TraceContextPropagator::new());
         }
-        if tracer.is_some() {
-            attach_traceparent_context();
-        }
-
         Ok(Some(Self {
             logger,
             tracer_provider,
@@ -170,29 +160,17 @@ impl Drop for OtelProvider {
     }
 }
 
-pub(crate) fn traceparent_context_from_env() -> Option<Context> {
+pub fn traceparent_context_from_env() -> Option<Context> {
     TRACEPARENT_CONTEXT
         .get_or_init(load_traceparent_context)
         .clone()
-}
-
-fn attach_traceparent_context() {
-    TRACEPARENT_GUARD.with(|guard| {
-        let mut guard = guard.borrow_mut();
-        if guard.is_some() {
-            return;
-        }
-        if let Some(context) = traceparent_context_from_env() {
-            *guard = Some(context.attach());
-        }
-    });
 }
 
 fn load_traceparent_context() -> Option<Context> {
     let traceparent = env::var(TRACEPARENT_ENV_VAR).ok()?;
     let tracestate = env::var(TRACESTATE_ENV_VAR).ok();
 
-    match extract_traceparent_context(traceparent, tracestate) {
+    match context_from_trace_headers(Some(&traceparent), tracestate.as_deref()) {
         Some(context) => {
             debug!("TRACEPARENT detected; continuing trace from parent context");
             Some(context)
@@ -204,33 +182,38 @@ fn load_traceparent_context() -> Option<Context> {
     }
 }
 
-fn extract_traceparent_context(traceparent: String, tracestate: Option<String>) -> Option<Context> {
-    let mut headers = HashMap::new();
-    headers.insert("traceparent".to_string(), traceparent);
-    if let Some(tracestate) = tracestate {
-        headers.insert("tracestate".to_string(), tracestate);
-    }
-
-    let context = TraceContextPropagator::new().extract(&headers);
-    let span = context.span();
-    let span_context = span.span_context();
-    if !span_context.is_valid() {
-        return None;
-    }
-    Some(context)
-}
-
 fn make_resource(settings: &OtelSettings) -> Resource {
     Resource::builder()
         .with_service_name(settings.service_name.clone())
-        .with_attributes(vec![
-            KeyValue::new(
-                semconv::attribute::SERVICE_VERSION,
-                settings.service_version.clone(),
-            ),
-            KeyValue::new(ENV_ATTRIBUTE, settings.environment.clone()),
-        ])
+        .with_attributes(resource_attributes(
+            settings,
+            detected_host_name().as_deref(),
+        ))
         .build()
+}
+
+fn resource_attributes(settings: &OtelSettings, host_name: Option<&str>) -> Vec<KeyValue> {
+    let mut attributes = vec![
+        KeyValue::new(
+            semconv::attribute::SERVICE_VERSION,
+            settings.service_version.clone(),
+        ),
+        KeyValue::new(ENV_ATTRIBUTE, settings.environment.clone()),
+    ];
+    if let Some(host_name) = host_name.and_then(normalize_host_name) {
+        attributes.push(KeyValue::new(HOST_NAME_ATTRIBUTE, host_name));
+    }
+    attributes
+}
+
+fn detected_host_name() -> Option<String> {
+    let host_name = gethostname();
+    normalize_host_name(host_name.to_string_lossy().as_ref())
+}
+
+fn normalize_host_name(host_name: &str) -> Option<String> {
+    let host_name = host_name.trim();
+    (!host_name.is_empty()).then(|| host_name.to_owned())
 }
 
 fn build_logger(
@@ -377,13 +360,16 @@ mod tests {
     use opentelemetry::trace::SpanId;
     use opentelemetry::trace::TraceContextExt;
     use opentelemetry::trace::TraceId;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
 
     #[test]
     fn parses_valid_traceparent() {
         let trace_id = "00000000000000000000000000000001";
         let span_id = "0000000000000002";
-        let context = extract_traceparent_context(format!("00-{trace_id}-{span_id}-01"), None)
-            .expect("trace context");
+        let context =
+            context_from_trace_headers(Some(&format!("00-{trace_id}-{span_id}-01")), None)
+                .expect("trace context");
         let span = context.span();
         let span_context = span.span_context();
         assert_eq!(
@@ -396,6 +382,48 @@ mod tests {
 
     #[test]
     fn invalid_traceparent_returns_none() {
-        assert!(extract_traceparent_context("not-a-traceparent".to_string(), None).is_none());
+        assert!(context_from_trace_headers(Some("not-a-traceparent"), None).is_none());
+    }
+
+    #[test]
+    fn resource_attributes_include_host_name_when_present() {
+        let attrs = resource_attributes(&test_otel_settings(), Some("opentelemetry-test"));
+
+        let host_name = attrs
+            .iter()
+            .find(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
+            .map(|kv| kv.value.as_str().to_string());
+
+        assert_eq!(host_name, Some("opentelemetry-test".to_string()));
+    }
+
+    #[test]
+    fn resource_attributes_omit_host_name_when_missing_or_empty() {
+        let missing = resource_attributes(&test_otel_settings(), None);
+        let empty = resource_attributes(&test_otel_settings(), Some("   "));
+
+        assert!(
+            !missing
+                .iter()
+                .any(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
+        );
+        assert!(
+            !empty
+                .iter()
+                .any(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
+        );
+    }
+
+    fn test_otel_settings() -> OtelSettings {
+        OtelSettings {
+            environment: "test".to_string(),
+            service_name: "codex-test".to_string(),
+            service_version: "0.0.0".to_string(),
+            codex_home: PathBuf::from("."),
+            exporter: OtelExporter::None,
+            trace_exporter: OtelExporter::None,
+            metrics_exporter: OtelExporter::None,
+            runtime_metrics: false,
+        }
     }
 }

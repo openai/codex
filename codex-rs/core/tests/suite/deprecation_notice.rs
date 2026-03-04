@@ -7,8 +7,8 @@ use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigRequirements;
 use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::features::Feature;
-use codex_core::protocol::DeprecationNoticeEvent;
-use codex_core::protocol::EventMsg;
+use codex_protocol::protocol::DeprecationNoticeEvent;
+use codex_protocol::protocol::EventMsg;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_absolute_path;
@@ -26,10 +26,14 @@ async fn emits_deprecation_notice_for_legacy_feature_flag() -> anyhow::Result<()
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
+        let mut features = config.features.get().clone();
+        features.enable(Feature::UnifiedExec);
+        features
+            .record_legacy_usage_force("use_experimental_unified_exec_tool", Feature::UnifiedExec);
         config
             .features
-            .record_legacy_usage_force("use_experimental_unified_exec_tool", Feature::UnifiedExec);
+            .set(features)
+            .expect("test config should allow managed feature metadata updates");
         config.use_experimental_unified_exec_tool = true;
     });
 
@@ -122,7 +126,12 @@ async fn emits_deprecation_notice_for_web_search_feature_flag_values() -> anyhow
         let mut builder = test_codex().with_config(move |config| {
             let mut entries = BTreeMap::new();
             entries.insert("web_search_request".to_string(), enabled);
-            config.features.apply_map(&entries);
+            let mut features = config.features.get().clone();
+            features.apply_map(&entries);
+            config
+                .features
+                .set(features)
+                .expect("test config should allow managed feature map updates");
         });
 
         let TestCodex { codex, .. } = builder.build(&server).await?;

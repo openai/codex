@@ -14,13 +14,13 @@ use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::connectors::connector_mention_slug;
-use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_core::protocol::SkillsListEntry;
 use codex_core::skills::model::SkillDependencies;
 use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::skills::model::SkillToolDependency;
+use codex_protocol::protocol::ListSkillsResponseEvent;
+use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_protocol::protocol::SkillsListEntry;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {
@@ -78,7 +78,7 @@ impl ChatWidget {
                 let display_name = skill_display_name(&core_skill).to_string();
                 let description = skill_description(&core_skill).to_string();
                 let name = core_skill.name.clone();
-                let path = core_skill.path;
+                let path = core_skill.path_to_skills_md;
                 SkillsToggleItem {
                     name: display_name,
                     skill_name: name,
@@ -190,8 +190,8 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
                     .collect(),
             }),
         policy: None,
-        permissions: None,
-        path: skill.path.clone(),
+        permission_profile: None,
+        path_to_skills_md: skill.path.clone(),
         scope: skill.scope,
     }
 }
@@ -229,23 +229,23 @@ pub(crate) fn find_skill_mentions_with_tool_mentions(
     let mut matches: Vec<SkillMetadata> = Vec::new();
 
     for skill in skills {
-        if seen_paths.contains(&skill.path) {
+        if seen_paths.contains(&skill.path_to_skills_md) {
             continue;
         }
-        let path_str = skill.path.to_string_lossy();
+        let path_str = skill.path_to_skills_md.to_string_lossy();
         if mention_skill_paths.contains(path_str.as_ref()) {
-            seen_paths.insert(skill.path.clone());
+            seen_paths.insert(skill.path_to_skills_md.clone());
             seen_names.insert(skill.name.clone());
             matches.push(skill.clone());
         }
     }
 
     for skill in skills {
-        if seen_paths.contains(&skill.path) {
+        if seen_paths.contains(&skill.path_to_skills_md) {
             continue;
         }
         if mentions.names.contains(&skill.name) && seen_names.insert(skill.name.clone()) {
-            seen_paths.insert(skill.path.clone());
+            seen_paths.insert(skill.path_to_skills_md.clone());
             matches.push(skill.clone());
         }
     }

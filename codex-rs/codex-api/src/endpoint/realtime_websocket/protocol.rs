@@ -1,67 +1,63 @@
-use serde::Deserialize;
+pub use codex_protocol::protocol::RealtimeAudioFrame;
+pub use codex_protocol::protocol::RealtimeEvent;
+pub use codex_protocol::protocol::RealtimeHandoffMessage;
+pub use codex_protocol::protocol::RealtimeHandoffRequested;
 use serde::Serialize;
 use serde_json::Value;
 use tracing::debug;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealtimeSessionConfig {
-    pub api_url: String,
-    pub prompt: String,
+    pub instructions: String,
+    pub model: Option<String>,
     pub session_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RealtimeAudioFrame {
-    pub data: String,
-    pub sample_rate: u32,
-    pub num_channels: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub samples_per_channel: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RealtimeEvent {
-    SessionCreated { session_id: String },
-    SessionUpdated { backend_prompt: Option<String> },
-    AudioOut(RealtimeAudioFrame),
-    ConversationItemAdded(Value),
-    Error(String),
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub(super) enum RealtimeOutboundMessage {
-    #[serde(rename = "response.input_audio.delta")]
-    InputAudioDelta {
-        delta: String,
-        sample_rate: u32,
-        num_channels: u16,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        samples_per_channel: Option<u32>,
+    #[serde(rename = "input_audio_buffer.append")]
+    InputAudioBufferAppend { audio: String },
+    #[serde(rename = "conversation.handoff.append")]
+    ConversationHandoffAppend {
+        handoff_id: String,
+        output_text: String,
     },
-    #[serde(rename = "session.create")]
-    SessionCreate { session: SessionCreateSession },
     #[serde(rename = "session.update")]
-    SessionUpdate {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        session: Option<SessionUpdateSession>,
-    },
+    SessionUpdate { session: SessionUpdateSession },
     #[serde(rename = "conversation.item.create")]
     ConversationItemCreate { item: ConversationItem },
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionUpdateSession {
-    pub(super) backend_prompt: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) conversation_id: Option<String>,
+    #[serde(rename = "type")]
+    pub(super) kind: String,
+    pub(super) instructions: String,
+    pub(super) audio: SessionAudio,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionCreateSession {
-    pub(super) backend_prompt: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) conversation_id: Option<String>,
+pub(super) struct SessionAudio {
+    pub(super) input: SessionAudioInput,
+    pub(super) output: SessionAudioOutput,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionAudioInput {
+    pub(super) format: SessionAudioFormat,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionAudioFormat {
+    #[serde(rename = "type")]
+    pub(super) kind: String,
+    pub(super) rate: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionAudioOutput {
+    pub(super) voice: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,30 +92,25 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
         }
     };
     match message_type {
-        "session.created" => {
-            let session = parsed.get("session").and_then(Value::as_object);
-            let session_id = session
-                .and_then(|session| session.get("id"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .or_else(|| {
-                    parsed
-                        .get("session_id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                });
-            session_id.map(|id| RealtimeEvent::SessionCreated { session_id: id })
-        }
         "session.updated" => {
-            let backend_prompt = parsed
+            let session_id = parsed
                 .get("session")
                 .and_then(Value::as_object)
-                .and_then(|session| session.get("backend_prompt"))
+                .and_then(|session| session.get("id"))
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            Some(RealtimeEvent::SessionUpdated { backend_prompt })
+            let instructions = parsed
+                .get("session")
+                .and_then(Value::as_object)
+                .and_then(|session| session.get("instructions"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            session_id.map(|session_id| RealtimeEvent::SessionUpdated {
+                session_id,
+                instructions,
+            })
         }
-        "response.output_audio.delta" => {
+        "conversation.output_audio.delta" => {
             let data = parsed
                 .get("delta")
                 .and_then(Value::as_str)
@@ -130,7 +121,8 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
                 .and_then(Value::as_u64)
                 .and_then(|v| u32::try_from(v).ok())?;
             let num_channels = parsed
-                .get("num_channels")
+                .get("channels")
+                .or_else(|| parsed.get("num_channels"))
                 .and_then(Value::as_u64)
                 .and_then(|v| u16::try_from(v).ok())?;
             Some(RealtimeEvent::AudioOut(RealtimeAudioFrame {
@@ -147,10 +139,55 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
             .get("item")
             .cloned()
             .map(RealtimeEvent::ConversationItemAdded),
+        "conversation.item.done" => parsed
+            .get("item")
+            .and_then(Value::as_object)
+            .and_then(|item| item.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .map(|item_id| RealtimeEvent::ConversationItemDone { item_id }),
+        "conversation.handoff.requested" => {
+            let handoff_id = parsed
+                .get("handoff_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)?;
+            let item_id = parsed
+                .get("item_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)?;
+            let input_transcript = parsed
+                .get("input_transcript")
+                .and_then(Value::as_str)
+                .map(str::to_string)?;
+            let messages = parsed
+                .get("messages")
+                .and_then(Value::as_array)?
+                .iter()
+                .filter_map(|message| {
+                    let role = message.get("role").and_then(Value::as_str)?.to_string();
+                    let text = message.get("text").and_then(Value::as_str)?.to_string();
+                    Some(RealtimeHandoffMessage { role, text })
+                })
+                .collect();
+            Some(RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
+                handoff_id,
+                item_id,
+                input_transcript,
+                messages,
+            }))
+        }
         "error" => parsed
             .get("message")
             .and_then(Value::as_str)
             .map(str::to_string)
+            .or_else(|| {
+                parsed
+                    .get("error")
+                    .and_then(Value::as_object)
+                    .and_then(|error| error.get("message"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
             .or_else(|| parsed.get("error").map(std::string::ToString::to_string))
             .map(RealtimeEvent::Error),
         _ => {

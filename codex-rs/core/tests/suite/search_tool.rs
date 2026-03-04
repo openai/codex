@@ -11,10 +11,10 @@ use codex_core::config::Config;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses::ResponsesRequest;
@@ -22,6 +22,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -133,6 +134,7 @@ fn rmcp_server_config(command: String) -> McpServerConfig {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        oauth_resource: None,
     }
 }
 
@@ -141,8 +143,14 @@ fn configure_apps_with_optional_rmcp(
     apps_base_url: &str,
     rmcp_server_bin: Option<String>,
 ) {
-    config.features.enable(Feature::Apps);
-    config.features.disable(Feature::AppsMcpGateway);
+    config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
+    config
+        .features
+        .disable(Feature::AppsMcpGateway)
+        .expect("test config should allow feature update");
     config.chatgpt_base_url = apps_base_url.to_string();
     if let Some(command) = rmcp_server_bin {
         let mut servers = config.mcp_servers.get().clone();
@@ -180,13 +188,13 @@ async fn search_tool_flag_adds_tool() -> Result<()> {
 
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
-    let mock = mount_sse_sequence(
+    let mock = mount_sse_once(
         &server,
-        vec![sse(vec![
+        sse(vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "done"),
             ev_completed("resp-1"),
-        ])],
+        ]),
     )
     .await;
 

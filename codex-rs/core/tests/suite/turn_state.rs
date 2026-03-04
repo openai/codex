@@ -4,7 +4,6 @@ use anyhow::Result;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_done;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_shell_command_call;
@@ -100,7 +99,7 @@ async fn websocket_turn_state_persists_within_turn_and_resets_after() -> Result<
                 ev_response_created("resp-1"),
                 ev_reasoning_item("rsn-1", &["thinking"], &[]),
                 ev_shell_command_call(call_id, "echo websocket"),
-                ev_done(),
+                ev_completed("resp-1"),
             ]],
             response_headers: vec![(TURN_STATE_HEADER.to_string(), "ts-1".to_string())],
             accept_delay: None,

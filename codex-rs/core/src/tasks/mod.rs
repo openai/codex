@@ -21,21 +21,24 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
+use crate::event_mapping::parse_turn_item;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;
-use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 
+use crate::features::Feature;
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
@@ -121,8 +124,6 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        self.seed_initial_context_if_needed(turn_context.as_ref())
-            .await;
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
@@ -140,7 +141,6 @@ impl Session {
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
-                    let model_slug = ctx_for_finish.model_info.slug.clone();
                     let last_agent_message = task_for_run
                         .run(
                             Arc::clone(&session_ctx),
@@ -151,9 +151,6 @@ impl Session {
                         .await;
                     let sess = session_ctx.clone_session();
                     sess.flush_rollout().await;
-                    // Update previous model before TurnComplete is emitted so
-                    // immediately following turns observe the correct switch state.
-                    sess.set_previous_model(Some(model_slug)).await;
                     if !task_cancellation_token.is_cancelled() {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                         sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
@@ -203,11 +200,15 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         let mut pending_input = Vec::<ResponseInputItem>::new();
         let mut should_clear_active_turn = false;
+        let mut token_usage_at_turn_start = None;
+        let mut turn_tool_calls = 0_u64;
         if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
             let mut ts = at.turn_state.lock().await;
             pending_input = ts.take_pending_input();
+            turn_tool_calls = ts.tool_calls;
+            token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
             should_clear_active_turn = true;
         }
         if should_clear_active_turn {
@@ -219,8 +220,85 @@ impl Session {
                 .into_iter()
                 .map(ResponseItem::from)
                 .collect::<Vec<_>>();
-            self.record_conversation_items(turn_context.as_ref(), &pending_response_items)
-                .await;
+            for response_item in pending_response_items {
+                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
+                    // Keep leftover user input on the same persistence + lifecycle path as the
+                    // normal pre-sampling drain. This helper records the response item once, then
+                    // emits ItemStarted/UserMessage and ItemCompleted/UserMessage for clients.
+                    self.record_user_prompt_and_emit_turn_item(
+                        turn_context.as_ref(),
+                        &user_message.content,
+                        response_item,
+                    )
+                    .await;
+                } else {
+                    self.record_conversation_items(
+                        turn_context.as_ref(),
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await;
+                }
+            }
+        }
+        // Emit token usage metrics.
+        if let Some(token_usage_at_turn_start) = token_usage_at_turn_start {
+            // TODO(jif): drop this
+            let tmp_mem = (
+                "tmp_mem_enabled",
+                if self.enabled(Feature::MemoryTool) {
+                    "true"
+                } else {
+                    "false"
+                },
+            );
+            self.services.otel_manager.histogram(
+                "codex.turn.tool.call",
+                i64::try_from(turn_tool_calls).unwrap_or(i64::MAX),
+                &[tmp_mem],
+            );
+            let total_token_usage = self.total_token_usage().await.unwrap_or_default();
+            let turn_token_usage = crate::protocol::TokenUsage {
+                input_tokens: (total_token_usage.input_tokens
+                    - token_usage_at_turn_start.input_tokens)
+                    .max(0),
+                cached_input_tokens: (total_token_usage.cached_input_tokens
+                    - token_usage_at_turn_start.cached_input_tokens)
+                    .max(0),
+                output_tokens: (total_token_usage.output_tokens
+                    - token_usage_at_turn_start.output_tokens)
+                    .max(0),
+                reasoning_output_tokens: (total_token_usage.reasoning_output_tokens
+                    - token_usage_at_turn_start.reasoning_output_tokens)
+                    .max(0),
+                total_tokens: (total_token_usage.total_tokens
+                    - token_usage_at_turn_start.total_tokens)
+                    .max(0),
+            };
+            self.services.otel_manager.histogram(
+                "codex.turn.token_usage",
+                turn_token_usage.total_tokens,
+                &[("token_type", "total"), tmp_mem],
+            );
+            self.services.otel_manager.histogram(
+                "codex.turn.token_usage",
+                turn_token_usage.input_tokens,
+                &[("token_type", "input"), tmp_mem],
+            );
+            self.services.otel_manager.histogram(
+                "codex.turn.token_usage",
+                turn_token_usage.cached_input(),
+                &[("token_type", "cached_input"), tmp_mem],
+            );
+            self.services.otel_manager.histogram(
+                "codex.turn.token_usage",
+                turn_token_usage.output_tokens,
+                &[("token_type", "output"), tmp_mem],
+            );
+            self.services.otel_manager.histogram(
+                "codex.turn.token_usage",
+                turn_token_usage.reasoning_output_tokens,
+                &[("token_type", "reasoning_output"), tmp_mem],
+            );
         }
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
@@ -230,8 +308,10 @@ impl Session {
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {
+        let token_usage_at_turn_start = self.total_token_usage().await.unwrap_or_default();
         let mut active = self.active_turn.lock().await;
         let mut turn = ActiveTurn::default();
+        turn.turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start;
         turn.add_task(task);
         *active = Some(turn);
     }
@@ -277,10 +357,6 @@ impl Session {
         }
 
         task.handle.abort();
-
-        // Set previous model even when interrupted so model-switch handling stays correct.
-        self.set_previous_model(Some(task.turn_context.model_info.slug.clone()))
-            .await;
 
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task

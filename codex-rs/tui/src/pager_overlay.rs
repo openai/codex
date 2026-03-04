@@ -409,8 +409,9 @@ struct CellRenderable {
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let p =
-            Paragraph::new(Text::from(self.cell.transcript_lines(area.width))).style(self.style);
+        let p = Paragraph::new(Text::from(self.cell.transcript_lines(area.width)))
+            .style(self.style)
+            .wrap(Wrap { trim: false });
         p.render(area, buf);
     }
 
@@ -645,7 +646,7 @@ impl TranscriptOverlay {
         has_prior_cells: bool,
         is_stream_continuation: bool,
     ) -> Box<dyn Renderable> {
-        let paragraph = Paragraph::new(Text::from(lines));
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
         if has_prior_cells && !is_stream_continuation {
             renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
@@ -796,8 +797,8 @@ fn render_offset_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::protocol::ExecCommandSource;
-    use codex_core::protocol::ReviewDecision;
+    use codex_protocol::protocol::ExecCommandSource;
+    use codex_protocol::protocol::ReviewDecision;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -809,8 +810,8 @@ mod tests {
     use crate::history_cell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::new_patch_event;
-    use codex_core::protocol::FileChange;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::FileChange;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::Text;

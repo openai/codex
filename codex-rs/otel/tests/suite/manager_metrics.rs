@@ -109,3 +109,47 @@ fn manager_allows_disabling_metadata_tags() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn manager_attaches_optional_service_name_tag() -> Result<()> {
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
+    let manager = OtelManager::new(
+        ThreadId::new(),
+        "gpt-5.1",
+        "gpt-5.1",
+        None,
+        None,
+        None,
+        "test_originator".to_string(),
+        false,
+        "tty".to_string(),
+        SessionSource::Cli,
+    )
+    .with_metrics_service_name("my_app_server_client")
+    .with_metrics(metrics);
+
+    manager.counter("codex.session_started", 1, &[]);
+    manager.shutdown_metrics()?;
+
+    let resource_metrics = latest_metrics(&exporter);
+    let metric =
+        find_metric(&resource_metrics, "codex.session_started").expect("counter metric missing");
+    let attrs = match metric.data() {
+        AggregatedMetrics::U64(data) => match data {
+            MetricData::Sum(sum) => {
+                let points: Vec<_> = sum.data_points().collect();
+                assert_eq!(points.len(), 1);
+                attributes_to_map(points[0].attributes())
+            }
+            _ => panic!("unexpected counter aggregation"),
+        },
+        _ => panic!("unexpected counter data type"),
+    };
+
+    assert_eq!(
+        attrs.get("service_name"),
+        Some(&"my_app_server_client".to_string())
+    );
+
+    Ok(())
+}

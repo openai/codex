@@ -4,6 +4,8 @@
 //! - Phase 1: select rollouts, extract stage-1 raw memories, persist stage-1 outputs, and enqueue consolidation.
 //! - Phase 2: claim a global consolidation lock, materialize consolidation inputs, and dispatch one consolidation agent.
 
+pub(crate) mod citations;
+mod control;
 mod phase1;
 mod phase2;
 pub(crate) mod prompts;
@@ -13,6 +15,9 @@ mod storage;
 mod tests;
 pub(crate) mod usage;
 
+use codex_protocol::openai_models::ReasoningEffort;
+
+pub(crate) use control::clear_memory_root_contents;
 /// Starts the memory startup pipeline for eligible root sessions.
 /// This is the single entrypoint that `codex` uses to trigger memory startup.
 ///
@@ -28,6 +33,8 @@ mod artifacts {
 mod phase_one {
     /// Default model used for phase 1.
     pub(super) const MODEL: &str = "gpt-5.1-codex-mini";
+    /// Default reasoning effort used for phase 1.
+    pub(super) const REASONING_EFFORT: super::ReasoningEffort = super::ReasoningEffort::Low;
     /// Prompt used for phase 1.
     pub(super) const PROMPT: &str = include_str!("../../templates/memories/stage_one_system.md");
     /// Concurrency cap for startup memory extraction and consolidation scheduling.
@@ -56,6 +63,8 @@ mod phase_one {
 mod phase_two {
     /// Default model used for phase 2.
     pub(super) const MODEL: &str = "gpt-5.3-codex";
+    /// Default reasoning effort used for phase 2.
+    pub(super) const REASONING_EFFORT: super::ReasoningEffort = super::ReasoningEffort::Medium;
     /// Lease duration (seconds) for phase-2 consolidation job ownership.
     pub(super) const JOB_LEASE_SECONDS: i64 = 3_600;
     /// Backoff delay (seconds) before retrying a failed phase-2 consolidation

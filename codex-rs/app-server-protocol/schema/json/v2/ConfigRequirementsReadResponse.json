@@ -81,6 +81,15 @@
               "type": "null"
             }
           ]
+        },
+        "featureRequirements": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -114,6 +123,12 @@
           },
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "dangerouslyAllowAllUnixSockets": {
+          "type": [
+            "boolean",
             "null"
           ]
         },

@@ -1,10 +1,16 @@
-use codex_core::protocol::NetworkAccess;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::NetworkAccess;
+use codex_protocol::protocol::SandboxPolicy;
 
 pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
     match sandbox_policy {
         SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
-        SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
+        SandboxPolicy::ReadOnly { network_access, .. } => {
+            let mut summary = "read-only".to_string();
+            if *network_access {
+                summary.push_str(" (network access enabled)");
+            }
+            summary
+        }
         SandboxPolicy::ExternalSandbox { network_access } => {
             let mut summary = "external-sandbox".to_string();
             if matches!(network_access, NetworkAccess::Enabled) {
@@ -64,6 +70,15 @@ mod tests {
             network_access: NetworkAccess::Enabled,
         });
         assert_eq!(summary, "external-sandbox (network access enabled)");
+    }
+
+    #[test]
+    fn summarizes_read_only_with_enabled_network() {
+        let summary = summarize_sandbox_policy(&SandboxPolicy::ReadOnly {
+            access: Default::default(),
+            network_access: true,
+        });
+        assert_eq!(summary, "read-only (network access enabled)");
     }
 
     #[test]

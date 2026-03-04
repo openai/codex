@@ -1,6 +1,7 @@
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
-use crate::config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL;
+use crate::config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION;
+use crate::memories::clear_memory_root_contents;
 use crate::memories::ensure_layout;
 use crate::memories::memory_root;
 use crate::memories::raw_memories_file;
@@ -64,6 +65,72 @@ fn stage_one_output_schema_requires_rollout_slug_and_keeps_it_nullable() {
 }
 
 #[tokio::test]
+async fn clear_memory_root_contents_preserves_root_directory() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().join("memory");
+    let nested_dir = root.join("rollout_summaries");
+    tokio::fs::create_dir_all(&nested_dir)
+        .await
+        .expect("create rollout summaries dir");
+    tokio::fs::write(root.join("MEMORY.md"), "stale memory index\n")
+        .await
+        .expect("write memory index");
+    tokio::fs::write(nested_dir.join("rollout.md"), "stale rollout\n")
+        .await
+        .expect("write rollout summary");
+
+    clear_memory_root_contents(&root)
+        .await
+        .expect("clear memory root contents");
+
+    assert!(
+        tokio::fs::try_exists(&root)
+            .await
+            .expect("check memory root existence"),
+        "memory root should still exist after clearing contents"
+    );
+    let mut entries = tokio::fs::read_dir(&root)
+        .await
+        .expect("read memory root after clear");
+    assert!(
+        entries
+            .next_entry()
+            .await
+            .expect("read next entry")
+            .is_none(),
+        "memory root should be empty after clearing contents"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn clear_memory_root_contents_rejects_symlinked_root() {
+    let dir = tempdir().expect("tempdir");
+    let target = dir.path().join("outside");
+    tokio::fs::create_dir_all(&target)
+        .await
+        .expect("create symlink target dir");
+    let target_file = target.join("keep.txt");
+    tokio::fs::write(&target_file, "keep\n")
+        .await
+        .expect("write target file");
+
+    let root = dir.path().join("memory");
+    std::os::unix::fs::symlink(&target, &root).expect("create memory root symlink");
+
+    let err = clear_memory_root_contents(&root)
+        .await
+        .expect_err("symlinked memory root should be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        tokio::fs::try_exists(&target_file)
+            .await
+            .expect("check target file existence"),
+        "rejecting a symlinked memory root should not delete the symlink target"
+    );
+}
+
+#[tokio::test]
 async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("memory");
@@ -86,21 +153,23 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         raw_memory: "raw memory".to_string(),
         rollout_summary: "short summary".to_string(),
         rollout_slug: None,
+        rollout_path: PathBuf::from("/tmp/rollout-100.jsonl"),
         cwd: PathBuf::from("/tmp/workspace"),
+        git_branch: None,
         generated_at: Utc.timestamp_opt(101, 0).single().expect("timestamp"),
     }];
 
     sync_rollout_summaries_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("sync rollout summaries");
     rebuild_raw_memories_file_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("rebuild raw memories");
@@ -127,6 +196,7 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
     }
     files.sort_unstable();
     assert_eq!(files.len(), 1);
+    let canonical_rollout_summary_file = &files[0];
 
     let raw_memories = tokio::fs::read_to_string(raw_memories_file(&root))
         .await
@@ -134,6 +204,36 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
     assert!(raw_memories.contains("raw memory"));
     assert!(raw_memories.contains(&keep_id));
     assert!(raw_memories.contains("cwd: /tmp/workspace"));
+    assert!(raw_memories.contains("rollout_path: /tmp/rollout-100.jsonl"));
+    assert!(raw_memories.contains(&format!(
+        "rollout_summary_file: {canonical_rollout_summary_file}"
+    )));
+    let thread_header = format!("## Thread `{keep_id}`");
+    let thread_pos = raw_memories
+        .find(&thread_header)
+        .expect("thread header should exist");
+    let updated_pos = raw_memories[thread_pos..]
+        .find("updated_at: ")
+        .map(|offset| thread_pos + offset)
+        .expect("updated_at should exist after thread header");
+    let cwd_pos = raw_memories[thread_pos..]
+        .find("cwd: /tmp/workspace")
+        .map(|offset| thread_pos + offset)
+        .expect("cwd should exist after thread header");
+    let rollout_path_pos = raw_memories[thread_pos..]
+        .find("rollout_path: /tmp/rollout-100.jsonl")
+        .map(|offset| thread_pos + offset)
+        .expect("rollout_path should exist after thread header");
+    let file_pos = raw_memories[thread_pos..]
+        .find(&format!(
+            "rollout_summary_file: {canonical_rollout_summary_file}"
+        ))
+        .map(|offset| thread_pos + offset)
+        .expect("rollout_summary_file should exist after thread header");
+    assert!(thread_pos < updated_pos);
+    assert!(updated_pos < cwd_pos);
+    assert!(cwd_pos < rollout_path_pos);
+    assert!(rollout_path_pos < file_pos);
 }
 
 #[tokio::test]
@@ -159,14 +259,16 @@ async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename(
         raw_memory: "raw memory".to_string(),
         rollout_summary: "short summary".to_string(),
         rollout_slug: Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345".to_string()),
+        rollout_path: PathBuf::from("/tmp/rollout-200.jsonl"),
         cwd: PathBuf::from("/tmp/workspace"),
+        git_branch: Some("feature/memory-branch".to_string()),
         generated_at: Utc.timestamp_opt(201, 0).single().expect("timestamp"),
     }];
 
     sync_rollout_summaries_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("sync rollout summaries");
@@ -214,6 +316,8 @@ async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename(
         .await
         .expect("read rollout summary");
     assert!(summary.contains(&format!("thread_id: {thread_id}")));
+    assert!(summary.contains("rollout_path: /tmp/rollout-200.jsonl"));
+    assert!(summary.contains("git_branch: feature/memory-branch"));
     assert!(
         !tokio::fs::try_exists(&stale_unslugged_path)
             .await
@@ -229,7 +333,7 @@ async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename(
 }
 
 #[tokio::test]
-async fn rebuild_raw_memories_file_rewrites_rollout_summary_file_to_canonical_filename() {
+async fn rebuild_raw_memories_file_adds_canonical_rollout_summary_file_header() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("memory");
     ensure_layout(&root).await.expect("ensure layout");
@@ -241,29 +345,40 @@ async fn rebuild_raw_memories_file_rewrites_rollout_summary_file_to_canonical_fi
         source_updated_at: Utc.timestamp_opt(200, 0).single().expect("timestamp"),
         raw_memory: "\
 ---
-rollout_summary_file: state_migration_uniqueness_test.md
 description: Added a migration test
 keywords: codex-state, migrations
 ---
-- Kept details."
+### Task 1: migration-test
+task: add-migration-test
+task_group: codex-state
+task_outcome: success
+- Added regression coverage for migration uniqueness.
+
+### Task 2: validate-migration
+task: validate-migration-ordering
+task_group: codex-state
+task_outcome: success
+- Confirmed no ordering regressions."
             .to_string(),
         rollout_summary: "short summary".to_string(),
         rollout_slug: Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345".to_string()),
+        rollout_path: PathBuf::from("/tmp/rollout-200.jsonl"),
         cwd: PathBuf::from("/tmp/workspace"),
+        git_branch: None,
         generated_at: Utc.timestamp_opt(201, 0).single().expect("timestamp"),
     }];
 
     sync_rollout_summaries_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("sync rollout summaries");
     rebuild_raw_memories_file_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("rebuild raw memories");
@@ -282,11 +397,20 @@ keywords: codex-state, migrations
     let raw_memories = tokio::fs::read_to_string(raw_memories_file(&root))
         .await
         .expect("read raw memories");
+    let summary = tokio::fs::read_to_string(
+        rollout_summaries_dir(&root).join(canonical_rollout_summary_file),
+    )
+    .await
+    .expect("read rollout summary");
+    assert!(summary.contains("rollout_path: /tmp/rollout-200.jsonl"));
     assert!(raw_memories.contains(&format!(
         "rollout_summary_file: {canonical_rollout_summary_file}"
     )));
-    assert!(!raw_memories.contains("rollout_summary_file: state_migration_uniqueness_test.md"));
     assert!(raw_memories.contains("description: Added a migration test"));
+    assert!(raw_memories.contains("### Task 1: migration-test"));
+    assert!(raw_memories.contains("task: add-migration-test"));
+    assert!(raw_memories.contains("task_group: codex-state"));
+    assert!(raw_memories.contains("task_outcome: success"));
 }
 
 mod phase2 {
@@ -323,7 +447,9 @@ mod phase2 {
             raw_memory: "raw memory".to_string(),
             rollout_summary: "rollout summary".to_string(),
             rollout_slug: None,
+            rollout_path: PathBuf::from("/tmp/rollout-summary.jsonl"),
             cwd: PathBuf::from("/tmp/workspace"),
+            git_branch: None,
             generated_at: chrono::DateTime::<Utc>::from_timestamp(source_updated_at + 1, 0)
                 .expect("valid generated_at timestamp"),
         }
@@ -505,7 +631,7 @@ mod phase2 {
     #[tokio::test]
     async fn dispatch_reclaims_stale_global_lock_and_starts_consolidation() {
         let harness = DispatchHarness::new().await;
-        harness.seed_stage1_output(100).await;
+        harness.seed_stage1_output(Utc::now().timestamp()).await;
 
         let stale_claim = harness
             .state_db
@@ -519,12 +645,18 @@ mod phase2 {
 
         phase2::run(&harness.session, Arc::clone(&harness.config)).await;
 
-        let running_claim = harness
+        let post_dispatch_claim = harness
             .state_db
             .try_claim_global_phase2_job(ThreadId::new(), 3_600)
             .await
-            .expect("claim while running");
-        pretty_assertions::assert_eq!(running_claim, Phase2JobClaimOutcome::SkippedRunning);
+            .expect("claim after stale lock dispatch");
+        assert!(
+            matches!(
+                post_dispatch_claim,
+                Phase2JobClaimOutcome::SkippedRunning | Phase2JobClaimOutcome::SkippedNotDirty
+            ),
+            "stale-lock dispatch should either keep the reclaimed job running or finish it before re-claim"
+        );
 
         let user_input_ops = harness.user_input_ops_count();
         pretty_assertions::assert_eq!(user_input_ops, 1);
