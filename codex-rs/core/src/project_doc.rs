@@ -23,6 +23,7 @@ use crate::config_loader::project_root_markers_from_config;
 use crate::features::Feature;
 use crate::skills::SkillMetadata;
 use crate::skills::render_skills_section;
+use crate::tools::code_mode;
 use codex_app_server_protocol::ConfigLayerSource;
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
@@ -108,6 +109,13 @@ pub(crate) async fn get_user_instructions(
             output.push_str("\n\n");
         }
         output.push_str(&js_repl_section);
+    }
+
+    if let Some(code_mode_section) = code_mode::instructions(config) {
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(&code_mode_section);
     }
 
     let skills_section = skills.and_then(render_skills_section);

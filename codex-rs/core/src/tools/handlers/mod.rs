@@ -1,5 +1,6 @@
 pub(crate) mod agent_jobs;
 pub mod apply_patch;
+mod code_mode;
 mod dynamic;
 mod grep_files;
 mod js_repl;
@@ -29,6 +30,7 @@ use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
+pub use code_mode::CodeModeHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;

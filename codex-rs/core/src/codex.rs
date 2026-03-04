@@ -393,6 +393,16 @@ impl Codex {
             warn!("{message}");
             config.startup_warnings.push(message);
         }
+        if config.features.enabled(Feature::CodeMode)
+            && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
+        {
+            let message = format!(
+                "Disabled `code_mode` for this session because the configured Node runtime is unavailable or incompatible. {err}"
+            );
+            warn!("{message}");
+            config.features.disable(Feature::CodeMode);
+            config.startup_warnings.push(message);
+        }
 
         let allowed_skills_for_implicit_invocation =
             loaded_skills.allowed_skills_for_implicit_invocation();
