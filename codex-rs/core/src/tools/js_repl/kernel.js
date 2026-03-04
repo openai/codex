@@ -148,6 +148,9 @@ const moduleSearchBases = (() => {
 
 const importResolveConditions = new Set(["node", "import"]);
 const requireByBase = new Map();
+const linkedFileModules = new Map();
+const linkedNativeModules = new Map();
+const linkedModuleEvaluations = new Map();
 
 function canonicalizePath(value) {
   try {
@@ -155,6 +158,25 @@ function canonicalizePath(value) {
   } catch {
     return value;
   }
+}
+
+function resolveResultToUrl(resolved) {
+  if (resolved.kind === "builtin") {
+    return resolved.specifier;
+  }
+  if (resolved.kind === "file" || resolved.kind === "package") {
+    return pathToFileURL(resolved.path).href;
+  }
+  throw new Error(`Unsupported module resolution kind: ${resolved.kind}`);
+}
+
+function setImportMeta(meta, mod, isMain = false) {
+  meta.url = pathToFileURL(mod.identifier).href;
+  meta.filename = mod.identifier;
+  meta.dirname = path.dirname(mod.identifier);
+  meta.main = isMain;
+  meta.resolve = (specifier) =>
+    resolveResultToUrl(resolveSpecifier(specifier, mod.identifier));
 }
 
 function getRequireForBase(base) {
@@ -180,6 +202,26 @@ function isWithinBaseNodeModules(base, resolvedPath) {
   return (
     relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
   );
+}
+
+function isExplicitRelativePathSpecifier(specifier) {
+  return (
+    specifier.startsWith("./") ||
+    specifier.startsWith("../") ||
+    specifier.startsWith(".\\") ||
+    specifier.startsWith("..\\")
+  );
+}
+
+function isPathSpecifier(specifier) {
+  if (
+    typeof specifier !== "string" ||
+    !specifier ||
+    specifier.trim() !== specifier
+  ) {
+    return false;
+  }
+  return isExplicitRelativePathSpecifier(specifier) || path.isAbsolute(specifier);
 }
 
 function isBarePackageSpecifier(specifier) {
@@ -236,7 +278,52 @@ function resolveBareSpecifier(specifier) {
   return null;
 }
 
-function resolveSpecifier(specifier) {
+function resolvePathSpecifier(specifier, referrerIdentifier = null) {
+  const baseDir =
+    referrerIdentifier && path.isAbsolute(referrerIdentifier)
+      ? path.dirname(referrerIdentifier)
+      : process.cwd();
+  const candidate = path.isAbsolute(specifier)
+    ? specifier
+    : path.resolve(baseDir, specifier);
+
+  let resolvedPath;
+  try {
+    resolvedPath = fs.realpathSync.native(candidate);
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      throw new Error(`Module not found: ${specifier}`);
+    }
+    throw new Error(`Failed to resolve module "${specifier}": ${err.message}`);
+  }
+
+  let stats;
+  try {
+    stats = fs.statSync(resolvedPath);
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      throw new Error(`Module not found: ${specifier}`);
+    }
+    throw new Error(`Failed to inspect module "${specifier}": ${err.message}`);
+  }
+
+  if (!stats.isFile()) {
+    throw new Error(
+      `Unsupported import specifier "${specifier}" in js_repl. Directory imports are not supported.`,
+    );
+  }
+
+  const extension = path.extname(resolvedPath).toLowerCase();
+  if (extension !== ".js" && extension !== ".mjs") {
+    throw new Error(
+      `Unsupported import specifier "${specifier}" in js_repl. Only .js and .mjs files are supported.`,
+    );
+  }
+
+  return { kind: "file", path: resolvedPath };
+}
+
+function resolveSpecifier(specifier, referrerIdentifier = null) {
   if (specifier.startsWith("node:") || builtinModuleSet.has(specifier)) {
     if (isDeniedBuiltin(specifier)) {
       throw new Error(
@@ -246,9 +333,13 @@ function resolveSpecifier(specifier) {
     return { kind: "builtin", specifier: toNodeBuiltinSpecifier(specifier) };
   }
 
+  if (isPathSpecifier(specifier)) {
+    return resolvePathSpecifier(specifier, referrerIdentifier);
+  }
+
   if (!isBarePackageSpecifier(specifier)) {
     throw new Error(
-      `Unsupported import specifier "${specifier}" in js_repl. Use a package name like "lodash" or "@scope/pkg".`,
+      `Unsupported import specifier "${specifier}" in js_repl. Use a package name like "lodash" or "@scope/pkg", or a relative/absolute .js/.mjs path.`,
     );
   }
 
@@ -257,17 +348,96 @@ function resolveSpecifier(specifier) {
     throw new Error(`Module not found: ${specifier}`);
   }
 
-  return { kind: "path", path: resolvedBare };
+  return { kind: "package", path: resolvedBare };
 }
 
-function importResolved(resolved) {
+function importNativeResolved(resolved) {
   if (resolved.kind === "builtin") {
     return import(resolved.specifier);
   }
-  if (resolved.kind === "path") {
+  if (resolved.kind === "package") {
     return import(pathToFileURL(resolved.path).href);
   }
   throw new Error(`Unsupported module resolution kind: ${resolved.kind}`);
+}
+
+async function loadLinkedNativeModule(resolved) {
+  const key =
+    resolved.kind === "builtin"
+      ? `builtin:${resolved.specifier}`
+      : `package:${resolved.path}`;
+  let modulePromise = linkedNativeModules.get(key);
+  if (!modulePromise) {
+    modulePromise = (async () => {
+      const namespace = await importNativeResolved(resolved);
+      const exportNames = Object.getOwnPropertyNames(namespace);
+      return new SyntheticModule(
+        exportNames,
+        function initSyntheticModule() {
+          for (const name of exportNames) {
+            this.setExport(name, namespace[name]);
+          }
+        },
+        { context },
+      );
+    })();
+    linkedNativeModules.set(key, modulePromise);
+  }
+  return modulePromise;
+}
+
+async function loadLinkedFileModule(modulePath) {
+  let module = linkedFileModules.get(modulePath);
+  if (!module) {
+    const source = fs.readFileSync(modulePath, "utf8");
+    module = new SourceTextModule(source, {
+      context,
+      identifier: modulePath,
+      initializeImportMeta(meta, mod) {
+        setImportMeta(meta, mod, false);
+      },
+      importModuleDynamically(specifier, referrer) {
+        return importResolved(resolveSpecifier(specifier, referrer?.identifier));
+      },
+    });
+    linkedFileModules.set(modulePath, module);
+  }
+  if (module.status === "unlinked") {
+    await module.link(async (specifier, referencingModule) => {
+      const resolved = resolveSpecifier(specifier, referencingModule?.identifier);
+      if (resolved.kind !== "file") {
+        throw new Error(
+          `Static import "${specifier}" is not supported from js_repl local files. Use await import("${specifier}") instead.`,
+        );
+      }
+      return loadLinkedFileModule(resolved.path);
+    });
+  }
+  return module;
+}
+
+async function loadLinkedModule(resolved) {
+  if (resolved.kind === "file") {
+    return loadLinkedFileModule(resolved.path);
+  }
+  if (resolved.kind === "builtin" || resolved.kind === "package") {
+    return loadLinkedNativeModule(resolved);
+  }
+  throw new Error(`Unsupported module resolution kind: ${resolved.kind}`);
+}
+
+async function importResolved(resolved) {
+  if (resolved.kind === "file") {
+    const module = await loadLinkedFileModule(resolved.path);
+    let evaluation = linkedModuleEvaluations.get(resolved.path);
+    if (!evaluation) {
+      evaluation = module.evaluate();
+      linkedModuleEvaluations.set(resolved.path, evaluation);
+    }
+    await evaluation;
+    return module.namespace;
+  }
+  return importNativeResolved(resolved);
 }
 
 function collectPatternNames(pattern, kind, map) {
@@ -522,14 +692,18 @@ async function handleExec(message) {
     context.tmpDir = tmpDir;
 
     await withCapturedConsole(context, async (logs) => {
+      const cellIdentifier = path.join(
+        process.cwd(),
+        `.codex_js_repl_cell_${cellCounter++}.mjs`,
+      );
       const module = new SourceTextModule(source, {
         context,
-        identifier: `cell-${cellCounter++}.mjs`,
+        identifier: cellIdentifier,
         initializeImportMeta(meta, mod) {
-          meta.url = `file://${mod.identifier}`;
+          setImportMeta(meta, mod, true);
         },
-        importModuleDynamically(specifier) {
-          return importResolved(resolveSpecifier(specifier));
+        importModuleDynamically(specifier, referrer) {
+          return importResolved(resolveSpecifier(specifier, referrer?.identifier));
         },
       });
 

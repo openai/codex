@@ -2056,6 +2056,19 @@ mod tests {
         Ok(())
     }
 
+    fn write_js_repl_test_module(
+        base: &Path,
+        relative: &str,
+        contents: &str,
+    ) -> anyhow::Result<()> {
+        let module_path = base.join(relative);
+        if let Some(parent) = module_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(module_path, contents)?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn js_repl_timeout_does_not_deadlock() -> anyhow::Result<()> {
         if !can_run_js_repl_runtime_tests().await {
@@ -2696,12 +2709,189 @@ console.log(out.type);
     }
 
     #[tokio::test]
-    async fn js_repl_rejects_path_specifiers() -> anyhow::Result<()> {
+    async fn js_repl_supports_relative_file_imports() -> anyhow::Result<()> {
         if !can_run_js_repl_runtime_tests().await {
             return Ok(());
         }
 
-        let (session, turn) = make_session_and_context().await;
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "child.js",
+            "export const value = \"child\";\n",
+        )?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "parent.js",
+            "import { value as childValue } from \"./child.js\";\nexport const value = `${childValue}-parent`;\n",
+        )?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "local.mjs",
+            "export const value = \"mjs\";\n",
+        )?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "const parent = await import(\"./parent.js\"); const other = await import(\"./local.mjs\"); console.log(parent.value); console.log(other.value);".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("child-parent"));
+        assert!(result.output.contains("mjs"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_supports_absolute_file_imports() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let module_dir = tempdir()?;
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_module(
+            module_dir.path(),
+            "absolute.js",
+            "export const value = \"absolute\";\n",
+        )?;
+        let absolute_path_json =
+            serde_json::to_string(&module_dir.path().join("absolute.js").display().to_string())?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: format!(
+                        "const mod = await import({absolute_path_json}); console.log(mod.value);"
+                    ),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("absolute"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_local_files_expose_node_like_import_meta() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "child.js",
+            "export const value = \"child\";\n",
+        )?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "meta.js",
+            "console.log(import.meta.url);\nconsole.log(import.meta.filename);\nconsole.log(import.meta.dirname);\nconsole.log(import.meta.main);\nconsole.log(import.meta.resolve(\"./child.js\"));\nconsole.log(import.meta.resolve(\"node:fs\"));\n",
+        )?;
+        let child_url = url::Url::from_file_path(cwd_dir.path().join("child.js"))
+            .expect("child path should convert to file URL")
+            .to_string();
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"./meta.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        let cwd_display = cwd_dir.path().display().to_string();
+        let meta_path_display = cwd_dir.path().join("meta.js").display().to_string();
+        assert!(result.output.contains("file://"));
+        assert!(result.output.contains(&meta_path_display));
+        assert!(result.output.contains(&cwd_display));
+        assert!(result.output.contains("false"));
+        assert!(result.output.contains(&child_url));
+        assert!(result.output.contains("node:fs"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_local_files_reject_static_bare_imports() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_package(cwd_dir.path(), "repl_counter", "pkg")?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "entry.js",
+            "import { value } from \"repl_counter\";\nconsole.log(value);\n",
+        )?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
         let session = Arc::new(session);
         let turn = Arc::new(turn);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
@@ -2713,13 +2903,214 @@ console.log(out.type);
                 turn,
                 tracker,
                 JsReplArgs {
-                    code: "await import(\"./local.js\");".to_string(),
+                    code: "await import(\"./entry.js\");".to_string(),
                     timeout_ms: Some(10_000),
                 },
             )
             .await
-            .expect_err("expected path specifier to be rejected");
-        assert!(err.to_string().contains("Unsupported import specifier"));
+            .expect_err("expected static bare import to be rejected");
+        assert!(
+            err.to_string().contains(
+                "Static import \"repl_counter\" is not supported from js_repl local files"
+            )
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_rejects_unsupported_file_specifiers() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_module(cwd_dir.path(), "local.ts", "export const value = \"ts\";\n")?;
+        write_js_repl_test_module(cwd_dir.path(), "local", "export const value = \"noext\";\n")?;
+        fs::create_dir_all(cwd_dir.path().join("dir"))?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let unsupported_extension = manager
+            .execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "await import(\"./local.ts\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected unsupported extension to be rejected");
+        assert!(
+            unsupported_extension
+                .to_string()
+                .contains("Only .js and .mjs files are supported")
+        );
+
+        let extensionless = manager
+            .execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "await import(\"./local\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected extensionless import to be rejected");
+        assert!(
+            extensionless
+                .to_string()
+                .contains("Only .js and .mjs files are supported")
+        );
+
+        let directory = manager
+            .execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "await import(\"./dir\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected directory import to be rejected");
+        assert!(
+            directory
+                .to_string()
+                .contains("Directory imports are not supported")
+        );
+
+        let file_url = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"file:///tmp/test.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected file url import to be rejected");
+        assert!(
+            file_url
+                .to_string()
+                .contains("Unsupported import specifier")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_blocks_sensitive_builtin_imports_from_local_files() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "blocked.js",
+            "import process from \"node:process\";\nconsole.log(process.pid);\n",
+        )?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let err = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"./blocked.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected blocked builtin import to be rejected");
+        assert!(
+            err.to_string()
+                .contains("Importing module \"node:process\" is not allowed in js_repl")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_local_files_do_not_escape_node_module_search_roots() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let parent_dir = tempdir()?;
+        write_js_repl_test_package(parent_dir.path(), "repl_probe", "parent")?;
+        let cwd_dir = parent_dir.path().join("workspace");
+        fs::create_dir_all(&cwd_dir)?;
+        write_js_repl_test_module(
+            &cwd_dir,
+            "entry.js",
+            "import { value } from \"repl_probe\";\nconsole.log(value);\n",
+        )?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.clone();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let err = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"./entry.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected parent node_modules lookup to be rejected");
+        assert!(
+            err.to_string()
+                .contains("Static import \"repl_probe\" is not supported from js_repl local files")
+        );
         Ok(())
     }
 }
