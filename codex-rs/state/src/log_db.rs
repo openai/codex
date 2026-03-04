@@ -462,18 +462,6 @@ mod tests {
         }
     }
 
-    fn strip_feedback_timestamps(logs: &str) -> String {
-        let stripped = logs
-            .lines()
-            .map(|line| match line.split_once(' ') {
-                Some((_, rest)) => rest,
-                None => line,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!("{stripped}\n")
-    }
-
     #[tokio::test]
     async fn sqlite_feedback_logs_match_feedback_formatter_shape() {
         let codex_home =
@@ -506,6 +494,15 @@ mod tests {
         drop(guard);
 
         let feedback_logs = writer.snapshot();
+        let without_timestamps = |logs: &str| {
+            logs.lines()
+                .map(|line| match line.split_once(' ') {
+                    Some((_, rest)) => rest,
+                    None => line,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let sqlite_logs = String::from_utf8(
@@ -515,8 +512,7 @@ mod tests {
                     .expect("query feedback logs"),
             )
             .expect("valid utf-8");
-            if strip_feedback_timestamps(&sqlite_logs) == strip_feedback_timestamps(&feedback_logs)
-            {
+            if without_timestamps(&sqlite_logs) == without_timestamps(&feedback_logs) {
                 break;
             }
             assert!(
