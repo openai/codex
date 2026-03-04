@@ -3375,6 +3375,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
 
     chat.restore_thread_input_state(Some(ThreadInputState {
         composer: None,
+        pending_steers: VecDeque::new(),
         queued_user_messages: VecDeque::new(),
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
