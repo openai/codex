@@ -565,6 +565,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn format_feedback_log_line_preserves_existing_trailing_newline() {
+        assert_eq!(
+            format_feedback_log_line(1, 123_456_000, "INFO", "alpha\n"),
+            "1970-01-01T00:00:01.123456Z  INFO alpha\n"
+        );
+    }
+
     #[tokio::test]
     async fn query_logs_with_search_matches_substring() {
         let codex_home = unique_temp_dir();
