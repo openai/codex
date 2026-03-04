@@ -2121,7 +2121,10 @@ mod tests {
     }
 
     fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
-        let names = tools.iter().map(|tool| tool_name(&tool.spec)).collect::<Vec<_>>();
+        let names = tools
+            .iter()
+            .map(|tool| tool_name(&tool.spec))
+            .collect::<Vec<_>>();
         assert!(
             !names.contains(&expected_absent),
             "expected tool {expected_absent} to be absent; had: {names:?}"
