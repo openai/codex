@@ -477,13 +477,8 @@ async fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Res
     match cmd.subcommand {
         DebugAppServerSubcommand::SendMessageV2(cmd) => {
             let codex_bin = std::env::current_exe()?;
-            codex_app_server_test_client::send_message_v2(
-                &codex_bin,
-                &[],
-                cmd.user_message,
-                &None,
-            )
-            .await
+            codex_app_server_test_client::send_message_v2(&codex_bin, &[], cmd.user_message, &None)
+                .await
         }
     }
 }

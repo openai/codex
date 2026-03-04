@@ -1504,7 +1504,6 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-utils-cli",
- "pretty_assertions",
  "serde",
  "serde_json",
  "tokio",

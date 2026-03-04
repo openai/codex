@@ -313,8 +313,7 @@ pub async fn run() -> Result<()> {
         }
         CliCommand::TriggerPatchApproval { user_message } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            trigger_patch_approval(&endpoint, &config_overrides, user_message, &dynamic_tools)
-                .await
+            trigger_patch_approval(&endpoint, &config_overrides, user_message, &dynamic_tools).await
         }
         CliCommand::NoTriggerCmdApproval => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
@@ -976,11 +975,7 @@ async fn model_list(endpoint: &Endpoint, config_overrides: &[String]) -> Result<
     .await
 }
 
-async fn thread_list(
-    endpoint: &Endpoint,
-    config_overrides: &[String],
-    limit: u32,
-) -> Result<()> {
+async fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u32) -> Result<()> {
     with_client("thread-list", endpoint, config_overrides, |client| {
         let initialize = client.initialize()?;
         println!("< initialize response: {initialize:?}");
