@@ -722,10 +722,12 @@ fn normalize_harness_overrides_for_cwd(
 
 fn compute_title_context(
     title_override: Option<String>,
+    thread_name: Option<String>,
     task_running: bool,
     tick: u128,
 ) -> Option<String> {
     let context = title_override
+        .or(thread_name)
         .as_deref()
         .map(str::trim)
         .filter(|name| !name.is_empty())
@@ -752,9 +754,15 @@ fn title_animation_tick() -> u128 {
 fn update_terminal_title(
     tui: &mut tui::Tui,
     title_override: Option<String>,
+    thread_name: Option<String>,
     task_running: bool,
 ) -> Result<()> {
-    let title_context = compute_title_context(title_override, task_running, title_animation_tick());
+    let title_context = compute_title_context(
+        title_override,
+        thread_name,
+        task_running,
+        title_animation_tick(),
+    );
     tui.set_title_context(title_context.as_deref())?;
     if task_running {
         tui.frame_requester()
@@ -1793,7 +1801,12 @@ impl App {
             pending_primary_events: VecDeque::new(),
         };
         let task_running = app.chat_widget.is_task_running();
-        update_terminal_title(tui, app.chat_widget.title_override(), task_running)?;
+        update_terminal_title(
+            tui,
+            app.chat_widget.title_override(),
+            app.chat_widget.thread_name(),
+            task_running,
+        )?;
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -1894,7 +1907,12 @@ impl App {
                 }
             };
             let task_running = app.chat_widget.is_task_running();
-            update_terminal_title(tui, app.chat_widget.title_override(), task_running)?;
+            update_terminal_title(
+                tui,
+                app.chat_widget.title_override(),
+                app.chat_widget.thread_name(),
+                task_running,
+            )?;
             if App::should_stop_waiting_for_initial_session(
                 waiting_for_initial_session_configured,
                 app.primary_thread_id,
@@ -3789,25 +3807,36 @@ mod tests {
     #[test]
     fn title_context_adds_spinner_while_running() {
         assert_eq!(
-            compute_title_context(Some("Named thread".to_string()), true, 0),
+            compute_title_context(Some("Named thread".to_string()), None, true, 0),
             Some("⠋ - Named thread".to_string())
         );
         assert_eq!(
-            compute_title_context(Some("Named thread".to_string()), true, 9),
+            compute_title_context(Some("Named thread".to_string()), None, true, 9),
             Some("⠏ - Named thread".to_string())
         );
-        assert_eq!(compute_title_context(None, true, 0), Some("⠋".to_string()));
+        assert_eq!(
+            compute_title_context(None, None, true, 0),
+            Some("⠋".to_string())
+        );
     }
 
     #[test]
-    fn title_context_defaults_to_none_without_manual_title() {
-        assert_eq!(compute_title_context(None, false, 0), None);
+    fn title_context_uses_thread_name_when_idle() {
+        assert_eq!(
+            compute_title_context(None, Some("named thread".to_string()), false, 0),
+            Some("named thread".to_string())
+        );
     }
 
     #[test]
     fn title_context_prefers_manual_title_when_idle() {
         assert_eq!(
-            compute_title_context(Some("manual title".to_string()), false, 0),
+            compute_title_context(
+                Some("manual title".to_string()),
+                Some("named thread".to_string()),
+                false,
+                0,
+            ),
             Some("manual title".to_string())
         );
     }
