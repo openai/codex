@@ -760,6 +760,7 @@ impl ThreadComposerState {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
+    pending_steers: VecDeque<UserMessage>,
     queued_user_messages: VecDeque<UserMessage>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
@@ -2064,6 +2065,11 @@ impl ChatWidget {
         };
         Some(ThreadInputState {
             composer: composer.has_content().then_some(composer),
+            pending_steers: self
+                .pending_steers
+                .iter()
+                .map(|pending| pending.user_message.clone())
+                .collect(),
             queued_user_messages: self.queued_user_messages.clone(),
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
@@ -2103,9 +2109,13 @@ impl ChatWidget {
                 );
                 self.bottom_pane.set_composer_pending_pastes(Vec::new());
             }
-            self.queued_user_messages = input_state.queued_user_messages;
+            self.pending_steers.clear();
+            self.queued_user_messages = input_state.pending_steers;
+            self.queued_user_messages
+                .extend(input_state.queued_user_messages);
         } else {
             self.agent_turn_running = false;
+            self.pending_steers.clear();
             self.set_remote_image_urls(Vec::new());
             self.bottom_pane.set_composer_text_with_mention_bindings(
                 String::new(),
@@ -2119,7 +2129,7 @@ impl ChatWidget {
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
         self.update_task_running_state();
-        self.refresh_queued_user_messages();
+        self.refresh_pending_input_preview();
         self.request_redraw();
     }
 
