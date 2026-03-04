@@ -298,9 +298,13 @@ async fn run_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::ArtifactRuntimePlatform;
+    #[cfg(unix)]
     use crate::ExtractedRuntimeManifest;
+    #[cfg(unix)]
     use crate::RuntimeEntrypoints;
+    #[cfg(unix)]
     use crate::RuntimePathEntry;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -421,6 +425,7 @@ mod tests {
         assert!(logged.contains(&build_entrypoint.display().to_string()));
     }
 
+    #[cfg(unix)]
     fn sample_manifest(runtime_version: &str) -> ExtractedRuntimeManifest {
         ExtractedRuntimeManifest {
             schema_version: 1,
