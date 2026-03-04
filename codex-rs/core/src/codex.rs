@@ -4454,11 +4454,9 @@ mod handlers {
         }
 
         let memory_root = crate::memories::memory_root(&config.codex_home);
-        if let Err(err) = tokio::fs::remove_dir_all(&memory_root).await
-            && err.kind() != std::io::ErrorKind::NotFound
-        {
+        if let Err(err) = crate::memories::clear_memory_root_contents(&memory_root).await {
             errors.push(format!(
-                "failed removing memory directory {}: {err}",
+                "failed clearing memory directory {}: {err}",
                 memory_root.display()
             ));
         }

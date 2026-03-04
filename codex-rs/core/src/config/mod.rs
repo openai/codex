@@ -1806,7 +1806,9 @@ impl Config {
             Some(&constrained_sandbox_policy),
         );
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
-            let memories_root = AbsolutePathBuf::from_absolute_path(memory_root(&codex_home))?;
+            let memories_root = memory_root(&codex_home);
+            std::fs::create_dir_all(&memories_root)?;
+            let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
             if !writable_roots
                 .iter()
                 .any(|existing| existing == &memories_root)
@@ -3183,13 +3185,18 @@ trust_level = "trusted"
             codex_home.path().to_path_buf(),
         )?;
 
-        let expected_memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
         if cfg!(target_os = "windows") {
             match config.permissions.sandbox_policy.get() {
                 SandboxPolicy::ReadOnly { .. } => {}
                 other => panic!("expected read-only policy on Windows, got {other:?}"),
             }
         } else {
+            assert!(
+                memories_root.is_dir(),
+                "expected memories root directory to exist at {}",
+                memories_root.display()
+            );
+            let expected_memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
             match config.permissions.sandbox_policy.get() {
                 SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                     assert_eq!(
