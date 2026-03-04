@@ -331,6 +331,9 @@ pub enum Op {
         request_id: RequestId,
         /// User's decision for the request.
         decision: ElicitationAction,
+        /// Structured user input supplied for accepted elicitations.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<Value>,
     },
 
     /// Resolve a request_user_input tool call.

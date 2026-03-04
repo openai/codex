@@ -48,6 +48,7 @@ export type { DeprecationNoticeEvent } from "./DeprecationNoticeEvent";
 export type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 export type { DynamicToolCallRequest } from "./DynamicToolCallRequest";
 export type { DynamicToolCallResponseEvent } from "./DynamicToolCallResponseEvent";
+export type { ElicitationRequest } from "./ElicitationRequest";
 export type { ElicitationRequestEvent } from "./ElicitationRequestEvent";
 export type { ErrorEvent } from "./ErrorEvent";
 export type { EventMsg } from "./EventMsg";

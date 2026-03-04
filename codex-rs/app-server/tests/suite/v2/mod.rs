@@ -11,6 +11,7 @@ mod dynamic_tools;
 mod experimental_api;
 mod experimental_feature_list;
 mod initialize;
+mod mcp_server_elicitation;
 mod model_list;
 mod output_schema;
 mod plan_item;

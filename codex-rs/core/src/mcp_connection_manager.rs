@@ -27,6 +27,7 @@ use async_channel::Sender;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
+use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
@@ -294,6 +295,27 @@ impl ElicitationRequestManager {
                     });
                 }
 
+                let request = match elicitation {
+                    CreateElicitationRequestParams::FormElicitationParams {
+                        message,
+                        requested_schema,
+                        ..
+                    } => ElicitationRequest::Form {
+                        message,
+                        requested_schema: serde_json::to_value(requested_schema)
+                            .context("failed to serialize MCP elicitation schema")?,
+                    },
+                    CreateElicitationRequestParams::UrlElicitationParams {
+                        message,
+                        url,
+                        elicitation_id,
+                        ..
+                    } => ElicitationRequest::Url {
+                        message,
+                        url,
+                        elicitation_id,
+                    },
+                };
                 let (tx, rx) = oneshot::channel();
                 {
                     let mut lock = elicitation_requests.lock().await;
@@ -312,16 +334,7 @@ impl ElicitationRequestManager {
                                     ProtocolRequestId::Integer(value)
                                 }
                             },
-                            message: match elicitation {
-                                CreateElicitationRequestParams::FormElicitationParams {
-                                    message,
-                                    ..
-                                }
-                                | CreateElicitationRequestParams::UrlElicitationParams {
-                                    message,
-                                    ..
-                                } => message,
-                            },
+                            request,
                         }),
                     })
                     .await;
