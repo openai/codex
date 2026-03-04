@@ -56,8 +56,6 @@ The API exposes three top level primitives representing an interaction between a
 - **Turn**: One turn of the conversation, typically starting with a user message and finishing with an agent message. Each turn contains multiple items.
 - **Item**: Represents user inputs and agent outputs as part of the turn, persisted and used as the context for future conversations. Example items include user message, agent reasoning, agent message, shell command, file edit, etc.
 
-When `thread/read`, `thread/resume`, `thread/fork`, or `thread/rollback` load persisted extended history, each `turn.hookRuns` carries the completed lifecycle hook summaries associated with that turn (including `SessionStart` and `Stop`).
-
 Use the thread APIs to create, list, or archive conversations. Drive a conversation with turn APIs and stream progress via turn notifications.
 
 ## Lifecycle Overview

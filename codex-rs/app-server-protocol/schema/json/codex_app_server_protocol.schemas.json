@@ -14768,12 +14768,6 @@
             ],
             "description": "Only populated when the Turn's status is failed."
           },
-          "hookRuns": {
-            "items": {
-              "$ref": "#/definitions/v2/HookRunSummary"
-            },
-            "type": "array"
-          },
           "id": {
             "type": "string"
           },
@@ -14789,7 +14783,6 @@
           }
         },
         "required": [
-          "hookRuns",
           "id",
           "items",
           "status"

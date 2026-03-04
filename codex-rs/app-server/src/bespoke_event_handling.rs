@@ -200,7 +200,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     state.active_turn_snapshot().unwrap_or_else(|| Turn {
                         id: payload.turn_id.clone(),
                         items: Vec::new(),
-                        hook_runs: Vec::new(),
                         error: None,
                         status: TurnStatus::InProgress,
                     })
@@ -1634,7 +1633,6 @@ async fn emit_turn_completed_with_status(
         turn: Turn {
             id: event_turn_id,
             items: vec![],
-            hook_runs: vec![],
             error,
             status,
         },

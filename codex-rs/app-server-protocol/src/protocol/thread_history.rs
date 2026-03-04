@@ -6,7 +6,6 @@ use crate::protocol::v2::CommandExecutionStatus;
 use crate::protocol::v2::DynamicToolCallOutputContentItem;
 use crate::protocol::v2::DynamicToolCallStatus;
 use crate::protocol::v2::FileUpdateChange;
-use crate::protocol::v2::HookRunSummary;
 use crate::protocol::v2::McpToolCallError;
 use crate::protocol::v2::McpToolCallResult;
 use crate::protocol::v2::McpToolCallStatus;
@@ -163,8 +162,7 @@ impl ThreadHistoryBuilder {
             EventMsg::ExitedReviewMode(payload) => self.handle_exited_review_mode(payload),
             EventMsg::ItemStarted(payload) => self.handle_item_started(payload),
             EventMsg::ItemCompleted(payload) => self.handle_item_completed(payload),
-            EventMsg::HookStarted(_) => {}
-            EventMsg::HookCompleted(payload) => self.handle_hook_completed(payload),
+            EventMsg::HookStarted(_) | EventMsg::HookCompleted(_) => {}
             EventMsg::Error(payload) => self.handle_error(payload),
             EventMsg::TokenCount(_) => {}
             EventMsg::ThreadRolledBack(payload) => self.handle_thread_rollback(payload),
@@ -871,35 +869,9 @@ impl ThreadHistoryBuilder {
         self.next_item_index = i64::try_from(item_count.saturating_add(1)).unwrap_or(i64::MAX);
     }
 
-    fn handle_hook_completed(&mut self, payload: &codex_protocol::protocol::HookCompletedEvent) {
-        let run = HookRunSummary::from(payload.run.clone());
-        if let Some(turn_id) = payload.turn_id.as_deref() {
-            if let Some(turn) = self.current_turn.as_mut()
-                && turn.id == turn_id
-            {
-                turn.hook_runs.push(run);
-                return;
-            }
-
-            if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id) {
-                turn.hook_runs.push(run);
-                return;
-            }
-
-            warn!("dropping hook run for unknown turn id `{turn_id}`");
-            return;
-        }
-
-        self.ensure_turn().hook_runs.push(run);
-    }
-
     fn finish_current_turn(&mut self) {
         if let Some(turn) = self.current_turn.take() {
-            if turn.items.is_empty()
-                && turn.hook_runs.is_empty()
-                && !turn.opened_explicitly
-                && !turn.saw_compaction
-            {
+            if turn.items.is_empty() && !turn.opened_explicitly && !turn.saw_compaction {
                 return;
             }
             self.turns.push(turn.into());
@@ -910,7 +882,6 @@ impl ThreadHistoryBuilder {
         PendingTurn {
             id: id.unwrap_or_else(|| Uuid::now_v7().to_string()),
             items: Vec::new(),
-            hook_runs: Vec::new(),
             error: None,
             status: TurnStatus::Completed,
             opened_explicitly: false,
@@ -1070,7 +1041,6 @@ fn upsert_turn_item(items: &mut Vec<ThreadItem>, item: ThreadItem) {
 struct PendingTurn {
     id: String,
     items: Vec<ThreadItem>,
-    hook_runs: Vec<HookRunSummary>,
     error: Option<TurnError>,
     status: TurnStatus,
     /// True when this turn originated from an explicit `turn_started`/`turn_complete`
@@ -1098,7 +1068,6 @@ impl From<PendingTurn> for Turn {
         Self {
             id: value.id,
             items: value.items,
-            hook_runs: value.hook_runs,
             error: value.error,
             status: value.status,
         }
@@ -1110,7 +1079,6 @@ impl From<&PendingTurn> for Turn {
         Self {
             id: value.id.clone(),
             items: value.items.clone(),
-            hook_runs: value.hook_runs.clone(),
             error: value.error.clone(),
             status: value.status.clone(),
         }
@@ -2290,7 +2258,6 @@ mod tests {
                 status: TurnStatus::Completed,
                 error: None,
                 items: Vec::new(),
-                hook_runs: Vec::new(),
             }]
         );
     }
@@ -2417,7 +2384,6 @@ mod tests {
                         text_elements: Vec::new(),
                     }],
                 }],
-                hook_runs: Vec::new(),
             }
         );
     }
