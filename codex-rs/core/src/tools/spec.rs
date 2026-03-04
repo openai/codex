@@ -575,97 +575,6 @@ fn create_view_image_tool() -> ToolSpec {
     })
 }
 
-fn create_presentation_artifact_tool() -> ToolSpec {
-    let action_step_schema = JsonSchema::Object {
-        properties: BTreeMap::from([
-            (
-                "action".to_string(),
-                JsonSchema::String {
-                    description: Some("Action name to run for this step.".to_string()),
-                },
-            ),
-            (
-                "args".to_string(),
-                JsonSchema::Object {
-                    properties: BTreeMap::new(),
-                    required: None,
-                    additional_properties: Some(true.into()),
-                },
-            ),
-        ]),
-        required: Some(vec!["action".to_string(), "args".to_string()]),
-        additional_properties: Some(false.into()),
-    };
-    let properties = BTreeMap::from([
-        (
-            "artifact_id".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Artifact id returned by an earlier presentation_artifact call.".to_string(),
-                ),
-            },
-        ),
-        (
-            "actions".to_string(),
-            JsonSchema::Array {
-                items: Box::new(action_step_schema),
-                description: Some(
-                    "Array of `(action, args)` steps to execute sequentially.".to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "presentation_artifact".to_string(),
-        description: "Create or edit a presentation artifact for the current thread.".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["actions".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
-fn create_spreadsheet_artifact_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "artifact_id".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Artifact id returned by an earlier spreadsheet_artifact call.".to_string(),
-                ),
-            },
-        ),
-        (
-            "action".to_string(),
-            JsonSchema::String {
-                description: Some("Action name to run for this request.".to_string()),
-            },
-        ),
-        (
-            "args".to_string(),
-            JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: Some(true.into()),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "spreadsheet_artifact".to_string(),
-        description: "Create or edit a spreadsheet artifact for the current thread.".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["action".to_string(), "args".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
 fn create_collab_input_items_schema() -> JsonSchema {
     let properties = BTreeMap::from([
         (
@@ -1818,13 +1727,11 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::MultiAgentHandler;
     use crate::tools::handlers::PlanHandler;
-    use crate::tools::handlers::PresentationArtifactHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::SearchToolBm25Handler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
-    use crate::tools::handlers::SpreadsheetArtifactHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
@@ -1848,8 +1755,6 @@ pub(crate) fn build_specs(
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let artifacts_handler = Arc::new(ArtifactsHandler);
-    let _presentation_artifact_handler = Arc::new(PresentationArtifactHandler);
-    let _spreadsheet_artifact_handler = Arc::new(SpreadsheetArtifactHandler);
     let request_permission_enabled = config.request_permission_enabled;
 
     match &config.shell_type {
@@ -1995,11 +1900,7 @@ pub(crate) fn build_specs(
 
     if config.artifact_tools {
         builder.push_spec(create_artifacts_tool());
-        // builder.push_spec(create_presentation_artifact_tool());
-        // builder.push_spec(create_spreadsheet_artifact_tool());
         builder.register_handler("artifacts", artifacts_handler);
-        // builder.register_handler("presentation_artifact", presentation_artifact_handler);
-        // builder.register_handler("spreadsheet_artifact", spreadsheet_artifact_handler);
     }
 
     if config.collab_tools {

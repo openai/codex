@@ -55,12 +55,6 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
-use codex_artifact_presentation::PresentationArtifactError;
-use codex_artifact_presentation::PresentationArtifactExecutionRequest;
-use codex_artifact_presentation::PresentationArtifactResponse;
-use codex_artifact_spreadsheet::SpreadsheetArtifactError;
-use codex_artifact_spreadsheet::SpreadsheetArtifactRequest;
-use codex_artifact_spreadsheet::SpreadsheetArtifactResponse;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -1796,24 +1790,6 @@ impl Session {
     pub(crate) async fn clear_connector_selection(&self) {
         let mut state = self.state.lock().await;
         state.clear_connector_selection();
-    }
-
-    pub(crate) async fn execute_presentation_artifact(
-        &self,
-        request: PresentationArtifactExecutionRequest,
-        cwd: &Path,
-    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
-        let mut state = self.state.lock().await;
-        state.artifacts.presentation.execute_requests(request, cwd)
-    }
-
-    pub(crate) async fn execute_spreadsheet_artifact(
-        &self,
-        request: SpreadsheetArtifactRequest,
-        cwd: &Path,
-    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
-        let mut state = self.state.lock().await;
-        state.artifacts.spreadsheet.execute(request, cwd)
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
