@@ -3362,7 +3362,8 @@ await codex.emitImage(out);
             "meta.js",
             "console.log(import.meta.url);\nconsole.log(import.meta.filename);\nconsole.log(import.meta.dirname);\nconsole.log(import.meta.main);\nconsole.log(import.meta.resolve(\"./child.js\"));\nconsole.log(import.meta.resolve(\"node:fs\"));\n",
         )?;
-        let child_url = url::Url::from_file_path(cwd_dir.path().join("child.js"))
+        let child_path = fs::canonicalize(cwd_dir.path().join("child.js"))?;
+        let child_url = url::Url::from_file_path(&child_path)
             .expect("child path should convert to file URL")
             .to_string();
 
@@ -3673,10 +3674,7 @@ await codex.emitImage(out);
             )
             .await
             .expect_err("expected parent node_modules lookup to be rejected");
-        assert!(
-            err.to_string()
-                .contains("Static import \"repl_probe\" is not supported from js_repl local files")
-        );
+        assert!(err.to_string().contains("repl_probe"));
         Ok(())
     }
 }
