@@ -3,6 +3,7 @@ use std::time::Duration;
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::TurnContext;
+use crate::contextual_user_message::ContextualUserFragment;
 use crate::contextual_user_message::USER_SHELL_COMMAND_FRAGMENT;
 use crate::exec::ExecToolCallOutput;
 use crate::tools::format_exec_output_str;
@@ -12,34 +13,47 @@ fn format_duration_line(duration: Duration) -> String {
     format!("Duration: {duration_seconds:.4} seconds")
 }
 
-fn format_user_shell_command_body(
-    command: &str,
-    exec_output: &ExecToolCallOutput,
-    turn_context: &TurnContext,
-) -> String {
-    let mut sections = Vec::new();
-    sections.push("<command>".to_string());
-    sections.push(command.to_string());
-    sections.push("</command>".to_string());
-    sections.push("<result>".to_string());
-    sections.push(format!("Exit code: {}", exec_output.exit_code));
-    sections.push(format_duration_line(exec_output.duration));
-    sections.push("Output:".to_string());
-    sections.push(format_exec_output_str(
-        exec_output,
-        turn_context.truncation_policy,
-    ));
-    sections.push("</result>".to_string());
-    sections.join("\n")
+struct UserShellCommandRecord<'a> {
+    command: &'a str,
+    exec_output: &'a ExecToolCallOutput,
+    turn_context: &'a TurnContext,
 }
 
+impl ContextualUserFragment for UserShellCommandRecord<'_> {
+    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+        USER_SHELL_COMMAND_FRAGMENT
+    }
+
+    fn serialize_to_text(&self) -> String {
+        let mut sections = Vec::new();
+        sections.push("<command>".to_string());
+        sections.push(self.command.to_string());
+        sections.push("</command>".to_string());
+        sections.push("<result>".to_string());
+        sections.push(format!("Exit code: {}", self.exec_output.exit_code));
+        sections.push(format_duration_line(self.exec_output.duration));
+        sections.push("Output:".to_string());
+        sections.push(format_exec_output_str(
+            self.exec_output,
+            self.turn_context.truncation_policy,
+        ));
+        sections.push("</result>".to_string());
+        USER_SHELL_COMMAND_FRAGMENT.wrap_body(sections.join("\n"))
+    }
+}
+
+#[cfg(test)]
 pub fn format_user_shell_command_record(
     command: &str,
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
 ) -> String {
-    let body = format_user_shell_command_body(command, exec_output, turn_context);
-    USER_SHELL_COMMAND_FRAGMENT.wrap(body)
+    UserShellCommandRecord {
+        command,
+        exec_output,
+        turn_context,
+    }
+    .serialize_to_text()
 }
 
 pub fn user_shell_command_record_item(
@@ -47,11 +61,12 @@ pub fn user_shell_command_record_item(
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
 ) -> ResponseItem {
-    USER_SHELL_COMMAND_FRAGMENT.into_message(format_user_shell_command_record(
+    UserShellCommandRecord {
         command,
         exec_output,
         turn_context,
-    ))
+    }
+    .into_response_item()
 }
 
 #[cfg(test)]

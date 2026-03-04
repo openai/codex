@@ -21,6 +21,13 @@ In the codex-rs folder where the rust code lives:
   locally before CI.
 - Do not create small helper methods that are referenced only once.
 
+### Model-visible context fragments
+
+- When adding developer-role prompt context, use `DeveloperInstructions`. Do not push raw strings directly into context builders.
+- When adding user-role contextual prompt context, define a typed contextual fragment and register its `ContextualUserFragmentDefinition` so history parsing still treats it as contextual state rather than user intent.
+- Use `EnvironmentContext` only for environment/session facts. Do not use it as a generic container for unrelated contextual messages.
+- Later injected contextual user messages should use the same typed fragment path as initial-context fragments; do not call fragment wrapping helpers ad hoc from new code.
+
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 
 1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.

@@ -1,4 +1,5 @@
 use crate::codex::TurnContext;
+use crate::contextual_user_message::ContextualUserFragment;
 use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::shell::Shell;
 use codex_protocol::models::ResponseItem;
@@ -153,22 +154,22 @@ impl EnvironmentContext {
     ///   <shell>...</shell>
     /// </environment_context>
     /// ```
-    pub fn serialize_to_xml(self) -> String {
+    pub fn serialize_to_text(&self) -> String {
         let mut lines = Vec::new();
-        if let Some(cwd) = self.cwd {
+        if let Some(cwd) = &self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
         }
 
         let shell_name = self.shell.name();
         lines.push(format!("  <shell>{shell_name}</shell>"));
-        if let Some(current_date) = self.current_date {
+        if let Some(current_date) = &self.current_date {
             lines.push(format!("  <current_date>{current_date}</current_date>"));
         }
-        if let Some(timezone) = self.timezone {
+        if let Some(timezone) = &self.timezone {
             lines.push(format!("  <timezone>{timezone}</timezone>"));
         }
-        match self.network {
-            Some(ref network) => {
+        match &self.network {
+            Some(network) => {
                 lines.push("  <network enabled=\"true\">".to_string());
                 for allowed in &network.allowed_domains {
                     lines.push(format!("    <allowed>{allowed}</allowed>"));
@@ -183,18 +184,28 @@ impl EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
-        if let Some(subagents) = self.subagents {
+        if let Some(subagents) = &self.subagents {
             lines.push("  <subagents>".to_string());
             lines.extend(subagents.lines().map(|line| format!("    {line}")));
             lines.push("  </subagents>".to_string());
         }
-        ENVIRONMENT_CONTEXT_FRAGMENT.wrap(lines.join("\n"))
+        ENVIRONMENT_CONTEXT_FRAGMENT.wrap_body(lines.join("\n"))
+    }
+}
+
+impl ContextualUserFragment for EnvironmentContext {
+    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+        ENVIRONMENT_CONTEXT_FRAGMENT
+    }
+
+    fn serialize_to_text(&self) -> String {
+        Self::serialize_to_text(self)
     }
 }
 
 impl From<EnvironmentContext> for ResponseItem {
     fn from(ec: EnvironmentContext) -> Self {
-        ENVIRONMENT_CONTEXT_FRAGMENT.into_message(ec.serialize_to_xml())
+        ec.into_response_item()
     }
 }
 
@@ -236,7 +247,7 @@ mod tests {
             cwd = cwd.display(),
         );
 
-        assert_eq!(context.serialize_to_xml(), expected);
+        assert_eq!(context.serialize_to_text(), expected);
     }
 
     #[test]
@@ -269,7 +280,7 @@ mod tests {
             test_path_buf("/repo").display()
         );
 
-        assert_eq!(context.serialize_to_xml(), expected);
+        assert_eq!(context.serialize_to_text(), expected);
     }
 
     #[test]
@@ -289,7 +300,7 @@ mod tests {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-        assert_eq!(context.serialize_to_xml(), expected);
+        assert_eq!(context.serialize_to_text(), expected);
     }
 
     #[test]
@@ -309,7 +320,7 @@ mod tests {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-        assert_eq!(context.serialize_to_xml(), expected);
+        assert_eq!(context.serialize_to_text(), expected);
     }
 
     #[test]
@@ -329,7 +340,7 @@ mod tests {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-        assert_eq!(context.serialize_to_xml(), expected);
+        assert_eq!(context.serialize_to_text(), expected);
     }
 
     #[test]
@@ -349,7 +360,7 @@ mod tests {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-        assert_eq!(context.serialize_to_xml(), expected);
+        assert_eq!(context.serialize_to_text(), expected);
     }
 
     #[test]
@@ -472,6 +483,6 @@ mod tests {
             test_path_buf("/repo").display()
         );
 
-        assert_eq!(context.serialize_to_xml(), expected);
+        assert_eq!(context.serialize_to_text(), expected);
     }
 }

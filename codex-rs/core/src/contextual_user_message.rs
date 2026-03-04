@@ -1,3 +1,9 @@
+//! Typed contextual-user fragments.
+//!
+//! Use this path for model-visible user-role context that is not actual user
+//! intent, including durable context like AGENTS/environment state and later
+//! contextual event markers.
+
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
@@ -48,7 +54,7 @@ impl ContextualUserFragmentDefinition {
         self.end_marker
     }
 
-    pub(crate) fn wrap(&self, body: String) -> String {
+    pub(crate) fn wrap_body(&self, body: String) -> String {
         format!("{}\n{}\n{}", self.start_marker, body, self.end_marker)
     }
 
@@ -60,6 +66,30 @@ impl ContextualUserFragmentDefinition {
             end_turn: None,
             phase: None,
         }
+    }
+}
+
+/// Implement this for any model-visible user-role fragment that is contextual
+/// state rather than user intent.
+pub(crate) trait ContextualUserFragment {
+    fn definition(&self) -> ContextualUserFragmentDefinition;
+
+    fn serialize_to_text(&self) -> String;
+
+    fn into_content_item(self) -> ContentItem
+    where
+        Self: Sized,
+    {
+        ContentItem::InputText {
+            text: self.serialize_to_text(),
+        }
+    }
+
+    fn into_response_item(self) -> ResponseItem
+    where
+        Self: Sized,
+    {
+        self.definition().into_message(self.serialize_to_text())
     }
 }
 

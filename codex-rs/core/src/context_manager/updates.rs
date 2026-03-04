@@ -1,5 +1,6 @@
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
+use crate::contextual_user_message::ContextualUserFragment;
 use crate::environment_context::EnvironmentContext;
 use crate::features::Feature;
 use crate::shell::Shell;
@@ -11,11 +12,11 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
 
-fn build_environment_update_item(
+fn build_environment_update_fragment(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
     shell: &Shell,
-) -> Option<ResponseItem> {
+) -> Option<EnvironmentContext> {
     let prev = previous?;
     let prev_context = EnvironmentContext::from_turn_context_item(prev, shell);
     let next_context = EnvironmentContext::from_turn_context(next, shell);
@@ -23,8 +24,8 @@ fn build_environment_update_item(
         return None;
     }
 
-    Some(ResponseItem::from(
-        EnvironmentContext::diff_from_turn_context_item(prev, next, shell),
+    Some(EnvironmentContext::diff_from_turn_context_item(
+        prev, next, shell,
     ))
 }
 
@@ -146,23 +147,47 @@ pub(crate) fn build_model_instructions_update_item(
     ))
 }
 
-pub(crate) fn build_developer_update_item(text_sections: Vec<String>) -> Option<ResponseItem> {
-    build_text_message("developer", text_sections)
+#[derive(Default)]
+pub(crate) struct DeveloperEnvelopeBuilder {
+    fragments: Vec<DeveloperInstructions>,
 }
 
-pub(crate) fn build_contextual_user_message(text_sections: Vec<String>) -> Option<ResponseItem> {
-    build_text_message("user", text_sections)
-}
-
-fn build_text_message(role: &str, text_sections: Vec<String>) -> Option<ResponseItem> {
-    if text_sections.is_empty() {
-        return None;
+impl DeveloperEnvelopeBuilder {
+    pub(crate) fn push(&mut self, fragment: impl Into<DeveloperInstructions>) {
+        self.fragments.push(fragment.into());
     }
 
-    let content = text_sections
-        .into_iter()
-        .map(|text| ContentItem::InputText { text })
-        .collect();
+    pub(crate) fn build(self) -> Option<ResponseItem> {
+        let content = self
+            .fragments
+            .into_iter()
+            .map(|fragment| ContentItem::InputText {
+                text: fragment.into_text(),
+            })
+            .collect::<Vec<_>>();
+        build_message("developer", content)
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct ContextualUserEnvelopeBuilder {
+    content: Vec<ContentItem>,
+}
+
+impl ContextualUserEnvelopeBuilder {
+    pub(crate) fn push_fragment(&mut self, fragment: impl ContextualUserFragment) {
+        self.content.push(fragment.into_content_item());
+    }
+
+    pub(crate) fn build(self) -> Option<ResponseItem> {
+        build_message("user", self.content)
+    }
+}
+
+fn build_message(role: &str, content: Vec<ContentItem>) -> Option<ResponseItem> {
+    if content.is_empty() {
+        return None;
+    }
 
     Some(ResponseItem::Message {
         id: None,
@@ -181,8 +206,8 @@ pub(crate) fn build_settings_update_items(
     exec_policy: &Policy,
     personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
-    let contextual_user_message = build_environment_update_item(previous, next, shell);
-    let developer_update_sections = [
+    let mut developer_envelope = DeveloperEnvelopeBuilder::default();
+    for fragment in [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
         build_model_instructions_update_item(previous_turn_settings, next),
@@ -193,15 +218,91 @@ pub(crate) fn build_settings_update_items(
     ]
     .into_iter()
     .flatten()
-    .map(DeveloperInstructions::into_text)
-    .collect();
+    {
+        developer_envelope.push(fragment);
+    }
+    let mut contextual_user_envelope = ContextualUserEnvelopeBuilder::default();
+    if let Some(environment_update) = build_environment_update_fragment(previous, next, shell) {
+        contextual_user_envelope.push_fragment(environment_update);
+    }
 
     let mut items = Vec::with_capacity(2);
-    if let Some(developer_message) = build_developer_update_item(developer_update_sections) {
+    if let Some(developer_message) = developer_envelope.build() {
         items.push(developer_message);
     }
-    if let Some(contextual_user_message) = contextual_user_message {
+    if let Some(contextual_user_message) = contextual_user_envelope.build() {
         items.push(contextual_user_message);
     }
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contextual_user_message::ContextualUserFragmentDefinition;
+    use codex_protocol::models::ContentItem;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn developer_envelope_builder_emits_one_message_in_order() {
+        let mut builder = DeveloperEnvelopeBuilder::default();
+        builder.push(DeveloperInstructions::new("first"));
+        builder.push(DeveloperInstructions::new("second"));
+
+        let item = builder.build().expect("developer message expected");
+        let ResponseItem::Message { role, content, .. } = item else {
+            panic!("expected message");
+        };
+
+        assert_eq!(role, "developer");
+        assert_eq!(
+            content,
+            vec![
+                ContentItem::InputText {
+                    text: "first".to_string()
+                },
+                ContentItem::InputText {
+                    text: "second".to_string()
+                },
+            ]
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    struct FakeContextualFragment(&'static str);
+
+    impl ContextualUserFragment for FakeContextualFragment {
+        fn definition(&self) -> ContextualUserFragmentDefinition {
+            ContextualUserFragmentDefinition::new("<fake>", "</fake>")
+        }
+
+        fn serialize_to_text(&self) -> String {
+            self.0.to_string()
+        }
+    }
+
+    #[test]
+    fn contextual_user_envelope_builder_emits_one_message_in_order() {
+        let mut builder = ContextualUserEnvelopeBuilder::default();
+        builder.push_fragment(FakeContextualFragment("first"));
+        builder.push_fragment(FakeContextualFragment("second"));
+
+        let item = builder.build().expect("user message expected");
+        let ResponseItem::Message { role, content, .. } = item else {
+            panic!("expected message");
+        };
+
+        assert_eq!(role, "user");
+        assert_eq!(
+            content,
+            vec![
+                ContentItem::InputText {
+                    text: "first".to_string()
+                },
+                ContentItem::InputText {
+                    text: "second".to_string()
+                },
+            ]
+        );
+    }
 }

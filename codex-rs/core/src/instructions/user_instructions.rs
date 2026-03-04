@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::contextual_user_message::ContextualUserFragment;
 use codex_protocol::models::ResponseItem;
 
 use crate::contextual_user_message::AGENTS_MD_FRAGMENT;
@@ -27,9 +28,19 @@ impl UserInstructions {
     }
 }
 
+impl ContextualUserFragment for UserInstructions {
+    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+        AGENTS_MD_FRAGMENT
+    }
+
+    fn serialize_to_text(&self) -> String {
+        Self::serialize_to_text(self)
+    }
+}
+
 impl From<UserInstructions> for ResponseItem {
     fn from(ui: UserInstructions) -> Self {
-        AGENTS_MD_FRAGMENT.into_message(ui.serialize_to_text())
+        ui.into_response_item()
     }
 }
 
@@ -41,14 +52,28 @@ pub(crate) struct SkillInstructions {
     pub contents: String,
 }
 
-impl SkillInstructions {}
+impl SkillInstructions {
+    pub(crate) fn serialize_to_text(&self) -> String {
+        SKILL_FRAGMENT.wrap_body(format!(
+            "<name>{}</name>\n<path>{}</path>\n{}",
+            self.name, self.path, self.contents
+        ))
+    }
+}
+
+impl ContextualUserFragment for SkillInstructions {
+    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+        SKILL_FRAGMENT
+    }
+
+    fn serialize_to_text(&self) -> String {
+        Self::serialize_to_text(self)
+    }
+}
 
 impl From<SkillInstructions> for ResponseItem {
     fn from(si: SkillInstructions) -> Self {
-        SKILL_FRAGMENT.into_message(SKILL_FRAGMENT.wrap(format!(
-            "<name>{}</name>\n<path>{}</path>\n{}",
-            si.name, si.path, si.contents
-        )))
+        si.into_response_item()
     }
 }
 

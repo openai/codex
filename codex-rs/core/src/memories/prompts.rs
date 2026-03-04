@@ -4,6 +4,7 @@ use crate::memories::storage::rollout_summary_file_stem_from_parts;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 use askama::Template;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::openai_models::ModelInfo;
 use codex_state::Phase2InputSelection;
 use codex_state::Stage1Output;
@@ -155,7 +156,9 @@ pub(super) fn build_stage_one_input_message(
 /// Build prompt used for read path. This prompt must be added to the developer instructions. In
 /// case of large memory files, the `memory_summary.md` is truncated at
 /// [phase_one::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT].
-pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) -> Option<String> {
+pub(crate) async fn build_memory_tool_developer_instructions(
+    codex_home: &Path,
+) -> Option<DeveloperInstructions> {
     let base_path = memory_root(codex_home);
     let memory_summary_path = base_path.join("memory_summary.md");
     let memory_summary = fs::read_to_string(&memory_summary_path)
@@ -175,7 +178,7 @@ pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) 
         base_path: &base_path,
         memory_summary: &memory_summary,
     };
-    template.render().ok()
+    template.render().ok().map(DeveloperInstructions::new)
 }
 
 #[cfg(test)]
