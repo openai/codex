@@ -30,6 +30,8 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::ImageGenerationBeginEvent;
+use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
@@ -141,6 +143,8 @@ impl ThreadHistoryBuilder {
             EventMsg::McpToolCallBegin(payload) => self.handle_mcp_tool_call_begin(payload),
             EventMsg::McpToolCallEnd(payload) => self.handle_mcp_tool_call_end(payload),
             EventMsg::ViewImageToolCall(payload) => self.handle_view_image_tool_call(payload),
+            EventMsg::ImageGenerationBegin(payload) => self.handle_image_generation_begin(payload),
+            EventMsg::ImageGenerationEnd(payload) => self.handle_image_generation_end(payload),
             EventMsg::CollabAgentSpawnBegin(payload) => {
                 self.handle_collab_agent_spawn_begin(payload)
             }
@@ -269,6 +273,7 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
+            | codex_protocol::items::TurnItem::ImageGeneration(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
     }
@@ -288,6 +293,7 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
+            | codex_protocol::items::TurnItem::ImageGeneration(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
     }
@@ -512,6 +518,26 @@ impl ThreadHistoryBuilder {
         let item = ThreadItem::ImageView {
             id: payload.call_id.clone(),
             path: payload.path.to_string_lossy().into_owned(),
+        };
+        self.upsert_item_in_current_turn(item);
+    }
+
+    fn handle_image_generation_begin(&mut self, payload: &ImageGenerationBeginEvent) {
+        let item = ThreadItem::ImageGeneration {
+            id: payload.call_id.clone(),
+            status: String::new(),
+            revised_prompt: None,
+            result: String::new(),
+        };
+        self.upsert_item_in_current_turn(item);
+    }
+
+    fn handle_image_generation_end(&mut self, payload: &ImageGenerationEndEvent) {
+        let item = ThreadItem::ImageGeneration {
+            id: payload.call_id.clone(),
+            status: payload.status.clone(),
+            revised_prompt: payload.revised_prompt.clone(),
+            result: payload.result.clone(),
         };
         self.upsert_item_in_current_turn(item);
     }

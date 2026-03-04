@@ -111,6 +111,8 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::ImageGenerationBeginEvent;
+use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListCustomPromptsResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::McpListToolsResponseEvent;
@@ -2159,6 +2161,20 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_view_image_tool_call(
             event.path,
             &self.config.cwd,
+        ));
+        self.request_redraw();
+    }
+
+    fn on_image_generation_begin(&mut self, _event: ImageGenerationBeginEvent) {
+        self.flush_answer_stream_with_separator();
+    }
+
+    fn on_image_generation_end(&mut self, event: ImageGenerationEndEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_image_generation_call(
+            event.call_id,
+            event.status,
+            event.revised_prompt,
         ));
         self.request_redraw();
     }
@@ -4611,6 +4627,8 @@ impl ChatWidget {
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
             EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
+            EventMsg::ImageGenerationBegin(ev) => self.on_image_generation_begin(ev),
+            EventMsg::ImageGenerationEnd(ev) => self.on_image_generation_end(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
