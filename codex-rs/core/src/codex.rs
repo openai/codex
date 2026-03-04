@@ -3238,12 +3238,9 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) {
-        {
+        if let Some(token_usage) = token_usage {
             let mut state = self.state.lock().await;
-            if let Some(token_usage) = token_usage {
-                state
-                    .update_token_info_from_usage(token_usage, turn_context.model_context_window());
-            }
+            state.update_token_info_from_usage(token_usage, turn_context.model_context_window());
         }
         self.send_token_count_event(turn_context).await;
     }
