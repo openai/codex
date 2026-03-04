@@ -17,8 +17,10 @@ impl StateRuntime {
         );
         builder.push_values(entries, |mut row, entry| {
             let feedback_log_body = entry.feedback_log_body.as_ref().or(entry.message.as_ref());
-            // This is a retained-content budget, not an exact on-disk SQLite byte count:
-            // `query_logs` reads `message`, while `/feedback` exports `feedback_log_body`.
+            // Keep about 10 MiB of reader-visible log content per partition.
+            // `query_logs` uses `message`, while `/feedback` exports
+            // `feedback_log_body`, so charge the larger payload without
+            // double-counting the same event.
             let estimated_bytes = entry
                 .message
                 .as_ref()
