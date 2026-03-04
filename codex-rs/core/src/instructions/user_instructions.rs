@@ -1,11 +1,15 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::contextual_user_message::ContextualUserFragment;
+use crate::codex::TurnContext;
+use crate::contextual_user_message::ModelVisibleFragment;
+use crate::contextual_user_message::TurnContextFragment;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TurnContextItem;
 
 use crate::contextual_user_message::AGENTS_MD_FRAGMENT;
 use crate::contextual_user_message::SKILL_FRAGMENT;
+use crate::shell::Shell;
 
 pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
 
@@ -28,13 +32,47 @@ impl UserInstructions {
     }
 }
 
-impl ContextualUserFragment for UserInstructions {
-    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+impl ModelVisibleFragment for UserInstructions {
+    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
         AGENTS_MD_FRAGMENT
     }
 
-    fn serialize_to_text(&self) -> String {
+    fn render_text(&self) -> String {
         Self::serialize_to_text(self)
+    }
+}
+
+impl TurnContextFragment for UserInstructions {
+    fn from_turn_context(turn_context: &TurnContext, _shell: &Shell) -> Option<Self> {
+        let text = turn_context.user_instructions.as_ref()?.clone();
+        Some(Self {
+            directory: turn_context.cwd.to_string_lossy().into_owned(),
+            text,
+        })
+    }
+
+    fn from_turn_context_item(turn_context_item: &TurnContextItem, _shell: &Shell) -> Option<Self> {
+        let text = turn_context_item.user_instructions.as_ref()?.clone();
+        Some(Self {
+            directory: turn_context_item.cwd.to_string_lossy().into_owned(),
+            text,
+        })
+    }
+
+    fn diff_from_turn_context_item(
+        previous: &TurnContextItem,
+        turn_context: &TurnContext,
+        shell: &Shell,
+    ) -> Option<Self> {
+        let current = Self::from_turn_context(turn_context, shell)?;
+        let previous_directory = previous.cwd.to_string_lossy().into_owned();
+        if previous.user_instructions.as_deref() == Some(current.text.as_str())
+            && previous_directory == current.directory
+        {
+            return None;
+        }
+
+        Some(current)
     }
 }
 
@@ -61,12 +99,12 @@ impl SkillInstructions {
     }
 }
 
-impl ContextualUserFragment for SkillInstructions {
-    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+impl ModelVisibleFragment for SkillInstructions {
+    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
         SKILL_FRAGMENT
     }
 
-    fn serialize_to_text(&self) -> String {
+    fn render_text(&self) -> String {
         Self::serialize_to_text(self)
     }
 }

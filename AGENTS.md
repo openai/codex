@@ -23,10 +23,12 @@ In the codex-rs folder where the rust code lives:
 
 ### Model-visible context fragments
 
-- Developer envelope builders accept only `DeveloperInstructions`; add new developer-role prompt context as `DeveloperInstructions`, not as raw strings or direct developer `ResponseItem`s.
-- When adding user-role contextual prompt context, define a typed contextual fragment and register its `ContextualUserFragmentDefinition` so history parsing still treats it as contextual state rather than user intent.
-- Use `EnvironmentContext` only for environment/session facts. Do not use it as a generic container for unrelated contextual messages.
-- Contextual user messages injected after initial-context assembly should use the same typed fragment path as initial-context fragments; do not call fragment wrapping helpers ad hoc from new code.
+- Model-visible prompt context should go through the shared fragment abstractions described in `docs/model-visible-context.md`.
+- Every new model-visible fragment should implement `ModelVisibleFragment` and declare a `ModelVisibleFragmentSpec`.
+- Use the developer envelope for developer guidance. `DeveloperInstructions` remains the standard string-backed developer fragment for most cases, but any new developer fragment must still use the shared fragment path rather than hand-built developer `ResponseItem`s.
+- Use the contextual-user envelope for user-role contextual state or runtime markers. Contextual-user fragments must provide stable markers so history parsing treats them as contextual state rather than user intent.
+- Fragments derived from `TurnContext` / `TurnContextItem` should implement `TurnContextFragment` so current-state extraction, persisted-state extraction, diffing, and rendering live together.
+- Do not inject raw strings directly into the initial-context or settings-update builders, and do not call fragment wrapping helpers ad hoc from new code.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 

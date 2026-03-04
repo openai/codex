@@ -21,7 +21,7 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::contextual_user_message::ContextualUserFragment;
+use crate::contextual_user_message::ModelVisibleFragment;
 use crate::contextual_user_message::TURN_ABORTED_FRAGMENT;
 use crate::event_mapping::parse_turn_item;
 use crate::models_manager::manager::ModelsManager;
@@ -55,12 +55,12 @@ struct TurnAbortedMarker {
     guidance: &'static str,
 }
 
-impl ContextualUserFragment for TurnAbortedMarker {
-    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+impl ModelVisibleFragment for TurnAbortedMarker {
+    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
         TURN_ABORTED_FRAGMENT
     }
 
-    fn serialize_to_text(&self) -> String {
+    fn render_text(&self) -> String {
         TURN_ABORTED_FRAGMENT.wrap_body(self.guidance.to_string())
     }
 }

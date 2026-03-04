@@ -3,7 +3,7 @@ use std::time::Duration;
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::TurnContext;
-use crate::contextual_user_message::ContextualUserFragment;
+use crate::contextual_user_message::ModelVisibleFragment;
 use crate::contextual_user_message::USER_SHELL_COMMAND_FRAGMENT;
 use crate::exec::ExecToolCallOutput;
 use crate::tools::format_exec_output_str;
@@ -19,12 +19,12 @@ struct UserShellCommandRecord<'a> {
     turn_context: &'a TurnContext,
 }
 
-impl ContextualUserFragment for UserShellCommandRecord<'_> {
-    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+impl ModelVisibleFragment for UserShellCommandRecord<'_> {
+    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
         USER_SHELL_COMMAND_FRAGMENT
     }
 
-    fn serialize_to_text(&self) -> String {
+    fn render_text(&self) -> String {
         let mut sections = Vec::new();
         sections.push("<command>".to_string());
         sections.push(self.command.to_string());
@@ -53,7 +53,7 @@ pub fn format_user_shell_command_record(
         exec_output,
         turn_context,
     }
-    .serialize_to_text()
+    .render_text()
 }
 
 pub fn user_shell_command_record_item(

@@ -361,6 +361,9 @@ impl Default for BaseInstructions {
 
 /// Developer-provided guidance that is injected into a turn as a developer role
 /// message.
+///
+/// In `codex-core`, this is one implementation of the shared model-visible
+/// fragment path used to assemble prompt context.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(rename = "developer_instructions", rename_all = "snake_case")]
 pub struct DeveloperInstructions {

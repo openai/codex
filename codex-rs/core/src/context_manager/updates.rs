@@ -1,6 +1,8 @@
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
-use crate::contextual_user_message::ContextualUserFragment;
+use crate::contextual_user_message::ModelVisibleEnvelope;
+use crate::contextual_user_message::ModelVisibleFragment;
+use crate::contextual_user_message::TurnContextFragment;
 use crate::environment_context::EnvironmentContext;
 use crate::features::Feature;
 use crate::shell::Shell;
@@ -17,16 +19,7 @@ fn build_environment_update_fragment(
     next: &TurnContext,
     shell: &Shell,
 ) -> Option<EnvironmentContext> {
-    let prev = previous?;
-    let prev_context = EnvironmentContext::from_turn_context_item(prev, shell);
-    let next_context = EnvironmentContext::from_turn_context(next, shell);
-    if prev_context.equals_except_shell(&next_context) {
-        return None;
-    }
-
-    Some(EnvironmentContext::diff_from_turn_context_item(
-        prev, next, shell,
-    ))
+    EnvironmentContext::diff_from_turn_context_item(previous?, next, shell)
 }
 
 fn build_permissions_update_item(
@@ -147,40 +140,73 @@ pub(crate) fn build_model_instructions_update_item(
     ))
 }
 
-#[derive(Default)]
-pub(crate) struct DeveloperEnvelopeBuilder {
-    fragments: Vec<DeveloperInstructions>,
-}
-
-impl DeveloperEnvelopeBuilder {
-    pub(crate) fn push(&mut self, fragment: impl Into<DeveloperInstructions>) {
-        self.fragments.push(fragment.into());
-    }
-
-    pub(crate) fn build(self) -> Option<ResponseItem> {
-        let content = self
-            .fragments
-            .into_iter()
-            .map(|fragment| ContentItem::InputText {
-                text: fragment.into_text(),
-            })
-            .collect::<Vec<_>>();
-        build_message("developer", content)
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct ContextualUserEnvelopeBuilder {
+struct ModelVisibleEnvelopeBuilder {
+    envelope: ModelVisibleEnvelope,
     content: Vec<ContentItem>,
 }
 
-impl ContextualUserEnvelopeBuilder {
-    pub(crate) fn push_fragment(&mut self, fragment: impl ContextualUserFragment) {
+impl ModelVisibleEnvelopeBuilder {
+    fn new(envelope: ModelVisibleEnvelope) -> Self {
+        Self {
+            envelope,
+            content: Vec::new(),
+        }
+    }
+
+    fn push_fragment(&mut self, fragment: impl ModelVisibleFragment) {
+        let spec = fragment.spec();
+        assert_eq!(
+            spec.envelope(),
+            self.envelope,
+            "fragment role mismatch: expected {:?}, got {:?}",
+            self.envelope,
+            spec.envelope()
+        );
         self.content.push(fragment.into_content_item());
     }
 
+    fn build(self) -> Option<ResponseItem> {
+        build_message(self.envelope.response_role(), self.content)
+    }
+}
+
+pub(crate) struct DeveloperEnvelopeBuilder(ModelVisibleEnvelopeBuilder);
+
+impl Default for DeveloperEnvelopeBuilder {
+    fn default() -> Self {
+        Self(ModelVisibleEnvelopeBuilder::new(
+            ModelVisibleEnvelope::Developer,
+        ))
+    }
+}
+
+impl DeveloperEnvelopeBuilder {
+    pub(crate) fn push(&mut self, fragment: impl ModelVisibleFragment) {
+        self.0.push_fragment(fragment);
+    }
+
     pub(crate) fn build(self) -> Option<ResponseItem> {
-        build_message("user", self.content)
+        self.0.build()
+    }
+}
+
+pub(crate) struct ContextualUserEnvelopeBuilder(ModelVisibleEnvelopeBuilder);
+
+impl Default for ContextualUserEnvelopeBuilder {
+    fn default() -> Self {
+        Self(ModelVisibleEnvelopeBuilder::new(
+            ModelVisibleEnvelope::ContextualUser,
+        ))
+    }
+}
+
+impl ContextualUserEnvelopeBuilder {
+    pub(crate) fn push_fragment(&mut self, fragment: impl ModelVisibleFragment) {
+        self.0.push_fragment(fragment);
+    }
+
+    pub(crate) fn build(self) -> Option<ResponseItem> {
+        self.0.build()
     }
 }
 
@@ -239,7 +265,7 @@ pub(crate) fn build_settings_update_items(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contextual_user_message::ContextualUserFragmentDefinition;
+    use crate::contextual_user_message::ModelVisibleFragmentSpec;
     use codex_protocol::models::ContentItem;
     use pretty_assertions::assert_eq;
 
@@ -269,23 +295,37 @@ mod tests {
     }
 
     #[derive(Clone, Copy)]
-    struct FakeContextualFragment(&'static str);
+    struct FakeFragment {
+        role: ModelVisibleEnvelope,
+        text: &'static str,
+    }
 
-    impl ContextualUserFragment for FakeContextualFragment {
-        fn definition(&self) -> ContextualUserFragmentDefinition {
-            ContextualUserFragmentDefinition::new("<fake>", "</fake>")
+    impl ModelVisibleFragment for FakeFragment {
+        fn spec(&self) -> ModelVisibleFragmentSpec {
+            match self.role {
+                ModelVisibleEnvelope::Developer => ModelVisibleFragmentSpec::developer(),
+                ModelVisibleEnvelope::ContextualUser => {
+                    ModelVisibleFragmentSpec::contextual_user("<fake>", "</fake>")
+                }
+            }
         }
 
-        fn serialize_to_text(&self) -> String {
-            self.0.to_string()
+        fn render_text(&self) -> String {
+            self.text.to_string()
         }
     }
 
     #[test]
     fn contextual_user_envelope_builder_emits_one_message_in_order() {
         let mut builder = ContextualUserEnvelopeBuilder::default();
-        builder.push_fragment(FakeContextualFragment("first"));
-        builder.push_fragment(FakeContextualFragment("second"));
+        builder.push_fragment(FakeFragment {
+            role: ModelVisibleEnvelope::ContextualUser,
+            text: "first",
+        });
+        builder.push_fragment(FakeFragment {
+            role: ModelVisibleEnvelope::ContextualUser,
+            text: "second",
+        });
 
         let item = builder.build().expect("user message expected");
         let ResponseItem::Message { role, content, .. } = item else {
@@ -304,5 +344,15 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "fragment role mismatch")]
+    fn developer_envelope_builder_rejects_contextual_user_fragment() {
+        let mut builder = DeveloperEnvelopeBuilder::default();
+        builder.push(FakeFragment {
+            role: ModelVisibleEnvelope::ContextualUser,
+            text: "wrong",
+        });
     }
 }

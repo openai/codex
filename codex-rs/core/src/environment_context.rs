@@ -1,6 +1,7 @@
 use crate::codex::TurnContext;
-use crate::contextual_user_message::ContextualUserFragment;
 use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
+use crate::contextual_user_message::ModelVisibleFragment;
+use crate::contextual_user_message::TurnContextFragment;
 use crate::shell::Shell;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
@@ -57,48 +58,6 @@ impl EnvironmentContext {
             && self.current_date == *current_date
             && self.timezone == *timezone
             && self.network == *network
-    }
-
-    pub fn diff_from_turn_context_item(
-        before: &TurnContextItem,
-        after: &TurnContext,
-        shell: &Shell,
-    ) -> Self {
-        let before_network = Self::network_from_turn_context_item(before);
-        let after_network = Self::network_from_turn_context(after);
-        let cwd = if before.cwd != after.cwd {
-            Some(after.cwd.clone())
-        } else {
-            None
-        };
-        let current_date = after.current_date.clone();
-        let timezone = after.timezone.clone();
-        let network = if before_network != after_network {
-            after_network
-        } else {
-            before_network
-        };
-        EnvironmentContext::new(cwd, shell.clone(), current_date, timezone, network)
-    }
-
-    pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
-        Self::new(
-            Some(turn_context.cwd.clone()),
-            shell.clone(),
-            turn_context.current_date.clone(),
-            turn_context.timezone.clone(),
-            Self::network_from_turn_context(turn_context),
-        )
-    }
-
-    pub fn from_turn_context_item(turn_context_item: &TurnContextItem, shell: &Shell) -> Self {
-        Self::new(
-            Some(turn_context_item.cwd.clone()),
-            shell.clone(),
-            turn_context_item.current_date.clone(),
-            turn_context_item.timezone.clone(),
-            Self::network_from_turn_context_item(turn_context_item),
-        )
     }
 
     fn network_from_turn_context(turn_context: &TurnContext) -> Option<NetworkContext> {
@@ -174,13 +133,68 @@ impl EnvironmentContext {
     }
 }
 
-impl ContextualUserFragment for EnvironmentContext {
-    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+impl ModelVisibleFragment for EnvironmentContext {
+    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
         ENVIRONMENT_CONTEXT_FRAGMENT
     }
 
-    fn serialize_to_text(&self) -> String {
+    fn render_text(&self) -> String {
         Self::serialize_to_text(self)
+    }
+}
+
+impl TurnContextFragment for EnvironmentContext {
+    fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Option<Self> {
+        Some(Self::new(
+            Some(turn_context.cwd.clone()),
+            shell.clone(),
+            turn_context.current_date.clone(),
+            turn_context.timezone.clone(),
+            Self::network_from_turn_context(turn_context),
+        ))
+    }
+
+    fn from_turn_context_item(turn_context_item: &TurnContextItem, shell: &Shell) -> Option<Self> {
+        Some(Self::new(
+            Some(turn_context_item.cwd.clone()),
+            shell.clone(),
+            turn_context_item.current_date.clone(),
+            turn_context_item.timezone.clone(),
+            Self::network_from_turn_context_item(turn_context_item),
+        ))
+    }
+
+    fn diff_from_turn_context_item(
+        previous: &TurnContextItem,
+        turn_context: &TurnContext,
+        shell: &Shell,
+    ) -> Option<Self> {
+        let previous_context = Self::from_turn_context_item(previous, shell)?;
+        let next_context = Self::from_turn_context(turn_context, shell)?;
+        if previous_context.equals_except_shell(&next_context) {
+            return None;
+        }
+
+        let previous_network = Self::network_from_turn_context_item(previous);
+        let current_network = Self::network_from_turn_context(turn_context);
+        let cwd = if previous.cwd != turn_context.cwd {
+            Some(turn_context.cwd.clone())
+        } else {
+            None
+        };
+        let network = if previous_network != current_network {
+            current_network
+        } else {
+            previous_network
+        };
+
+        Some(Self::new(
+            cwd,
+            shell.clone(),
+            turn_context.current_date.clone(),
+            turn_context.timezone.clone(),
+            network,
+        ))
     }
 }
 

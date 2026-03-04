@@ -2,7 +2,7 @@ use codex_protocol::protocol::AgentStatus;
 
 /// Helpers for model-visible session state markers that are stored in user-role
 /// messages but are not user intent.
-use crate::contextual_user_message::ContextualUserFragment;
+use crate::contextual_user_message::ModelVisibleFragment;
 use crate::contextual_user_message::SUBAGENT_NOTIFICATION_FRAGMENT;
 use crate::contextual_user_message::SUBAGENTS_FRAGMENT;
 
@@ -20,12 +20,12 @@ impl SubagentRosterContext {
     }
 }
 
-impl ContextualUserFragment for SubagentRosterContext {
-    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+impl ModelVisibleFragment for SubagentRosterContext {
+    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
         SUBAGENTS_FRAGMENT
     }
 
-    fn serialize_to_text(&self) -> String {
+    fn render_text(&self) -> String {
         let lines = self
             .subagents
             .lines()
@@ -41,12 +41,12 @@ struct SubagentNotification<'a> {
     status: &'a AgentStatus,
 }
 
-impl ContextualUserFragment for SubagentNotification<'_> {
-    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+impl ModelVisibleFragment for SubagentNotification<'_> {
+    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
         SUBAGENT_NOTIFICATION_FRAGMENT
     }
 
-    fn serialize_to_text(&self) -> String {
+    fn render_text(&self) -> String {
         let payload_json = serde_json::json!({
             "agent_id": self.agent_id,
             "status": self.status,
@@ -57,7 +57,7 @@ impl ContextualUserFragment for SubagentNotification<'_> {
 }
 
 pub(crate) fn format_subagent_notification_message(agent_id: &str, status: &AgentStatus) -> String {
-    SubagentNotification { agent_id, status }.serialize_to_text()
+    SubagentNotification { agent_id, status }.render_text()
 }
 
 pub(crate) fn format_subagent_context_line(agent_id: &str, agent_nickname: Option<&str>) -> String {
@@ -79,7 +79,7 @@ mod tests {
                 .expect("context expected");
 
         assert_eq!(
-            context.serialize_to_text(),
+            context.render_text(),
             "<subagents>\n  - agent-1: Atlas\n  - agent-2: Juniper\n</subagents>"
         );
     }
