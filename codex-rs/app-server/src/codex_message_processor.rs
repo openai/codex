@@ -3149,6 +3149,20 @@ impl CodexMessageProcessor {
                     mismatch_details.join("; ")
                 );
             }
+            let thread_summary = match load_thread_summary_for_rollout(
+                &self.config,
+                existing_thread_id,
+                rollout_path.as_path(),
+                config_snapshot.model_provider_id.as_str(),
+            )
+            .await
+            {
+                Ok(thread) => thread,
+                Err(message) => {
+                    self.send_internal_error(request_id, message).await;
+                    return true;
+                }
+            };
 
             let listener_command_tx = {
                 let thread_state = thread_state.lock().await;
@@ -3169,13 +3183,9 @@ impl CodexMessageProcessor {
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
                 Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
-                    rollout_path,
+                    rollout_path: rollout_path.clone(),
                     config_snapshot,
-                    persisted_git_info: read_persisted_thread_git_info_by_thread_id(
-                        &self.config,
-                        existing_thread_id,
-                    )
-                    .await,
+                    thread_summary,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -3280,17 +3290,17 @@ impl CodexMessageProcessor {
         rollout_path: &Path,
         fallback_provider: &str,
     ) -> Option<Thread> {
-        let mut thread = match read_summary_from_rollout(rollout_path, fallback_provider).await {
-            Ok(summary) => summary_to_thread(summary),
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!(
-                        "failed to load rollout `{}` for thread {thread_id}: {err}",
-                        rollout_path.display()
-                    ),
-                )
-                .await;
+        let mut thread = match load_thread_summary_for_rollout(
+            &self.config,
+            thread_id,
+            rollout_path,
+            fallback_provider,
+        )
+        .await
+        {
+            Ok(thread) => thread,
+            Err(message) => {
+                self.send_internal_error(request_id, message).await;
                 return None;
             }
         };
@@ -3298,10 +3308,6 @@ impl CodexMessageProcessor {
             Ok(items) => {
                 thread.turns = build_turns_from_rollout_items(&items);
                 self.attach_thread_name(thread_id, &mut thread).await;
-                apply_persisted_thread_git_info(
-                    &mut thread,
-                    read_persisted_thread_git_info_by_thread_id(&self.config, thread_id).await,
-                );
                 Some(thread)
             }
             Err(err) => {
@@ -6252,9 +6258,8 @@ async fn handle_pending_thread_resume_request(
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = match load_thread_for_running_resume_response(
-        conversation_id,
+        pending.thread_summary,
         pending.rollout_path.as_path(),
-        pending.config_snapshot.model_provider_id.as_str(),
         active_turn.as_ref(),
     )
     .await
@@ -6288,7 +6293,6 @@ async fn handle_pending_thread_resume_request(
         has_in_progress_turn,
     );
     thread.status = status;
-    apply_persisted_thread_git_info(&mut thread, pending.persisted_git_info);
 
     match find_thread_name_by_id(codex_home, &conversation_id).await {
         Ok(thread_name) => thread.name = thread_name,
@@ -6350,28 +6354,18 @@ async fn resolve_pending_server_request(
 }
 
 async fn load_thread_for_running_resume_response(
-    conversation_id: ThreadId,
+    mut thread: Thread,
     rollout_path: &Path,
-    fallback_provider: &str,
     active_turn: Option<&Turn>,
 ) -> std::result::Result<Thread, String> {
-    let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
-        .await
-        .map(summary_to_thread)
-        .map_err(|err| {
-            format!(
-                "failed to load rollout `{}` for thread {conversation_id}: {err}",
-                rollout_path.display()
-            )
-        })?;
-
     let mut turns = read_rollout_items_from_rollout(rollout_path)
         .await
         .map(|items| build_turns_from_rollout_items(&items))
         .map_err(|err| {
             format!(
-                "failed to load rollout `{}` for thread {conversation_id}: {err}",
-                rollout_path.display()
+                "failed to load rollout `{}` for thread {}: {err}",
+                rollout_path.display(),
+                thread.id
             )
         })?;
     if let Some(active_turn) = active_turn {
@@ -6978,25 +6972,25 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     }
 }
 
-async fn read_persisted_thread_git_info_by_thread_id(
+async fn load_thread_summary_for_rollout(
     config: &Config,
     thread_id: ThreadId,
-) -> Option<Option<ApiGitInfo>> {
-    let summary = read_summary_from_state_db_by_thread_id(config, thread_id).await?;
-    Some(summary.git_info.map(|info| ApiGitInfo {
-        sha: info.sha,
-        branch: info.branch,
-        origin_url: info.origin_url,
-    }))
-}
-
-fn apply_persisted_thread_git_info(
-    thread: &mut Thread,
-    persisted_git_info: Option<Option<ApiGitInfo>>,
-) {
-    if let Some(git_info) = persisted_git_info {
-        thread.git_info = git_info;
+    rollout_path: &Path,
+    fallback_provider: &str,
+) -> std::result::Result<Thread, String> {
+    if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
+        return Ok(summary_to_thread(summary));
     }
+
+    read_summary_from_rollout(rollout_path, fallback_provider)
+        .await
+        .map(summary_to_thread)
+        .map_err(|err| {
+            format!(
+                "failed to load rollout `{}` for thread {thread_id}: {err}",
+                rollout_path.display()
+            )
+        })
 }
 
 fn with_thread_spawn_agent_metadata(
