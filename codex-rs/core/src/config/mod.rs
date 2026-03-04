@@ -2404,6 +2404,18 @@ impl Config {
                 ));
             }
 
+            if !normalized_nickname
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_'))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "agents.{role_name}.nickname_candidates may only contain ASCII letters, digits, spaces, hyphens, and underscores"
+                    ),
+                ));
+            }
+
             normalized_candidates.push(normalized_nickname.to_owned());
         }
 
@@ -4887,6 +4899,40 @@ nickname_candidates = ["Hypatia", "Noether"]
             err.to_string()
                 .contains("agents.researcher.nickname_candidates cannot contain duplicates")
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            agents: Some(AgentsToml {
+                max_threads: None,
+                max_depth: None,
+                job_max_runtime_seconds: None,
+                roles: BTreeMap::from([(
+                    "researcher".to_string(),
+                    AgentRoleToml {
+                        description: Some("Research role".to_string()),
+                        config_file: None,
+                        nickname_candidates: Some(vec!["Agent <One>".to_string()]),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        };
+
+        let result = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        );
+        let err = result.expect_err("unsafe nickname candidates should be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains(
+            "agents.researcher.nickname_candidates may only contain ASCII letters, digits, spaces, hyphens, and underscores"
+        ));
 
         Ok(())
     }
