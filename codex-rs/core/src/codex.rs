@@ -3119,10 +3119,14 @@ impl Session {
             .agent_control
             .format_environment_context_subagents(self.conversation_id)
             .await;
-        contextual_user_envelope.push_fragment(
-            EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
-                .with_subagents(subagents),
-        );
+        contextual_user_envelope.push_fragment(EnvironmentContext::from_turn_context(
+            turn_context,
+            shell.as_ref(),
+        ));
+        if let Some(subagent_roster) = crate::session_prefix::SubagentRosterContext::new(subagents)
+        {
+            contextual_user_envelope.push_fragment(subagent_roster);
+        }
 
         let mut items = Vec::with_capacity(2);
         if let Some(developer_message) = developer_envelope.build() {

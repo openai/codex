@@ -1,0 +1,8 @@
+---
+source: core/tests/suite/model_visible_layout.rs
+assertion_line: 491
+expression: "format_subagents_fragment_snapshot(&[\"- agent-1: Atlas\",\n\"- agent-2: Juniper\"])"
+---
+00:message/user[2]:
+    [01] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [02] <SUBAGENTS:count=2>

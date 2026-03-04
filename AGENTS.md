@@ -23,10 +23,10 @@ In the codex-rs folder where the rust code lives:
 
 ### Model-visible context fragments
 
-- When adding developer-role prompt context, use `DeveloperInstructions`. Do not push raw strings directly into context builders.
+- Developer envelope builders accept only `DeveloperInstructions`; add new developer-role prompt context as `DeveloperInstructions`, not as raw strings or direct developer `ResponseItem`s.
 - When adding user-role contextual prompt context, define a typed contextual fragment and register its `ContextualUserFragmentDefinition` so history parsing still treats it as contextual state rather than user intent.
 - Use `EnvironmentContext` only for environment/session facts. Do not use it as a generic container for unrelated contextual messages.
-- Later injected contextual user messages should use the same typed fragment path as initial-context fragments; do not call fragment wrapping helpers ad hoc from new code.
+- Contextual user messages injected after initial-context assembly should use the same typed fragment path as initial-context fragments; do not call fragment wrapping helpers ad hoc from new code.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 

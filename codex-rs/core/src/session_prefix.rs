@@ -4,6 +4,37 @@ use codex_protocol::protocol::AgentStatus;
 /// messages but are not user intent.
 use crate::contextual_user_message::ContextualUserFragment;
 use crate::contextual_user_message::SUBAGENT_NOTIFICATION_FRAGMENT;
+use crate::contextual_user_message::SUBAGENTS_FRAGMENT;
+
+pub(crate) struct SubagentRosterContext {
+    subagents: String,
+}
+
+impl SubagentRosterContext {
+    pub(crate) fn new(subagents: String) -> Option<Self> {
+        if subagents.is_empty() {
+            None
+        } else {
+            Some(Self { subagents })
+        }
+    }
+}
+
+impl ContextualUserFragment for SubagentRosterContext {
+    fn definition(&self) -> crate::contextual_user_message::ContextualUserFragmentDefinition {
+        SUBAGENTS_FRAGMENT
+    }
+
+    fn serialize_to_text(&self) -> String {
+        let lines = self
+            .subagents
+            .lines()
+            .map(|line| format!("  {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        SUBAGENTS_FRAGMENT.wrap_body(lines)
+    }
+}
 
 struct SubagentNotification<'a> {
     agent_id: &'a str,
@@ -33,5 +64,28 @@ pub(crate) fn format_subagent_context_line(agent_id: &str, agent_nickname: Optio
     match agent_nickname.filter(|nickname| !nickname.is_empty()) {
         Some(agent_nickname) => format!("- {agent_id}: {agent_nickname}"),
         None => format!("- {agent_id}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn serializes_subagent_roster_context() {
+        let context =
+            SubagentRosterContext::new("- agent-1: Atlas\n- agent-2: Juniper".to_string())
+                .expect("context expected");
+
+        assert_eq!(
+            context.serialize_to_text(),
+            "<subagents>\n  - agent-1: Atlas\n  - agent-2: Juniper\n</subagents>"
+        );
+    }
+
+    #[test]
+    fn skips_empty_subagent_roster_context() {
+        assert!(SubagentRosterContext::new(String::new()).is_none());
     }
 }

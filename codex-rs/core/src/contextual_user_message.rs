@@ -17,6 +17,8 @@ pub(crate) const USER_SHELL_COMMAND_OPEN_TAG: &str = "<user_shell_command>";
 pub(crate) const USER_SHELL_COMMAND_CLOSE_TAG: &str = "</user_shell_command>";
 pub(crate) const TURN_ABORTED_OPEN_TAG: &str = "<turn_aborted>";
 pub(crate) const TURN_ABORTED_CLOSE_TAG: &str = "</turn_aborted>";
+pub(crate) const SUBAGENTS_OPEN_TAG: &str = "<subagents>";
+pub(crate) const SUBAGENTS_CLOSE_TAG: &str = "</subagents>";
 pub(crate) const SUBAGENT_NOTIFICATION_OPEN_TAG: &str = "<subagent_notification>";
 pub(crate) const SUBAGENT_NOTIFICATION_CLOSE_TAG: &str = "</subagent_notification>";
 
@@ -109,6 +111,8 @@ pub(crate) const USER_SHELL_COMMAND_FRAGMENT: ContextualUserFragmentDefinition =
     );
 pub(crate) const TURN_ABORTED_FRAGMENT: ContextualUserFragmentDefinition =
     ContextualUserFragmentDefinition::new(TURN_ABORTED_OPEN_TAG, TURN_ABORTED_CLOSE_TAG);
+pub(crate) const SUBAGENTS_FRAGMENT: ContextualUserFragmentDefinition =
+    ContextualUserFragmentDefinition::new(SUBAGENTS_OPEN_TAG, SUBAGENTS_CLOSE_TAG);
 pub(crate) const SUBAGENT_NOTIFICATION_FRAGMENT: ContextualUserFragmentDefinition =
     ContextualUserFragmentDefinition::new(
         SUBAGENT_NOTIFICATION_OPEN_TAG,
@@ -121,6 +125,7 @@ const CONTEXTUAL_USER_FRAGMENTS: &[ContextualUserFragmentDefinition] = &[
     SKILL_FRAGMENT,
     USER_SHELL_COMMAND_FRAGMENT,
     TURN_ABORTED_FRAGMENT,
+    SUBAGENTS_FRAGMENT,
     SUBAGENT_NOTIFICATION_FRAGMENT,
 ];
 
@@ -158,6 +163,13 @@ mod tests {
             SUBAGENT_NOTIFICATION_FRAGMENT
                 .matches_text("<SUBAGENT_NOTIFICATION>{}</subagent_notification>")
         );
+    }
+
+    #[test]
+    fn detects_subagents_fragment() {
+        assert!(is_contextual_user_fragment(&ContentItem::InputText {
+            text: "<subagents>\n  - agent-1: atlas\n</subagents>".to_string(),
+        }));
     }
 
     #[test]
