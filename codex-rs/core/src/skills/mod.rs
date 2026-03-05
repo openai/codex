@@ -4,7 +4,6 @@ pub(crate) mod invocation_utils;
 pub mod loader;
 pub mod manager;
 pub mod model;
-pub mod permissions;
 pub mod remote;
 pub mod render;
 pub mod system;
