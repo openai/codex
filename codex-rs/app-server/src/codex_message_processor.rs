@@ -2693,7 +2693,13 @@ impl CodexMessageProcessor {
             }
         };
 
-        let db_summary = read_summary_from_state_db_by_thread_id(&self.config, thread_uuid).await;
+        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
+        let loaded_thread_state_db = loaded_thread.as_ref().and_then(|thread| thread.state_db());
+        let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
+            read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_uuid).await
+        } else {
+            read_summary_from_state_db_by_thread_id(&self.config, thread_uuid).await
+        };
         let mut rollout_path = db_summary.as_ref().map(|summary| summary.path.clone());
         if rollout_path.is_none() || include_turns {
             rollout_path =
@@ -2747,7 +2753,7 @@ impl CodexMessageProcessor {
                 }
             }
         } else {
-            let Ok(thread) = self.thread_manager.get_thread(thread_uuid).await else {
+            let Some(thread) = loaded_thread else {
                 self.send_invalid_request_error(
                     request_id,
                     format!("thread not loaded: {thread_uuid}"),
