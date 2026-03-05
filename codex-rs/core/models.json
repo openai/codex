@@ -75,7 +75,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": true,
       "default_verbosity": "low",
       "apply_patch_tool_type": "freeform",
@@ -146,7 +146,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": false,
       "default_verbosity": null,
       "apply_patch_tool_type": "freeform",
@@ -221,7 +221,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": false,
       "default_verbosity": null,
       "apply_patch_tool_type": "freeform",
@@ -289,7 +289,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": false,
       "default_verbosity": null,
       "apply_patch_tool_type": "freeform",
@@ -353,7 +353,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": true,
       "default_verbosity": "low",
       "apply_patch_tool_type": "freeform",
@@ -421,7 +421,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": true,
       "default_verbosity": "low",
       "apply_patch_tool_type": "freeform",
@@ -485,7 +485,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": false,
       "default_verbosity": null,
       "apply_patch_tool_type": "freeform",
@@ -549,7 +549,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": true,
       "default_verbosity": null,
       "apply_patch_tool_type": null,
@@ -617,7 +617,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": true,
       "default_verbosity": null,
       "apply_patch_tool_type": "freeform",
@@ -677,7 +677,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": true,
       "default_verbosity": null,
       "apply_patch_tool_type": "freeform",
@@ -737,7 +737,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": false,
       "default_verbosity": null,
       "apply_patch_tool_type": "freeform",
@@ -797,7 +797,7 @@
       "supports_reasoning_summaries": true
     },
     {
-      "prefer_websockets": true,
+      "prefer_websockets": false,
       "support_verbosity": false,
       "default_verbosity": null,
       "apply_patch_tool_type": "freeform",
