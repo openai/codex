@@ -2,7 +2,10 @@
 //!
 //! The in-process path intentionally reuses the same span shape as JSON-RPC
 //! transports so request telemetry stays comparable across stdio, websocket,
-//! and embedded callers.
+//! and embedded callers. [`typed_request_span`] is the in-process counterpart
+//! of [`request_span`] and stamps `rpc.transport` as `"in-process"` while
+//! deriving client identity from the typed [`ClientRequest`] rather than
+//! from a parsed JSON envelope.
 
 use crate::message_processor::ConnectionSessionState;
 use crate::outgoing_message::ConnectionId;

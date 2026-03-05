@@ -1,26 +1,42 @@
 //! In-process app-server runtime host for local embedders.
 //!
-//! This module runs the existing `MessageProcessor` and outbound routing logic
+//! This module runs the existing [`MessageProcessor`] and outbound routing logic
 //! on Tokio tasks, but replaces socket/stdio transports with bounded in-memory
 //! channels. The intent is to preserve app-server semantics while avoiding a
 //! process boundary for CLI surfaces that run in the same process.
 //!
-//! The lifecycle is:
-//! - construct runtime state with [`InProcessStartArgs`]
-//! - perform `initialize` + `initialized` handshake in [`start`]
-//! - interact through [`InProcessClientHandle`] request/notify/event methods
-//! - terminate with [`InProcessClientHandle::shutdown`]
+//! # Lifecycle
+//!
+//! 1. Construct runtime state with [`InProcessStartArgs`].
+//! 2. Call [`start`], which performs the `initialize` / `initialized` handshake
+//!    internally and returns a ready-to-use [`InProcessClientHandle`].
+//! 3. Send requests via [`InProcessClientHandle::request`], notifications via
+//!    [`InProcessClientHandle::notify`], and consume events via
+//!    [`InProcessClientHandle::next_event`].
+//! 4. Terminate with [`InProcessClientHandle::shutdown`].
+//!
+//! # Transport model
 //!
 //! The runtime is transport-local but not protocol-free. Incoming requests are
-//! typed `ClientRequest` values, yet responses still come back through the same
-//! JSON-RPC result envelope that `MessageProcessor` uses for stdio/websocket
-//! transports. This keeps in-process behavior aligned with app-server rather
-//! than creating a second execution contract.
+//! typed [`ClientRequest`] values, yet responses still come back through the
+//! same JSON-RPC result envelope that `MessageProcessor` uses for stdio and
+//! websocket transports. This keeps in-process behavior aligned with
+//! app-server rather than creating a second execution contract.
 //!
-//! Backpressure is explicit: command submission uses `try_send` and can return
-//! `WouldBlock`, while event fanout may drop notifications under saturation.
-//! Server requests are never silently abandoned: if they cannot be queued they
-//! are failed back into `MessageProcessor` with overload/internal errors.
+//! # Backpressure
+//!
+//! Command submission uses `try_send` and can return `WouldBlock`, while event
+//! fanout may drop notifications under saturation. Server requests are never
+//! silently abandoned: if they cannot be queued they are failed back into
+//! `MessageProcessor` with overload or internal errors so approval flows do
+//! not hang indefinitely.
+//!
+//! # Relationship to `codex-app-server-client`
+//!
+//! This module provides the low-level runtime handle ([`InProcessClientHandle`]).
+//! Higher-level callers (TUI, exec) should go through `codex-app-server-client`,
+//! which wraps this module behind a worker task with async request/response
+//! helpers, surface-specific startup policy, and bounded shutdown.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -108,10 +124,13 @@ pub struct InProcessStartArgs {
 
 /// Event emitted from the app-server to the in-process client.
 ///
-/// The stream intentionally carries both typed app-server events and legacy
-/// bridge notifications because some CLI surfaces still consume
-/// `codex_protocol::Event` values today. `Lagged` is a transport health marker,
-/// not an application event.
+/// The stream carries three event families because CLI surfaces are mid-migration
+/// from the legacy `codex_protocol::Event` model to the typed app-server
+/// notification model. Once all surfaces consume only [`ServerNotification`],
+/// [`LegacyNotification`](Self::LegacyNotification) can be removed.
+///
+/// [`Lagged`](Self::Lagged) is a transport health marker, not an application
+/// event — it signals that the consumer fell behind and some events were dropped.
 #[derive(Debug, Clone)]
 pub enum InProcessServerEvent {
     /// Server request that requires client response/rejection.
@@ -124,6 +143,11 @@ pub enum InProcessServerEvent {
     Lagged { skipped: usize },
 }
 
+/// Internal message sent from [`InProcessClientHandle`] methods to the runtime task.
+///
+/// Requests carry a oneshot sender for the response; notifications and server-request
+/// replies are fire-and-forget from the caller's perspective (transport errors are
+/// caught by `try_send` on the outer channel).
 enum InProcessClientMessage {
     Request {
         request: Box<ClientRequest>,

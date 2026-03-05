@@ -1,15 +1,19 @@
 //! Shared in-process app-server client facade for CLI surfaces.
 //!
-//! This crate wraps `codex_app_server::in_process` behind a single async API
+//! This crate wraps [`codex_app_server::in_process`] behind a single async API
 //! used by surfaces like TUI and exec. It centralizes:
-//! - runtime startup and initialize capabilities
-//! - surface-to-session-source policy
-//! - request/notification dispatch
-//! - server request resolution and rejection
-//! - event consumption and shutdown behavior
 //!
-//! The facade uses bounded channels between caller and worker task so overload
-//! is visible instead of unbounded memory growth.
+//! - Runtime startup and initialize-capabilities handshake.
+//! - Surface-to-session-source policy ([`ClientSurface`] → [`SessionSource`]).
+//! - Typed and raw request/notification dispatch.
+//! - Server request resolution and rejection.
+//! - Event consumption with backpressure signaling ([`InProcessServerEvent::Lagged`]).
+//! - Bounded graceful shutdown with abort fallback.
+//!
+//! The facade interposes a worker task between the caller and the underlying
+//! [`InProcessClientHandle`](codex_app_server::in_process::InProcessClientHandle),
+//! bridging async `mpsc` channels on both sides. Queues are bounded so overload
+//! surfaces as channel-full errors rather than unbounded memory growth.
 
 use std::error::Error;
 use std::fmt;
@@ -207,6 +211,10 @@ impl InProcessClientStartArgs {
     }
 }
 
+/// Internal command sent from public facade methods to the worker task.
+///
+/// Each variant carries a oneshot sender so the caller can `await` the
+/// result without holding a mutable reference to the client.
 enum ClientCommand {
     Request {
         request: Box<ClientRequest>,
