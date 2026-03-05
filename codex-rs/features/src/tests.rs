@@ -157,15 +157,6 @@ fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
 }
 
 #[test]
-fn image_detail_original_feature_is_under_development() {
-    assert_eq!(
-        Feature::ImageDetailOriginal.stage(),
-        Stage::UnderDevelopment
-    );
-    assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
-}
-
-#[test]
 fn remote_control_is_under_development() {
     assert_eq!(Feature::RemoteControl.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::RemoteControl.default_enabled(), false);
