@@ -2617,6 +2617,7 @@ mod tests {
         let features = Features::with_defaults();
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            codex_home: &config.codex_home,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
