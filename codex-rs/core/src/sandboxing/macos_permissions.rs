@@ -9,8 +9,6 @@ use codex_protocol::models::MacOsPreferencesPermission;
 #[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsPreferencesValue;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
-#[cfg(target_os = "macos")]
-use tracing::warn;
 
 pub(crate) fn merge_macos_seatbelt_profile_extensions(
     base: Option<&MacOsSeatbeltProfileExtensions>,
@@ -135,7 +133,7 @@ fn resolve_macos_preferences_permission(
             {
                 MacOsPreferencesPermission::ReadWrite
             } else {
-                warn!(
+                tracing::warn!(
                     "ignoring permissions.macos.preferences: expected true/false, readonly, or readwrite"
                 );
                 default
