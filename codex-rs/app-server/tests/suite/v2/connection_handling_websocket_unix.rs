@@ -83,6 +83,57 @@ async fn websocket_transport_second_ctrl_c_forces_exit_while_turn_running() -> R
     Ok(())
 }
 
+#[tokio::test]
+async fn websocket_transport_sigterm_waits_for_running_turn_before_exit() -> Result<()> {
+    let GracefulCtrlCFixture {
+        _codex_home,
+        _server,
+        mut process,
+        mut ws,
+    } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
+
+    send_sigterm(&process)?;
+    assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
+
+    let status = wait_for_process_exit_within(
+        &mut process,
+        Duration::from_secs(10),
+        "timed out waiting for graceful SIGTERM restart shutdown",
+    )
+    .await?;
+    assert!(status.success(), "expected graceful exit, got {status}");
+
+    expect_websocket_disconnect(&mut ws).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_transport_second_sigterm_forces_exit_while_turn_running() -> Result<()> {
+    let GracefulCtrlCFixture {
+        _codex_home,
+        _server,
+        mut process,
+        mut ws,
+    } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
+
+    send_sigterm(&process)?;
+    assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
+
+    send_sigterm(&process)?;
+    let status = wait_for_process_exit_within(
+        &mut process,
+        Duration::from_secs(2),
+        "timed out waiting for forced SIGTERM restart shutdown",
+    )
+    .await?;
+    assert!(status.success(), "expected graceful exit, got {status}");
+
+    expect_websocket_disconnect(&mut ws).await?;
+
+    Ok(())
+}
+
 struct GracefulCtrlCFixture {
     _codex_home: TempDir,
     _server: wiremock::MockServer,
@@ -180,16 +231,24 @@ async fn wait_for_responses_post(server: &wiremock::MockServer, wait_for: Durati
 }
 
 fn send_sigint(process: &Child) -> Result<()> {
+    send_signal(process, "-INT")
+}
+
+fn send_sigterm(process: &Child) -> Result<()> {
+    send_signal(process, "-TERM")
+}
+
+fn send_signal(process: &Child, signal: &str) -> Result<()> {
     let pid = process
         .id()
         .context("websocket app-server process has no pid")?;
     let status = StdCommand::new("kill")
-        .arg("-INT")
+        .arg(signal)
         .arg(pid.to_string())
         .status()
-        .context("failed to invoke kill -INT")?;
+        .with_context(|| format!("failed to invoke kill {signal}"))?;
     if !status.success() {
-        bail!("kill -INT exited with {status}");
+        bail!("kill {signal} exited with {status}");
     }
     Ok(())
 }
