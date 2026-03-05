@@ -465,7 +465,9 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
     }
 }
 
-/// Common initialization parameters shared by all `ChatWidget` constructors.
+/// Ambient state needed to start an in-process app-server client inside the
+/// agent task. Cloned into each spawned agent so new threads/forks can create
+/// their own `InProcessAppServerClient` without reaching back to the TUI shell.
 #[derive(Clone)]
 pub(crate) struct InProcessAgentContext {
     pub(crate) arg0_paths: Arg0DispatchPaths,

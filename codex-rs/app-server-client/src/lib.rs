@@ -5,6 +5,7 @@
 //!
 //! - Runtime startup and initialize-capabilities handshake.
 //! - Typed caller-provided startup identity (`SessionSource` + client name).
+//! - Surface-to-session-source policy ([`ClientSurface`] → [`SessionSource`]).
 //! - Typed and raw request/notification dispatch.
 //! - Server request resolution and rejection.
 //! - Event consumption with backpressure signaling ([`InProcessServerEvent::Lagged`]).
