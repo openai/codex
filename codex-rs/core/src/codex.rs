@@ -1679,7 +1679,7 @@ impl Session {
         self.services.state_db.clone()
     }
 
-    /// Ensure all rollout writes are durably flushed.
+    /// Ensure rollout file writes are durably flushed.
     pub(crate) async fn flush_rollout(&self) {
         let recorder = {
             let guard = self.services.rollout.lock().await;
