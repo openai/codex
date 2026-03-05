@@ -64,6 +64,7 @@ use codex_hooks::HooksConfig;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
+use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::ThreadId;
@@ -652,6 +653,7 @@ impl TurnSkillsContext {
 #[derive(Debug)]
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
+    pub(crate) trace_id: Option<String>,
     pub(crate) realtime_active: bool,
     pub(crate) config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
@@ -740,6 +742,7 @@ impl TurnContext {
 
         Self {
             sub_id: self.sub_id.clone(),
+            trace_id: self.trace_id.clone(),
             realtime_active: self.realtime_active,
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
@@ -795,6 +798,7 @@ impl TurnContext {
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
+            trace_id: self.trace_id.clone(),
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
@@ -1124,6 +1128,7 @@ impl Session {
         let (current_date, timezone) = local_time_context();
         TurnContext {
             sub_id,
+            trace_id: current_span_trace_id(),
             realtime_active: false,
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
@@ -4773,6 +4778,7 @@ async fn spawn_review_thread(
 
     let review_turn_context = TurnContext {
         sub_id: review_turn_id,
+        trace_id: current_span_trace_id(),
         realtime_active: parent_turn_context.realtime_active,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
@@ -6652,6 +6658,7 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
+    use tracing::Span;
 
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
@@ -7589,6 +7596,7 @@ mod tests {
         let previous_model = "forked-rollout-model";
         let previous_context_item = TurnContextItem {
             turn_id: Some(turn_context.sub_id.clone()),
+            trace_id: turn_context.trace_id.clone(),
             cwd: turn_context.cwd.clone(),
             current_date: turn_context.current_date.clone(),
             timezone: turn_context.timezone.clone(),
@@ -8561,6 +8569,43 @@ mod tests {
 
         let submitted = rx_sub.recv().await.expect("submission");
         assert_eq!(submitted.trace, Some(expected_trace));
+    }
+
+    #[tokio::test]
+    async fn new_default_turn_captures_current_span_trace_id() {
+        let (session, _turn_context) = make_session_and_context().await;
+
+        init_test_tracing();
+
+        let request_parent = W3cTraceContext {
+            traceparent: Some("00-00000000000000000000000000000011-0000000000000022-01".into()),
+            tracestate: Some("vendor=value".into()),
+        };
+        let request_span = info_span!("app_server.request");
+        assert!(set_parent_from_w3c_trace_context(
+            &request_span,
+            &request_parent
+        ));
+
+        let turn_context_item = async {
+            let expected_trace_id = Span::current()
+                .context()
+                .span()
+                .span_context()
+                .trace_id()
+                .to_string();
+            let turn_context = session.new_default_turn().await;
+            let turn_context_item = turn_context.to_turn_context_item();
+            assert_eq!(turn_context_item.trace_id, Some(expected_trace_id));
+            turn_context_item
+        }
+        .instrument(request_span)
+        .await;
+
+        assert_eq!(
+            turn_context_item.trace_id.as_deref(),
+            Some("00000000000000000000000000000011")
+        );
     }
 
     #[test]

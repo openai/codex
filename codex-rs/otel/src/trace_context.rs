@@ -23,6 +23,17 @@ pub fn current_span_w3c_trace_context() -> Option<W3cTraceContext> {
     })
 }
 
+pub fn current_span_trace_id() -> Option<String> {
+    let context = Span::current().context();
+    let span = context.span();
+    let span_context = span.span_context();
+    if !span_context.is_valid() {
+        return None;
+    }
+
+    Some(span_context.trace_id().to_string())
+}
+
 pub fn context_from_w3c_trace_context(trace: &W3cTraceContext) -> Option<Context> {
     context_from_trace_headers(trace.traceparent.as_deref(), trace.tracestate.as_deref())
 }
@@ -62,11 +73,17 @@ pub(crate) fn context_from_trace_headers(
 mod tests {
     use super::context_from_trace_headers;
     use super::context_from_w3c_trace_context;
+    use super::current_span_trace_id;
     use codex_protocol::protocol::W3cTraceContext;
     use opentelemetry::trace::SpanId;
     use opentelemetry::trace::TraceContextExt;
     use opentelemetry::trace::TraceId;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
+    use tracing::trace_span;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
 
     #[test]
     fn parses_valid_w3c_trace_context() {
@@ -102,5 +119,22 @@ mod tests {
             })
             .is_none()
         );
+    }
+
+    #[test]
+    fn current_span_trace_id_returns_hex_trace_id() {
+        let provider = SdkTracerProvider::builder().build();
+        let tracer = provider.tracer("codex-otel-tests");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+        let _guard = subscriber.set_default();
+
+        let span = trace_span!("test_span");
+        let _entered = span.enter();
+        let trace_id = current_span_trace_id().expect("trace id");
+
+        assert_eq!(trace_id.len(), 32);
+        assert!(trace_id.chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert_ne!(trace_id, "00000000000000000000000000000000");
     }
 }
