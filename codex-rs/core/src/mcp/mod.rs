@@ -19,6 +19,7 @@ use serde_json::Value;
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::config::Config;
+use crate::config::filter_mcp_servers_by_requirements;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::features::Feature;
@@ -193,6 +194,14 @@ fn configured_mcp_servers(
     for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
         servers.entry(name).or_insert(plugin_server);
     }
+    filter_mcp_servers_by_requirements(
+        &mut servers,
+        config
+            .config_layer_stack
+            .requirements()
+            .mcp_servers
+            .as_ref(),
+    );
     servers
 }
 
@@ -407,6 +416,8 @@ mod tests {
     use super::*;
     use crate::config::CONFIG_TOML_FILE;
     use crate::config::ConfigBuilder;
+    use crate::config_loader::CloudRequirementsLoader;
+    use crate::config_loader::ConfigRequirementsToml;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -616,6 +627,59 @@ mod tests {
 
         let expected_url = format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
         assert_eq!(url, &expected_url);
+    }
+
+    #[tokio::test]
+    async fn configured_mcp_servers_apply_requirements_to_plugin_servers() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let plugin_root = codex_home.path().join("plugin-sample");
+        write_file(
+            &plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"sample"}"#,
+        );
+        write_file(
+            &plugin_root.join(".mcp.json"),
+            r#"{
+  "mcpServers": {
+    "docs": {
+      "type": "http",
+      "url": "https://docs.example/mcp"
+    }
+  }
+}"#,
+        );
+        write_file(
+            &codex_home.path().join(CONFIG_TOML_FILE),
+            &plugin_config_toml(&plugin_root),
+        );
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(ConfigRequirementsToml {
+                    mcp_servers: Some(Default::default()),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await
+            .expect("config should load");
+
+        let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
+        let configured = mcp_manager.configured_servers(&config);
+
+        let docs = configured.get("docs").expect("plugin server should exist");
+        assert!(
+            !docs.enabled,
+            "plugin server should be disabled by requirements"
+        );
+        assert!(
+            matches!(
+                docs.disabled_reason,
+                Some(crate::config::types::McpServerDisabledReason::Requirements { .. })
+            ),
+            "plugin server should record requirements disabled reason"
+        );
     }
 
     #[tokio::test]

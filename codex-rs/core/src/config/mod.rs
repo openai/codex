@@ -739,7 +739,7 @@ fn load_model_catalog(
         .transpose()
 }
 
-fn filter_mcp_servers_by_requirements(
+pub(crate) fn filter_mcp_servers_by_requirements(
     mcp_servers: &mut HashMap<String, McpServerConfig>,
     mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
 ) {
