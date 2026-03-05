@@ -3464,6 +3464,16 @@ await codex.emitImage(out);
         }
 
         let cwd_dir = tempdir()?;
+        let pkg_dir = cwd_dir.path().join("node_modules").join("repl_meta_pkg");
+        fs::create_dir_all(&pkg_dir)?;
+        fs::write(
+            pkg_dir.join("package.json"),
+            "{\n  \"name\": \"repl_meta_pkg\",\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"exports\": {\n    \"import\": \"./index.js\"\n  }\n}\n",
+        )?;
+        fs::write(
+            pkg_dir.join("index.js"),
+            "import { sep } from \"node:path\";\nexport const value = `pkg:${typeof sep}`;\n",
+        )?;
         write_js_repl_test_module(
             cwd_dir.path(),
             "child.js",
@@ -3472,7 +3482,7 @@ await codex.emitImage(out);
         write_js_repl_test_module(
             cwd_dir.path(),
             "meta.js",
-            "console.log(import.meta.url);\nconsole.log(import.meta.filename);\nconsole.log(import.meta.dirname);\nconsole.log(import.meta.main);\nconsole.log(import.meta.resolve(\"./child.js\"));\nconsole.log(import.meta.resolve(\"node:fs\"));\nconsole.log((await import(import.meta.resolve(\"./child.js\"))).value);\n",
+            "console.log(import.meta.url);\nconsole.log(import.meta.filename);\nconsole.log(import.meta.dirname);\nconsole.log(import.meta.main);\nconsole.log(import.meta.resolve(\"./child.js\"));\nconsole.log(import.meta.resolve(\"repl_meta_pkg\"));\nconsole.log(import.meta.resolve(\"node:fs\"));\nconsole.log((await import(import.meta.resolve(\"./child.js\"))).value);\nconsole.log((await import(import.meta.resolve(\"repl_meta_pkg\"))).value);\n",
         )?;
         let child_path = fs::canonicalize(cwd_dir.path().join("child.js"))?;
         let child_url = url::Url::from_file_path(&child_path)
@@ -3512,8 +3522,10 @@ await codex.emitImage(out);
         assert!(result.output.contains(&cwd_display));
         assert!(result.output.contains("false"));
         assert!(result.output.contains(&child_url));
+        assert!(result.output.contains("repl_meta_pkg"));
         assert!(result.output.contains("node:fs"));
         assert!(result.output.contains("child-export"));
+        assert!(result.output.contains("pkg:string"));
         Ok(())
     }
 

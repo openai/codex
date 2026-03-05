@@ -174,8 +174,11 @@ function resolveResultToUrl(resolved) {
   if (resolved.kind === "builtin") {
     return resolved.specifier;
   }
-  if (resolved.kind === "file" || resolved.kind === "package") {
+  if (resolved.kind === "file") {
     return pathToFileURL(resolved.path).href;
+  }
+  if (resolved.kind === "package") {
+    return resolved.specifier;
   }
   throw new Error(`Unsupported module resolution kind: ${resolved.kind}`);
 }
@@ -382,7 +385,7 @@ function resolveSpecifier(specifier, referrerIdentifier = null) {
     throw new Error(`Module not found: ${specifier}`);
   }
 
-  return { kind: "package", path: resolvedBare };
+  return { kind: "package", path: resolvedBare, specifier };
 }
 
 function importNativeResolved(resolved) {
