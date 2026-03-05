@@ -513,7 +513,7 @@ impl Codex {
             session_source_clone,
             skills_manager,
             plugins_manager,
-            mcp_manager,
+            mcp_manager.clone(),
             file_watcher,
             agent_control,
         )
@@ -1528,7 +1528,7 @@ impl Session {
             execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager,
             plugins_manager: Arc::clone(&plugins_manager),
-            mcp_manager,
+            mcp_manager: Arc::clone(&mcp_manager),
             file_watcher,
             agent_control,
             network_proxy,
@@ -1612,10 +1612,7 @@ impl Session {
             .map(|(name, _)| name.clone())
             .collect();
         required_mcp_servers.sort();
-        let tool_plugin_provenance = plugins_manager
-            .plugins_for_config(config.as_ref())
-            .tool_plugin_provenance()
-            .clone();
+        let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
             cancel_guard.cancel();
@@ -3578,10 +3575,8 @@ impl Session {
         let config = self.get_config().await;
         let tool_plugin_provenance = self
             .services
-            .plugins_manager
-            .plugins_for_config(config.as_ref())
-            .tool_plugin_provenance()
-            .clone();
+            .mcp_manager
+            .tool_plugin_provenance(config.as_ref());
         let mcp_servers = with_codex_apps_mcp(
             mcp_servers,
             self.features.enabled(Feature::Apps),

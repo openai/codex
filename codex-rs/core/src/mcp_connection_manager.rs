@@ -20,6 +20,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::ToolPluginProvenance;
 use crate::mcp::auth::McpAuthStatusEntry;
 use anyhow::Context;
 use anyhow::Result;
@@ -80,8 +81,6 @@ use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::connectors::is_connector_id_allowed;
-use crate::plugins::ToolPluginProvenance;
-
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
 ///
