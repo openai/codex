@@ -60,6 +60,9 @@ imported local file. They are not resolved relative to the imported file's locat
 - Optional first-line pragma:
   - `// codex-js-repl: timeout_ms=15000`
 - Top-level bindings persist across calls.
+- If a cell throws, prior bindings remain available, lexical bindings whose initialization completed before the throw stay available in later calls, and hoisted `var` / `function` bindings persist only when execution clearly reached their declaration or a supported write site.
+- Supported hoisted-`var` failed-cell cases are direct top-level identifier writes and updates before the declaration (for example `x = 1`, `x += 1`, `x++`, `x &&= 1`) and non-empty top-level `for...in` / `for...of` loops.
+- Intentionally unsupported failed-cell cases include hoisted function reads before the declaration, aliasing or direct-IIFE-based inference, writes in nested blocks or other nested statement structure, nested writes inside already-instrumented assignment RHS expressions, destructuring-assignment recovery for hoisted `var`, partial `var` destructuring recovery, pre-declaration `undefined` reads, and empty top-level `for...in` / `for...of` loop vars.
 - Top-level static import declarations (for example `import x from "pkg"`) are currently unsupported; use dynamic imports with `await import("pkg")`.
 - Imported local files must be ESM `.js` / `.mjs` files and run in the same REPL VM context as the calling cell.
 - Static imports inside imported local files may only target other local `.js` / `.mjs` files via relative paths, absolute paths, or `file://` URLs. Bare package and builtin imports from local files must stay dynamic via `await import(...)`.
