@@ -74,7 +74,7 @@ once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }
 regex-lite = { workspace = true }
-reqwest = { workspace = true, features = ["json", "stream"] }
+reqwest = { workspace = true, features = ["cookies", "json", "stream"] }
 rmcp = { workspace = true, default-features = false, features = [
     "base64",
     "macros",
