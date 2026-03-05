@@ -21,6 +21,7 @@ pub struct ArtifactsClient {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum RuntimeSource {
     Managed(ArtifactRuntimeManager),
     Installed(InstalledArtifactRuntime),
