@@ -2546,6 +2546,21 @@ pub struct SkillsConfigWriteResponse {
     pub effective_enabled: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginInstallParams {
+    pub marketplace_name: String,
+    pub plugin_name: String,
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginInstallResponse {}
+
 impl From<CoreSkillMetadata> for SkillMetadata {
     fn from(value: CoreSkillMetadata) -> Self {
         Self {
@@ -3942,6 +3957,8 @@ pub enum WindowsSandboxSetupMode {
 #[ts(export_to = "v2/")]
 pub struct WindowsSandboxSetupStartParams {
     pub mode: WindowsSandboxSetupMode,
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

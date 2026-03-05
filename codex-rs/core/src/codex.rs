@@ -55,12 +55,6 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
-use codex_artifact_presentation::PresentationArtifactError;
-use codex_artifact_presentation::PresentationArtifactExecutionRequest;
-use codex_artifact_presentation::PresentationArtifactResponse;
-use codex_artifact_spreadsheet::SpreadsheetArtifactError;
-use codex_artifact_spreadsheet::SpreadsheetArtifactRequest;
-use codex_artifact_spreadsheet::SpreadsheetArtifactResponse;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -1798,24 +1792,6 @@ impl Session {
         state.clear_connector_selection();
     }
 
-    pub(crate) async fn execute_presentation_artifact(
-        &self,
-        request: PresentationArtifactExecutionRequest,
-        cwd: &Path,
-    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
-        let mut state = self.state.lock().await;
-        state.artifacts.presentation.execute_requests(request, cwd)
-    }
-
-    pub(crate) async fn execute_spreadsheet_artifact(
-        &self,
-        request: SpreadsheetArtifactRequest,
-        cwd: &Path,
-    ) -> Result<SpreadsheetArtifactResponse, SpreadsheetArtifactError> {
-        let mut state = self.state.lock().await;
-        state.artifacts.spreadsheet.execute(request, cwd)
-    }
-
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_default_turn().await;
         self.clear_mcp_tool_selection().await;
@@ -3238,12 +3214,9 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) {
-        {
+        if let Some(token_usage) = token_usage {
             let mut state = self.state.lock().await;
-            if let Some(token_usage) = token_usage {
-                state
-                    .update_token_info_from_usage(token_usage, turn_context.model_context_window());
-            }
+            state.update_token_info_from_usage(token_usage, turn_context.model_context_window());
         }
         self.send_token_count_event(turn_context).await;
     }
@@ -4457,11 +4430,9 @@ mod handlers {
         }
 
         let memory_root = crate::memories::memory_root(&config.codex_home);
-        if let Err(err) = tokio::fs::remove_dir_all(&memory_root).await
-            && err.kind() != std::io::ErrorKind::NotFound
-        {
+        if let Err(err) = crate::memories::clear_memory_root_contents(&memory_root).await {
             errors.push(format!(
-                "failed removing memory directory {}: {err}",
+                "failed clearing memory directory {}: {err}",
                 memory_root.display()
             ));
         }
@@ -6717,6 +6688,7 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::Once;
     use std::time::Duration as StdDuration;
 
     struct InstructionsTestCase {
@@ -8183,10 +8155,16 @@ mod tests {
         })
     }
 
-    fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
-        let provider = SdkTracerProvider::builder().build();
-        let tracer = provider.tracer("codex-core-tests");
-        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer))
+    fn init_test_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let provider = SdkTracerProvider::builder().build();
+            let tracer = provider.tracer("codex-core-tests");
+            let subscriber = tracing_subscriber::registry()
+                .with(tracing_opentelemetry::layer().with_tracer(tracer));
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("global tracing subscriber should only be installed once");
+        });
     }
 
     async fn build_test_config(codex_home: &Path) -> Config {
@@ -8532,8 +8510,7 @@ mod tests {
             session: Arc::new(session),
         };
 
-        let subscriber = test_tracing_subscriber();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        init_test_tracing();
 
         let request_parent = W3cTraceContext {
             traceparent: Some("00-00000000000000000000000000000011-0000000000000022-01".into()),
@@ -8567,8 +8544,7 @@ mod tests {
 
     #[test]
     fn submission_dispatch_span_prefers_submission_trace_context() {
-        let subscriber = test_tracing_subscriber();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        init_test_tracing();
 
         let ambient_parent = W3cTraceContext {
             traceparent: Some("00-00000000000000000000000000000033-0000000000000044-01".into()),
@@ -8596,6 +8572,108 @@ mod tests {
         assert_eq!(
             trace_id,
             TraceId::from_hex("00000000000000000000000000000055").expect("trace id")
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
+        struct TraceCaptureTask {
+            captured_trace: Arc<std::sync::Mutex<Option<W3cTraceContext>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl SessionTask for TraceCaptureTask {
+            fn kind(&self) -> TaskKind {
+                TaskKind::Regular
+            }
+
+            fn span_name(&self) -> &'static str {
+                "session_task.trace_capture"
+            }
+
+            async fn run(
+                self: Arc<Self>,
+                _session: Arc<SessionTaskContext>,
+                _ctx: Arc<TurnContext>,
+                _input: Vec<UserInput>,
+                _cancellation_token: CancellationToken,
+            ) -> Option<String> {
+                let mut trace = self
+                    .captured_trace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *trace = current_span_w3c_trace_context();
+                None
+            }
+        }
+
+        init_test_tracing();
+
+        let request_parent = W3cTraceContext {
+            traceparent: Some("00-00000000000000000000000000000011-0000000000000022-01".into()),
+            tracestate: Some("vendor=value".into()),
+        };
+        let request_span = tracing::info_span!("app_server.request");
+        assert!(set_parent_from_w3c_trace_context(
+            &request_span,
+            &request_parent
+        ));
+
+        let submission_trace = async {
+            current_span_w3c_trace_context().expect("request span should have trace context")
+        }
+        .instrument(request_span)
+        .await;
+
+        let dispatch_span = submission_dispatch_span(&Submission {
+            id: "sub-1".into(),
+            op: Op::Interrupt,
+            trace: Some(submission_trace.clone()),
+        });
+        let dispatch_span_id = dispatch_span.context().span().span_context().span_id();
+
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+        let captured_trace = Arc::new(std::sync::Mutex::new(None));
+
+        async {
+            sess.spawn_task(
+                Arc::clone(&tc),
+                vec![UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                TraceCaptureTask {
+                    captured_trace: Arc::clone(&captured_trace),
+                },
+            )
+            .await;
+        }
+        .instrument(dispatch_span)
+        .await;
+
+        let evt = tokio::time::timeout(StdDuration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for turn completion")
+            .expect("event");
+        assert!(matches!(evt.msg, EventMsg::TurnComplete(_)));
+
+        let task_trace = captured_trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .expect("turn task should capture the current span trace context");
+        let submission_context =
+            codex_otel::context_from_w3c_trace_context(&submission_trace).expect("submission");
+        let task_context =
+            codex_otel::context_from_w3c_trace_context(&task_trace).expect("task trace");
+
+        assert_eq!(
+            task_context.span().span_context().trace_id(),
+            submission_context.span().span_context().trace_id()
+        );
+        assert_ne!(
+            task_context.span().span_context().span_id(),
+            dispatch_span_id
         );
     }
 
@@ -9401,6 +9479,10 @@ mod tests {
     impl SessionTask for NeverEndingTask {
         fn kind(&self) -> TaskKind {
             self.kind
+        }
+
+        fn span_name(&self) -> &'static str {
+            "session_task.never_ending"
         }
 
         async fn run(

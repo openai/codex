@@ -77,6 +77,8 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::PluginInstallParams;
+use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::ProductSurface as ApiProductSurface;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
@@ -196,6 +198,8 @@ use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
+use codex_core::plugins::PluginInstallError as CorePluginInstallError;
+use codex_core::plugins::PluginInstallRequest;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
@@ -656,6 +660,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SkillsConfigWrite { request_id, params } => {
                 self.skills_config_write(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PluginInstall { request_id, params } => {
+                self.plugin_install(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::TurnStart { request_id, params } => {
@@ -4984,6 +4992,56 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn plugin_install(&self, request_id: ConnectionRequestId, params: PluginInstallParams) {
+        let PluginInstallParams {
+            marketplace_name,
+            plugin_name,
+            cwd,
+        } = params;
+
+        let plugins_manager = self.thread_manager.plugins_manager();
+        let request = PluginInstallRequest {
+            plugin_name,
+            marketplace_name,
+            cwd: cwd.unwrap_or_else(|| self.config.cwd.clone()),
+        };
+
+        match plugins_manager.install_plugin(request).await {
+            Ok(_) => {
+                plugins_manager.clear_cache();
+                self.thread_manager.skills_manager().clear_cache();
+                self.outgoing
+                    .send_response(request_id, PluginInstallResponse {})
+                    .await;
+            }
+            Err(err) => {
+                if err.is_invalid_request() {
+                    self.send_invalid_request_error(request_id, err.to_string())
+                        .await;
+                    return;
+                }
+
+                match err {
+                    CorePluginInstallError::Config(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to persist installed plugin config: {err}"),
+                        )
+                        .await;
+                    }
+                    CorePluginInstallError::Join(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to install plugin: {err}"),
+                        )
+                        .await;
+                    }
+                    CorePluginInstallError::Marketplace(_) | CorePluginInstallError::Store(_) => {}
+                }
+            }
+        }
+    }
+
     async fn turn_start(
         &self,
         request_id: ConnectionRequestId,
@@ -6119,21 +6177,39 @@ impl CodexMessageProcessor {
             WindowsSandboxSetupMode::Unelevated => CoreWindowsSandboxSetupMode::Unelevated,
         };
         let config = Arc::clone(&self.config);
+        let cli_overrides = self.cli_overrides.clone();
+        let cloud_requirements = self.current_cloud_requirements();
+        let command_cwd = params.cwd.unwrap_or_else(|| config.cwd.clone());
         let outgoing = Arc::clone(&self.outgoing);
         let connection_id = request_id.connection_id;
 
         tokio::spawn(async move {
-            let setup_request = WindowsSandboxSetupRequest {
-                mode,
-                policy: config.permissions.sandbox_policy.get().clone(),
-                policy_cwd: config.cwd.clone(),
-                command_cwd: config.cwd.clone(),
-                env_map: std::env::vars().collect(),
-                codex_home: config.codex_home.clone(),
-                active_profile: config.active_profile.clone(),
+            let derived_config = derive_config_for_cwd(
+                &cli_overrides,
+                None,
+                ConfigOverrides {
+                    cwd: Some(command_cwd.clone()),
+                    ..Default::default()
+                },
+                Some(command_cwd.clone()),
+                &cloud_requirements,
+            )
+            .await;
+            let setup_result = match derived_config {
+                Ok(config) => {
+                    let setup_request = WindowsSandboxSetupRequest {
+                        mode,
+                        policy: config.permissions.sandbox_policy.get().clone(),
+                        policy_cwd: config.cwd.clone(),
+                        command_cwd,
+                        env_map: std::env::vars().collect(),
+                        codex_home: config.codex_home.clone(),
+                        active_profile: config.active_profile.clone(),
+                    };
+                    codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await
+                }
+                Err(err) => Err(err.into()),
             };
-            let setup_result =
-                codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await;
             let notification = WindowsSandboxSetupCompletedNotification {
                 mode: match mode {
                     CoreWindowsSandboxSetupMode::Elevated => WindowsSandboxSetupMode::Elevated,

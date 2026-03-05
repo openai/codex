@@ -7,14 +7,13 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-const DEFAULT_MARKETPLACE_NAME: &str = "debug";
 pub(crate) const DEFAULT_PLUGIN_VERSION: &str = "local";
 pub(crate) const PLUGINS_CACHE_DIR: &str = "plugins/cache";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginInstallRequest {
-    pub source_path: PathBuf,
-    pub marketplace_name: Option<String>,
+#[derive(Debug, thiserror::Error)]
+pub enum PluginIdError {
+    #[error("{0}")]
+    Invalid(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,34 +23,32 @@ pub struct PluginId {
 }
 
 impl PluginId {
-    pub fn new(plugin_name: String, marketplace_name: String) -> Result<Self, PluginStoreError> {
-        validate_plugin_segment(&plugin_name, "plugin name")
-            .map_err(PluginStoreError::InvalidPluginKey)?;
+    pub fn new(plugin_name: String, marketplace_name: String) -> Result<Self, PluginIdError> {
+        validate_plugin_segment(&plugin_name, "plugin name").map_err(PluginIdError::Invalid)?;
         validate_plugin_segment(&marketplace_name, "marketplace name")
-            .map_err(PluginStoreError::InvalidPluginKey)?;
+            .map_err(PluginIdError::Invalid)?;
         Ok(Self {
             plugin_name,
             marketplace_name,
         })
     }
 
-    pub fn parse(plugin_key: &str) -> Result<Self, PluginStoreError> {
+    pub fn parse(plugin_key: &str) -> Result<Self, PluginIdError> {
         let Some((plugin_name, marketplace_name)) = plugin_key.rsplit_once('@') else {
-            return Err(PluginStoreError::InvalidPluginKey(format!(
+            return Err(PluginIdError::Invalid(format!(
                 "invalid plugin key `{plugin_key}`; expected <plugin>@<marketplace>"
             )));
         };
         if plugin_name.is_empty() || marketplace_name.is_empty() {
-            return Err(PluginStoreError::InvalidPluginKey(format!(
+            return Err(PluginIdError::Invalid(format!(
                 "invalid plugin key `{plugin_key}`; expected <plugin>@<marketplace>"
             )));
         }
 
         Self::new(plugin_name.to_string(), marketplace_name.to_string()).map_err(|err| match err {
-            PluginStoreError::InvalidPluginKey(message) => {
-                PluginStoreError::InvalidPluginKey(format!("{message} in `{plugin_key}`"))
+            PluginIdError::Invalid(message) => {
+                PluginIdError::Invalid(format!("{message} in `{plugin_key}`"))
             }
-            other => other,
         })
     }
 
@@ -97,29 +94,24 @@ impl PluginStore {
 
     pub fn install(
         &self,
-        request: PluginInstallRequest,
+        source_path: PathBuf,
+        plugin_id: PluginId,
     ) -> Result<PluginInstallResult, PluginStoreError> {
-        let source_path = request.source_path;
         if !source_path.is_dir() {
-            return Err(PluginStoreError::InvalidPlugin(format!(
+            return Err(PluginStoreError::Invalid(format!(
                 "plugin source path is not a directory: {}",
                 source_path.display()
             )));
         }
 
         let plugin_name = plugin_name_for_source(&source_path)?;
-        let marketplace_name = request
-            .marketplace_name
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| DEFAULT_MARKETPLACE_NAME.to_string());
+        if plugin_name != plugin_id.plugin_name {
+            return Err(PluginStoreError::Invalid(format!(
+                "plugin manifest name `{plugin_name}` does not match marketplace plugin name `{}`",
+                plugin_id.plugin_name
+            )));
+        }
         let plugin_version = DEFAULT_PLUGIN_VERSION.to_string();
-        let plugin_id = match PluginId::new(plugin_name, marketplace_name) {
-            Ok(plugin_id) => plugin_id,
-            Err(PluginStoreError::InvalidPluginKey(message)) => {
-                return Err(PluginStoreError::InvalidPlugin(message));
-            }
-            Err(err) => return Err(err),
-        };
         let installed_path = self
             .plugin_root(&plugin_id, &plugin_version)
             .into_path_buf();
@@ -151,10 +143,7 @@ pub enum PluginStoreError {
     },
 
     #[error("{0}")]
-    InvalidPlugin(String),
-
-    #[error("{0}")]
-    InvalidPluginKey(String),
+    Invalid(String),
 }
 
 impl PluginStoreError {
@@ -166,14 +155,14 @@ impl PluginStoreError {
 fn plugin_name_for_source(source_path: &Path) -> Result<String, PluginStoreError> {
     let manifest_path = source_path.join(PLUGIN_MANIFEST_PATH);
     if !manifest_path.is_file() {
-        return Err(PluginStoreError::InvalidPlugin(format!(
+        return Err(PluginStoreError::Invalid(format!(
             "missing plugin manifest: {}",
             manifest_path.display()
         )));
     }
 
     let manifest = load_plugin_manifest(source_path).ok_or_else(|| {
-        PluginStoreError::InvalidPlugin(format!(
+        PluginStoreError::Invalid(format!(
             "missing or invalid plugin manifest: {}",
             manifest_path.display()
         ))
@@ -181,7 +170,7 @@ fn plugin_name_for_source(source_path: &Path) -> Result<String, PluginStoreError
 
     let plugin_name = plugin_manifest_name(&manifest, source_path);
     validate_plugin_segment(&plugin_name, "plugin name")
-        .map_err(PluginStoreError::InvalidPlugin)
+        .map_err(PluginStoreError::Invalid)
         .map(|_| plugin_name)
 }
 
@@ -265,19 +254,17 @@ mod tests {
     fn install_copies_plugin_into_default_marketplace() {
         let tmp = tempdir().unwrap();
         write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
+        let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
 
         let result = PluginStore::new(tmp.path().to_path_buf())
-            .install(PluginInstallRequest {
-                source_path: tmp.path().join("sample-plugin"),
-                marketplace_name: None,
-            })
+            .install(tmp.path().join("sample-plugin"), plugin_id.clone())
             .unwrap();
 
         let installed_path = tmp.path().join("plugins/cache/debug/sample-plugin/local");
         assert_eq!(
             result,
             PluginInstallResult {
-                plugin_id: PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap(),
+                plugin_id,
                 plugin_version: "local".to_string(),
                 installed_path: installed_path.clone(),
             }
@@ -290,19 +277,16 @@ mod tests {
     fn install_uses_manifest_name_for_destination_and_key() {
         let tmp = tempdir().unwrap();
         write_plugin(tmp.path(), "source-dir", "manifest-name");
+        let plugin_id = PluginId::new("manifest-name".to_string(), "market".to_string()).unwrap();
 
         let result = PluginStore::new(tmp.path().to_path_buf())
-            .install(PluginInstallRequest {
-                source_path: tmp.path().join("source-dir"),
-                marketplace_name: Some("market".to_string()),
-            })
+            .install(tmp.path().join("source-dir"), plugin_id.clone())
             .unwrap();
 
         assert_eq!(
             result,
             PluginInstallResult {
-                plugin_id: PluginId::new("manifest-name".to_string(), "market".to_string())
-                    .unwrap(),
+                plugin_id,
                 plugin_version: "local".to_string(),
                 installed_path: tmp.path().join("plugins/cache/market/manifest-name/local"),
             }
@@ -342,10 +326,10 @@ mod tests {
         write_plugin(tmp.path(), "source-dir", "../../etc");
 
         let err = PluginStore::new(tmp.path().to_path_buf())
-            .install(PluginInstallRequest {
-                source_path: tmp.path().join("source-dir"),
-                marketplace_name: None,
-            })
+            .install(
+                tmp.path().join("source-dir"),
+                PluginId::new("source-dir".to_string(), "debug".to_string()).unwrap(),
+            )
             .unwrap_err();
 
         assert_eq!(
@@ -356,19 +340,29 @@ mod tests {
 
     #[test]
     fn install_rejects_marketplace_names_with_path_separators() {
-        let tmp = tempdir().unwrap();
-        write_plugin(tmp.path(), "source-dir", "sample-plugin");
-
-        let err = PluginStore::new(tmp.path().to_path_buf())
-            .install(PluginInstallRequest {
-                source_path: tmp.path().join("source-dir"),
-                marketplace_name: Some("../../etc".to_string()),
-            })
-            .unwrap_err();
+        let err = PluginId::new("sample-plugin".to_string(), "../../etc".to_string()).unwrap_err();
 
         assert_eq!(
             err.to_string(),
             "invalid marketplace name: only ASCII letters, digits, `_`, and `-` are allowed"
+        );
+    }
+
+    #[test]
+    fn install_rejects_manifest_names_that_do_not_match_marketplace_plugin_name() {
+        let tmp = tempdir().unwrap();
+        write_plugin(tmp.path(), "source-dir", "manifest-name");
+
+        let err = PluginStore::new(tmp.path().to_path_buf())
+            .install(
+                tmp.path().join("source-dir"),
+                PluginId::new("different-name".to_string(), "debug".to_string()).unwrap(),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "plugin manifest name `manifest-name` does not match marketplace plugin name `different-name`"
         );
     }
 }

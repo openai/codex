@@ -546,7 +546,8 @@ impl ModelClientSession {
             include,
             service_tier: match service_tier {
                 Some(ServiceTier::Fast) => Some("priority".to_string()),
-                _ => None,
+                Some(service_tier) => Some(service_tier.to_string()),
+                None => None,
             },
             prompt_cache_key,
             text,

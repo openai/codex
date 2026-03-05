@@ -23,6 +23,7 @@ use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_completed;
@@ -285,6 +286,25 @@ async fn service_tier_change_is_applied_on_next_http_turn() -> Result<()> {
 
     assert_eq!(first_body["service_tier"].as_str(), Some("priority"));
     assert_eq!(second_body.get("service_tier"), None);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn flex_service_tier_is_applied_to_http_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+
+    let test = test_codex().build(&server).await?;
+
+    test.submit_turn_with_service_tier("flex turn", Some(ServiceTier::Flex))
+        .await?;
+
+    let request = resp_mock.single_request();
+    let body = request.body_json();
+    assert_eq!(body["service_tier"].as_str(), Some("flex"));
 
     Ok(())
 }

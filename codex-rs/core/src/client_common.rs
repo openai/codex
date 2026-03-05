@@ -237,6 +237,7 @@ mod tests {
     use codex_api::common::OpenAiVerbosity;
     use codex_api::common::TextControls;
     use codex_api::create_text_param_for_request;
+    use codex_protocol::config_types::ServiceTier;
     use codex_protocol::models::FunctionCallOutputPayload;
     use pretty_assertions::assert_eq;
 
@@ -343,6 +344,31 @@ mod tests {
 
         let v = serde_json::to_value(&req).expect("json");
         assert!(v.get("text").is_none());
+    }
+
+    #[test]
+    fn serializes_flex_service_tier_when_set() {
+        let req = ResponsesApiRequest {
+            model: "gpt-5.1".to_string(),
+            instructions: "i".to_string(),
+            input: vec![],
+            tools: vec![],
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: true,
+            reasoning: None,
+            store: false,
+            stream: true,
+            include: vec![],
+            prompt_cache_key: None,
+            service_tier: Some(ServiceTier::Flex.to_string()),
+            text: None,
+        };
+
+        let v = serde_json::to_value(&req).expect("json");
+        assert_eq!(
+            v.get("service_tier").and_then(|tier| tier.as_str()),
+            Some("flex")
+        );
     }
 
     #[test]

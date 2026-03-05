@@ -40,6 +40,7 @@ use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
+use crate::memories::memory_root;
 use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
@@ -189,7 +190,7 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: Option<String>,
 
-    /// Effective service tier preference for new turns.
+    /// Effective service tier preference for new turns (`fast` or `flex`).
     pub service_tier: Option<ServiceTier>,
 
     /// Model used specifically for review sessions.
@@ -1191,7 +1192,7 @@ pub struct ConfigToml {
     /// Optionally specify a personality for the model
     pub personality: Option<Personality>,
 
-    /// Optional explicit service tier preference for new turns.
+    /// Optional explicit service tier preference for new turns (`fast` or `flex`).
     pub service_tier: Option<ServiceTier>,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
@@ -1805,6 +1806,15 @@ impl Config {
             Some(&constrained_sandbox_policy),
         );
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
+            let memories_root = memory_root(&codex_home);
+            std::fs::create_dir_all(&memories_root)?;
+            let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
+            if !writable_roots
+                .iter()
+                .any(|existing| existing == &memories_root)
+            {
+                writable_roots.push(memories_root);
+            }
             for path in additional_writable_roots {
                 if !writable_roots.iter().any(|existing| existing == &path) {
                     writable_roots.push(path);
@@ -1984,15 +1994,14 @@ impl Config {
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(config_profile.model).or(cfg.model);
-        let service_tier = if features.enabled(Feature::FastMode) {
-            service_tier_override.unwrap_or_else(|| {
-                config_profile
-                    .service_tier
-                    .or(cfg.service_tier)
-                    .filter(|tier| matches!(tier, ServiceTier::Fast))
-            })
-        } else {
-            None
+        let service_tier = service_tier_override
+            .unwrap_or_else(|| config_profile.service_tier.or(cfg.service_tier));
+        let service_tier = match service_tier {
+            Some(ServiceTier::Fast) if features.enabled(Feature::FastMode) => {
+                Some(ServiceTier::Fast)
+            }
+            Some(ServiceTier::Flex) => Some(ServiceTier::Flex),
+            _ => None,
         };
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
@@ -3153,6 +3162,56 @@ trust_level = "trusted"
         )?;
 
         assert_eq!(config.sqlite_home, codex_home.path().to_path_buf());
+
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_write_always_includes_memories_root_once() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let memories_root = codex_home.path().join("memories");
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                    writable_roots: vec![AbsolutePathBuf::from_absolute_path(&memories_root)?],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ConfigOverrides {
+                sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        if cfg!(target_os = "windows") {
+            match config.permissions.sandbox_policy.get() {
+                SandboxPolicy::ReadOnly { .. } => {}
+                other => panic!("expected read-only policy on Windows, got {other:?}"),
+            }
+        } else {
+            assert!(
+                memories_root.is_dir(),
+                "expected memories root directory to exist at {}",
+                memories_root.display()
+            );
+            let expected_memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
+            match config.permissions.sandbox_policy.get() {
+                SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                    assert_eq!(
+                        writable_roots
+                            .iter()
+                            .filter(|root| **root == expected_memories_root)
+                            .count(),
+                        1,
+                        "expected single writable root entry for {}",
+                        expected_memories_root.display()
+                    );
+                }
+                other => panic!("expected workspace-write policy, got {other:?}"),
+            }
+        }
 
         Ok(())
     }

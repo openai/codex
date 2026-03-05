@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "cwd": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "marketplaceName": {
+      "type": "string"
+    },
+    "pluginName": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "marketplaceName",
+    "pluginName"
+  ],
+  "title": "PluginInstallParams",
+  "type": "object"
+}
