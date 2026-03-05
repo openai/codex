@@ -57,15 +57,15 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AGENT_INBOX_MESSAGE_PREFIX;
+use codex_protocol::protocol::AgentInboxPayload;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AgentReasoningDeltaEvent;
 use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
-use codex_protocol::protocol::COLLAB_INBOX_MESSAGE_PREFIX;
 use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::CollabInboxPayload;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -161,21 +161,21 @@ fn snapshot(percent: f64) -> RateLimitSnapshot {
     }
 }
 
-fn collab_inbox_function_call_output(sender: ThreadId, message: &str) -> ResponseItem {
-    let payload = serde_json::to_string(&CollabInboxPayload::new(sender, message.to_string()))
-        .expect("collab inbox payload should serialize");
+fn agent_inbox_function_call_output(sender: ThreadId, message: &str) -> ResponseItem {
+    let payload = serde_json::to_string(&AgentInboxPayload::new(sender, message.to_string()))
+        .expect("agent inbox payload should serialize");
     ResponseItem::FunctionCallOutput {
-        call_id: "call-collab-inbox".to_string(),
+        call_id: "call-agent-inbox".to_string(),
         output: FunctionCallOutputPayload::from_text(payload),
     }
 }
 
-fn collab_inbox_message(sender: ThreadId, message: &str) -> ResponseItem {
+fn agent_inbox_message(sender: ThreadId, message: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: format!("{COLLAB_INBOX_MESSAGE_PREFIX}{sender}] {message}"),
+            text: format!("{AGENT_INBOX_MESSAGE_PREFIX}{sender}] {message}"),
         }],
         end_turn: None,
         phase: None,
@@ -284,7 +284,7 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
 }
 
 #[tokio::test]
-async fn thread_snapshot_replay_deduplicates_collab_inbox_compatibility_items() {
+async fn thread_snapshot_replay_deduplicates_agent_inbox_compatibility_items() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
     let sender =
@@ -292,15 +292,15 @@ async fn thread_snapshot_replay_deduplicates_collab_inbox_compatibility_items() 
     let message = "Please review the latest diff";
 
     chat.handle_codex_event_replay(Event {
-        id: "evt-collab-output".into(),
+        id: "evt-agent-output".into(),
         msg: EventMsg::RawResponseItem(RawResponseItemEvent {
-            item: collab_inbox_function_call_output(sender, message),
+            item: agent_inbox_function_call_output(sender, message),
         }),
     });
     chat.handle_codex_event_replay(Event {
-        id: "evt-collab-message".into(),
+        id: "evt-agent-message".into(),
         msg: EventMsg::RawResponseItem(RawResponseItemEvent {
-            item: collab_inbox_message(sender, message),
+            item: agent_inbox_message(sender, message),
         }),
     });
 
@@ -308,7 +308,7 @@ async fn thread_snapshot_replay_deduplicates_collab_inbox_compatibility_items() 
     assert_eq!(
         cells.len(),
         1,
-        "expected replayed collab inbox compatibility items to render one history row"
+        "expected replayed agent inbox compatibility items to render one history row"
     );
     let rendered = cells
         .iter()
@@ -316,7 +316,7 @@ async fn thread_snapshot_replay_deduplicates_collab_inbox_compatibility_items() 
         .collect::<Vec<_>>()
         .join("\n");
     assert_snapshot!(
-        "thread_snapshot_replay_collab_inbox_dedupes_compatibility_items",
+        "thread_snapshot_replay_agent_inbox_dedupes_compatibility_items",
         rendered
     );
 }
@@ -1912,7 +1912,7 @@ async fn make_chatwidget_manual(
         status_line_branch_lookup_complete: false,
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
-        last_replayed_collab_inbox_message: None,
+        last_replayed_agent_inbox_message: None,
         last_rendered_user_message_event: None,
     };
     widget.set_model(&resolved_model);

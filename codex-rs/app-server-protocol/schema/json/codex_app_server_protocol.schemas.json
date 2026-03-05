@@ -131,6 +131,14 @@
         }
       ]
     },
+    "AgentSpawnMode": {
+      "enum": [
+        "spawn",
+        "fork",
+        "watchdog"
+      ],
+      "type": "string"
+    },
     "AgentStatus": {
       "description": "Agent lifecycle status, derived from emitted events.",
       "oneOf": [
@@ -1455,14 +1463,6 @@
         "thread_id"
       ],
       "type": "object"
-    },
-    "CollabAgentSpawnMode": {
-      "enum": [
-        "spawn",
-        "fork",
-        "watchdog"
-      ],
-      "type": "string"
     },
     "CollabAgentStatusEntry": {
       "properties": {
@@ -4166,7 +4166,7 @@
             "spawn_mode": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/CollabAgentSpawnMode"
+                  "$ref": "#/definitions/AgentSpawnMode"
                 }
               ],
               "default": "spawn",

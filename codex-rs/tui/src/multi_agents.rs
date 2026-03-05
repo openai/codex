@@ -447,7 +447,7 @@ fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
 mod tests {
     use super::*;
     use crate::history_cell::HistoryCell;
-    use codex_protocol::protocol::CollabAgentSpawnMode;
+    use codex_protocol::protocol::AgentSpawnMode;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::style::Color;
@@ -469,7 +469,7 @@ mod tests {
             new_agent_nickname: Some("Robie".to_string()),
             new_agent_role: Some("explorer".to_string()),
             prompt: "Compute 11! and reply with just the integer result.".to_string(),
-            spawn_mode: CollabAgentSpawnMode::Spawn,
+            spawn_mode: AgentSpawnMode::Spawn,
             status: AgentStatus::PendingInit,
         });
 
@@ -550,7 +550,7 @@ mod tests {
             new_agent_nickname: Some("Robie".to_string()),
             new_agent_role: Some("explorer".to_string()),
             prompt: String::new(),
-            spawn_mode: CollabAgentSpawnMode::Spawn,
+            spawn_mode: AgentSpawnMode::Spawn,
             status: AgentStatus::PendingInit,
         });
 

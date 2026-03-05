@@ -74,22 +74,22 @@ pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
-pub const COLLAB_INBOX_KIND: &str = "collab_inbox";
-pub const COLLAB_INBOX_MESSAGE_PREFIX: &str = "[collab_inbox:";
+pub const AGENT_INBOX_KIND: &str = "agent_inbox";
+pub const AGENT_INBOX_MESSAGE_PREFIX: &str = "[agent_inbox:";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
-pub struct CollabInboxPayload {
+pub struct AgentInboxPayload {
     pub injected: bool,
     pub kind: String,
     pub sender_thread_id: ThreadId,
     pub message: String,
 }
 
-impl CollabInboxPayload {
+impl AgentInboxPayload {
     pub fn new(sender_thread_id: ThreadId, message: String) -> Self {
         Self {
             injected: true,
-            kind: COLLAB_INBOX_KIND.to_string(),
+            kind: AGENT_INBOX_KIND.to_string(),
             sender_thread_id,
             message,
         }
@@ -2989,7 +2989,7 @@ pub struct CollabAgentSpawnBeginEvent {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Default)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
-pub enum CollabAgentSpawnMode {
+pub enum AgentSpawnMode {
     #[default]
     Spawn,
     Fork,
@@ -3041,7 +3041,7 @@ pub struct CollabAgentSpawnEndEvent {
     pub prompt: String,
     /// Spawn mode used for this agent.
     #[serde(default)]
-    pub spawn_mode: CollabAgentSpawnMode,
+    pub spawn_mode: AgentSpawnMode,
     /// Last known status of the new agent reported to the sender agent.
     pub status: AgentStatus,
 }

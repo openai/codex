@@ -11,6 +11,7 @@ export type { AgentReasoningEvent } from "./AgentReasoningEvent";
 export type { AgentReasoningRawContentDeltaEvent } from "./AgentReasoningRawContentDeltaEvent";
 export type { AgentReasoningRawContentEvent } from "./AgentReasoningRawContentEvent";
 export type { AgentReasoningSectionBreakEvent } from "./AgentReasoningSectionBreakEvent";
+export type { AgentSpawnMode } from "./AgentSpawnMode";
 export type { AgentStatus } from "./AgentStatus";
 export type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 export type { ApplyPatchApprovalRequestEvent } from "./ApplyPatchApprovalRequestEvent";
@@ -29,7 +30,6 @@ export type { CollabAgentInteractionEndEvent } from "./CollabAgentInteractionEnd
 export type { CollabAgentRef } from "./CollabAgentRef";
 export type { CollabAgentSpawnBeginEvent } from "./CollabAgentSpawnBeginEvent";
 export type { CollabAgentSpawnEndEvent } from "./CollabAgentSpawnEndEvent";
-export type { CollabAgentSpawnMode } from "./CollabAgentSpawnMode";
 export type { CollabAgentStatusEntry } from "./CollabAgentStatusEntry";
 export type { CollabCloseBeginEvent } from "./CollabCloseBeginEvent";
 export type { CollabCloseEndEvent } from "./CollabCloseEndEvent";
