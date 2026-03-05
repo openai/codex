@@ -1,6 +1,7 @@
 use crate::network_policy::NetworkDecisionSource;
 use crate::network_policy::NetworkPolicyDecision;
 use crate::network_policy::NetworkProtocol;
+use crate::reasons::REASON_CONNECT_PORT_NOT_ALLOWED;
 use crate::reasons::REASON_DENIED;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_MITM_REQUIRED;
@@ -49,6 +50,7 @@ pub fn json_response<T: Serialize>(value: &T) -> Response {
 
 pub fn blocked_header_value(reason: &str) -> &'static str {
     match reason {
+        REASON_CONNECT_PORT_NOT_ALLOWED => "blocked-by-connect-port-policy",
         REASON_NOT_ALLOWED | REASON_NOT_ALLOWED_LOCAL => "blocked-by-allowlist",
         REASON_DENIED => "blocked-by-denylist",
         REASON_METHOD_NOT_ALLOWED => "blocked-by-method-policy",
@@ -59,6 +61,9 @@ pub fn blocked_header_value(reason: &str) -> &'static str {
 
 pub fn blocked_message(reason: &str) -> &'static str {
     match reason {
+        REASON_CONNECT_PORT_NOT_ALLOWED => {
+            "Codex blocked this request: CONNECT is only allowed to HTTPS port 443."
+        }
         REASON_NOT_ALLOWED => {
             "Codex blocked this request: domain not in allowlist (this is not a denylist block)."
         }

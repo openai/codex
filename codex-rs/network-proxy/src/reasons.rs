@@ -1,3 +1,4 @@
+pub(crate) const REASON_CONNECT_PORT_NOT_ALLOWED: &str = "connect_port_not_allowed";
 pub(crate) const REASON_DENIED: &str = "denied";
 pub(crate) const REASON_METHOD_NOT_ALLOWED: &str = "method_not_allowed";
 pub(crate) const REASON_MITM_REQUIRED: &str = "mitm_required";

@@ -12,6 +12,7 @@ use crate::network_policy::emit_allow_decision_audit_event;
 use crate::network_policy::emit_block_decision_audit_event;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
+use crate::reasons::REASON_CONNECT_PORT_NOT_ALLOWED;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_MITM_REQUIRED;
 use crate::reasons::REASON_NOT_ALLOWED;
@@ -78,6 +79,8 @@ use std::sync::Arc;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+
+const HTTPS_CONNECT_PORT: u16 = 443;
 
 pub async fn run_http_proxy(
     state: Arc<NetworkProxyState>,
@@ -184,6 +187,51 @@ async fn http_connect_accept(
             None,
         )
         .await);
+    }
+
+    if authority.port != HTTPS_CONNECT_PORT {
+        emit_http_block_decision_audit_event(
+            &app_state,
+            BlockDecisionAuditEventArgs {
+                source: NetworkDecisionSource::ModeGuard,
+                reason: REASON_CONNECT_PORT_NOT_ALLOWED,
+                protocol: NetworkProtocol::HttpsConnect,
+                server_address: host.as_str(),
+                server_port: authority.port,
+                method: Some("CONNECT"),
+                client_addr: client.as_deref(),
+            },
+        );
+        let details = PolicyDecisionDetails {
+            decision: NetworkPolicyDecision::Deny,
+            reason: REASON_CONNECT_PORT_NOT_ALLOWED,
+            source: NetworkDecisionSource::ModeGuard,
+            protocol: NetworkProtocol::HttpsConnect,
+            host: &host,
+            port: authority.port,
+        };
+        let _ = app_state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: host.clone(),
+                reason: REASON_CONNECT_PORT_NOT_ALLOWED.to_string(),
+                client: client.clone(),
+                method: Some("CONNECT".to_string()),
+                mode: None,
+                protocol: "http-connect".to_string(),
+                decision: Some(details.decision.as_str().to_string()),
+                source: Some(details.source.as_str().to_string()),
+                port: Some(authority.port),
+            }))
+            .await;
+        let client = client.as_deref().unwrap_or_default();
+        let port = authority.port;
+        warn!(
+            "CONNECT blocked; non-HTTPS port not allowed (client={client}, host={host}, port={port}, allowed_port={HTTPS_CONNECT_PORT})"
+        );
+        return Err(blocked_text_with_details(
+            REASON_CONNECT_PORT_NOT_ALLOWED,
+            &details,
+        ));
     }
 
     let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
@@ -1022,6 +1070,30 @@ mod tests {
 
         let (response, _request) = http_connect_accept(None, req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn http_connect_accept_blocks_non_https_port_in_full_mode() {
+        let policy = NetworkProxySettings {
+            allowed_domains: vec!["github.com".to_string()],
+            ..Default::default()
+        };
+        let state = Arc::new(network_proxy_state_for_policy(policy));
+
+        let mut req = Request::builder()
+            .method(Method::CONNECT)
+            .uri("https://github.com:22")
+            .header("host", "github.com:22")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let response = http_connect_accept(None, req).await.unwrap_err();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.headers().get("x-proxy-error").unwrap(),
+            "blocked-by-connect-port-policy"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

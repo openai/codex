@@ -27,7 +27,7 @@ socks_url = "http://127.0.0.1:8081"
 enable_socks5_udp = true
 # When `enabled` is false, the proxy no-ops and does not bind listeners.
 # When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
-# including CONNECT tunnels in full mode.
+# including HTTPS CONNECT tunnels to port 443 in full mode.
 allow_upstream_proxy = true
 # By default, non-loopback binds are clamped to loopback for safety.
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
@@ -88,9 +88,9 @@ When a request is blocked, the proxy responds with `403` and includes:
   - `blocked-by-method-policy`
   - `blocked-by-policy`
 
-In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` requests require
-MITM to enforce limited-mode method policy; otherwise they are blocked. SOCKS5 remains blocked in
-limited mode.
+In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` requests to port
+`443` require MITM to enforce limited-mode method policy; otherwise they are blocked. SOCKS5
+remains blocked in limited mode.
 
 Websocket clients typically tunnel `wss://` through HTTPS `CONNECT`; those CONNECT targets still go
 through the same host allowlist/denylist checks.
