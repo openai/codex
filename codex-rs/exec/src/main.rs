@@ -29,7 +29,10 @@ fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let top_cli = TopCli::parse();
         // Merge root-level overrides into inner CLI struct so downstream logic remains unchanged.
-        let mut inner = top_cli.inner;
+        let mut inner = match top_cli.inner.validate() {
+            Ok(inner) => inner,
+            Err(err) => err.exit(),
+        };
         inner
             .config_overrides
             .raw_overrides
