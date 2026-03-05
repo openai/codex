@@ -181,6 +181,16 @@ pub enum ApplyPatchToolType {
     Function,
 }
 
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema, Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearchToolType {
+    #[default]
+    Text,
+    TextAndImage,
+}
+
 /// Server-provided truncation policy metadata for a model.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -243,6 +253,8 @@ pub struct ModelInfo {
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+    #[serde(default)]
+    pub web_search_tool_type: WebSearchToolType,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
     #[serde(default)]
@@ -515,6 +527,7 @@ mod tests {
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,
+            web_search_tool_type: WebSearchToolType::Text,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
             supports_image_detail_original: false,
@@ -718,6 +731,7 @@ mod tests {
 
         assert_eq!(model.availability_nux, None);
         assert!(!model.supports_image_detail_original);
+        assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
     }
 
     #[test]

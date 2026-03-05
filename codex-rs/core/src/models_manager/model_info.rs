@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::openai_models::default_input_modalities;
 
 use crate::config::Config;
@@ -78,6 +79,7 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
+        web_search_tool_type: WebSearchToolType::Text,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
