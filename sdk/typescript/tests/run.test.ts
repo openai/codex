@@ -4,7 +4,6 @@ import path from "node:path";
 
 import { codexExecSpy } from "./codexExecSpy";
 import { describe, expect, it } from "@jest/globals";
-
 import { Codex } from "../src/codex";
 
 import {
@@ -16,8 +15,7 @@ import {
   startResponsesTestProxy,
   SseResponseBody,
 } from "./responsesProxy";
-
-const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
+import { codexExecPath, createMockClient, createTestClient } from "./testCodex";
 
 describe("Codex", () => {
   it("returns thread events", async () => {
@@ -25,10 +23,9 @@ describe("Codex", () => {
       statusCode: 200,
       responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       const result = await thread.run("Hello, world!");
 
@@ -47,6 +44,7 @@ describe("Codex", () => {
       });
       expect(thread.id).toEqual(expect.any(String));
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -67,10 +65,9 @@ describe("Codex", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       await thread.run("first input");
       await thread.run("second input");
@@ -90,6 +87,7 @@ describe("Codex", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -110,10 +108,9 @@ describe("Codex", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       await thread.run("first input");
       await thread.run("second input");
@@ -134,6 +131,7 @@ describe("Codex", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -154,10 +152,9 @@ describe("Codex", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const originalThread = client.startThread();
       await originalThread.run("first input");
 
@@ -181,6 +178,7 @@ describe("Codex", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -198,10 +196,9 @@ describe("Codex", () => {
     });
 
     const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread({
         model: "gpt-test-1",
         sandboxMode: "workspace-write",
@@ -219,6 +216,7 @@ describe("Codex", () => {
       expectPair(commandArgs, ["--sandbox", "workspace-write"]);
       expectPair(commandArgs, ["--model", "gpt-test-1"]);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -237,10 +235,9 @@ describe("Codex", () => {
     });
 
     const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread({
         modelReasoningEffort: "high",
       });
@@ -250,6 +247,7 @@ describe("Codex", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", 'model_reasoning_effort="high"']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -268,10 +266,9 @@ describe("Codex", () => {
     });
 
     const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread({
         networkAccessEnabled: true,
       });
@@ -281,6 +278,7 @@ describe("Codex", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", "sandbox_workspace_write.network_access=true"]);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -299,10 +297,9 @@ describe("Codex", () => {
     });
 
     const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread({
         webSearchEnabled: true,
       });
@@ -312,6 +309,7 @@ describe("Codex", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", 'web_search="live"']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -330,10 +328,9 @@ describe("Codex", () => {
     });
 
     const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread({
         webSearchMode: "cached",
       });
@@ -343,6 +340,7 @@ describe("Codex", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", 'web_search="cached"']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -361,10 +359,9 @@ describe("Codex", () => {
     });
 
     const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread({
         webSearchEnabled: false,
       });
@@ -374,6 +371,7 @@ describe("Codex", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", 'web_search="disabled"']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -392,10 +390,9 @@ describe("Codex", () => {
     });
 
     const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread({
         approvalPolicy: "on-request",
       });
@@ -405,6 +402,7 @@ describe("Codex", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", 'approval_policy="on-request"']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -423,20 +421,18 @@ describe("Codex", () => {
     });
 
     const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createTestClient({
+      baseUrl: url,
+      apiKey: "test",
+      config: {
+        approval_policy: "never",
+        sandbox_workspace_write: { network_access: true },
+        retry_budget: 3,
+        tool_rules: { allow: ["git status", "git diff"] },
+      },
+    });
 
     try {
-      const client = new Codex({
-        codexPathOverride: codexExecPath,
-        baseUrl: url,
-        apiKey: "test",
-        config: {
-          approval_policy: "never",
-          sandbox_workspace_write: { network_access: true },
-          retry_budget: 3,
-          tool_rules: { allow: ["git status", "git diff"] },
-        },
-      });
-
       const thread = client.startThread();
       await thread.run("apply config overrides");
 
@@ -447,6 +443,7 @@ describe("Codex", () => {
       expectPair(commandArgs, ["--config", "retry_budget=3"]);
       expectPair(commandArgs, ["--config", 'tool_rules.allow=["git status", "git diff"]']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -465,15 +462,13 @@ describe("Codex", () => {
     });
 
     const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createTestClient({
+      baseUrl: url,
+      apiKey: "test",
+      config: { approval_policy: "never" },
+    });
 
     try {
-      const client = new Codex({
-        codexPathOverride: codexExecPath,
-        baseUrl: url,
-        apiKey: "test",
-        config: { approval_policy: "never" },
-      });
-
       const thread = client.startThread({ approvalPolicy: "on-request" });
       await thread.run("override approval policy");
 
@@ -485,6 +480,7 @@ describe("Codex", () => {
       ]);
       expect(approvalPolicyOverrides.at(-1)).toBe('approval_policy="on-request"');
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -510,7 +506,10 @@ describe("Codex", () => {
         codexPathOverride: codexExecPath,
         baseUrl: url,
         apiKey: "test",
-        env: { CUSTOM_ENV: "custom" },
+        env: {
+          CODEX_HOME: process.env.CODEX_HOME!,
+          CUSTOM_ENV: "custom",
+        },
       });
 
       const thread = client.startThread();
@@ -521,6 +520,7 @@ describe("Codex", () => {
       if (!spawnEnv) {
         throw new Error("Spawn env missing");
       }
+      expect(spawnEnv.CODEX_HOME).toBe(process.env.CODEX_HOME);
       expect(spawnEnv.CUSTOM_ENV).toBe("custom");
       expect(spawnEnv.CODEX_ENV_SHOULD_NOT_LEAK).toBeUndefined();
       expect(spawnEnv.OPENAI_BASE_URL).toBe(url);
@@ -546,10 +546,9 @@ describe("Codex", () => {
     });
 
     const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread({
         additionalDirectories: ["../backend", "/tmp/shared"],
       });
@@ -570,6 +569,7 @@ describe("Codex", () => {
       }
       expect(addDirArgs).toEqual(["../backend", "/tmp/shared"]);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -598,9 +598,9 @@ describe("Codex", () => {
       additionalProperties: false,
     } as const;
 
-    try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+    const { client, cleanup } = createMockClient(url);
 
+    try {
       const thread = client.startThread();
       await thread.run("structured", { outputSchema: schema });
 
@@ -627,6 +627,7 @@ describe("Codex", () => {
       }
       expect(fs.existsSync(schemaPath)).toBe(false);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -642,10 +643,9 @@ describe("Codex", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       await thread.run([
         { type: "text", text: "Describe file changes" },
@@ -657,6 +657,7 @@ describe("Codex", () => {
       const lastUser = payload!.json.input.at(-1);
       expect(lastUser?.content?.[0]?.text).toBe("Describe file changes\n\nFocus on impacted tests");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -681,10 +682,9 @@ describe("Codex", () => {
     imagesDirectoryEntries.forEach((image, index) => {
       fs.writeFileSync(image, `image-${index}`);
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       await thread.run([
         { type: "text", text: "describe the images" },
@@ -702,6 +702,7 @@ describe("Codex", () => {
       }
       expect(forwardedImages).toEqual(imagesDirectoryEntries);
     } finally {
+      cleanup();
       fs.rmSync(tempDir, { recursive: true, force: true });
       restore();
       await close();
@@ -720,15 +721,13 @@ describe("Codex", () => {
     });
 
     const { args: spawnArgs, restore } = codexExecSpy();
+    const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-working-dir-"));
+    const { client, cleanup } = createTestClient({
+      baseUrl: url,
+      apiKey: "test",
+    });
 
     try {
-      const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-working-dir-"));
-      const client = new Codex({
-        codexPathOverride: codexExecPath,
-        baseUrl: url,
-        apiKey: "test",
-      });
-
       const thread = client.startThread({
         workingDirectory,
         skipGitRepoCheck: true,
@@ -738,6 +737,8 @@ describe("Codex", () => {
       const commandArgs = spawnArgs[0];
       expectPair(commandArgs, ["--cd", workingDirectory]);
     } finally {
+      cleanup();
+      fs.rmSync(workingDirectory, { recursive: true, force: true });
       restore();
       await close();
     }
@@ -754,15 +755,13 @@ describe("Codex", () => {
         ),
       ],
     });
+    const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-working-dir-"));
+    const { client, cleanup } = createTestClient({
+      baseUrl: url,
+      apiKey: "test",
+    });
 
     try {
-      const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-working-dir-"));
-      const client = new Codex({
-        codexPathOverride: codexExecPath,
-        baseUrl: url,
-        apiKey: "test",
-      });
-
       const thread = client.startThread({
         workingDirectory,
       });
@@ -770,6 +769,8 @@ describe("Codex", () => {
         /Not inside a trusted directory/,
       );
     } finally {
+      cleanup();
+      fs.rmSync(workingDirectory, { recursive: true, force: true });
       await close();
     }
   });
@@ -779,10 +780,9 @@ describe("Codex", () => {
       statusCode: 200,
       responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       await thread.run("Hello, originator!");
 
@@ -794,6 +794,7 @@ describe("Codex", () => {
         expect(originatorHeader).toBe("codex_sdk_ts");
       }
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -807,12 +808,13 @@ describe("Codex", () => {
         }
       })(),
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
       const thread = client.startThread();
       await expect(thread.run("fail")).rejects.toThrow("stream disconnected before completion:");
     } finally {
+      cleanup();
       await close();
     }
   }, 10000); // TODO(pakrym): remove timeout

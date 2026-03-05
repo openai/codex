@@ -159,9 +159,9 @@ pub enum Feature {
     RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
-    /// Use the Responses API WebSocket transport for OpenAI by default.
+    /// Legacy rollout flag for Responses API WebSocket transport experiments.
     ResponsesWebsockets,
-    /// Enable Responses API websocket v2 mode.
+    /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
     ResponsesWebsocketsV2,
 }
 
@@ -744,13 +744,13 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResponsesWebsockets,
         key: "responses_websockets",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
 ];

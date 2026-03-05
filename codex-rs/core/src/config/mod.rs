@@ -3585,32 +3585,6 @@ profile = "project"
     }
 
     #[test]
-    fn responses_websocket_features_do_not_change_wire_api() -> std::io::Result<()> {
-        for feature_key in ["responses_websockets", "responses_websockets_v2"] {
-            let codex_home = TempDir::new()?;
-            let mut entries = BTreeMap::new();
-            entries.insert(feature_key.to_string(), true);
-            let cfg = ConfigToml {
-                features: Some(crate::features::FeaturesToml { entries }),
-                ..Default::default()
-            };
-
-            let config = Config::load_from_base_config_with_overrides(
-                cfg,
-                ConfigOverrides::default(),
-                codex_home.path().to_path_buf(),
-            )?;
-
-            assert_eq!(
-                config.model_provider.wire_api,
-                crate::model_provider_info::WireApi::Responses
-            );
-        }
-
-        Ok(())
-    }
-
-    #[test]
     fn config_honors_explicit_file_oauth_store_mode() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
