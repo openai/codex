@@ -20,7 +20,11 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses::ResponseMock;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::mount_sse_once_match;
@@ -35,6 +39,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
+const AFTER_ROLLBACK: &str = "AFTER_ROLLBACK";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
@@ -406,6 +411,119 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Scenario: rolling back past a compaction should remove the compacted
+/// checkpoint from subsequent replay, including when the thread is resumed from
+/// the rollout file path.
+async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Result<()> {
+    if network_disabled() {
+        println!("Skipping test because network is disabled in this sandbox");
+        return Ok(());
+    }
+
+    let server = MockServer::start().await;
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", "AFTER_COMPACT_REPLY"),
+        ev_completed("r3"),
+    ]);
+    let sse4 = sse(vec![ev_completed("r4")]);
+
+    let match_first = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains("\"text\":\"hello world\"")
+            && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
+            && !body.contains("\"text\":\"AFTER_COMPACT\"")
+            && !body.contains(&format!("\"text\":\"{AFTER_ROLLBACK}\""))
+    };
+    let first = mount_sse_once_match(&server, match_first, sse1).await;
+
+    let match_compact = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body_contains_text(body, SUMMARIZATION_PROMPT) || body.contains(&json_fragment(FIRST_REPLY))
+    };
+    let compact = mount_sse_once_match(&server, match_compact, sse2).await;
+
+    let match_after_compact = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains("\"text\":\"AFTER_COMPACT\"")
+            && !body.contains(&format!("\"text\":\"{AFTER_ROLLBACK}\""))
+    };
+    let after_compact = mount_sse_once_match(&server, match_after_compact, sse3).await;
+
+    let match_after_rollback = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(&format!("\"text\":\"{AFTER_ROLLBACK}\""))
+    };
+    let after_rollback = mount_sse_once_match(&server, match_after_rollback, sse4).await;
+
+    let request_log = vec![first, compact, after_compact, after_rollback];
+
+    let (_home, _config, _manager, base) = start_test_conversation(&server, None).await;
+
+    user_turn(&base, "hello world").await;
+    compact_conversation(&base).await;
+    user_turn(&base, "AFTER_COMPACT").await;
+
+    base.submit(Op::ThreadRollback { num_turns: 2 })
+        .await
+        .expect("submit thread rollback");
+    let rollback_event =
+        wait_for_event(&base, |ev| matches!(ev, EventMsg::ThreadRolledBack(_))).await;
+    let EventMsg::ThreadRolledBack(rollback_event) = rollback_event else {
+        panic!("expected thread rolled back event");
+    };
+    assert_eq!(rollback_event.num_turns, 2);
+
+    user_turn(&base, AFTER_ROLLBACK).await;
+
+    let requests = gather_requests(&request_log);
+    assert_eq!(requests.len(), 4);
+    assert!(requests[2].body_contains_text(SUMMARY_TEXT));
+    assert!(requests[2].body_contains_text("AFTER_COMPACT"));
+
+    let after_rollback_user_texts = requests[3].message_input_texts("user");
+    let after_rollback_last = after_rollback_user_texts
+        .last()
+        .unwrap_or_else(|| panic!("post-rollback request missing user messages"));
+    assert_eq!(after_rollback_last, AFTER_ROLLBACK);
+    assert!(
+        !requests[3].body_contains_text("hello world"),
+        "rolled-back first turn should not survive replay after rollback",
+    );
+    assert!(
+        !requests[3].body_contains_text(SUMMARY_TEXT),
+        "compaction summary should be removed when rollback crosses it",
+    );
+    assert!(
+        !requests[3].body_contains_text("AFTER_COMPACT"),
+        "rolled-back post-compaction turn should not survive replay after rollback",
+    );
+
+    insta::assert_snapshot!(
+        "rollback_past_compaction_shapes",
+        context_snapshot::format_labeled_requests_snapshot(
+            "rollback past compaction replay after rollback",
+            &[
+                ("before compact", &requests[0]),
+                ("after compact", &requests[2]),
+                ("after rollback", &requests[3]),
+            ],
+            &ContextSnapshotOptions::default()
+                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
+        )
+    );
+
+    Ok(())
+}
+
 fn normalize_line_endings(value: &mut Value) {
     match value {
         Value::String(text) => {
@@ -427,10 +545,16 @@ fn normalize_line_endings(value: &mut Value) {
     }
 }
 
-fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
-    let mut bodies = request_log
+fn gather_requests(request_log: &[ResponseMock]) -> Vec<ResponsesRequest> {
+    request_log
         .iter()
         .flat_map(ResponseMock::requests)
+        .collect::<Vec<_>>()
+}
+
+fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
+    let mut bodies = gather_requests(request_log)
+        .into_iter()
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
     bodies.iter_mut().for_each(normalize_line_endings);

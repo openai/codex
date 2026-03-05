@@ -1,0 +1,32 @@
+---
+source: core/tests/suite/compact_resume_fork.rs
+expression: "context_snapshot::format_labeled_requests_snapshot(\"rollback past compaction replay after rollback\",\n&[(\"before compact\", &requests[0]), (\"after compact\", &requests[2]),\n(\"after rollback\", &requests[3]),],\n&ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::KindWithTextPrefix\n{ max_chars: 64 }),)"
+---
+Scenario: rollback past compaction replay after rollback
+
+## before compact
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:hello world
+
+## after compact
+00:message/user:hello world
+01:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
+02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:AFTER_COMPACT
+
+## after rollback
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:AFTER_ROLLBACK
