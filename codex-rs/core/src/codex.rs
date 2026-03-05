@@ -393,7 +393,7 @@ impl Codex {
         let user_instructions = get_user_instructions(
             &config,
             Some(&allowed_skills_for_implicit_invocation),
-            Some(loaded_plugins.capability_index().plugins()),
+            Some(loaded_plugins.capability_summaries()),
         )
         .await;
 

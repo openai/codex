@@ -6,7 +6,6 @@ mod store;
 
 pub use manager::AppConnectorId;
 pub use manager::LoadedPlugin;
-pub use manager::PluginCapabilityIndex;
 pub use manager::PluginCapabilitySummary;
 pub use manager::PluginInstallError;
 pub use manager::PluginInstallRequest;
