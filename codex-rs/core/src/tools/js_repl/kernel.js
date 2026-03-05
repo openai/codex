@@ -155,6 +155,11 @@ const linkedFileModules = new Map();
 const linkedNativeModules = new Map();
 const linkedModuleEvaluations = new Map();
 
+function clearLocalFileModuleCaches() {
+  linkedFileModules.clear();
+  linkedModuleEvaluations.clear();
+}
+
 function canonicalizePath(value) {
   try {
     return fs.realpathSync.native(value);
@@ -900,6 +905,7 @@ function normalizeEmitImageValue(value) {
 }
 
 async function handleExec(message) {
+  clearLocalFileModuleCaches();
   activeExecId = message.id;
   const pendingBackgroundTasks = new Set();
   const tool = (toolName, args) => {

@@ -3346,6 +3346,118 @@ await codex.emitImage(out);
     }
 
     #[tokio::test]
+    async fn js_repl_reimports_local_files_after_edit() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        let helper_path = cwd_dir.path().join("helper.js");
+        fs::write(&helper_path, "export const value = \"v1\";\n")?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let first = manager
+            .execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "const { value: firstValue } = await import(\"./helper.js\");\nconsole.log(firstValue);".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(first.output.contains("v1"));
+
+        fs::write(&helper_path, "export const value = \"v2\";\n")?;
+
+        let second = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "console.log(firstValue);\nconst { value: secondValue } = await import(\"./helper.js\");\nconsole.log(secondValue);".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(second.output.contains("v1"));
+        assert!(second.output.contains("v2"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_reimports_local_files_after_fixing_failure() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        let helper_path = cwd_dir.path().join("broken.js");
+        fs::write(&helper_path, "throw new Error(\"boom\");\n")?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let err = manager
+            .execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "await import(\"./broken.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected broken module import to fail");
+        assert!(err.to_string().contains("boom"));
+
+        fs::write(&helper_path, "export const value = \"fixed\";\n")?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "console.log((await import(\"./broken.js\")).value);".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("fixed"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn js_repl_local_files_expose_node_like_import_meta() -> anyhow::Result<()> {
         if !can_run_js_repl_runtime_tests().await {
             return Ok(());
