@@ -4085,7 +4085,6 @@ impl CodexMessageProcessor {
             env_http_headers,
             scopes.as_deref().unwrap_or_default(),
             server.oauth_resource.as_deref(),
-            server.oauth_client_metadata_url.as_deref(),
             timeout_secs,
             config.mcp_oauth_callback_port,
             config.mcp_oauth_callback_url.as_deref(),

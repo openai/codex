@@ -2554,7 +2554,6 @@ mod tests {
             disabled_tools: None,
             scopes: None,
             oauth_resource: None,
-            oauth_client_metadata_url: None,
         }
     }
 
@@ -2575,7 +2574,6 @@ mod tests {
             disabled_tools: None,
             scopes: None,
             oauth_resource: None,
-            oauth_client_metadata_url: None,
         }
     }
 
@@ -3719,7 +3717,6 @@ profile = "project"
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         );
 
@@ -3878,7 +3875,6 @@ bearer_token = "secret"
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         )]);
 
@@ -3951,7 +3947,6 @@ ZIG_VAR = "3"
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         )]);
 
@@ -4004,7 +3999,6 @@ ZIG_VAR = "3"
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         )]);
 
@@ -4055,7 +4049,6 @@ ZIG_VAR = "3"
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         )]);
 
@@ -4122,7 +4115,6 @@ startup_timeout_sec = 2.0
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         )]);
         apply_blocking(
@@ -4201,7 +4193,6 @@ X-Auth = "DOCS_AUTH"
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         )]);
 
@@ -4233,7 +4224,6 @@ X-Auth = "DOCS_AUTH"
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         );
         apply_blocking(
@@ -4303,7 +4293,6 @@ url = "https://example.com/mcp"
                     disabled_tools: None,
                     scopes: None,
                     oauth_resource: None,
-                    oauth_client_metadata_url: None,
                 },
             ),
             (
@@ -4325,7 +4314,6 @@ url = "https://example.com/mcp"
                     disabled_tools: None,
                     scopes: None,
                     oauth_resource: None,
-                    oauth_client_metadata_url: None,
                 },
             ),
         ]);
@@ -4410,7 +4398,6 @@ url = "https://example.com/mcp"
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         )]);
 
@@ -4457,7 +4444,6 @@ url = "https://example.com/mcp"
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         )]);
 
@@ -4504,7 +4490,6 @@ url = "https://example.com/mcp"
                 disabled_tools: Some(vec!["blocked".to_string()]),
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         )]);
 
@@ -4555,9 +4540,6 @@ url = "https://example.com/mcp"
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: Some("https://resource.example.com".to_string()),
-                oauth_client_metadata_url: Some(
-                    "https://example.com/client/metadata.json".to_string(),
-                ),
             },
         )]);
 
@@ -4570,21 +4552,12 @@ url = "https://example.com/mcp"
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert!(serialized.contains(r#"oauth_resource = "https://resource.example.com""#));
-        assert!(
-            serialized.contains(
-                r#"oauth_client_metadata_url = "https://example.com/client/metadata.json""#
-            )
-        );
 
         let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         assert_eq!(
             docs.oauth_resource.as_deref(),
             Some("https://resource.example.com")
-        );
-        assert_eq!(
-            docs.oauth_client_metadata_url.as_deref(),
-            Some("https://example.com/client/metadata.json")
         );
 
         Ok(())

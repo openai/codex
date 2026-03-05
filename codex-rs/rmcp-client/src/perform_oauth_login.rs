@@ -24,6 +24,11 @@ use crate::save_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 
+const DEFAULT_CIMD_CLIENT_METADATA_URL: &str =
+    "https://raw.githubusercontent.com/openai/codex/main/codex-rs/client-metadata.json";
+const DYNAMIC_CLIENT_REGISTRATION_UNSUPPORTED_ERROR: &str =
+    "dynamic client registration not supported";
+
 struct OauthHeaders {
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
@@ -48,7 +53,6 @@ pub async fn perform_oauth_login(
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
     oauth_resource: Option<&str>,
-    oauth_client_metadata_url: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
 ) -> Result<()> {
@@ -63,7 +67,6 @@ pub async fn perform_oauth_login(
         headers,
         scopes,
         oauth_resource,
-        oauth_client_metadata_url,
         true,
         callback_port,
         callback_url,
@@ -83,7 +86,6 @@ pub async fn perform_oauth_login_return_url(
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
     oauth_resource: Option<&str>,
-    oauth_client_metadata_url: Option<&str>,
     timeout_secs: Option<i64>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
@@ -99,7 +101,6 @@ pub async fn perform_oauth_login_return_url(
         headers,
         scopes,
         oauth_resource,
-        oauth_client_metadata_url,
         false,
         callback_port,
         callback_url,
@@ -312,7 +313,6 @@ impl OauthLoginFlow {
         headers: OauthHeaders,
         scopes: &[String],
         oauth_resource: Option<&str>,
-        oauth_client_metadata_url: Option<&str>,
         launch_browser: bool,
         callback_port: Option<u16>,
         callback_url: Option<&str>,
@@ -345,15 +345,9 @@ impl OauthLoginFlow {
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
         let http_client = apply_default_headers(ClientBuilder::new(), &default_headers).build()?;
 
-        let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-        start_oauth_authorization(
-            &mut oauth_state,
-            &scope_refs,
-            &redirect_uri,
-            oauth_client_metadata_url,
-        )
-        .await?;
+        let oauth_state =
+            start_oauth_authorization(server_url, http_client, &scope_refs, &redirect_uri).await?;
         let auth_url = append_query_param(
             &oauth_state.get_authorization_url().await?,
             "resource",
@@ -450,26 +444,49 @@ impl OauthLoginFlow {
 }
 
 async fn start_oauth_authorization(
-    oauth_state: &mut OAuthState,
+    server_url: &str,
+    http_client: reqwest::Client,
     scope_refs: &[&str],
     redirect_uri: &str,
-    oauth_client_metadata_url: Option<&str>,
-) -> Result<()> {
-    match oauth_client_metadata_url {
-        Some(url) => oauth_state
-            .start_authorization_with_metadata_url(
-                scope_refs,
-                redirect_uri,
-                Some("Codex"),
-                Some(url),
-            )
-            .await
-            .context("failed to start OAuth authorization with client metadata URL"),
-        None => oauth_state
-            .start_authorization(scope_refs, redirect_uri, Some("Codex"))
-            .await
-            .context("failed to start OAuth authorization"),
+) -> Result<OAuthState> {
+    let mut oauth_state = OAuthState::new(server_url, Some(http_client.clone())).await?;
+    match oauth_state
+        .start_authorization(scope_refs, redirect_uri, Some("Codex"))
+        .await
+    {
+        Ok(()) => Ok(oauth_state),
+        Err(err) => {
+            let err = anyhow!(err);
+            if is_dynamic_client_registration_unsupported(&err) {
+                let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
+                oauth_state
+                    .start_authorization_with_metadata_url(
+                        scope_refs,
+                        redirect_uri,
+                        Some("Codex"),
+                        Some(DEFAULT_CIMD_CLIENT_METADATA_URL),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to start OAuth authorization with default client metadata URL after dynamic registration fallback: {err:#}"
+                        )
+                    })?;
+                Ok(oauth_state)
+            } else {
+                Err(err).context("failed to start OAuth authorization")
+            }
+        }
     }
+}
+
+fn is_dynamic_client_registration_unsupported(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .to_string()
+            .to_ascii_lowercase()
+            .contains(DYNAMIC_CLIENT_REGISTRATION_UNSUPPORTED_ERROR)
+    })
 }
 
 fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
@@ -500,6 +517,7 @@ mod tests {
     use tokio::task::JoinHandle;
 
     use super::CallbackOutcome;
+    use super::DEFAULT_CIMD_CLIENT_METADATA_URL;
     use super::OAuthCredentialsStoreMode;
     use super::append_query_param;
     use super::callback_path_from_redirect_uri;
@@ -564,7 +582,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_login_supports_cimd_when_client_metadata_url_provided() {
+    async fn oauth_login_uses_default_cimd_metadata_when_dynamic_registration_unsupported() {
         let (server_url, server_handle) = start_oauth_metadata_server(true).await;
 
         let login_handle = perform_oauth_login_return_url(
@@ -575,13 +593,12 @@ mod tests {
             None,
             &[],
             None,
-            Some("https://example.com/client/metadata.json"),
             Some(1),
             None,
             None,
         )
         .await
-        .expect("oauth login should start with CIMD metadata URL");
+        .expect("oauth login should start with default CIMD metadata URL");
         let (authorization_url, completion) = login_handle.into_parts();
 
         let parsed = Url::parse(&authorization_url).expect("authorization URL should parse");
@@ -590,7 +607,7 @@ mod tests {
             .collect::<std::collections::HashMap<_, _>>();
         assert_eq!(
             params.get("client_id").map(std::convert::AsRef::as_ref),
-            Some("https://example.com/client/metadata.json")
+            Some(DEFAULT_CIMD_CLIENT_METADATA_URL)
         );
 
         let err = completion
@@ -601,37 +618,6 @@ mod tests {
             err.to_string()
                 .contains("timed out waiting for OAuth callback"),
             "unexpected oauth completion error: {err}"
-        );
-
-        server_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn oauth_login_without_client_metadata_url_fails_if_dynamic_registration_unsupported() {
-        let (server_url, server_handle) = start_oauth_metadata_server(true).await;
-
-        let result = perform_oauth_login_return_url(
-            "rmcp-http",
-            &server_url,
-            OAuthCredentialsStoreMode::File,
-            None,
-            None,
-            &[],
-            None,
-            None,
-            Some(1),
-            None,
-            None,
-        )
-        .await;
-        let err = match result {
-            Ok(_) => panic!("oauth login should fail without metadata url"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string()
-                .contains("failed to start OAuth authorization"),
-            "unexpected oauth login error: {err}"
         );
 
         server_handle.abort();

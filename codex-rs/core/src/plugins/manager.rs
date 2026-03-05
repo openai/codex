@@ -660,7 +660,6 @@ mod tests {
                         disabled_tools: None,
                         scopes: None,
                         oauth_resource: None,
-                        oauth_client_metadata_url: None,
                     },
                 )]),
                 apps: vec![AppConnectorId("connector_example".to_string())],

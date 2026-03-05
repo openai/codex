@@ -2116,7 +2116,6 @@ mod tests {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
             auth_status: McpAuthStatus::Unsupported,
         };
@@ -2165,7 +2164,6 @@ mod tests {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
             auth_status: McpAuthStatus::Unsupported,
         };

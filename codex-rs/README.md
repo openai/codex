@@ -32,14 +32,7 @@ Codex supports a rich set of configuration options. Note that the Rust CLI uses 
 
 Codex CLI functions as an MCP client that allows the Codex CLI and IDE extension to connect to MCP servers on startup. See the [`configuration documentation`](../docs/config.md#connecting-to-mcp-servers) for details.
 
-For OAuth servers that require Client ID Metadata Documents (SEP-991/CIMD), pass `--oauth-client-metadata-url` when adding a streamable HTTP MCP server:
-
-```shell
-codex mcp add chromatic --url https://tetra.chromatic.com/mcp \
-  --oauth-client-metadata-url https://raw.githubusercontent.com/openai/codex/main/codex-rs/client-metadata.json
-```
-
-The checked-in metadata document lives at [`client-metadata.json`](./client-metadata.json). If you host your own metadata URL, the `client_id` field in that JSON must exactly match the published URL.
+For OAuth MCP servers that disable dynamic client registration but support Client ID Metadata Documents (SEP-991/CIMD), Codex automatically retries login with its built-in client metadata document at [`client-metadata.json`](./client-metadata.json).
 
 #### MCP server (experimental)
 

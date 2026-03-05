@@ -12,8 +12,6 @@ Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the c
 
 - https://developers.openai.com/codex/config-reference
 
-If an MCP server requires URL-based OAuth client IDs (SEP-991/CIMD), set `oauth_client_metadata_url` on that streamable HTTP server entry (or use `codex mcp add --oauth-client-metadata-url <url>`). The URL must be `https` and include a non-root path.
-
 ## Apps (Connectors)
 
 Use `$` in the composer to insert a ChatGPT connector; the popover lists accessible

@@ -225,11 +225,6 @@ mod document_helpers {
         {
             entry["oauth_resource"] = value(resource.clone());
         }
-        if let Some(url) = &config.oauth_client_metadata_url
-            && !url.is_empty()
-        {
-            entry["oauth_client_metadata_url"] = value(url.clone());
-        }
 
         entry
     }
@@ -1535,7 +1530,6 @@ gpt-5 = "gpt-5.1"
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         );
 
@@ -1561,9 +1555,6 @@ gpt-5 = "gpt-5.1"
                 disabled_tools: Some(vec!["forbidden".to_string()]),
                 scopes: None,
                 oauth_resource: Some("https://resource.example.com".to_string()),
-                oauth_client_metadata_url: Some(
-                    "https://example.com/client/metadata.json".to_string(),
-                ),
             },
         );
 
@@ -1583,7 +1574,6 @@ enabled = false
 startup_timeout_sec = 5.0
 disabled_tools = [\"forbidden\"]
 oauth_resource = \"https://resource.example.com\"
-oauth_client_metadata_url = \"https://example.com/client/metadata.json\"
 
 [mcp_servers.http.http_headers]
 Z-Header = \"z\"
@@ -1634,7 +1624,6 @@ foo = { command = "cmd" }
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         );
 
@@ -1682,7 +1671,6 @@ foo = { command = "cmd" } # keep me
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         );
 
@@ -1729,7 +1717,6 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         );
 
@@ -1777,7 +1764,6 @@ foo = { command = "cmd" }
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
-                oauth_client_metadata_url: None,
             },
         );
 

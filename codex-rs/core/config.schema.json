@@ -1201,10 +1201,6 @@
           },
           "type": "object"
         },
-        "oauth_client_metadata_url": {
-          "default": null,
-          "type": "string"
-        },
         "oauth_resource": {
           "default": null,
           "type": "string"

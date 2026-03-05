@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
-use url::Url;
 use wildmatch::WildMatchPattern;
 
 use schemars::JsonSchema;
@@ -105,10 +104,6 @@ pub struct McpServerConfig {
     /// Optional OAuth resource parameter to include during MCP login (RFC 8707).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_resource: Option<String>,
-
-    /// Optional OAuth client metadata URL to use for URL-based client IDs (SEP-991/CIMD).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oauth_client_metadata_url: Option<String>,
 }
 
 // Raw MCP config shape used for deserialization and JSON Schema generation.
@@ -155,8 +150,6 @@ pub(crate) struct RawMcpServerConfig {
     pub scopes: Option<Vec<String>>,
     #[serde(default)]
     pub oauth_resource: Option<String>,
-    #[serde(default)]
-    pub oauth_client_metadata_url: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for McpServerConfig {
@@ -181,7 +174,6 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         let disabled_tools = raw.disabled_tools.clone();
         let scopes = raw.scopes.clone();
         let oauth_resource = raw.oauth_resource.clone();
-        let oauth_client_metadata_url = raw.oauth_client_metadata_url.clone();
 
         fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
         where
@@ -195,19 +187,6 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             )))
         }
 
-        fn validate_oauth_client_metadata_url<E>(value: &str) -> Result<(), E>
-        where
-            E: SerdeError,
-        {
-            let parsed = Url::parse(value).map_err(E::custom)?;
-            if parsed.scheme() != "https" || parsed.path() == "/" {
-                return Err(E::custom(
-                    "oauth_client_metadata_url must be an HTTPS URL with a non-root pathname",
-                ));
-            }
-            Ok(())
-        }
-
         let transport = if let Some(command) = raw.command.clone() {
             throw_if_set("stdio", "url", raw.url.as_ref())?;
             throw_if_set(
@@ -219,11 +198,6 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             throw_if_set("stdio", "http_headers", raw.http_headers.as_ref())?;
             throw_if_set("stdio", "env_http_headers", raw.env_http_headers.as_ref())?;
             throw_if_set("stdio", "oauth_resource", raw.oauth_resource.as_ref())?;
-            throw_if_set(
-                "stdio",
-                "oauth_client_metadata_url",
-                raw.oauth_client_metadata_url.as_ref(),
-            )?;
             McpServerTransportConfig::Stdio {
                 command,
                 args: raw.args.clone().unwrap_or_default(),
@@ -237,9 +211,6 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             throw_if_set("streamable_http", "env_vars", raw.env_vars.as_ref())?;
             throw_if_set("streamable_http", "cwd", raw.cwd.as_ref())?;
             throw_if_set("streamable_http", "bearer_token", raw.bearer_token.as_ref())?;
-            if let Some(url) = raw.oauth_client_metadata_url.as_deref() {
-                validate_oauth_client_metadata_url(url)?;
-            }
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var: raw.bearer_token_env_var.clone(),
@@ -261,7 +232,6 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             disabled_tools,
             scopes,
             oauth_resource,
-            oauth_client_metadata_url,
         })
     }
 }
@@ -1186,22 +1156,6 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_streamable_http_server_config_with_oauth_client_metadata_url() {
-        let cfg: McpServerConfig = toml::from_str(
-            r#"
-            url = "https://example.com/mcp"
-            oauth_client_metadata_url = "https://example.com/client/metadata.json"
-        "#,
-        )
-        .expect("should deserialize http config with oauth_client_metadata_url");
-
-        assert_eq!(
-            cfg.oauth_client_metadata_url,
-            Some("https://example.com/client/metadata.json".to_string())
-        );
-    }
-
-    #[test]
     fn deserialize_server_config_with_tool_filters() {
         let cfg: McpServerConfig = toml::from_str(
             r#"
@@ -1267,53 +1221,6 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("oauth_resource is not supported for stdio"),
-            "unexpected error: {err}"
-        );
-
-        let err = toml::from_str::<McpServerConfig>(
-            r#"
-            command = "echo"
-            oauth_client_metadata_url = "https://example.com/client/metadata.json"
-        "#,
-        )
-        .expect_err("should reject oauth_client_metadata_url for stdio transport");
-
-        assert!(
-            err.to_string()
-                .contains("oauth_client_metadata_url is not supported for stdio"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn deserialize_rejects_invalid_oauth_client_metadata_url() {
-        let err = toml::from_str::<McpServerConfig>(
-            r#"
-            url = "https://example.com"
-            oauth_client_metadata_url = "http://example.com/client/metadata.json"
-        "#,
-        )
-        .expect_err("should reject non-https oauth_client_metadata_url");
-
-        assert!(
-            err.to_string().contains(
-                "oauth_client_metadata_url must be an HTTPS URL with a non-root pathname"
-            ),
-            "unexpected error: {err}"
-        );
-
-        let err = toml::from_str::<McpServerConfig>(
-            r#"
-            url = "https://example.com"
-            oauth_client_metadata_url = "https://example.com/"
-        "#,
-        )
-        .expect_err("should reject root-path oauth_client_metadata_url");
-
-        assert!(
-            err.to_string().contains(
-                "oauth_client_metadata_url must be an HTTPS URL with a non-root pathname"
-            ),
             "unexpected error: {err}"
         );
     }
