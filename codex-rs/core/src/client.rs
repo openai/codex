@@ -2,7 +2,7 @@
 //!
 //! `ModelClient` is intended to live for the lifetime of a Codex session and holds the stable
 //! configuration and state needed to talk to a provider (auth, provider selection, conversation id,
-//! and feature-gated request behavior).
+//! and transport fallback state).
 //!
 //! Per-turn settings (model selection, reasoning controls, telemetry context, and turn metadata)
 //! are passed explicitly to streaming and unary methods so that the turn lifetime is visible at the
@@ -89,7 +89,6 @@ use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -105,15 +104,6 @@ pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 
-pub fn ws_version_from_features(config: &Config) -> bool {
-    config
-        .features
-        .enabled(crate::features::Feature::ResponsesWebsockets)
-        || config
-            .features
-            .enabled(crate::features::Feature::ResponsesWebsocketsV2)
-}
-
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
@@ -125,7 +115,6 @@ struct ModelClientState {
     provider: ModelProviderInfo,
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
-    responses_websockets_enabled_by_feature: bool,
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
@@ -146,8 +135,7 @@ struct CurrentClientSetup {
 /// A session-scoped client for model-provider API calls.
 ///
 /// This holds configuration and state that should be shared across turns within a Codex session
-/// (auth, provider selection, conversation id, feature-gated request behavior, and transport
-/// fallback state).
+/// (auth, provider selection, conversation id, and transport fallback state).
 ///
 /// WebSocket fallback is session-scoped: once a turn activates the HTTP fallback, subsequent turns
 /// will also use HTTP for the remainder of the session.
@@ -219,7 +207,6 @@ impl ModelClient {
         provider: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
-        responses_websockets_enabled_by_feature: bool,
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
@@ -231,7 +218,6 @@ impl ModelClient {
                 provider,
                 session_source,
                 model_verbosity,
-                responses_websockets_enabled_by_feature,
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
@@ -377,19 +363,15 @@ impl ModelClient {
 
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
     ///
-    /// This combines provider capability and feature gating; both must be true for websocket paths
-    /// to be eligible.
-    ///
-    /// If websockets are only enabled via model preference (no explicit feature flag), prefer the
-    /// current v2 behavior.
-    pub fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
+    /// WebSocket use is controlled by provider capability and session-scoped fallback state.
+    pub fn responses_websocket_enabled(&self) -> bool {
         if !self.state.provider.supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
         {
             return false;
         }
 
-        self.state.responses_websockets_enabled_by_feature || model_info.prefer_websockets
+        true
     }
 
     /// Returns auth + provider configuration resolved from the current session auth state.
@@ -661,9 +643,9 @@ impl ModelClientSession {
     pub async fn preconnect_websocket(
         &mut self,
         otel_manager: &OtelManager,
-        model_info: &ModelInfo,
+        _model_info: &ModelInfo,
     ) -> std::result::Result<(), ApiError> {
-        if !self.client.responses_websocket_enabled(model_info) {
+        if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
         if self.websocket_session.connection.is_some() {
@@ -924,7 +906,7 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<()> {
-        if !self.client.responses_websocket_enabled(model_info) {
+        if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
         if self.websocket_session.last_request.is_some() {
@@ -956,7 +938,7 @@ impl ModelClientSession {
                 Ok(())
             }
             Ok(WebsocketStreamOutcome::FallbackToHttp) => {
-                self.try_switch_fallback_transport(otel_manager, model_info);
+                self.try_switch_fallback_transport(otel_manager);
                 Ok(())
             }
             Err(err) => Err(err),
@@ -968,8 +950,8 @@ impl ModelClientSession {
     ///
     /// The caller is responsible for passing per-turn settings explicitly (model selection,
     /// reasoning settings, telemetry context, and turn metadata). This method will prefer the
-    /// Responses WebSocket transport when enabled and healthy, and will fall back to the HTTP
-    /// Responses API transport otherwise.
+    /// Responses WebSocket transport when the provider supports it and it remains healthy, and will
+    /// fall back to the HTTP Responses API transport otherwise.
     pub async fn stream(
         &mut self,
         prompt: &Prompt,
@@ -983,7 +965,7 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
-                if self.client.responses_websocket_enabled(model_info) {
+                if self.client.responses_websocket_enabled() {
                     match self
                         .stream_responses_websocket(
                             prompt,
@@ -999,7 +981,7 @@ impl ModelClientSession {
                     {
                         WebsocketStreamOutcome::Stream(stream) => return Ok(stream),
                         WebsocketStreamOutcome::FallbackToHttp => {
-                            self.try_switch_fallback_transport(otel_manager, model_info);
+                            self.try_switch_fallback_transport(otel_manager);
                         }
                     }
                 }
@@ -1024,12 +1006,8 @@ impl ModelClientSession {
     /// the HTTP transport.
     ///
     /// Returns `true` if this call activated fallback, or `false` if fallback was already active.
-    pub(crate) fn try_switch_fallback_transport(
-        &mut self,
-        otel_manager: &OtelManager,
-        model_info: &ModelInfo,
-    ) -> bool {
-        let websocket_enabled = self.client.responses_websocket_enabled(model_info);
+    pub(crate) fn try_switch_fallback_transport(&mut self, otel_manager: &OtelManager) -> bool {
+        let websocket_enabled = self.client.responses_websocket_enabled();
         let activated = self.activate_http_fallback(websocket_enabled);
         if activated {
             warn!("falling back to HTTP");
@@ -1276,7 +1254,6 @@ mod tests {
             provider,
             session_source,
             None,
-            false,
             false,
             false,
             None,

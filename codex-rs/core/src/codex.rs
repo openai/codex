@@ -50,7 +50,6 @@ use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
-use crate::ws_version_from_features;
 use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
@@ -1537,7 +1536,6 @@ impl Session {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                ws_version_from_features(config.as_ref()),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
@@ -5591,8 +5589,7 @@ async fn run_sampling_request(
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.provider.stream_max_retries();
         if retries >= max_retries
-            && client_session
-                .try_switch_fallback_transport(&turn_context.otel_manager, &turn_context.model_info)
+            && client_session.try_switch_fallback_transport(&turn_context.otel_manager)
         {
             sess.send_event(
                 &turn_context,
@@ -5620,10 +5617,7 @@ async fn run_sampling_request(
             // transient reconnect messages. In debug builds, keep full visibility for diagnosis.
             let report_error = retries > 1
                 || cfg!(debug_assertions)
-                || !sess
-                    .services
-                    .model_client
-                    .responses_websocket_enabled(&turn_context.model_info);
+                || !sess.services.model_client.responses_websocket_enabled();
             if report_error {
                 // Surface retry information to any UI/front‑end so the
                 // user understands what is happening instead of staring
@@ -8459,7 +8453,6 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                ws_version_from_features(config.as_ref()),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),
@@ -8808,7 +8801,6 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                ws_version_from_features(config.as_ref()),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),
