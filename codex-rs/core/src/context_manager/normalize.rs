@@ -1,10 +1,9 @@
-use std::collections::HashSet;
-
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
+use std::collections::HashSet;
 
 use crate::util::error_or_panic;
 use tracing::info;
@@ -209,6 +208,31 @@ where
     if let Some(pos) = items.iter().position(predicate) {
         items.remove(pos);
     }
+}
+
+pub(crate) fn rewrite_image_generation_calls_for_stateless_input(items: &mut Vec<ResponseItem>) {
+    let original_items = std::mem::take(items);
+    *items = original_items
+        .into_iter()
+        .map(|item| match item {
+            ResponseItem::ImageGenerationCall { result, .. } => {
+                let image_url = if result.starts_with("data:") {
+                    result
+                } else {
+                    format!("data:image/png;base64,{result}")
+                };
+
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputImage { image_url }],
+                    end_turn: None,
+                    phase: None,
+                }
+            }
+            _ => item,
+        })
+        .collect();
 }
 
 /// Strip image content from messages and tool outputs when the model does not support images.

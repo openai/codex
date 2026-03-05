@@ -390,10 +390,15 @@ impl WebSocketRequest {
 
 #[derive(Debug, Clone)]
 pub struct WebSocketHandshake {
+    uri: String,
     headers: Vec<(String, String)>,
 }
 
 impl WebSocketHandshake {
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+
     pub fn header(&self, name: &str) -> Option<String> {
         self.headers
             .iter()
@@ -577,25 +582,6 @@ pub fn ev_completed(id: &str) -> Value {
     })
 }
 
-pub fn ev_done() -> Value {
-    serde_json::json!({
-        "type": "response.done",
-        "response": {
-            "usage": {"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}
-        }
-    })
-}
-
-pub fn ev_done_with_id(id: &str) -> Value {
-    serde_json::json!({
-        "type": "response.done",
-        "response": {
-            "id": id,
-            "usage": {"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}
-        }
-    })
-}
-
 /// Convenience: SSE event for a created response with a specific id.
 pub fn ev_response_created(id: &str) -> Value {
     serde_json::json!({
@@ -749,6 +735,24 @@ pub fn ev_web_search_call_done(id: &str, status: &str, query: &str) -> Value {
             "id": id,
             "status": status,
             "action": {"type": "search", "query": query}
+        }
+    })
+}
+
+pub fn ev_image_generation_call(
+    id: &str,
+    status: &str,
+    revised_prompt: &str,
+    result: &str,
+) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "image_generation_call",
+            "id": id,
+            "status": status,
+            "revised_prompt": revised_prompt,
+            "result": result,
         }
     })
 }
@@ -1223,10 +1227,10 @@ pub async fn start_websocket_server_with_headers(
                             .map(|value| (name.as_str().to_string(), value.to_string()))
                     })
                     .collect();
-                handshake_log
-                    .lock()
-                    .unwrap()
-                    .push(WebSocketHandshake { headers });
+                handshake_log.lock().unwrap().push(WebSocketHandshake {
+                    uri: req.uri().to_string(),
+                    headers,
+                });
 
                 let headers_mut = response.headers_mut();
                 for (name, value) in &response_headers {

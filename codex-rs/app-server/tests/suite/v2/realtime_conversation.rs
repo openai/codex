@@ -5,6 +5,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
@@ -43,19 +44,16 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let realtime_server = start_websocket_server(vec![vec![
         vec![json!({
-            "type": "session.created",
-            "session": { "id": "sess_backend" }
-        })],
-        vec![json!({
             "type": "session.updated",
-            "session": { "backend_prompt": "backend prompt" }
+            "session": { "id": "sess_backend", "instructions": "backend prompt" }
         })],
+        vec![],
         vec![
             json!({
-                "type": "response.output_audio.delta",
+                "type": "conversation.output_audio.delta",
                 "delta": "AQID",
                 "sample_rate": 24_000,
-                "num_channels": 1,
+                "channels": 1,
                 "samples_per_channel": 512
             }),
             json!({
@@ -84,6 +82,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     mcp.initialize().await?;
+    login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
         .send_thread_start_request(ThreadStartParams::default())
@@ -182,7 +181,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(connection.len(), 3);
     assert_eq!(
         connection[0].body_json()["type"].as_str(),
-        Some("session.create")
+        Some("session.update")
     );
     let mut request_types = [
         connection[1].body_json()["type"]
@@ -199,7 +198,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         request_types,
         [
             "conversation.item.create".to_string(),
-            "response.input_audio.delta".to_string(),
+            "input_audio_buffer.append".to_string(),
         ]
     );
 
@@ -214,8 +213,8 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let realtime_server = start_websocket_server(vec![vec![
         vec![json!({
-            "type": "session.created",
-            "session": { "id": "sess_backend" }
+            "type": "session.updated",
+            "session": { "id": "sess_backend", "instructions": "backend prompt" }
         })],
         vec![],
     ]])
@@ -231,6 +230,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     mcp.initialize().await?;
+    login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
         .send_thread_start_request(ThreadStartParams::default())
@@ -347,6 +347,19 @@ async fn read_notification<T: DeserializeOwned>(mcp: &mut McpProcess, method: &s
         .params
         .context("expected notification params to be present")?;
     Ok(serde_json::from_value(params)?)
+}
+
+async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
+    let request_id = mcp.send_login_account_api_key_request(api_key).await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let login: LoginAccountResponse = to_response(response)?;
+    assert_eq!(login, LoginAccountResponse::ApiKey {});
+
+    Ok(())
 }
 
 fn create_config_toml(

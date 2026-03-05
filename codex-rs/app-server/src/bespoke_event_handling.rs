@@ -61,6 +61,7 @@ use codex_app_server_protocol::ReasoningTextDeltaNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
@@ -83,6 +84,7 @@ use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
+use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_app_server_protocol::convert_patch_changes;
@@ -185,12 +187,30 @@ pub(crate) async fn apply_bespoke_event_handling(
         msg,
     } = event;
     match msg {
-        EventMsg::TurnStarted(_) => {
+        EventMsg::TurnStarted(payload) => {
             // While not technically necessary as it was already done on TurnComplete, be extra cautios and abort any pending server requests.
             outgoing.abort_pending_server_requests().await;
             thread_watch_manager
                 .note_turn_started(&conversation_id.to_string())
                 .await;
+            if let ApiVersion::V2 = api_version {
+                let turn = {
+                    let state = thread_state.lock().await;
+                    state.active_turn_snapshot().unwrap_or_else(|| Turn {
+                        id: payload.turn_id.clone(),
+                        items: Vec::new(),
+                        error: None,
+                        status: TurnStatus::InProgress,
+                    })
+                };
+                let notification = TurnStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::TurnStarted(notification))
+                    .await;
+            }
         }
         EventMsg::TurnComplete(_ev) => {
             // All per-thread requests are bound to a turn, so abort them.
@@ -200,6 +220,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
                 .await;
             handle_turn_complete(conversation_id, event_turn_id, &outgoing, &thread_state).await;
+        }
+        EventMsg::SkillsUpdateAvailable => {
+            if let ApiVersion::V2 = api_version {
+                outgoing
+                    .send_server_notification(ServerNotification::SkillsChanged(
+                        SkillsChangedNotification {},
+                    ))
+                    .await;
+            }
         }
         EventMsg::Warning(_warning_event) => {}
         EventMsg::ModelReroute(event) => {
@@ -232,7 +261,6 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::RealtimeConversationRealtime(event) => {
             if let ApiVersion::V2 = api_version {
                 match event.payload {
-                    RealtimeEvent::SessionCreated { .. } => {}
                     RealtimeEvent::SessionUpdated { .. } => {}
                     RealtimeEvent::AudioOut(audio) => {
                         let notification = ThreadRealtimeOutputAudioDeltaNotification {
@@ -249,6 +277,24 @@ pub(crate) async fn apply_bespoke_event_handling(
                         let notification = ThreadRealtimeItemAddedNotification {
                             thread_id: conversation_id.to_string(),
                             item,
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                                notification,
+                            ))
+                            .await;
+                    }
+                    RealtimeEvent::ConversationItemDone { .. } => {}
+                    RealtimeEvent::HandoffRequested(handoff) => {
+                        let notification = ThreadRealtimeItemAddedNotification {
+                            thread_id: conversation_id.to_string(),
+                            item: serde_json::json!({
+                                "type": "handoff_request",
+                                "handoff_id": handoff.handoff_id,
+                                "item_id": handoff.item_id,
+                                "input_transcript": handoff.input_transcript,
+                                "messages": handoff.messages,
+                            }),
                         };
                         outgoing
                             .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(

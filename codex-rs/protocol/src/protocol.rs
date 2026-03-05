@@ -18,6 +18,7 @@ use crate::config_types::CollaborationMode;
 use crate::config_types::ModeKind;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use crate::config_types::ServiceTier;
 use crate::config_types::WindowsSandboxLevel;
 use crate::custom_prompts::CustomPrompt;
 use crate::dynamic_tools::DynamicToolCallOutputContentItem;
@@ -81,6 +82,19 @@ pub struct Submission {
     pub id: String,
     /// Payload
     pub op: Op,
+    /// Optional W3C trace carrier propagated across async submission handoffs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<W3cTraceContext>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct W3cTraceContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub traceparent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tracestate: Option<String>,
 }
 
 /// Config payload for refreshing MCP servers.
@@ -107,11 +121,31 @@ pub struct RealtimeAudioFrame {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeHandoffMessage {
+    pub role: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeHandoffRequested {
+    pub handoff_id: String,
+    pub item_id: String,
+    pub input_transcript: String,
+    pub messages: Vec<RealtimeHandoffMessage>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub enum RealtimeEvent {
-    SessionCreated { session_id: String },
-    SessionUpdated { backend_prompt: Option<String> },
+    SessionUpdated {
+        session_id: String,
+        instructions: Option<String>,
+    },
     AudioOut(RealtimeAudioFrame),
     ConversationItemAdded(Value),
+    ConversationItemDone {
+        item_id: String,
+    },
+    HandoffRequested(RealtimeHandoffRequested),
     Error(String),
 }
 
@@ -192,6 +226,15 @@ pub enum Op {
         /// fall back to the selected model's default on new sessions).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+
+        /// Optional service tier override for this turn.
+        ///
+        /// Use `Some(Some(_))` to set a specific tier for this turn, `Some(None)` to
+        /// explicitly clear the tier for this turn, or `None` to keep the existing
+        /// session preference.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        service_tier: Option<Option<ServiceTier>>,
+
         // The JSON schema to use for the final assistant message
         final_output_json_schema: Option<Value>,
 
@@ -243,6 +286,13 @@ pub enum Op {
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+
+        /// Updated service tier preference for future turns.
+        ///
+        /// Use `Some(Some(_))` to set a specific tier, `Some(None)` to clear the
+        /// preference, or `None` to leave the existing value unchanged.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        service_tier: Option<Option<ServiceTier>>,
 
         /// EXPERIMENTAL - set a pre-set collaboration mode.
         /// Takes precedence over model, effort, and developer instructions if set.
@@ -576,6 +626,11 @@ pub enum SandboxPolicy {
             skip_serializing_if = "ReadOnlyAccess::has_full_disk_read_access"
         )]
         access: ReadOnlyAccess,
+
+        /// When set to `true`, outbound network access is allowed. `false` by
+        /// default.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        network_access: bool,
     },
 
     /// Indicates the process is already in an external sandbox. Allows full
@@ -665,6 +720,7 @@ impl SandboxPolicy {
     pub fn new_read_only_policy() -> Self {
         SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
+            network_access: false,
         }
     }
 
@@ -685,7 +741,7 @@ impl SandboxPolicy {
         match self {
             SandboxPolicy::DangerFullAccess => true,
             SandboxPolicy::ExternalSandbox { .. } => true,
-            SandboxPolicy::ReadOnly { access } => access.has_full_disk_read_access(),
+            SandboxPolicy::ReadOnly { access, .. } => access.has_full_disk_read_access(),
             SandboxPolicy::WorkspaceWrite {
                 read_only_access, ..
             } => read_only_access.has_full_disk_read_access(),
@@ -705,7 +761,7 @@ impl SandboxPolicy {
         match self {
             SandboxPolicy::DangerFullAccess => true,
             SandboxPolicy::ExternalSandbox { network_access } => network_access.is_enabled(),
-            SandboxPolicy::ReadOnly { .. } => false,
+            SandboxPolicy::ReadOnly { network_access, .. } => *network_access,
             SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
         }
     }
@@ -716,7 +772,7 @@ impl SandboxPolicy {
             return false;
         }
         match self {
-            SandboxPolicy::ReadOnly { access } => access.include_platform_defaults(),
+            SandboxPolicy::ReadOnly { access, .. } => access.include_platform_defaults(),
             SandboxPolicy::WorkspaceWrite {
                 read_only_access, ..
             } => read_only_access.include_platform_defaults(),
@@ -732,7 +788,7 @@ impl SandboxPolicy {
     pub fn get_readable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
         let mut roots = match self {
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
-            SandboxPolicy::ReadOnly { access } => access.get_readable_roots_with_cwd(cwd),
+            SandboxPolicy::ReadOnly { access, .. } => access.get_readable_roots_with_cwd(cwd),
             SandboxPolicy::WorkspaceWrite {
                 read_only_access, ..
             } => {
@@ -2060,6 +2116,8 @@ pub struct SessionMeta {
     pub base_instructions: Option<BaseInstructions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_mode: Option<String>,
 }
 
 impl Default for SessionMeta {
@@ -2077,6 +2135,7 @@ impl Default for SessionMeta {
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,
+            memory_mode: None,
         }
     }
 }
@@ -2733,6 +2792,9 @@ pub struct SessionConfiguredEvent {
 
     pub model_provider_id: String,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<ServiceTier>,
+
     /// When to escalate for approval for execution
     pub approval_policy: AskForApproval,
 
@@ -3076,6 +3138,18 @@ mod tests {
     }
 
     #[test]
+    fn read_only_reports_network_access_flags() {
+        let restricted = SandboxPolicy::new_read_only_policy();
+        assert!(!restricted.has_full_network_access());
+
+        let enabled = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            network_access: true,
+        };
+        assert!(enabled.has_full_network_access());
+    }
+
+    #[test]
     fn reject_config_mcp_elicitation_flag_is_field_driven() {
         assert!(
             RejectConfig {
@@ -3414,6 +3488,7 @@ mod tests {
                 thread_name: None,
                 model: "codex-mini-latest".to_string(),
                 model_provider_id: "openai".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),

@@ -626,7 +626,6 @@ async fn request_chatgpt_token_refresh(
         client_id: CLIENT_ID,
         grant_type: "refresh_token",
         refresh_token,
-        scope: "openid profile email",
     };
 
     let endpoint = refresh_token_endpoint();
@@ -722,7 +721,6 @@ struct RefreshRequest {
     client_id: &'static str,
     grant_type: &'static str,
     refresh_token: String,
-    scope: &'static str,
 }
 
 #[derive(Deserialize, Clone)]

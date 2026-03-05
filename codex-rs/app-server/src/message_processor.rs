@@ -12,6 +12,7 @@ use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::transport::AppServerTransport;
 use async_trait::async_trait;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
@@ -53,12 +54,14 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_state::log_db::LogDbLayer;
 use futures::FutureExt;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use toml::Value as TomlValue;
+use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -141,17 +144,18 @@ pub(crate) struct ConnectionSessionState {
     pub(crate) experimental_api_enabled: bool,
     pub(crate) opted_out_notification_methods: HashSet<String>,
     pub(crate) app_server_client_name: Option<String>,
+    pub(crate) client_version: Option<String>,
 }
 
 pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
-    pub(crate) single_client_mode: bool,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
     pub(crate) feedback: CodexFeedback,
+    pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
 }
 
@@ -163,11 +167,11 @@ impl MessageProcessor {
             outgoing,
             arg0_paths,
             config,
-            single_client_mode,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
             feedback,
+            log_db,
             config_warnings,
         } = args;
         let auth_manager = AuthManager::shared(
@@ -199,8 +203,8 @@ impl MessageProcessor {
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
             cloud_requirements: cloud_requirements.clone(),
-            single_client_mode,
             feedback,
+            log_db,
         });
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
@@ -224,46 +228,50 @@ impl MessageProcessor {
         &mut self,
         connection_id: ConnectionId,
         request: JSONRPCRequest,
+        transport: AppServerTransport,
         session: &mut ConnectionSessionState,
         outbound_initialized: &AtomicBool,
     ) {
-        let request_method = request.method.as_str();
-        tracing::trace!(
-            ?connection_id,
-            request_id = ?request.id,
-            "app-server request: {request_method}"
-        );
-        let request_id = ConnectionRequestId {
-            connection_id,
-            request_id: request.id.clone(),
-        };
-        let request_json = match serde_json::to_value(&request) {
-            Ok(request_json) => request_json,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("Invalid request: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let request_span =
+            crate::app_server_tracing::request_span(&request, transport, connection_id, session);
+        async {
+            let request_method = request.method.as_str();
+            tracing::trace!(
+                ?connection_id,
+                request_id = ?request.id,
+                "app-server request: {request_method}"
+            );
+            let request_id = ConnectionRequestId {
+                connection_id,
+                request_id: request.id.clone(),
+            };
+            let request_json = match serde_json::to_value(&request) {
+                Ok(request_json) => request_json,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("Invalid request: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
 
-        let codex_request = match serde_json::from_value::<ClientRequest>(request_json) {
-            Ok(codex_request) => codex_request,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("Invalid request: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+            let codex_request = match serde_json::from_value::<ClientRequest>(request_json) {
+                Ok(codex_request) => codex_request,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("Invalid request: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
 
-        match codex_request {
+            match codex_request {
             // Handle Initialize internally so CodexMessageProcessor does not have to concern
             // itself with the `initialized` bool.
             ClientRequest::Initialize { request_id, params } => {
@@ -304,6 +312,8 @@ impl MessageProcessor {
                         title: _title,
                         version,
                     } = params.client_info;
+                    session.app_server_client_name = Some(name.clone());
+                    session.client_version = Some(version.clone());
                     if let Err(error) = set_default_originator(name.clone()) {
                         match error {
                             SetOriginatorError::InvalidHeaderValue => {
@@ -330,7 +340,6 @@ impl MessageProcessor {
                     if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
                         *suffix = Some(user_agent_suffix);
                     }
-                    session.app_server_client_name = Some(name.clone());
 
                     let user_agent = get_codex_user_agent();
                     let response = InitializeResponse { user_agent };
@@ -355,91 +364,97 @@ impl MessageProcessor {
                     return;
                 }
             }
-        }
+            }
+            if let Some(reason) = codex_request.experimental_reason()
+                && !session.experimental_api_enabled
+            {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: experimental_required_message(reason),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
 
-        if let Some(reason) = codex_request.experimental_reason()
-            && !session.experimental_api_enabled
-        {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: experimental_required_message(reason),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        }
-
-        match codex_request {
-            ClientRequest::ConfigRead { request_id, params } => {
-                self.handle_config_read(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
-            }
-            ClientRequest::ExternalAgentConfigDetect { request_id, params } => {
-                self.handle_external_agent_config_detect(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
-            }
-            ClientRequest::ExternalAgentConfigImport { request_id, params } => {
-                self.handle_external_agent_config_import(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
-            }
-            ClientRequest::ConfigValueWrite { request_id, params } => {
-                self.handle_config_value_write(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
-            }
-            ClientRequest::ConfigBatchWrite { request_id, params } => {
-                self.handle_config_batch_write(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
-            }
-            ClientRequest::ConfigRequirementsRead {
-                request_id,
-                params: _,
-            } => {
-                self.handle_config_requirements_read(ConnectionRequestId {
-                    connection_id,
-                    request_id,
-                })
-                .await;
-            }
-            other => {
-                // Box the delegated future so this wrapper's async state machine does not
-                // inline the full `CodexMessageProcessor::process_request` future, which
-                // can otherwise push worker-thread stack usage over the edge.
-                self.codex_message_processor
-                    .process_request(connection_id, other, session.app_server_client_name.clone())
-                    .boxed()
+            match codex_request {
+                ClientRequest::ConfigRead { request_id, params } => {
+                    self.handle_config_read(
+                        ConnectionRequestId {
+                            connection_id,
+                            request_id,
+                        },
+                        params,
+                    )
                     .await;
+                }
+                ClientRequest::ExternalAgentConfigDetect { request_id, params } => {
+                    self.handle_external_agent_config_detect(
+                        ConnectionRequestId {
+                            connection_id,
+                            request_id,
+                        },
+                        params,
+                    )
+                    .await;
+                }
+                ClientRequest::ExternalAgentConfigImport { request_id, params } => {
+                    self.handle_external_agent_config_import(
+                        ConnectionRequestId {
+                            connection_id,
+                            request_id,
+                        },
+                        params,
+                    )
+                    .await;
+                }
+                ClientRequest::ConfigValueWrite { request_id, params } => {
+                    self.handle_config_value_write(
+                        ConnectionRequestId {
+                            connection_id,
+                            request_id,
+                        },
+                        params,
+                    )
+                    .await;
+                }
+                ClientRequest::ConfigBatchWrite { request_id, params } => {
+                    self.handle_config_batch_write(
+                        ConnectionRequestId {
+                            connection_id,
+                            request_id,
+                        },
+                        params,
+                    )
+                    .await;
+                }
+                ClientRequest::ConfigRequirementsRead {
+                    request_id,
+                    params: _,
+                } => {
+                    self.handle_config_requirements_read(ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    })
+                    .await;
+                }
+                other => {
+                    // Box the delegated future so this wrapper's async state machine does not
+                    // inline the full `CodexMessageProcessor::process_request` future, which
+                    // can otherwise push worker-thread stack usage over the edge.
+                    self.codex_message_processor
+                        .process_request(
+                            connection_id,
+                            other,
+                            session.app_server_client_name.clone(),
+                        )
+                        .boxed()
+                        .await;
+                }
             }
         }
+        .instrument(request_span)
+        .await;
     }
 
     pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {

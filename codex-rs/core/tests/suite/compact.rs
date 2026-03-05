@@ -1659,6 +1659,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             model: resumed.session_configured.model.clone(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1748,6 +1749,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             model: previous_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1771,6 +1773,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             model: next_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1880,6 +1883,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             model: previous_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1927,6 +1931,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             model: next_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -3012,6 +3017,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -3106,7 +3112,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config
+            let _ = config
                 .features
                 .enable(codex_core::features::Feature::RemoteModels);
             config.model_auto_compact_token_limit = Some(200);
@@ -3128,6 +3134,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             model: previous_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -3151,6 +3158,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             model: next_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

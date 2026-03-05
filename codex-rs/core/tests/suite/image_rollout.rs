@@ -126,6 +126,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             model: session_model,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -208,6 +209,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             model: session_model,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::rollout;
 use crate::rollout::list::parse_timestamp_uuid_from_filename;
 use crate::rollout::recorder::RolloutRecorder;
+use crate::state_db::normalize_cwd_for_state_db;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
@@ -129,6 +130,13 @@ pub(crate) async fn extract_metadata_from_rollout(
     }
     Ok(ExtractionOutcome {
         metadata,
+        memory_mode: items.iter().rev().find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
+            RolloutItem::ResponseItem(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::EventMsg(_) => None,
+        }),
         parse_errors,
     })
 }
@@ -272,6 +280,11 @@ pub(crate) async fn backfill_sessions(
                         );
                     }
                     let mut metadata = outcome.metadata;
+                    metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
+                    let memory_mode = outcome.memory_mode.unwrap_or_else(|| "enabled".to_string());
+                    if let Ok(Some(existing_metadata)) = runtime.get_thread(metadata.id).await {
+                        metadata.prefer_existing_git_info(&existing_metadata);
+                    }
                     if rollout.archived && metadata.archived_at.is_none() {
                         let fallback_archived_at = metadata.updated_at;
                         metadata.archived_at = file_modified_time_utc(&rollout.path)
@@ -282,6 +295,17 @@ pub(crate) async fn backfill_sessions(
                         stats.failed = stats.failed.saturating_add(1);
                         warn!("failed to upsert rollout {}: {err}", rollout.path.display());
                     } else {
+                        if let Err(err) = runtime
+                            .set_thread_memory_mode(metadata.id, memory_mode.as_str())
+                            .await
+                        {
+                            stats.failed = stats.failed.saturating_add(1);
+                            warn!(
+                                "failed to restore memory mode for {}: {err}",
+                                rollout.path.display()
+                            );
+                            continue;
+                        }
                         stats.upserted = stats.upserted.saturating_add(1);
                         if let Ok(meta_line) =
                             rollout::list::read_session_meta_line(&rollout.path).await
@@ -482,6 +506,7 @@ mod tests {
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::CompactedItem;
+    use codex_protocol::protocol::GitInfo;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SessionMeta;
@@ -519,6 +544,7 @@ mod tests {
             model_provider: Some("openai".to_string()),
             base_instructions: None,
             dynamic_tools: None,
+            memory_mode: None,
         };
         let session_meta_line = SessionMetaLine {
             meta: session_meta,
@@ -543,7 +569,69 @@ mod tests {
         expected.updated_at = file_modified_time_utc(&path).await.expect("mtime");
 
         assert_eq!(outcome.metadata, expected);
+        assert_eq!(outcome.memory_mode, None);
         assert_eq!(outcome.parse_errors, 0);
+    }
+
+    #[tokio::test]
+    async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
+        let dir = tempdir().expect("tempdir");
+        let uuid = Uuid::new_v4();
+        let id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+        let path = dir
+            .path()
+            .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
+
+        let session_meta = SessionMeta {
+            id,
+            forked_from_id: None,
+            timestamp: "2026-01-27T12:34:56Z".to_string(),
+            cwd: dir.path().to_path_buf(),
+            originator: "cli".to_string(),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::default(),
+            agent_nickname: None,
+            agent_role: None,
+            model_provider: Some("openai".to_string()),
+            base_instructions: None,
+            dynamic_tools: None,
+            memory_mode: None,
+        };
+        let polluted_meta = SessionMeta {
+            memory_mode: Some("polluted".to_string()),
+            ..session_meta.clone()
+        };
+        let lines = vec![
+            RolloutLine {
+                timestamp: "2026-01-27T12:34:56Z".to_string(),
+                item: RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: session_meta,
+                    git: None,
+                }),
+            },
+            RolloutLine {
+                timestamp: "2026-01-27T12:35:00Z".to_string(),
+                item: RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: polluted_meta,
+                    git: None,
+                }),
+            },
+        ];
+        let mut file = File::create(&path).expect("create rollout");
+        for line in lines {
+            writeln!(
+                file,
+                "{}",
+                serde_json::to_string(&line).expect("serialize rollout line")
+            )
+            .expect("write rollout line");
+        }
+
+        let outcome = extract_metadata_from_rollout(&path, "openai", None)
+            .await
+            .expect("extract");
+
+        assert_eq!(outcome.memory_mode.as_deref(), Some("polluted"));
     }
 
     #[test]
@@ -585,12 +673,14 @@ mod tests {
             "2026-01-27T12-34-56",
             "2026-01-27T12:34:56Z",
             first_uuid,
+            None,
         );
         let second_path = write_rollout_in_sessions(
             codex_home.as_path(),
             "2026-01-27T12-35-56",
             "2026-01-27T12:35:56Z",
             second_uuid,
+            None,
         );
 
         let runtime =
@@ -646,11 +736,118 @@ mod tests {
         assert!(state.last_success_at.is_some());
     }
 
+    #[tokio::test]
+    async fn backfill_sessions_preserves_existing_git_branch_and_fills_missing_git_fields() {
+        let dir = tempdir().expect("tempdir");
+        let codex_home = dir.path().to_path_buf();
+        let thread_uuid = Uuid::new_v4();
+        let rollout_path = write_rollout_in_sessions(
+            codex_home.as_path(),
+            "2026-01-27T12-34-56",
+            "2026-01-27T12:34:56Z",
+            thread_uuid,
+            Some(GitInfo {
+                commit_hash: Some("rollout-sha".to_string()),
+                branch: Some("rollout-branch".to_string()),
+                repository_url: Some("git@example.com:openai/codex.git".to_string()),
+            }),
+        );
+
+        let runtime =
+            codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+                .await
+                .expect("initialize runtime");
+        let thread_id = ThreadId::from_string(&thread_uuid.to_string()).expect("thread id");
+        let mut existing = extract_metadata_from_rollout(&rollout_path, "test-provider", None)
+            .await
+            .expect("extract")
+            .metadata;
+        existing.git_sha = None;
+        existing.git_branch = Some("sqlite-branch".to_string());
+        existing.git_origin_url = None;
+        runtime
+            .upsert_thread(&existing)
+            .await
+            .expect("existing metadata upsert");
+
+        let mut config = crate::config::test_config();
+        config.codex_home = codex_home.clone();
+        config.model_provider_id = "test-provider".to_string();
+        backfill_sessions(runtime.as_ref(), &config, None).await;
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("get thread")
+            .expect("thread exists");
+        assert_eq!(persisted.git_sha.as_deref(), Some("rollout-sha"));
+        assert_eq!(persisted.git_branch.as_deref(), Some("sqlite-branch"));
+        assert_eq!(
+            persisted.git_origin_url.as_deref(),
+            Some("git@example.com:openai/codex.git")
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_sessions_normalizes_cwd_before_upsert() {
+        let dir = tempdir().expect("tempdir");
+        let codex_home = dir.path().to_path_buf();
+        let thread_uuid = Uuid::new_v4();
+        let session_cwd = codex_home.join(".");
+        let rollout_path = write_rollout_in_sessions_with_cwd(
+            codex_home.as_path(),
+            "2026-01-27T12-34-56",
+            "2026-01-27T12:34:56Z",
+            thread_uuid,
+            session_cwd.clone(),
+            None,
+        );
+
+        let runtime =
+            codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+                .await
+                .expect("initialize runtime");
+
+        let mut config = crate::config::test_config();
+        config.codex_home = codex_home.clone();
+        config.model_provider_id = "test-provider".to_string();
+        backfill_sessions(runtime.as_ref(), &config, None).await;
+
+        let thread_id = ThreadId::from_string(&thread_uuid.to_string()).expect("thread id");
+        let stored = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("get thread")
+            .expect("thread should be backfilled");
+
+        assert_eq!(stored.rollout_path, rollout_path);
+        assert_eq!(stored.cwd, normalize_cwd_for_state_db(&session_cwd));
+    }
+
     fn write_rollout_in_sessions(
         codex_home: &Path,
         filename_ts: &str,
         event_ts: &str,
         thread_uuid: Uuid,
+        git: Option<GitInfo>,
+    ) -> PathBuf {
+        write_rollout_in_sessions_with_cwd(
+            codex_home,
+            filename_ts,
+            event_ts,
+            thread_uuid,
+            codex_home.to_path_buf(),
+            git,
+        )
+    }
+
+    fn write_rollout_in_sessions_with_cwd(
+        codex_home: &Path,
+        filename_ts: &str,
+        event_ts: &str,
+        thread_uuid: Uuid,
+        cwd: PathBuf,
+        git: Option<GitInfo>,
     ) -> PathBuf {
         let id = ThreadId::from_string(&thread_uuid.to_string()).expect("thread id");
         let sessions_dir = codex_home.join("sessions");
@@ -660,7 +857,7 @@ mod tests {
             id,
             forked_from_id: None,
             timestamp: event_ts.to_string(),
-            cwd: codex_home.to_path_buf(),
+            cwd,
             originator: "cli".to_string(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::default(),
@@ -669,10 +866,11 @@ mod tests {
             model_provider: Some("test-provider".to_string()),
             base_instructions: None,
             dynamic_tools: None,
+            memory_mode: None,
         };
         let session_meta_line = SessionMetaLine {
             meta: session_meta,
-            git: None,
+            git,
         };
         let rollout_line = RolloutLine {
             timestamp: event_ts.to_string(),

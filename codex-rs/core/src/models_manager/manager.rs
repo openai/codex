@@ -471,6 +471,7 @@ mod tests {
             "apply_patch_tool_type": null,
             "truncation_policy": {"mode": "bytes", "limit": 10_000},
             "supports_parallel_tool_calls": false,
+            "supports_image_detail_original": false,
             "context_window": 272_000,
             "experimental_supported_tools": [],
         }))
@@ -549,6 +550,8 @@ mod tests {
             .build()
             .await
             .expect("load default test config");
+        let mut overlay = remote_model("gpt-overlay", "Overlay", 0);
+        overlay.supports_image_detail_original = true;
 
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -556,7 +559,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             auth_manager,
             Some(ModelsResponse {
-                models: vec![remote_model("gpt-overlay", "Overlay", 0)],
+                models: vec![overlay],
             }),
             CollaborationModesConfig::default(),
         );
@@ -568,6 +571,7 @@ mod tests {
         assert_eq!(model_info.slug, "gpt-overlay-experiment");
         assert_eq!(model_info.display_name, "Overlay");
         assert_eq!(model_info.context_window, Some(272_000));
+        assert!(model_info.supports_image_detail_original);
         assert!(!model_info.supports_parallel_tool_calls);
         assert!(!model_info.used_fallback_model_metadata);
     }
@@ -580,26 +584,24 @@ mod tests {
             .build()
             .await
             .expect("load default test config");
+        let mut remote = remote_model("gpt-image", "Image", 0);
+        remote.supports_image_detail_original = true;
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let manager = ModelsManager::new(
             codex_home.path().to_path_buf(),
             auth_manager,
-            None,
+            Some(ModelsResponse {
+                models: vec![remote],
+            }),
             CollaborationModesConfig::default(),
         );
-        let known_slug = manager
-            .get_remote_models()
-            .await
-            .first()
-            .expect("bundled models should include at least one model")
-            .slug
-            .clone();
-        let namespaced_model = format!("custom/{known_slug}");
+        let namespaced_model = "custom/gpt-image".to_string();
 
         let model_info = manager.get_model_info(&namespaced_model, &config).await;
 
         assert_eq!(model_info.slug, namespaced_model);
+        assert!(model_info.supports_image_detail_original);
         assert!(!model_info.used_fallback_model_metadata);
     }
 

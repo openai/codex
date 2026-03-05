@@ -31,6 +31,7 @@ use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use dunce::canonicalize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -110,6 +111,7 @@ pub(crate) fn normalize_additional_permissions(
         .write
         .map(|paths| normalize_permission_paths(paths, "file_system.write"));
     Ok(PermissionProfile {
+        network: additional_permissions.network,
         file_system: Some(FileSystemPermissions { read, write }),
         ..Default::default()
     })
@@ -123,9 +125,7 @@ fn normalize_permission_paths(
     let mut seen = HashSet::new();
 
     for path in paths {
-        let canonicalized = path
-            .as_path()
-            .canonicalize()
+        let canonicalized = canonicalize(path.as_path())
             .ok()
             .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
             .unwrap_or(path);
@@ -189,6 +189,18 @@ fn merge_read_only_access_with_additional_reads(
     }
 }
 
+fn merge_network_access(
+    base_network_access: bool,
+    additional_permissions: &PermissionProfile,
+) -> bool {
+    base_network_access
+        || additional_permissions
+            .network
+            .as_ref()
+            .and_then(|network| network.enabled)
+            .unwrap_or(false)
+}
+
 fn sandbox_policy_with_additional_permissions(
     sandbox_policy: &SandboxPolicy,
     additional_permissions: &PermissionProfile,
@@ -218,15 +230,19 @@ fn sandbox_policy_with_additional_permissions(
                     read_only_access,
                     extra_reads,
                 ),
-                network_access: *network_access,
+                network_access: merge_network_access(*network_access, additional_permissions),
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             }
         }
-        SandboxPolicy::ReadOnly { access } => {
+        SandboxPolicy::ReadOnly {
+            access,
+            network_access,
+        } => {
             if extra_writes.is_empty() {
                 SandboxPolicy::ReadOnly {
                     access: merge_read_only_access_with_additional_reads(access, extra_reads),
+                    network_access: merge_network_access(*network_access, additional_permissions),
                 }
             } else {
                 // todo(dylan) - for now, this grants more access than the request. We should restrict this,
@@ -238,7 +254,7 @@ fn sandbox_policy_with_additional_permissions(
                         access,
                         extra_reads,
                     ),
-                    network_access: false,
+                    network_access: merge_network_access(*network_access, additional_permissions),
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
                 }
@@ -412,11 +428,20 @@ pub async fn execute_env(
 #[cfg(test)]
 mod tests {
     use super::SandboxManager;
+    use super::normalize_additional_permissions;
+    use super::sandbox_policy_with_additional_permissions;
     use crate::exec::SandboxType;
+    use crate::protocol::ReadOnlyAccess;
     use crate::protocol::SandboxPolicy;
     use crate::tools::sandboxing::SandboxablePreference;
     use codex_protocol::config_types::WindowsSandboxLevel;
+    use codex_protocol::models::FileSystemPermissions;
+    use codex_protocol::models::NetworkPermissions;
+    use codex_protocol::models::PermissionProfile;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use dunce::canonicalize;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[test]
     fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
@@ -441,5 +466,79 @@ mod tests {
             true,
         );
         assert_eq!(sandbox, expected);
+    }
+
+    #[test]
+    fn normalize_additional_permissions_preserves_network() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let path = AbsolutePathBuf::from_absolute_path(
+            canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+        )
+        .expect("absolute temp dir");
+        let permissions = normalize_additional_permissions(PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![path.clone()]),
+                write: Some(vec![path.clone()]),
+            }),
+            ..Default::default()
+        })
+        .expect("permissions");
+
+        assert_eq!(
+            permissions.network,
+            Some(NetworkPermissions {
+                enabled: Some(true),
+            })
+        );
+        assert_eq!(
+            permissions.file_system,
+            Some(FileSystemPermissions {
+                read: Some(vec![path.clone()]),
+                write: Some(vec![path]),
+            })
+        );
+    }
+
+    #[test]
+    fn read_only_additional_permissions_can_enable_network_without_writes() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let path = AbsolutePathBuf::from_absolute_path(
+            canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+        )
+        .expect("absolute temp dir");
+        let policy = sandbox_policy_with_additional_permissions(
+            &SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: vec![path.clone()],
+                },
+                network_access: false,
+            },
+            &PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![path.clone()]),
+                    write: Some(Vec::new()),
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("policy");
+
+        assert_eq!(
+            policy,
+            SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: vec![path],
+                },
+                network_access: true,
+            }
+        );
     }
 }

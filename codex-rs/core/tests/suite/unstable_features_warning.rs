@@ -19,7 +19,10 @@ use toml::toml;
 async fn emits_warning_when_unstable_features_enabled_via_config() {
     let home = TempDir::new().expect("tempdir");
     let mut config = load_default_config_for_test(&home).await;
-    config.features.enable(Feature::ChildAgentsMd);
+    config
+        .features
+        .enable(Feature::ChildAgentsMd)
+        .expect("test config should allow feature update");
     let user_config_path =
         AbsolutePathBuf::from_absolute_path(config.codex_home.join(CONFIG_TOML_FILE))
             .expect("absolute user config path");
@@ -56,7 +59,10 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
 async fn suppresses_warning_when_configured() {
     let home = TempDir::new().expect("tempdir");
     let mut config = load_default_config_for_test(&home).await;
-    config.features.enable(Feature::ChildAgentsMd);
+    config
+        .features
+        .enable(Feature::ChildAgentsMd)
+        .expect("test config should allow feature update");
     config.suppress_unstable_features_warning = true;
     let user_config_path =
         AbsolutePathBuf::from_absolute_path(config.codex_home.join(CONFIG_TOML_FILE))

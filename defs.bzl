@@ -17,7 +17,7 @@ def multiplatform_binaries(name, platforms = PLATFORMS):
     for platform in platforms:
         platform_data(
             name = name + "_" + platform,
-            platform = "@toolchains_llvm_bootstrapped//platforms:" + platform,
+            platform = "@llvm//platforms:" + platform,
             target = name,
             tags = ["manual"],
         )
@@ -42,7 +42,6 @@ def codex_rust_crate(
         rustc_flags_extra = [],
         rustc_env = {},
         deps_extra = [],
-        integration_deps_extra = [],
         integration_compile_data_extra = [],
         test_data_extra = [],
         test_tags = [],
@@ -73,7 +72,6 @@ def codex_rust_crate(
         rustc_env: Extra rustc_env entries to merge with defaults.
         deps_extra: Extra normal deps beyond @crates resolution.
             Typically only needed when features add additional deps.
-        integration_deps_extra: Extra deps for integration tests only.
         integration_compile_data_extra: Extra compile_data for integration tests.
         test_data_extra: Extra runtime data for tests.
         test_tags: Tags applied to unit + integration test targets.
@@ -81,11 +79,6 @@ def codex_rust_crate(
         extra_binaries: Additional binary labels to surface as test data and
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
-    deps = all_crate_deps(normal = True) + deps_extra
-    dev_deps = all_crate_deps(normal_dev = True)
-    proc_macro_deps = all_crate_deps(proc_macro = True)
-    proc_macro_dev_deps = all_crate_deps(proc_macro_dev = True)
-
     test_env = {
         "INSTA_WORKSPACE_ROOT": ".",
         "INSTA_SNAPSHOT_PATH": "src",
@@ -99,18 +92,19 @@ def codex_rust_crate(
 
     lib_srcs = crate_srcs or native.glob(["src/**/*.rs"], exclude = binaries.values(), allow_empty = True)
 
+    maybe_deps = []
+
     if build_script_enabled and native.glob(["build.rs"], allow_empty = True):
         cargo_build_script(
             name = name + "-build-script",
             srcs = ["build.rs"],
             deps = all_crate_deps(build = True),
-            proc_macro_deps = all_crate_deps(build_proc_macro = True),
             data = build_script_data,
             # Some build script deps sniff version-related env vars...
             version = "0.0.0",
         )
 
-        deps = deps + [name + "-build-script"]
+        maybe_deps += [name + "-build-script"]
 
     if lib_srcs:
         lib_rule = rust_proc_macro if proc_macro else rust_library
@@ -118,8 +112,7 @@ def codex_rust_crate(
             name = name,
             crate_name = crate_name,
             crate_features = crate_features,
-            deps = deps,
-            proc_macro_deps = proc_macro_deps,
+            deps = all_crate_deps() + maybe_deps + deps_extra,
             compile_data = compile_data,
             data = lib_data_extra,
             srcs = lib_srcs,
@@ -133,18 +126,14 @@ def codex_rust_crate(
             name = name + "-unit-tests",
             crate = name,
             env = test_env,
-            deps = deps + dev_deps,
-            proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
+            deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
             rustc_flags = rustc_flags_extra,
             rustc_env = rustc_env,
             data = test_data_extra,
             tags = test_tags,
         )
 
-        if proc_macro:
-            proc_macro_deps += [name]
-        else:
-            deps += [name]
+        maybe_deps += [name]
 
     sanitized_binaries = []
     cargo_env = {}
@@ -157,8 +146,7 @@ def codex_rust_crate(
             name = binary,
             crate_name = binary.replace("-", "_"),
             crate_root = main,
-            deps = deps,
-            proc_macro_deps = proc_macro_deps,
+            deps = all_crate_deps() + maybe_deps + deps_extra,
             edition = crate_edition,
             rustc_flags = rustc_flags_extra,
             srcs = native.glob(["src/**/*.rs"]),
@@ -184,8 +172,7 @@ def codex_rust_crate(
             srcs = [test],
             data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
-            deps = deps + dev_deps + integration_deps_extra,
-            proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
+            deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
             # Keep `file!()` paths Cargo-like (`core/tests/...`) instead of
             # Bazel workspace-prefixed (`codex-rs/core/tests/...`) for snapshot parity.
             rustc_flags = rustc_flags_extra + ["--remap-path-prefix=codex-rs="],

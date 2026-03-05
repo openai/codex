@@ -177,6 +177,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             model: requested_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -238,6 +239,7 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
                     .model_reasoning_summary
                     .unwrap_or(ReasoningSummary::Auto),
             ),
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -301,6 +303,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
@@ -355,6 +358,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             model: Some(REMOTE_MODEL_SLUG.to_string()),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -392,6 +396,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             model: REMOTE_MODEL_SLUG.to_string(),
             effort: None,
             summary: Some(ReasoningSummary::Auto),
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -539,6 +544,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
@@ -587,6 +593,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             model: Some(model.to_string()),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -605,6 +612,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             model: model.to_string(),
             effort: None,
             summary: Some(ReasoningSummary::Auto),
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1001,6 +1009,7 @@ fn test_remote_model_with_policy(
         apply_patch_tool_type: None,
         truncation_policy,
         supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,

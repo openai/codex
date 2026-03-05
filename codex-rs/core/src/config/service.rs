@@ -1,6 +1,9 @@
 use super::ConfigToml;
+use super::deserialize_config_toml_with_base;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config::managed_features::validate_explicit_feature_settings_in_config_toml;
+use crate::config::managed_features::validate_feature_requirements_in_config_toml;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
@@ -326,6 +329,35 @@ impl ConfigService {
         }
 
         validate_config(&user_config).map_err(|err| {
+            ConfigServiceError::write(
+                ConfigWriteErrorCode::ConfigValidationError,
+                format!("Invalid configuration: {err}"),
+            )
+        })?;
+        let user_config_toml =
+            deserialize_config_toml_with_base(user_config.clone(), &self.codex_home).map_err(
+                |err| {
+                    ConfigServiceError::write(
+                        ConfigWriteErrorCode::ConfigValidationError,
+                        format!("Invalid configuration: {err}"),
+                    )
+                },
+            )?;
+        validate_explicit_feature_settings_in_config_toml(
+            &user_config_toml,
+            layers.requirements().feature_requirements.as_ref(),
+        )
+        .map_err(|err| {
+            ConfigServiceError::write(
+                ConfigWriteErrorCode::ConfigValidationError,
+                format!("Invalid configuration: {err}"),
+            )
+        })?;
+        validate_feature_requirements_in_config_toml(
+            &user_config_toml,
+            layers.requirements().feature_requirements.as_ref(),
+        )
+        .map_err(|err| {
             ConfigServiceError::write(
                 ConfigWriteErrorCode::ConfigValidationError,
                 format!("Invalid configuration: {err}"),
@@ -706,6 +738,7 @@ mod tests {
     use codex_app_server_protocol::AskForApproval;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
     use tempfile::tempdir;
 
     #[test]
@@ -1086,6 +1119,108 @@ personality = true
         let contents =
             std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents.trim(), "model = \"user\"");
+    }
+
+    #[tokio::test]
+    async fn write_value_rejects_feature_requirement_conflict() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
+
+        let service = ConfigService::new(
+            tmp.path().to_path_buf(),
+            vec![],
+            LoaderOverrides {
+                managed_config_path: None,
+                #[cfg(target_os = "macos")]
+                managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
+            },
+            CloudRequirementsLoader::new(async {
+                Ok(Some(ConfigRequirementsToml {
+                    feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                        entries: BTreeMap::from([("personality".to_string(), true)]),
+                    }),
+                    ..Default::default()
+                }))
+            }),
+        );
+
+        let error = service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+                key_path: "features.personality".to_string(),
+                value: serde_json::json!(false),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await
+            .expect_err("conflicting feature write should fail");
+
+        assert_eq!(
+            error.write_error_code(),
+            Some(ConfigWriteErrorCode::ConfigValidationError)
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("invalid value for `features`: `features.personality=false`"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap(),
+            ""
+        );
+    }
+
+    #[tokio::test]
+    async fn write_value_rejects_profile_feature_requirement_conflict() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
+
+        let service = ConfigService::new(
+            tmp.path().to_path_buf(),
+            vec![],
+            LoaderOverrides {
+                managed_config_path: None,
+                #[cfg(target_os = "macos")]
+                managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
+            },
+            CloudRequirementsLoader::new(async {
+                Ok(Some(ConfigRequirementsToml {
+                    feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                        entries: BTreeMap::from([("personality".to_string(), true)]),
+                    }),
+                    ..Default::default()
+                }))
+            }),
+        );
+
+        let error = service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+                key_path: "profiles.enterprise.features.personality".to_string(),
+                value: serde_json::json!(false),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await
+            .expect_err("conflicting profile feature write should fail");
+
+        assert_eq!(
+            error.write_error_code(),
+            Some(ConfigWriteErrorCode::ConfigValidationError)
+        );
+        assert!(
+            error.to_string().contains(
+                "invalid value for `features`: `profiles.enterprise.features.personality=false`"
+            ),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap(),
+            ""
+        );
     }
 
     #[tokio::test]

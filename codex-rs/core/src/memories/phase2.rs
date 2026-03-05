@@ -52,7 +52,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         return;
     };
     let root = memory_root(&config.codex_home);
-    let max_raw_memories = config.memories.max_raw_memories_for_global;
+    let max_raw_memories = config.memories.max_raw_memories_for_consolidation;
     let max_unused_days = config.memories.max_unused_days;
 
     // 1. Claim the job.
@@ -266,7 +266,7 @@ mod agent {
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
         // Consolidation runs as an internal sub-agent and must not recursively delegate.
-        agent_config.features.disable(Feature::Collab);
+        let _ = agent_config.features.disable(Feature::Collab);
 
         // Sandbox policy
         let mut writable_roots = Vec::new();
@@ -294,7 +294,7 @@ mod agent {
         agent_config.model = Some(
             config
                 .memories
-                .phase_2_model
+                .consolidation_model
                 .clone()
                 .unwrap_or(phase_two::MODEL.to_string()),
         );
