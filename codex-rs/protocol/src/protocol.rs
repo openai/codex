@@ -74,6 +74,26 @@ pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+pub const COLLAB_INBOX_KIND: &str = "collab_inbox";
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+pub struct CollabInboxPayload {
+    pub injected: bool,
+    pub kind: String,
+    pub sender_thread_id: ThreadId,
+    pub message: String,
+}
+
+impl CollabInboxPayload {
+    pub fn new(sender_thread_id: ThreadId, message: String) -> Self {
+        Self {
+            injected: true,
+            kind: COLLAB_INBOX_KIND.to_string(),
+            sender_thread_id,
+            message,
+        }
+    }
+}
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

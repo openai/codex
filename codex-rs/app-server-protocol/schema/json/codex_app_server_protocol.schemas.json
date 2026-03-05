@@ -1,108 +1,19 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "AdditionalFileSystemPermissions": {
+    "AdditionalPermissions": {
       "properties": {
-        "read": {
+        "fs_read": {
           "items": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "type": "string"
           },
-          "type": [
-            "array",
-            "null"
-          ]
+          "type": "array"
         },
-        "write": {
+        "fs_write": {
           "items": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "type": "string"
           },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "AdditionalMacOsPermissions": {
-      "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "automations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "preferences": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "AdditionalNetworkPermissions": {
-      "properties": {
-        "enabled": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "AdditionalPermissionProfile": {
-      "properties": {
-        "fileSystem": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalFileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "macos": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalMacOsPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "network": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalNetworkPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "array"
         }
       },
       "type": "object"
@@ -372,7 +283,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -397,7 +308,7 @@
           "description": "NEW APIs",
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -421,7 +332,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -445,7 +356,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -469,7 +380,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -493,31 +404,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "thread/unsubscribe"
-              ],
-              "title": "Thread/unsubscribeRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadUnsubscribeParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/unsubscribeRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -541,31 +428,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "thread/metadata/update"
-              ],
-              "title": "Thread/metadata/updateRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadMetadataUpdateParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/metadata/updateRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -589,7 +452,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -613,7 +476,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -637,7 +500,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -661,7 +524,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -685,7 +548,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -709,7 +572,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -733,7 +596,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -757,7 +620,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -781,7 +644,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -805,7 +668,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -829,31 +692,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "plugin/install"
-              ],
-              "title": "Plugin/installRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/PluginInstallParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Plugin/installRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -877,7 +716,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -901,7 +740,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -925,7 +764,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -949,7 +788,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -973,7 +812,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -997,7 +836,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1021,7 +860,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1044,7 +883,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1068,7 +907,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1092,7 +931,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1116,7 +955,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1140,7 +979,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1163,7 +1002,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1186,7 +1025,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1211,7 +1050,7 @@
           "description": "Execute a command (argv vector) under the server's sandbox.",
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1235,7 +1074,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1259,55 +1098,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "externalAgentConfig/detect"
-              ],
-              "title": "ExternalAgentConfig/detectRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ExternalAgentConfigDetectParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "ExternalAgentConfig/detectRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "externalAgentConfig/import"
-              ],
-              "title": "ExternalAgentConfig/importRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ExternalAgentConfigImportParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "ExternalAgentConfig/importRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1331,7 +1122,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1355,7 +1146,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1378,7 +1169,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1402,7 +1193,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -1445,7 +1236,7 @@
         "thread_id": {
           "allOf": [
             {
-              "$ref": "#/definitions/v2/ThreadId"
+              "$ref": "#/definitions/ThreadId"
             }
           ],
           "description": "Thread ID of the receiver/new agent."
@@ -1483,7 +1274,7 @@
         "thread_id": {
           "allOf": [
             {
-              "$ref": "#/definitions/v2/ThreadId"
+              "$ref": "#/definitions/ThreadId"
             }
           ],
           "description": "Thread ID of the receiver/new agent."
@@ -1495,6 +1286,14 @@
       ],
       "type": "object"
     },
+    "CollabAgentSpawnMode": {
+      "enum": [
+        "spawn",
+        "fork",
+        "watchdog"
+      ],
+      "type": "string"
+    },
     "CommandExecutionApprovalDecision": {
       "oneOf": [
         {
@@ -1505,7 +1304,7 @@
           "type": "string"
         },
         {
-          "description": "User approved the command and future prompts in the same session-scoped approval cache should run without prompting.",
+          "description": "User approved the command and future identical commands should run without prompting.",
           "enum": [
             "acceptForSession"
           ],
@@ -1534,28 +1333,6 @@
             "acceptWithExecpolicyAmendment"
           ],
           "title": "AcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "User chose a persistent network policy rule (allow/deny) for this host.",
-          "properties": {
-            "applyNetworkPolicyAmendment": {
-              "properties": {
-                "network_policy_amendment": {
-                  "$ref": "#/definitions/NetworkPolicyAmendment"
-                }
-              },
-              "required": [
-                "network_policy_amendment"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "applyNetworkPolicyAmendment"
-          ],
-          "title": "ApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision",
           "type": "object"
         },
         {
@@ -1620,22 +1397,12 @@
               "type": "null"
             }
           ],
-          "description": "Optional context for a managed-network approval prompt."
+          "description": "Optional context for managed-network approval prompts."
         },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
           "items": {
             "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "proposedNetworkPolicyAmendments": {
-          "description": "Optional proposed network policy amendments (allow/deny host) for future requests.",
-          "items": {
-            "$ref": "#/definitions/NetworkPolicyAmendment"
           },
           "type": [
             "array",
@@ -1727,6 +1494,50 @@
       ],
       "type": "object"
     },
+    "DynamicToolCallOutputContentItem": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "inputText"
+              ],
+              "title": "InputTextDynamicToolCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "InputTextDynamicToolCallOutputContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "imageUrl": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "inputImage"
+              ],
+              "title": "InputImageDynamicToolCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "imageUrl",
+            "type"
+          ],
+          "title": "InputImageDynamicToolCallOutputContentItem",
+          "type": "object"
+        }
+      ]
+    },
     "DynamicToolCallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -1759,7 +1570,7 @@
       "properties": {
         "contentItems": {
           "items": {
-            "$ref": "#/definitions/v2/DynamicToolCallOutputContentItem"
+            "$ref": "#/definitions/DynamicToolCallOutputContentItem"
           },
           "type": "array"
         },
@@ -2369,16 +2180,6 @@
               ],
               "description": "How to sandbox commands executed in the system"
             },
-            "service_tier": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/v2/ServiceTier"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "session_id": {
               "$ref": "#/definitions/v2/ThreadId"
             },
@@ -2616,60 +2417,6 @@
             "type"
           ],
           "title": "WebSearchEndEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "image_generation_begin"
-              ],
-              "title": "ImageGenerationBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "type"
-          ],
-          "title": "ImageGenerationBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "type": "string"
-            },
-            "result": {
-              "type": "string"
-            },
-            "revised_prompt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "status": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "image_generation_end"
-              ],
-              "title": "ImageGenerationEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "result",
-            "status",
-            "type"
-          ],
-          "title": "ImageGenerationEndEventMsg",
           "type": "object"
         },
         {
@@ -2955,7 +2702,7 @@
             "additional_permissions": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/PermissionProfile"
+                  "$ref": "#/definitions/AdditionalPermissions"
                 },
                 {
                   "type": "null"
@@ -2967,16 +2714,6 @@
               "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
               "type": [
                 "string",
-                "null"
-              ]
-            },
-            "available_decisions": {
-              "description": "Ordered list of decisions the client may present for this prompt.\n\nWhen absent, clients should derive the legacy default set from the other fields on this request.",
-              "items": {
-                "$ref": "#/definitions/ReviewDecision"
-              },
-              "type": [
-                "array",
                 "null"
               ]
             },
@@ -3127,72 +2864,32 @@
         },
         {
           "properties": {
-            "arguments": {
-              "description": "Dynamic tool call arguments."
-            },
-            "call_id": {
-              "description": "Identifier for the corresponding DynamicToolCallRequest.",
+            "item_id": {
               "type": "string"
             },
-            "content_items": {
-              "description": "Dynamic tool response content items.",
-              "items": {
-                "$ref": "#/definitions/v2/DynamicToolCallOutputContentItem"
-              },
-              "type": "array"
-            },
-            "duration": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/Duration"
-                }
-              ],
-              "description": "The duration of the dynamic tool call."
-            },
-            "error": {
-              "description": "Optional error text when the tool call failed before producing a response.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "success": {
-              "description": "Whether the tool call succeeded.",
-              "type": "boolean"
-            },
-            "tool": {
-              "description": "Dynamic tool name.",
-              "type": "string"
-            },
-            "turn_id": {
-              "description": "Turn ID that this dynamic tool call belongs to.",
+            "skill_name": {
               "type": "string"
             },
             "type": {
               "enum": [
-                "dynamic_tool_call_response"
+                "skill_request_approval"
               ],
-              "title": "DynamicToolCallResponseEventMsgType",
+              "title": "SkillRequestApprovalEventMsgType",
               "type": "string"
             }
           },
           "required": [
-            "arguments",
-            "call_id",
-            "content_items",
-            "duration",
-            "success",
-            "tool",
-            "turn_id",
+            "item_id",
+            "skill_name",
             "type"
           ],
-          "title": "DynamicToolCallResponseEventMsg",
+          "title": "SkillRequestApprovalEventMsg",
           "type": "object"
         },
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "message": {
               "type": "string"
@@ -4155,6 +3852,15 @@
               ],
               "description": "Thread ID of the sender."
             },
+            "spawn_mode": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CollabAgentSpawnMode"
+                }
+              ],
+              "default": "spawn",
+              "description": "Spawn mode used for this agent."
+            },
             "status": {
               "allOf": [
                 {
@@ -4845,29 +4551,6 @@
       "title": "FileChangeRequestApprovalResponse",
       "type": "object"
     },
-    "FileSystemPermissions": {
-      "properties": {
-        "read": {
-          "items": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "write": {
-          "items": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "FuzzyFileSearchParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -5070,7 +4753,7 @@
           "$ref": "#/definitions/JSONRPCErrorError"
         },
         "id": {
-          "$ref": "#/definitions/v2/RequestId"
+          "$ref": "#/definitions/RequestId"
         }
       },
       "required": [
@@ -5138,23 +4821,12 @@
       "description": "A request that expects a response.",
       "properties": {
         "id": {
-          "$ref": "#/definitions/v2/RequestId"
+          "$ref": "#/definitions/RequestId"
         },
         "method": {
           "type": "string"
         },
-        "params": true,
-        "trace": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/W3cTraceContext"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional W3C Trace Context for distributed tracing."
-        }
+        "params": true
       },
       "required": [
         "id",
@@ -5168,7 +4840,7 @@
       "description": "A successful (non-error) response to a request.",
       "properties": {
         "id": {
-          "$ref": "#/definitions/v2/RequestId"
+          "$ref": "#/definitions/RequestId"
         },
         "result": true
       },
@@ -5178,66 +4850,6 @@
       ],
       "title": "JSONRPCResponse",
       "type": "object"
-    },
-    "MacOsAutomationValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      ]
-    },
-    "MacOsPermissions": {
-      "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "automations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "preferences": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "MacOsPreferencesValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "string"
-        }
-      ]
     },
     "McpInvocation": {
       "properties": {
@@ -5364,17 +4976,6 @@
         "socks5Udp"
       ],
       "type": "string"
-    },
-    "NetworkPermissions": {
-      "properties": {
-        "enabled": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
     },
     "NetworkPolicyAmendment": {
       "properties": {
@@ -5509,41 +5110,6 @@
         }
       ]
     },
-    "PermissionProfile": {
-      "properties": {
-        "file_system": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/FileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "macos": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "network": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/NetworkPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
     "PlanItemArg": {
       "additionalProperties": false,
       "properties": {
@@ -5596,14 +5162,8 @@
         {
           "additionalProperties": false,
           "properties": {
-            "SessionUpdated": {
+            "SessionCreated": {
               "properties": {
-                "instructions": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
                 "session_id": {
                   "type": "string"
                 }
@@ -5611,6 +5171,27 @@
               "required": [
                 "session_id"
               ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SessionCreated"
+          ],
+          "title": "SessionCreatedRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SessionUpdated": {
+              "properties": {
+                "backend_prompt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
               "type": "object"
             }
           },
@@ -5647,40 +5228,6 @@
         {
           "additionalProperties": false,
           "properties": {
-            "ConversationItemDone": {
-              "properties": {
-                "item_id": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "item_id"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "ConversationItemDone"
-          ],
-          "title": "ConversationItemDoneRealtimeEvent",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "HandoffRequested": {
-              "$ref": "#/definitions/RealtimeHandoffRequested"
-            }
-          },
-          "required": [
-            "HandoffRequested"
-          ],
-          "title": "HandoffRequestedRealtimeEvent",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
             "Error": {
               "type": "string"
             }
@@ -5692,47 +5239,6 @@
           "type": "object"
         }
       ]
-    },
-    "RealtimeHandoffMessage": {
-      "properties": {
-        "role": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "role",
-        "text"
-      ],
-      "type": "object"
-    },
-    "RealtimeHandoffRequested": {
-      "properties": {
-        "handoff_id": {
-          "type": "string"
-        },
-        "input_transcript": {
-          "type": "string"
-        },
-        "item_id": {
-          "type": "string"
-        },
-        "messages": {
-          "items": {
-            "$ref": "#/definitions/RealtimeHandoffMessage"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "handoff_id",
-        "input_transcript",
-        "item_id",
-        "messages"
-      ],
-      "type": "object"
     },
     "RejectConfig": {
       "properties": {
@@ -5757,7 +5263,6 @@
       "type": "object"
     },
     "RequestId": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
       "anyOf": [
         {
           "type": "string"
@@ -5767,7 +5272,7 @@
           "type": "integer"
         }
       ],
-      "title": "RequestId"
+      "description": "ID of a request, which can be either a string or an integer."
     },
     "RequestUserInputQuestion": {
       "properties": {
@@ -5900,7 +5405,7 @@
           "type": "object"
         },
         {
-          "description": "User has approved this request and wants future prompts in the same session-scoped approval cache to be automatically approved for the remainder of the session.",
+          "description": "User has approved this command and wants to automatically approve any future identical instances (`command` and `cwd` match exactly) for the remainder of the session.",
           "enum": [
             "approved_for_session"
           ],
@@ -6125,46 +5630,6 @@
             "params"
           ],
           "title": "Thread/unarchivedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "thread/closed"
-              ],
-              "title": "Thread/closedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadClosedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Thread/closedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "skills/changed"
-              ],
-              "title": "Skills/changedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/SkillsChangedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Skills/changedNotification",
           "type": "object"
         },
         {
@@ -6426,26 +5891,6 @@
             "params"
           ],
           "title": "Item/fileChange/outputDeltaNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "serverRequest/resolved"
-              ],
-              "title": "ServerRequest/resolvedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ServerRequestResolvedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "ServerRequest/resolvedNotification",
           "type": "object"
         },
         {
@@ -6730,106 +6175,6 @@
           "type": "object"
         },
         {
-          "properties": {
-            "method": {
-              "enum": [
-                "thread/realtime/started"
-              ],
-              "title": "Thread/realtime/startedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadRealtimeStartedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Thread/realtime/startedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "thread/realtime/itemAdded"
-              ],
-              "title": "Thread/realtime/itemAddedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadRealtimeItemAddedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Thread/realtime/itemAddedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "thread/realtime/outputAudio/delta"
-              ],
-              "title": "Thread/realtime/outputAudio/deltaNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadRealtimeOutputAudioDeltaNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Thread/realtime/outputAudio/deltaNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "thread/realtime/error"
-              ],
-              "title": "Thread/realtime/errorNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadRealtimeErrorNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Thread/realtime/errorNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "thread/realtime/closed"
-              ],
-              "title": "Thread/realtime/closedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadRealtimeClosedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Thread/realtime/closedNotification",
-          "type": "object"
-        },
-        {
           "description": "Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.",
           "properties": {
             "method": {
@@ -6901,7 +6246,7 @@
           "description": "NEW APIs Sent when approval is requested for a specific command execution. This request is used for Turns started via turn/start.",
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -6926,7 +6271,7 @@
           "description": "Sent when approval is requested for a specific file change. This request is used for Turns started via turn/start.",
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -6951,7 +6296,7 @@
           "description": "EXPERIMENTAL - Request input from the user for a tool call.",
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -6973,10 +6318,34 @@
           "type": "object"
         },
         {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "skill/requestApproval"
+              ],
+              "title": "Skill/requestApprovalRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SkillRequestApprovalParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Skill/requestApprovalRequest",
+          "type": "object"
+        },
+        {
           "description": "Execute a dynamic tool call on the client.",
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -7000,7 +6369,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -7025,7 +6394,7 @@
           "description": "DEPRECATED APIs below Request to approve a patch. This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).",
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -7050,7 +6419,7 @@
           "description": "Request to exec a command. This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).",
           "properties": {
             "id": {
-              "$ref": "#/definitions/v2/RequestId"
+              "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
@@ -7091,6 +6460,43 @@
         "http_addr",
         "socks_addr"
       ],
+      "type": "object"
+    },
+    "SkillApprovalDecision": {
+      "enum": [
+        "approve",
+        "decline"
+      ],
+      "type": "string"
+    },
+    "SkillRequestApprovalParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "skillName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "skillName"
+      ],
+      "title": "SkillRequestApprovalParams",
+      "type": "object"
+    },
+    "SkillRequestApprovalResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/SkillApprovalDecision"
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "title": "SkillRequestApprovalResponse",
       "type": "object"
     },
     "StepStatus": {
@@ -7283,7 +6689,7 @@
           "properties": {
             "content": {
               "items": {
-                "$ref": "#/definitions/v2/UserInput"
+                "$ref": "#/definitions/UserInput"
               },
               "type": "array"
             },
@@ -7321,7 +6727,7 @@
             "phase": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/v2/MessagePhase"
+                  "$ref": "#/definitions/MessagePhase"
                 },
                 {
                   "type": "null"
@@ -7406,7 +6812,7 @@
         {
           "properties": {
             "action": {
-              "$ref": "#/definitions/v2/WebSearchAction"
+              "$ref": "#/definitions/WebSearchAction"
             },
             "id": {
               "type": "string"
@@ -7436,40 +6842,6 @@
             "id": {
               "type": "string"
             },
-            "result": {
-              "type": "string"
-            },
-            "revised_prompt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "status": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "ImageGeneration"
-              ],
-              "title": "ImageGenerationTurnItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "result",
-            "status",
-            "type"
-          ],
-          "title": "ImageGenerationTurnItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "type": "string"
-            },
             "type": {
               "enum": [
                 "ContextCompaction"
@@ -7486,23 +6858,6 @@
           "type": "object"
         }
       ]
-    },
-    "W3cTraceContext": {
-      "properties": {
-        "traceparent": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tracestate": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
     },
     "v2": {
       "AbsolutePathBuf": {
@@ -7598,16 +6953,6 @@
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/AuthMode"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "planType": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/PlanType"
               },
               {
                 "type": "null"
@@ -8390,8 +7735,14 @@
         "type": "object"
       },
       "CollaborationModeMask": {
-        "description": "EXPERIMENTAL - collaboration mode preset metadata for clients.",
+        "description": "A mask for collaboration mode settings, allowing partial updates. All fields except `name` are optional, enabling selective updates.",
         "properties": {
+          "developer_instructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mode": {
             "anyOf": [
               {
@@ -8791,16 +8142,6 @@
               }
             ]
           },
-          "service_tier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "tools": {
             "anyOf": [
               {
@@ -9149,15 +8490,6 @@
                 "type": "null"
               }
             ]
-          },
-          "featureRequirements": {
-            "additionalProperties": {
-              "type": "boolean"
-            },
-            "type": [
-              "object",
-              "null"
-            ]
           }
         },
         "type": "object"
@@ -9411,58 +8743,6 @@
         "title": "DeprecationNoticeNotification",
         "type": "object"
       },
-      "DynamicToolCallOutputContentItem": {
-        "oneOf": [
-          {
-            "properties": {
-              "text": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "inputText"
-                ],
-                "title": "InputTextDynamicToolCallOutputContentItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "text",
-              "type"
-            ],
-            "title": "InputTextDynamicToolCallOutputContentItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "imageUrl": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "inputImage"
-                ],
-                "title": "InputImageDynamicToolCallOutputContentItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "imageUrl",
-              "type"
-            ],
-            "title": "InputImageDynamicToolCallOutputContentItem",
-            "type": "object"
-          }
-        ]
-      },
-      "DynamicToolCallStatus": {
-        "enum": [
-          "inProgress",
-          "completed",
-          "failed"
-        ],
-        "type": "string"
-      },
       "DynamicToolSpec": {
         "properties": {
           "description": {
@@ -9642,95 +8922,6 @@
           }
         ]
       },
-      "ExternalAgentConfigDetectParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "cwds": {
-            "description": "Zero or more working directories to include for repo-scoped detection.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "includeHome": {
-            "description": "If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
-            "type": "boolean"
-          }
-        },
-        "title": "ExternalAgentConfigDetectParams",
-        "type": "object"
-      },
-      "ExternalAgentConfigDetectResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItem"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "title": "ExternalAgentConfigDetectResponse",
-        "type": "object"
-      },
-      "ExternalAgentConfigImportParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "migrationItems": {
-            "items": {
-              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItem"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "migrationItems"
-        ],
-        "title": "ExternalAgentConfigImportParams",
-        "type": "object"
-      },
-      "ExternalAgentConfigImportResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ExternalAgentConfigImportResponse",
-        "type": "object"
-      },
-      "ExternalAgentConfigMigrationItem": {
-        "properties": {
-          "cwd": {
-            "description": "Null or empty means home-scoped migration; non-empty means repo-scoped migration.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "description": {
-            "type": "string"
-          },
-          "itemType": {
-            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
-          }
-        },
-        "required": [
-          "description",
-          "itemType"
-        ],
-        "type": "object"
-      },
-      "ExternalAgentConfigMigrationItemType": {
-        "enum": [
-          "AGENTS_MD",
-          "CONFIG",
-          "SKILLS",
-          "MCP_SERVER_CONFIG"
-        ],
-        "type": "string"
-      },
       "FeedbackUploadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -9871,16 +9062,6 @@
           },
           {
             "properties": {
-              "detail": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ImageDetail"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "image_url": {
                 "type": "string"
               },
@@ -10043,15 +9224,6 @@
           "workspace-shared",
           "all-shared",
           "personal"
-        ],
-        "type": "string"
-      },
-      "ImageDetail": {
-        "enum": [
-          "auto",
-          "low",
-          "high",
-          "original"
         ],
         "type": "string"
       },
@@ -10578,16 +9750,6 @@
       },
       "Model": {
         "properties": {
-          "availabilityNux": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ModelAvailabilityNux"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "defaultReasoningEffort": {
             "$ref": "#/definitions/v2/ReasoningEffort"
           },
@@ -10634,16 +9796,6 @@
               "string",
               "null"
             ]
-          },
-          "upgradeInfo": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ModelUpgradeInfo"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
@@ -10655,17 +9807,6 @@
           "isDefault",
           "model",
           "supportedReasoningEfforts"
-        ],
-        "type": "object"
-      },
-      "ModelAvailabilityNux": {
-        "properties": {
-          "message": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "message"
         ],
         "type": "object"
       },
@@ -10755,35 +9896,6 @@
           "turnId"
         ],
         "title": "ModelReroutedNotification",
-        "type": "object"
-      },
-      "ModelUpgradeInfo": {
-        "properties": {
-          "migrationMarkdown": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "model": {
-            "type": "string"
-          },
-          "modelLink": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "upgradeCopy": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "model"
-        ],
         "type": "object"
       },
       "NetworkAccess": {
@@ -11009,34 +10121,6 @@
         ],
         "type": "string"
       },
-      "PluginInstallParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "cwd": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "marketplaceName": {
-            "type": "string"
-          },
-          "pluginName": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "marketplaceName",
-          "pluginName"
-        ],
-        "title": "PluginInstallParams",
-        "type": "object"
-      },
-      "PluginInstallResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "PluginInstallResponse",
-        "type": "object"
-      },
       "ProductSurface": {
         "enum": [
           "chatgpt",
@@ -11101,16 +10185,6 @@
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/Verbosity"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "service_tier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
               },
               {
                 "type": "null"
@@ -11501,17 +10575,6 @@
         ],
         "type": "object"
       },
-      "RequestId": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "format": "int64",
-            "type": "integer"
-          }
-        ]
-      },
       "ResidencyRequirement": {
         "enum": [
           "us"
@@ -11844,7 +10907,7 @@
                 "type": "string"
               },
               "output": {
-                "$ref": "#/definitions/v2/FunctionCallOutputPayload"
+                "type": "string"
               },
               "type": {
                 "enum": [
@@ -11899,40 +10962,6 @@
               "type"
             ],
             "title": "WebSearchCallResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "result": {
-                "type": "string"
-              },
-              "revised_prompt": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "status": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "image_generation_call"
-                ],
-                "title": "ImageGenerationCallResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "result",
-              "status",
-              "type"
-            ],
-            "title": "ImageGenerationCallResponseItem",
             "type": "object"
           },
           {
@@ -12176,10 +11205,6 @@
                   "type": "fullAccess"
                 }
               },
-              "networkAccess": {
-                "default": false,
-                "type": "boolean"
-              },
               "type": {
                 "enum": [
                   "readOnly"
@@ -12288,30 +11313,6 @@
           }
         },
         "type": "object"
-      },
-      "ServerRequestResolvedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "requestId": {
-            "$ref": "#/definitions/v2/RequestId"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "requestId",
-          "threadId"
-        ],
-        "title": "ServerRequestResolvedNotification",
-        "type": "object"
-      },
-      "ServiceTier": {
-        "enum": [
-          "fast",
-          "flex"
-        ],
-        "type": "string"
       },
       "SessionSource": {
         "oneOf": [
@@ -12538,12 +11539,6 @@
           "type",
           "value"
         ],
-        "type": "object"
-      },
-      "SkillsChangedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
-        "title": "SkillsChangedNotification",
         "type": "object"
       },
       "SkillsConfigWriteParams": {
@@ -12919,10 +11914,6 @@
             "description": "Working directory captured for the thread.",
             "type": "string"
           },
-          "ephemeral": {
-            "description": "Whether the thread is ephemeral and should not be materialized on disk.",
-            "type": "boolean"
-          },
           "gitInfo": {
             "anyOf": [
               {
@@ -12992,7 +11983,6 @@
           "cliVersion",
           "createdAt",
           "cwd",
-          "ephemeral",
           "id",
           "modelProvider",
           "preview",
@@ -13039,19 +12029,6 @@
           "threadId"
         ],
         "title": "ThreadArchivedNotification",
-        "type": "object"
-      },
-      "ThreadClosedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId"
-        ],
-        "title": "ThreadClosedNotification",
         "type": "object"
       },
       "ThreadCompactStartParams": {
@@ -13134,23 +12111,6 @@
               }
             ]
           },
-          "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "threadId": {
             "type": "string"
           }
@@ -13188,16 +12148,6 @@
           },
           "sandbox": {
             "$ref": "#/definitions/v2/SandboxPolicy"
-          },
-          "serviceTier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
@@ -13507,59 +12457,6 @@
           },
           {
             "properties": {
-              "arguments": true,
-              "contentItems": {
-                "items": {
-                  "$ref": "#/definitions/v2/DynamicToolCallOutputContentItem"
-                },
-                "type": [
-                  "array",
-                  "null"
-                ]
-              },
-              "durationMs": {
-                "description": "The duration of the dynamic tool call in milliseconds.",
-                "format": "int64",
-                "type": [
-                  "integer",
-                  "null"
-                ]
-              },
-              "id": {
-                "type": "string"
-              },
-              "status": {
-                "$ref": "#/definitions/v2/DynamicToolCallStatus"
-              },
-              "success": {
-                "type": [
-                  "boolean",
-                  "null"
-                ]
-              },
-              "tool": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "dynamicToolCall"
-                ],
-                "title": "DynamicToolCallThreadItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "arguments",
-              "id",
-              "status",
-              "tool",
-              "type"
-            ],
-            "title": "DynamicToolCallThreadItem",
-            "type": "object"
-          },
-          {
-            "properties": {
               "agentsStates": {
                 "additionalProperties": {
                   "$ref": "#/definitions/v2/CollabAgentState"
@@ -13688,40 +12585,6 @@
               "id": {
                 "type": "string"
               },
-              "result": {
-                "type": "string"
-              },
-              "revisedPrompt": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "status": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "imageGeneration"
-                ],
-                "title": "ImageGenerationThreadItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "result",
-              "status",
-              "type"
-            ],
-            "title": "ImageGenerationThreadItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "id": {
-                "type": "string"
-              },
               "review": {
                 "type": "string"
               },
@@ -13830,13 +12693,6 @@
               "null"
             ]
           },
-          "searchTerm": {
-            "description": "Optional substring filter for the extracted thread title.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "sortKey": {
             "anyOf": [
               {
@@ -13932,69 +12788,6 @@
         "title": "ThreadLoadedListResponse",
         "type": "object"
       },
-      "ThreadMetadataGitInfoUpdateParams": {
-        "properties": {
-          "branch": {
-            "description": "Omit to leave the stored branch unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "originUrl": {
-            "description": "Omit to leave the stored origin URL unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "sha": {
-            "description": "Omit to leave the stored commit unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
-      "ThreadMetadataUpdateParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "gitInfo": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ThreadMetadataGitInfoUpdateParams"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId"
-        ],
-        "title": "ThreadMetadataUpdateParams",
-        "type": "object"
-      },
-      "ThreadMetadataUpdateResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "thread": {
-            "$ref": "#/definitions/v2/Thread"
-          }
-        },
-        "required": [
-          "thread"
-        ],
-        "title": "ThreadMetadataUpdateResponse",
-        "type": "object"
-      },
       "ThreadNameUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -14043,130 +12836,6 @@
           "thread"
         ],
         "title": "ThreadReadResponse",
-        "type": "object"
-      },
-      "ThreadRealtimeAudioChunk": {
-        "description": "EXPERIMENTAL - thread realtime audio chunk.",
-        "properties": {
-          "data": {
-            "type": "string"
-          },
-          "numChannels": {
-            "format": "uint16",
-            "minimum": 0.0,
-            "type": "integer"
-          },
-          "sampleRate": {
-            "format": "uint32",
-            "minimum": 0.0,
-            "type": "integer"
-          },
-          "samplesPerChannel": {
-            "format": "uint32",
-            "minimum": 0.0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "data",
-          "numChannels",
-          "sampleRate"
-        ],
-        "type": "object"
-      },
-      "ThreadRealtimeClosedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - emitted when thread realtime transport closes.",
-        "properties": {
-          "reason": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId"
-        ],
-        "title": "ThreadRealtimeClosedNotification",
-        "type": "object"
-      },
-      "ThreadRealtimeErrorNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - emitted when thread realtime encounters an error.",
-        "properties": {
-          "message": {
-            "type": "string"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "message",
-          "threadId"
-        ],
-        "title": "ThreadRealtimeErrorNotification",
-        "type": "object"
-      },
-      "ThreadRealtimeItemAddedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.",
-        "properties": {
-          "item": true,
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "item",
-          "threadId"
-        ],
-        "title": "ThreadRealtimeItemAddedNotification",
-        "type": "object"
-      },
-      "ThreadRealtimeOutputAudioDeltaNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - streamed output audio emitted by thread realtime.",
-        "properties": {
-          "audio": {
-            "$ref": "#/definitions/v2/ThreadRealtimeAudioChunk"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "audio",
-          "threadId"
-        ],
-        "title": "ThreadRealtimeOutputAudioDeltaNotification",
-        "type": "object"
-      },
-      "ThreadRealtimeStartedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
-        "properties": {
-          "sessionId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId"
-        ],
-        "title": "ThreadRealtimeStartedNotification",
         "type": "object"
       },
       "ThreadResumeParams": {
@@ -14241,23 +12910,6 @@
               }
             ]
           },
-          "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "threadId": {
             "type": "string"
           }
@@ -14295,16 +12947,6 @@
           },
           "sandbox": {
             "$ref": "#/definitions/v2/SandboxPolicy"
-          },
-          "serviceTier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
@@ -14478,29 +13120,6 @@
                 "type": "null"
               }
             ]
-          },
-          "serviceName": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "title": "ThreadStartParams",
@@ -14533,16 +13152,6 @@
           },
           "sandbox": {
             "$ref": "#/definitions/v2/SandboxPolicy"
-          },
-          "serviceTier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
@@ -14745,40 +13354,6 @@
         ],
         "title": "ThreadUnarchivedNotification",
         "type": "object"
-      },
-      "ThreadUnsubscribeParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId"
-        ],
-        "title": "ThreadUnsubscribeParams",
-        "type": "object"
-      },
-      "ThreadUnsubscribeResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "status": {
-            "$ref": "#/definitions/v2/ThreadUnsubscribeStatus"
-          }
-        },
-        "required": [
-          "status"
-        ],
-        "title": "ThreadUnsubscribeResponse",
-        "type": "object"
-      },
-      "ThreadUnsubscribeStatus": {
-        "enum": [
-          "notLoaded",
-          "notSubscribed",
-          "unsubscribed"
-        ],
-        "type": "string"
       },
       "TokenUsageBreakdown": {
         "properties": {
@@ -15110,24 +13685,6 @@
               }
             ],
             "description": "Override the sandbox policy for this turn and subsequent turns."
-          },
-          "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Override the service tier for this turn and subsequent turns."
           },
           "summary": {
             "anyOf": [
@@ -15499,12 +14056,6 @@
       "WindowsSandboxSetupStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "cwd": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "mode": {
             "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
           }

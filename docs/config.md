@@ -26,6 +26,15 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
+## Watchdog Interval
+
+Watchdog agents use the top-level `watchdog_interval_s` setting to decide how long the owner thread
+must be idle before a check-in helper is spawned.
+
+```toml
+watchdog_interval_s = 60
+```
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
