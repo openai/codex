@@ -22,7 +22,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::CollabInboxPayload;
+use codex_protocol::protocol::AgentInboxPayload;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -484,7 +484,7 @@ impl AgentControl {
         result
     }
 
-    pub(crate) async fn send_collab_message(
+    pub(crate) async fn send_agent_message(
         &self,
         agent_id: ThreadId,
         sender_thread_id: ThreadId,
@@ -500,8 +500,8 @@ impl AgentControl {
 
         let prepend_turn_start_user_message = !thread.has_active_turn().await;
         let items =
-            build_collab_inbox_items(sender_thread_id, message, prepend_turn_start_user_message)?;
-        let submission_id = format!("collab_inbox_{}", Uuid::new_v4());
+            build_agent_inbox_items(sender_thread_id, message, prepend_turn_start_user_message)?;
+        let submission_id = format!("agent_inbox_{}", Uuid::new_v4());
         match thread.codex.session.inject_response_items(items).await {
             Ok(()) => Ok(submission_id),
             Err(items_without_active_turn) => {
@@ -974,7 +974,7 @@ impl AgentControl {
     }
 }
 
-fn build_collab_inbox_items(
+fn build_agent_inbox_items(
     sender_thread_id: ThreadId,
     message: String,
     prepend_turn_start_user_message: bool,
@@ -988,10 +988,10 @@ fn build_collab_inbox_items(
             }],
         });
     }
-    let call_id = format!("collab_inbox_{}", Uuid::new_v4());
-    let payload = CollabInboxPayload::new(sender_thread_id, message);
+    let call_id = format!("agent_inbox_{}", Uuid::new_v4());
+    let payload = AgentInboxPayload::new(sender_thread_id, message);
     let output = serde_json::to_string(&payload).map_err(|err| {
-        CodexErr::UnsupportedOperation(format!("failed to serialize collab inbox payload: {err}"))
+        CodexErr::UnsupportedOperation(format!("failed to serialize agent inbox payload: {err}"))
     })?;
     items.push(ResponseInputItem::FunctionCallOutput {
         call_id,

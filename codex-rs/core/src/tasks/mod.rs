@@ -217,7 +217,7 @@ impl Session {
         turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
-        self.snapshot_collab_send_input_on_turn_complete();
+        self.snapshot_agent_send_input_on_turn_complete();
 
         let mut active = self.active_turn.lock().await;
         let mut pending_input = Vec::<ResponseInputItem>::new();
@@ -334,7 +334,7 @@ impl Session {
         task: RunningTask,
         token_usage_at_turn_start: TokenUsage,
     ) {
-        self.reset_turn_collab_send_input_flag();
+        self.reset_turn_agent_send_input_flag();
         let mut active = self.active_turn.lock().await;
         let mut turn = ActiveTurn::default();
         let mut turn_state = turn.turn_state.lock().await;

@@ -105,10 +105,10 @@ impl CodexThread {
         self.codex.session.has_active_turn().await
     }
 
-    pub(crate) fn last_completed_turn_used_collab_send_input(&self) -> bool {
+    pub(crate) fn last_completed_turn_used_agent_send_input(&self) -> bool {
         self.codex
             .session
-            .last_completed_turn_used_collab_send_input()
+            .last_completed_turn_used_agent_send_input()
     }
 
     /// Records a user-role session-prefix message without creating a new user turn boundary.

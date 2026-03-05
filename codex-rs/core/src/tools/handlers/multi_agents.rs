@@ -455,7 +455,7 @@ mod send_input {
             )
             .await;
         let submission_id = result?;
-        session.mark_turn_used_collab_send_input();
+        session.mark_turn_used_agent_send_input();
 
         let content = serde_json::to_string(&SendInputResult { submission_id }).map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize send_input result: {err}"))
