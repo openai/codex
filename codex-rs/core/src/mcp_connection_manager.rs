@@ -344,7 +344,6 @@ struct ManagedClient {
     tool_timeout: Option<Duration>,
     server_supports_sandbox_state_capability: bool,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
-    tool_plugin_provenance: Arc<ToolPluginProvenance>,
 }
 
 impl ManagedClient {
@@ -354,17 +353,12 @@ impl ManagedClient {
             && let CachedCodexAppsToolsLoad::Hit(tools) =
                 load_cached_codex_apps_tools(cache_context)
         {
-            // Keep the disk cache raw because plugin provenance is session/config-scoped,
-            // while the codex_apps cache is only keyed per user account.
             emit_duration(
                 MCP_TOOLS_LIST_DURATION_METRIC,
                 total_start.elapsed(),
                 &[("cache", "hit")],
             );
-            return annotate_tools_with_plugin_sources(
-                filter_tools(tools, &self.tool_filter),
-                self.tool_plugin_provenance.as_ref(),
-            );
+            return filter_tools(tools, &self.tool_filter);
         }
 
         if self.codex_apps_tools_cache_context.is_some() {
@@ -400,6 +394,7 @@ struct AsyncManagedClient {
     client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
     startup_snapshot: Option<Vec<ToolInfo>>,
     startup_complete: Arc<AtomicBool>,
+    tool_plugin_provenance: Arc<ToolPluginProvenance>,
 }
 
 impl AsyncManagedClient {
@@ -421,16 +416,10 @@ impl AsyncManagedClient {
             &server_name,
             codex_apps_tools_cache_context.as_ref(),
         )
-        .map(|tools| {
-            annotate_tools_with_plugin_sources(
-                filter_tools(tools, &tool_filter),
-                tool_plugin_provenance.as_ref(),
-            )
-        });
+        .map(|tools| filter_tools(tools, &tool_filter));
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
-        let startup_tool_plugin_provenance = Arc::clone(&tool_plugin_provenance);
         let fut = async move {
             let outcome = async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
@@ -451,7 +440,6 @@ impl AsyncManagedClient {
                         tx_event,
                         elicitation_requests,
                         codex_apps_tools_cache_context,
-                        tool_plugin_provenance: startup_tool_plugin_provenance,
                     },
                 )
                 .or_cancel(&cancel_token)
@@ -478,6 +466,7 @@ impl AsyncManagedClient {
             client,
             startup_snapshot,
             startup_complete,
+            tool_plugin_provenance,
         }
     }
 
@@ -493,14 +482,63 @@ impl AsyncManagedClient {
     }
 
     async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
-        if let Some(startup_tools) = self.startup_snapshot_while_initializing() {
-            return Some(startup_tools);
-        }
+        let annotate_tools = |tools: Vec<ToolInfo>| {
+            let mut tools = tools;
+            for tool in &mut tools {
+                let plugin_names = match tool.connector_id.as_deref() {
+                    Some(connector_id) => self
+                        .tool_plugin_provenance
+                        .plugin_display_names_for_connector_id(connector_id),
+                    None => self
+                        .tool_plugin_provenance
+                        .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
+                };
+                tool.plugin_display_names = plugin_names.to_vec();
 
-        match self.client().await {
-            Ok(client) => Some(client.listed_tools()),
-            Err(_) => self.startup_snapshot.clone(),
-        }
+                if plugin_names.is_empty() {
+                    continue;
+                }
+
+                let plugin_source_note = if plugin_names.len() == 1 {
+                    format!("This tool is part of plugin `{}`.", plugin_names[0])
+                } else {
+                    format!(
+                        "This tool is part of plugins {}.",
+                        plugin_names
+                            .iter()
+                            .map(|plugin_name| format!("`{plugin_name}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                let description = tool
+                    .tool
+                    .description
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("");
+                let annotated_description = if description.is_empty() {
+                    plugin_source_note
+                } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
+                    format!("{description} {plugin_source_note}")
+                } else {
+                    format!("{description}. {plugin_source_note}")
+                };
+                tool.tool.description = Some(Cow::Owned(annotated_description));
+            }
+            tools
+        };
+
+        // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
+        let tools = if let Some(startup_tools) = self.startup_snapshot_while_initializing() {
+            Some(startup_tools)
+        } else {
+            match self.client().await {
+                Ok(client) => Some(client.listed_tools()),
+                Err(_) => self.startup_snapshot.clone(),
+            }
+        };
+        tools.map(annotate_tools)
     }
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
@@ -1158,56 +1196,6 @@ pub(crate) fn filter_mcp_tools_by_name(
         .collect()
 }
 
-fn annotate_tools_with_plugin_sources(
-    mut tools: Vec<ToolInfo>,
-    tool_plugin_provenance: &ToolPluginProvenance,
-) -> Vec<ToolInfo> {
-    for tool in &mut tools {
-        let plugin_names = match tool.connector_id.as_deref() {
-            Some(connector_id) => {
-                tool_plugin_provenance.plugin_display_names_for_connector_id(connector_id)
-            }
-            None => tool_plugin_provenance
-                .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
-        };
-        tool.plugin_display_names = plugin_names.to_vec();
-
-        if plugin_names.is_empty() {
-            continue;
-        }
-
-        let plugin_source_note = if plugin_names.len() == 1 {
-            format!("This tool is part of plugin `{}`.", plugin_names[0])
-        } else {
-            format!(
-                "This tool is part of plugins {}.",
-                plugin_names
-                    .iter()
-                    .map(|plugin_name| format!("`{plugin_name}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-
-        let description = tool
-            .tool
-            .description
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or("");
-        let annotated_description = if description.is_empty() {
-            plugin_source_note
-        } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
-            format!("{description} {plugin_source_note}")
-        } else {
-            format!("{description}. {plugin_source_note}")
-        };
-        tool.tool.description = Some(Cow::Owned(annotated_description));
-    }
-
-    tools
-}
-
 fn normalize_codex_apps_tool_title(
     server_name: &str,
     connector_name: Option<&str>,
@@ -1306,7 +1294,6 @@ async fn start_server_task(
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
-        tool_plugin_provenance,
     } = params;
     let elicitation = elicitation_capability_for_server(&server_name);
     let params = InitializeRequestParams {
@@ -1359,10 +1346,7 @@ async fn start_server_task(
             &[("cache", "miss")],
         );
     }
-    let tools = annotate_tools_with_plugin_sources(
-        filter_tools(tools, &tool_filter),
-        tool_plugin_provenance.as_ref(),
-    );
+    let tools = filter_tools(tools, &tool_filter);
 
     let server_supports_sandbox_state_capability = initialize_result
         .capabilities
@@ -1378,7 +1362,6 @@ async fn start_server_task(
         tool_filter,
         server_supports_sandbox_state_capability,
         codex_apps_tools_cache_context,
-        tool_plugin_provenance,
     };
 
     Ok(managed)
@@ -1391,7 +1374,6 @@ struct StartServerTaskParams {
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
-    tool_plugin_provenance: Arc<ToolPluginProvenance>,
 }
 
 async fn make_rmcp_client(
@@ -2072,6 +2054,7 @@ mod tests {
                 client: pending_client,
                 startup_snapshot: Some(startup_tools),
                 startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             },
         );
 
@@ -2097,6 +2080,7 @@ mod tests {
                 client: pending_client,
                 startup_snapshot: None,
                 startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             },
         );
 
@@ -2119,6 +2103,7 @@ mod tests {
                 client: pending_client,
                 startup_snapshot: Some(Vec::new()),
                 startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             },
         );
 
@@ -2150,6 +2135,7 @@ mod tests {
                 client: failed_client,
                 startup_snapshot: Some(startup_tools),
                 startup_complete,
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             },
         );
 
