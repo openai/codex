@@ -22,7 +22,7 @@ use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
-use crate::model_visible_context::ContextualUserEnvelopeKind;
+use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::TURN_ABORTED_FRAGMENT;
 use crate::models_manager::manager::ModelsManager;
@@ -57,7 +57,7 @@ struct TurnAbortedMarker {
 }
 
 impl ModelVisibleContextFragment for TurnAbortedMarker {
-    type Kind = ContextualUserEnvelopeKind;
+    type Role = ContextualUserContextRole;
 
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         TURN_ABORTED_FRAGMENT

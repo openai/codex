@@ -1,5 +1,5 @@
 use crate::codex::TurnContext;
-use crate::model_visible_context::ContextualUserEnvelopeKind;
+use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::TurnBackedContextFragment;
@@ -89,7 +89,7 @@ impl EnvironmentContext {
 }
 
 impl ModelVisibleContextFragment for EnvironmentContext {
-    type Kind = ContextualUserEnvelopeKind;
+    type Role = ContextualUserContextRole;
 
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         ENVIRONMENT_CONTEXT_FRAGMENT

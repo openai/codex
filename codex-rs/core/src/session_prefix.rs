@@ -3,7 +3,7 @@ use codex_protocol::protocol::AgentStatus;
 /// Helpers for model-visible subagent session state rendered in the developer
 /// envelope.
 use crate::model_visible_context::DEVELOPER_FRAGMENT;
-use crate::model_visible_context::DeveloperEnvelopeKind;
+use crate::model_visible_context::DeveloperContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::SUBAGENT_NOTIFICATION_CLOSE_TAG;
 use crate::model_visible_context::SUBAGENT_NOTIFICATION_OPEN_TAG;
@@ -25,7 +25,7 @@ impl SubagentRosterContext {
 }
 
 impl ModelVisibleContextFragment for SubagentRosterContext {
-    type Kind = DeveloperEnvelopeKind;
+    type Role = DeveloperContextRole;
 
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         DEVELOPER_FRAGMENT
@@ -48,7 +48,7 @@ struct SubagentNotification<'a> {
 }
 
 impl ModelVisibleContextFragment for SubagentNotification<'_> {
-    type Kind = DeveloperEnvelopeKind;
+    type Role = DeveloperContextRole;
 
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         DEVELOPER_FRAGMENT

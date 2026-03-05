@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::codex::TurnContext;
-use crate::model_visible_context::ContextualUserEnvelopeKind;
+use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::TurnBackedContextFragment;
 use codex_protocol::protocol::TurnContextItem;
@@ -22,7 +22,7 @@ pub(crate) struct UserInstructions {
 }
 
 impl ModelVisibleContextFragment for UserInstructions {
-    type Kind = ContextualUserEnvelopeKind;
+    type Role = ContextualUserContextRole;
 
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         AGENTS_MD_FRAGMENT
@@ -74,7 +74,7 @@ pub(crate) struct SkillInstructions {
 }
 
 impl ModelVisibleContextFragment for SkillInstructions {
-    type Kind = ContextualUserEnvelopeKind;
+    type Role = ContextualUserContextRole;
 
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         SKILL_FRAGMENT
@@ -95,7 +95,7 @@ pub(crate) struct PluginInstructions {
 }
 
 impl ModelVisibleContextFragment for PluginInstructions {
-    type Kind = ContextualUserEnvelopeKind;
+    type Role = ContextualUserContextRole;
 
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         PLUGINS_FRAGMENT

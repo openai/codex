@@ -4,7 +4,7 @@ use codex_protocol::models::ResponseItem;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
-use crate::model_visible_context::ContextualUserEnvelopeKind;
+use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::USER_SHELL_COMMAND_FRAGMENT;
 use crate::tools::format_exec_output_str;
@@ -21,7 +21,7 @@ struct UserShellCommandRecord<'a> {
 }
 
 impl ModelVisibleContextFragment for UserShellCommandRecord<'_> {
-    type Kind = ContextualUserEnvelopeKind;
+    type Role = ContextualUserContextRole;
 
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         USER_SHELL_COMMAND_FRAGMENT

@@ -32,19 +32,19 @@ pub(crate) const SUBAGENTS_CLOSE_TAG: &str = "</subagents>";
 pub(crate) const SUBAGENT_NOTIFICATION_OPEN_TAG: &str = "<subagent_notification>";
 pub(crate) const SUBAGENT_NOTIFICATION_CLOSE_TAG: &str = "</subagent_notification>";
 
-pub(crate) trait ModelVisibleContextEnvelopeKind {
+pub(crate) trait ModelVisibleContextRole {
     const RESPONSE_ROLE: &'static str;
 }
 
-pub(crate) struct DeveloperEnvelopeKind;
+pub(crate) struct DeveloperContextRole;
 
-impl ModelVisibleContextEnvelopeKind for DeveloperEnvelopeKind {
+impl ModelVisibleContextRole for DeveloperContextRole {
     const RESPONSE_ROLE: &'static str = "developer";
 }
 
-pub(crate) struct ContextualUserEnvelopeKind;
+pub(crate) struct ContextualUserContextRole;
 
-impl ModelVisibleContextEnvelopeKind for ContextualUserEnvelopeKind {
+impl ModelVisibleContextRole for ContextualUserContextRole {
     const RESPONSE_ROLE: &'static str = "user";
 }
 
@@ -55,7 +55,7 @@ pub(crate) struct ModelVisibleContextEnvelope {
 }
 
 impl ModelVisibleContextEnvelope {
-    pub(crate) const fn untagged() -> Self {
+    pub(crate) const fn markerless() -> Self {
         Self {
             start_marker: None,
             end_marker: None,
@@ -109,25 +109,22 @@ impl ModelVisibleContextEnvelope {
         ContentItem::InputText { text }
     }
 
-    pub(crate) fn into_message<K: ModelVisibleContextEnvelopeKind>(
-        self,
-        text: String,
-    ) -> ResponseItem {
+    pub(crate) fn into_message<R: ModelVisibleContextRole>(self, text: String) -> ResponseItem {
         ResponseItem::Message {
             id: None,
-            role: K::RESPONSE_ROLE.to_string(),
+            role: R::RESPONSE_ROLE.to_string(),
             content: vec![self.into_content_item(text)],
             end_turn: None,
             phase: None,
         }
     }
 
-    pub(crate) fn into_response_input_item<K: ModelVisibleContextEnvelopeKind>(
+    pub(crate) fn into_response_input_item<R: ModelVisibleContextRole>(
         self,
         text: String,
     ) -> ResponseInputItem {
         ResponseInputItem::Message {
-            role: K::RESPONSE_ROLE.to_string(),
+            role: R::RESPONSE_ROLE.to_string(),
             content: vec![self.into_content_item(text)],
         }
     }
@@ -136,7 +133,7 @@ impl ModelVisibleContextEnvelope {
 /// Implement this for any model-visible prompt fragment, regardless of which
 /// envelope it renders into.
 pub(crate) trait ModelVisibleContextFragment {
-    type Kind: ModelVisibleContextEnvelopeKind;
+    type Role: ModelVisibleContextRole;
 
     fn spec(&self) -> ModelVisibleContextEnvelope;
 
@@ -154,14 +151,14 @@ pub(crate) trait ModelVisibleContextFragment {
         Self: Sized,
     {
         self.spec()
-            .into_response_input_item::<Self::Kind>(self.render_text())
+            .into_response_input_item::<Self::Role>(self.render_text())
     }
 
     fn into_message(self) -> ResponseItem
     where
         Self: Sized,
     {
-        self.spec().into_message::<Self::Kind>(self.render_text())
+        self.spec().into_message::<Self::Role>(self.render_text())
     }
 }
 
@@ -177,24 +174,31 @@ pub(crate) trait TurnBackedContextFragment: ModelVisibleContextFragment + Sized 
     ) -> Option<Self>;
 }
 
+/// Untagged developer-envelope fragments, including `DeveloperInstructions`.
 pub(crate) const DEVELOPER_FRAGMENT: ModelVisibleContextEnvelope =
-    ModelVisibleContextEnvelope::untagged();
+    ModelVisibleContextEnvelope::markerless();
+/// AGENTS.md / user-instructions contextual-user fragments.
 pub(crate) const AGENTS_MD_FRAGMENT: ModelVisibleContextEnvelope =
     ModelVisibleContextEnvelope::contextual_user(AGENTS_MD_START_MARKER, AGENTS_MD_END_MARKER);
+/// Environment-context contextual-user fragments.
 pub(crate) const ENVIRONMENT_CONTEXT_FRAGMENT: ModelVisibleContextEnvelope =
     ModelVisibleContextEnvelope::contextual_user(
         ENVIRONMENT_CONTEXT_OPEN_TAG,
         ENVIRONMENT_CONTEXT_CLOSE_TAG,
     );
+/// Skill contextual-user fragments.
 pub(crate) const SKILL_FRAGMENT: ModelVisibleContextEnvelope =
     ModelVisibleContextEnvelope::contextual_user(SKILL_OPEN_TAG, SKILL_CLOSE_TAG);
+/// User-shell-command contextual-user fragments.
 pub(crate) const USER_SHELL_COMMAND_FRAGMENT: ModelVisibleContextEnvelope =
     ModelVisibleContextEnvelope::contextual_user(
         USER_SHELL_COMMAND_OPEN_TAG,
         USER_SHELL_COMMAND_CLOSE_TAG,
     );
+/// Turn-aborted contextual-user fragments.
 pub(crate) const TURN_ABORTED_FRAGMENT: ModelVisibleContextEnvelope =
     ModelVisibleContextEnvelope::contextual_user(TURN_ABORTED_OPEN_TAG, TURN_ABORTED_CLOSE_TAG);
+/// Plugin contextual-user fragments.
 pub(crate) const PLUGINS_FRAGMENT: ModelVisibleContextEnvelope =
     ModelVisibleContextEnvelope::contextual_user(PLUGINS_OPEN_TAG, PLUGINS_CLOSE_TAG);
 
@@ -217,7 +221,7 @@ pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
 }
 
 impl ModelVisibleContextFragment for DeveloperInstructions {
-    type Kind = DeveloperEnvelopeKind;
+    type Role = DeveloperContextRole;
 
     fn spec(&self) -> ModelVisibleContextEnvelope {
         DEVELOPER_FRAGMENT

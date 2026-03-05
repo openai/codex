@@ -2,10 +2,10 @@ use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
 use crate::features::Feature;
-use crate::model_visible_context::ContextualUserEnvelopeKind;
-use crate::model_visible_context::DeveloperEnvelopeKind;
-use crate::model_visible_context::ModelVisibleContextEnvelopeKind;
+use crate::model_visible_context::ContextualUserContextRole;
+use crate::model_visible_context::DeveloperContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::ModelVisibleContextRole;
 use crate::model_visible_context::TurnBackedContextFragment;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
@@ -127,30 +127,30 @@ pub(crate) fn build_model_instructions_update_item(
     ))
 }
 
-struct ModelVisibleContextEnvelopeBuilder<K: ModelVisibleContextEnvelopeKind> {
+struct ModelVisibleContextEnvelopeBuilder<R: ModelVisibleContextRole> {
     content: Vec<ContentItem>,
-    kind: PhantomData<K>,
+    role: PhantomData<R>,
 }
 
-impl<K: ModelVisibleContextEnvelopeKind> ModelVisibleContextEnvelopeBuilder<K> {
+impl<R: ModelVisibleContextRole> ModelVisibleContextEnvelopeBuilder<R> {
     fn new() -> Self {
         Self {
             content: Vec::new(),
-            kind: PhantomData,
+            role: PhantomData,
         }
     }
 
-    fn push_fragment(&mut self, fragment: impl ModelVisibleContextFragment<Kind = K>) {
+    fn push_fragment(&mut self, fragment: impl ModelVisibleContextFragment<Role = R>) {
         self.content.push(fragment.into_content_item());
     }
 
     fn build(self) -> Option<ResponseItem> {
-        build_message::<K>(self.content)
+        build_message::<R>(self.content)
     }
 }
 
 pub(crate) struct DeveloperEnvelopeBuilder(
-    ModelVisibleContextEnvelopeBuilder<DeveloperEnvelopeKind>,
+    ModelVisibleContextEnvelopeBuilder<DeveloperContextRole>,
 );
 
 impl Default for DeveloperEnvelopeBuilder {
@@ -162,7 +162,7 @@ impl Default for DeveloperEnvelopeBuilder {
 impl DeveloperEnvelopeBuilder {
     pub(crate) fn push(
         &mut self,
-        fragment: impl ModelVisibleContextFragment<Kind = DeveloperEnvelopeKind>,
+        fragment: impl ModelVisibleContextFragment<Role = DeveloperContextRole>,
     ) {
         self.0.push_fragment(fragment);
     }
@@ -173,7 +173,7 @@ impl DeveloperEnvelopeBuilder {
 }
 
 pub(crate) struct ContextualUserEnvelopeBuilder(
-    ModelVisibleContextEnvelopeBuilder<ContextualUserEnvelopeKind>,
+    ModelVisibleContextEnvelopeBuilder<ContextualUserContextRole>,
 );
 
 impl Default for ContextualUserEnvelopeBuilder {
@@ -185,7 +185,7 @@ impl Default for ContextualUserEnvelopeBuilder {
 impl ContextualUserEnvelopeBuilder {
     pub(crate) fn push_fragment(
         &mut self,
-        fragment: impl ModelVisibleContextFragment<Kind = ContextualUserEnvelopeKind>,
+        fragment: impl ModelVisibleContextFragment<Role = ContextualUserContextRole>,
     ) {
         self.0.push_fragment(fragment);
     }
@@ -195,16 +195,14 @@ impl ContextualUserEnvelopeBuilder {
     }
 }
 
-fn build_message<K: ModelVisibleContextEnvelopeKind>(
-    content: Vec<ContentItem>,
-) -> Option<ResponseItem> {
+fn build_message<R: ModelVisibleContextRole>(content: Vec<ContentItem>) -> Option<ResponseItem> {
     if content.is_empty() {
         return None;
     }
 
     Some(ResponseItem::Message {
         id: None,
-        role: K::RESPONSE_ROLE.to_string(),
+        role: R::RESPONSE_ROLE.to_string(),
         content,
         end_turn: None,
         phase: None,
@@ -235,19 +233,12 @@ pub(crate) fn build_settings_update_items(
         developer_envelope.push(fragment);
     }
     let mut contextual_user_envelope = ContextualUserEnvelopeBuilder::default();
-    let contextual_user_fragments: [Option<
-        Box<dyn ModelVisibleContextFragment<Kind = ContextualUserEnvelopeKind>>,
-    >; 1] = [previous.and_then(|previous| {
-        EnvironmentContext::diff_from_turn_context_item(previous, next, shell).map(|fragment| {
-            Box::new(fragment)
-                as Box<dyn ModelVisibleContextFragment<Kind = ContextualUserEnvelopeKind>>
-        })
-    })];
-    for fragment in contextual_user_fragments.into_iter().flatten() {
-        contextual_user_envelope
-            .0
-            .content
-            .push(fragment.spec().into_content_item(fragment.render_text()));
+    // Add new contextual-user diff fragments here.
+    if let Some(previous) = previous
+        && let Some(environment_update) =
+            EnvironmentContext::diff_from_turn_context_item(previous, next, shell)
+    {
+        contextual_user_envelope.push_fragment(environment_update);
     }
 
     let mut items = Vec::with_capacity(2);
@@ -263,8 +254,8 @@ pub(crate) fn build_settings_update_items(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_visible_context::ContextualUserEnvelopeKind;
-    use crate::model_visible_context::DeveloperEnvelopeKind;
+    use crate::model_visible_context::ContextualUserContextRole;
+    use crate::model_visible_context::DeveloperContextRole;
     use crate::model_visible_context::ModelVisibleContextEnvelope;
     use codex_protocol::models::ContentItem;
     use pretty_assertions::assert_eq;
@@ -300,7 +291,7 @@ mod tests {
     }
 
     impl ModelVisibleContextFragment for FakeFragment {
-        type Kind = ContextualUserEnvelopeKind;
+        type Role = ContextualUserContextRole;
 
         fn spec(&self) -> ModelVisibleContextEnvelope {
             ModelVisibleContextEnvelope::contextual_user("<fake>", "</fake>")
@@ -317,10 +308,10 @@ mod tests {
     }
 
     impl ModelVisibleContextFragment for FakeDeveloperFragment {
-        type Kind = DeveloperEnvelopeKind;
+        type Role = DeveloperContextRole;
 
         fn spec(&self) -> ModelVisibleContextEnvelope {
-            ModelVisibleContextEnvelope::untagged()
+            ModelVisibleContextEnvelope::markerless()
         }
 
         fn render_text(&self) -> String {
