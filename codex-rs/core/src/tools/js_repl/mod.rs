@@ -3769,7 +3769,7 @@ await codex.emitImage(out);
         write_js_repl_test_module(
             &cwd_dir,
             "entry.js",
-            "import { value } from \"repl_probe\";\nconsole.log(value);\n",
+            "const { value } = await import(\"repl_probe\");\nconsole.log(value);\n",
         )?;
 
         let (session, mut turn) = make_session_and_context().await;
