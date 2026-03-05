@@ -2,7 +2,6 @@ pub(crate) mod command_runner;
 pub(crate) mod config;
 pub(crate) mod discovery;
 pub(crate) mod dispatcher;
-pub(crate) mod feature_gate;
 pub(crate) mod output_parser;
 pub(crate) mod schema_loader;
 
@@ -64,7 +63,7 @@ impl ClaudeHooksEngine {
         config_layer_stack: Option<&ConfigLayerStack>,
         shell: CommandShell,
     ) -> Self {
-        if !feature_gate::is_enabled(enabled) {
+        if !enabled {
             return Self {
                 handlers: Vec::new(),
                 warnings: Vec::new(),
