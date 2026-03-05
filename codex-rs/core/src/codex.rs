@@ -6800,6 +6800,7 @@ mod tests {
             install_url: None,
             is_accessible: true,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         }
     }
 
@@ -6887,6 +6888,7 @@ mod tests {
             },
             connector_id: connector_id.map(str::to_string),
             connector_name: connector_name.map(str::to_string),
+            plugin_display_names: Vec::new(),
         }
     }
 

@@ -1708,6 +1708,8 @@ pub struct AppInfo {
     /// ```
     #[serde(default = "default_enabled")]
     pub is_enabled: bool,
+    #[serde(default)]
+    pub plugin_display_names: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

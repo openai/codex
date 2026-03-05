@@ -198,6 +198,8 @@ pub(crate) struct ToolInfo {
     pub(crate) tool: Tool,
     pub(crate) connector_id: Option<String>,
     pub(crate) connector_name: Option<String>,
+    #[serde(default)]
+    pub(crate) plugin_display_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1168,6 +1170,7 @@ fn annotate_tools_with_plugin_sources(
             None => tool_plugin_provenance
                 .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
         };
+        tool.plugin_display_names = plugin_names.to_vec();
 
         if plugin_names.is_empty() {
             continue;
@@ -1571,6 +1574,7 @@ async fn list_tools_for_client_uncached(
                 tool: tool_def,
                 connector_id: tool.connector_id,
                 connector_name,
+                plugin_display_names: Vec::new(),
             }
         })
         .collect();
@@ -1684,6 +1688,7 @@ mod tests {
             },
             connector_id: None,
             connector_name: None,
+            plugin_display_names: Vec::new(),
         }
     }
 

@@ -1,5 +1,5 @@
+use std::collections::BTreeSet;
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
@@ -19,38 +19,36 @@ pub(crate) fn build_plugin_injections(
         return Vec::new();
     }
 
-    let visible_mcp_server_names = mcp_tools
-        .values()
-        .filter(|tool| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
-        .map(|tool| tool.server_name.clone())
-        .collect::<HashSet<String>>();
-    let enabled_connectors_by_id = available_connectors
-        .iter()
-        .filter(|connector| connector.is_enabled)
-        .map(|connector| {
-            (
-                connector.id.as_str(),
-                connectors::connector_display_label(connector),
-            )
-        })
-        .collect::<HashMap<&str, String>>();
-
     // Turn each explicit @plugin mention into a developer hint that points the
     // model at the plugin's visible MCP servers, enabled apps, and skill prefix.
     mentioned_plugins
         .iter()
         .filter_map(|plugin| {
-            let available_mcp_servers = plugin
-                .mcp_server_names
-                .iter()
-                .filter(|server_name| visible_mcp_server_names.contains(server_name.as_str()))
-                .cloned()
+            let available_mcp_servers = mcp_tools
+                .values()
+                .filter(|tool| {
+                    tool.server_name != CODEX_APPS_MCP_SERVER_NAME
+                        && tool
+                            .plugin_display_names
+                            .iter()
+                            .any(|plugin_name| plugin_name == &plugin.display_name)
+                })
+                .map(|tool| tool.server_name.clone())
+                .collect::<BTreeSet<String>>()
+                .into_iter()
                 .collect::<Vec<_>>();
-            let available_apps = plugin
-                .app_connector_ids
+            let available_apps = available_connectors
                 .iter()
-                .filter_map(|connector_id| enabled_connectors_by_id.get(connector_id.0.as_str()))
-                .cloned()
+                .filter(|connector| {
+                    connector.is_enabled
+                        && connector
+                            .plugin_display_names
+                            .iter()
+                            .any(|plugin_name| plugin_name == &plugin.display_name)
+                })
+                .map(connectors::connector_display_label)
+                .collect::<BTreeSet<String>>()
+                .into_iter()
                 .collect::<Vec<_>>();
             render_explicit_plugin_instructions(plugin, &available_mcp_servers, &available_apps)
                 .map(DeveloperInstructions::new)
