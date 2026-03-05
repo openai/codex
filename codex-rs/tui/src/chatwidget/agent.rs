@@ -1,7 +1,15 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::fs::OpenOptions;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_app_server_client::ClientSurface;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
@@ -9,6 +17,7 @@ use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::InProcessServerEvent;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
+use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -54,11 +63,14 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_core::auth::AuthManager;
 use codex_core::config::Config;
+use codex_core::config::types::HistoryPersistence;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::approvals::ApplyPatchApprovalRequestEvent;
 use codex_protocol::approvals::ExecApprovalRequestEvent;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
@@ -71,6 +83,8 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::GetHistoryEntryResponseEvent;
+use codex_protocol::protocol::ListCustomPromptsResponseEvent;
 use codex_protocol::protocol::ListRemoteSkillsResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
@@ -86,6 +100,10 @@ use crate::app_event_sender::AppEventSender;
 use crate::version::CODEX_CLI_VERSION;
 
 const TUI_NOTIFY_CLIENT: &str = "codex-tui";
+const HISTORY_FILENAME: &str = "history.jsonl";
+const HISTORY_SOFT_CAP_RATIO: f64 = 0.8;
+const HISTORY_LOCK_MAX_RETRIES: usize = 10;
+const HISTORY_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(100);
 
 async fn initialize_app_server_client_name(thread: &CodexThread) {
     if let Err(err) = thread
@@ -534,6 +552,328 @@ fn resolve_elicitation_deferred_message() -> String {
     "ResolveElicitation is temporarily unavailable in in-process local-only mode".to_string()
 }
 
+fn local_only_deferred_message(action_name: &str) -> String {
+    format!("{action_name} is temporarily unavailable in in-process local-only mode")
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct StoredHistoryEntry {
+    session_id: String,
+    ts: u64,
+    text: String,
+}
+
+fn history_file_path(config: &Config) -> PathBuf {
+    config.codex_home.join(HISTORY_FILENAME)
+}
+
+fn now_unix_seconds() -> Result<u64, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|err| format!("system clock before unix epoch: {err}"))
+}
+
+fn history_entry_from_line(line: &str) -> Option<codex_protocol::message_history::HistoryEntry> {
+    if let Ok(entry) = serde_json::from_str::<StoredHistoryEntry>(line) {
+        return Some(codex_protocol::message_history::HistoryEntry {
+            conversation_id: entry.session_id,
+            ts: entry.ts,
+            text: entry.text,
+        });
+    }
+
+    serde_json::from_str::<codex_protocol::message_history::HistoryEntry>(line).ok()
+}
+
+#[cfg(unix)]
+fn history_log_id(metadata: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.ino()
+}
+
+#[cfg(windows)]
+fn history_log_id(metadata: &std::fs::Metadata) -> u64 {
+    use std::os::windows::fs::MetadataExt;
+    metadata.creation_time()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn history_log_id(_metadata: &std::fs::Metadata) -> u64 {
+    0
+}
+
+fn trim_target_bytes(max_bytes: u64, newest_entry_len: u64) -> u64 {
+    let soft_cap_bytes = ((max_bytes as f64) * HISTORY_SOFT_CAP_RATIO)
+        .floor()
+        .clamp(1.0, max_bytes as f64) as u64;
+    soft_cap_bytes.max(newest_entry_len)
+}
+
+fn trim_history_file(file: &mut std::fs::File, max_bytes: Option<usize>) -> Result<(), String> {
+    let Some(max_bytes) = max_bytes else {
+        return Ok(());
+    };
+    if max_bytes == 0 {
+        return Ok(());
+    }
+
+    let max_bytes = u64::try_from(max_bytes)
+        .map_err(|err| format!("invalid history max_bytes value: {err}"))?;
+    let mut current_len = file
+        .metadata()
+        .map_err(|err| format!("failed to read history metadata: {err}"))?
+        .len();
+    if current_len <= max_bytes {
+        return Ok(());
+    }
+
+    let mut reader_file = file
+        .try_clone()
+        .map_err(|err| format!("failed to clone history file: {err}"))?;
+    reader_file
+        .seek(SeekFrom::Start(0))
+        .map_err(|err| format!("failed to seek history file: {err}"))?;
+    let mut buf_reader = BufReader::new(reader_file);
+    let mut line_buf = String::new();
+    let mut line_lengths = Vec::new();
+    loop {
+        line_buf.clear();
+        let bytes = buf_reader
+            .read_line(&mut line_buf)
+            .map_err(|err| format!("failed to read history line: {err}"))?;
+        if bytes == 0 {
+            break;
+        }
+        line_lengths.push(bytes as u64);
+    }
+    if line_lengths.is_empty() {
+        return Ok(());
+    }
+
+    let last_index = line_lengths.len() - 1;
+    let trim_target = trim_target_bytes(max_bytes, line_lengths[last_index]);
+    let mut drop_bytes = 0u64;
+    let mut idx = 0usize;
+    while current_len > trim_target && idx < last_index {
+        current_len = current_len.saturating_sub(line_lengths[idx]);
+        drop_bytes += line_lengths[idx];
+        idx += 1;
+    }
+    if drop_bytes == 0 {
+        return Ok(());
+    }
+
+    let mut reader = buf_reader.into_inner();
+    reader
+        .seek(SeekFrom::Start(drop_bytes))
+        .map_err(|err| format!("failed to seek trimmed history position: {err}"))?;
+    let capacity = usize::try_from(current_len).unwrap_or(0);
+    let mut tail = Vec::with_capacity(capacity);
+    reader
+        .read_to_end(&mut tail)
+        .map_err(|err| format!("failed to read history tail: {err}"))?;
+
+    file.set_len(0)
+        .map_err(|err| format!("failed to truncate history file: {err}"))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|err| format!("failed to seek truncated history file: {err}"))?;
+    file.write_all(&tail)
+        .map_err(|err| format!("failed to write trimmed history file: {err}"))?;
+    file.flush()
+        .map_err(|err| format!("failed to flush trimmed history file: {err}"))?;
+    Ok(())
+}
+
+fn append_history_entry_blocking(
+    path: PathBuf,
+    line: String,
+    max_bytes: Option<usize>,
+) -> Result<(), String> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.append(true);
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|err| format!("failed to open history file: {err}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let metadata = file
+            .metadata()
+            .map_err(|err| format!("failed to stat history file: {err}"))?;
+        let current_mode = metadata.permissions().mode() & 0o777;
+        if current_mode != 0o600 {
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(0o600);
+            file.set_permissions(permissions)
+                .map_err(|err| format!("failed to set history permissions: {err}"))?;
+        }
+    }
+
+    for _ in 0..HISTORY_LOCK_MAX_RETRIES {
+        match file.try_lock() {
+            Ok(()) => {
+                file.seek(SeekFrom::End(0))
+                    .map_err(|err| format!("failed to seek history file: {err}"))?;
+                file.write_all(line.as_bytes())
+                    .map_err(|err| format!("failed to append history entry: {err}"))?;
+                file.flush()
+                    .map_err(|err| format!("failed to flush history entry: {err}"))?;
+                trim_history_file(&mut file, max_bytes)?;
+                return Ok(());
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                std::thread::sleep(HISTORY_LOCK_RETRY_SLEEP);
+            }
+            Err(err) => {
+                return Err(format!("failed to acquire exclusive history lock: {err}"));
+            }
+        }
+    }
+
+    Err("could not acquire exclusive history lock after retries".to_string())
+}
+
+fn read_history_entry_blocking(
+    path: PathBuf,
+    requested_log_id: u64,
+    offset: usize,
+) -> Result<Option<codex_protocol::message_history::HistoryEntry>, String> {
+    let file = OpenOptions::new()
+        .read(true)
+        .open(path)
+        .map_err(|err| format!("failed to open history file: {err}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to stat history file: {err}"))?;
+    let current_log_id = history_log_id(&metadata);
+    if requested_log_id != 0 && requested_log_id != current_log_id {
+        return Ok(None);
+    }
+
+    for _ in 0..HISTORY_LOCK_MAX_RETRIES {
+        match file.try_lock_shared() {
+            Ok(()) => {
+                let reader = BufReader::new(&file);
+                for (idx, line_result) in reader.lines().enumerate() {
+                    let line =
+                        line_result.map_err(|err| format!("failed to read history line: {err}"))?;
+                    if idx == offset {
+                        return Ok(history_entry_from_line(&line));
+                    }
+                }
+                return Ok(None);
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                std::thread::sleep(HISTORY_LOCK_RETRY_SLEEP);
+            }
+            Err(err) => {
+                return Err(format!("failed to acquire shared history lock: {err}"));
+            }
+        }
+    }
+
+    Err("could not acquire shared history lock after retries".to_string())
+}
+
+async fn append_history_entry_local(
+    config: &Config,
+    session_id: &ThreadId,
+    text: String,
+) -> Result<(), String> {
+    if config.history.persistence == HistoryPersistence::None {
+        return Ok(());
+    }
+
+    let path = history_file_path(config);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|err| format!("failed to create history dir: {err}"))?;
+    }
+
+    let entry = StoredHistoryEntry {
+        session_id: session_id.to_string(),
+        ts: now_unix_seconds()?,
+        text,
+    };
+    let mut line = serde_json::to_string(&entry)
+        .map_err(|err| format!("failed to serialize history entry: {err}"))?;
+    line.push('\n');
+    let max_bytes = config.history.max_bytes;
+    tokio::task::spawn_blocking(move || append_history_entry_blocking(path, line, max_bytes))
+        .await
+        .map_err(|err| format!("failed to join history append task: {err}"))?
+}
+
+async fn read_history_entry_local(
+    config: &Config,
+    requested_log_id: u64,
+    offset: usize,
+) -> Result<Option<codex_protocol::message_history::HistoryEntry>, String> {
+    let path = history_file_path(config);
+    if !tokio::fs::try_exists(&path)
+        .await
+        .map_err(|err| format!("failed to check history file existence: {err}"))?
+    {
+        return Ok(None);
+    }
+    tokio::task::spawn_blocking(move || read_history_entry_blocking(path, requested_log_id, offset))
+        .await
+        .map_err(|err| format!("failed to join history read task: {err}"))?
+}
+
+fn local_external_chatgpt_tokens(
+    config: &Config,
+) -> Result<ChatgptAuthTokensRefreshResponse, String> {
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
+    auth_manager.reload();
+
+    let auth = auth_manager
+        .auth_cached()
+        .ok_or_else(|| "no cached auth available for local token refresh".to_string())?;
+    if !auth.is_external_chatgpt_tokens() {
+        return Err("external ChatGPT token auth is not active".to_string());
+    }
+
+    let access_token = auth
+        .get_token()
+        .map_err(|err| format!("failed to read external access token: {err}"))?;
+    let chatgpt_account_id = auth
+        .get_account_id()
+        .ok_or_else(|| "external token auth is missing chatgpt account id".to_string())?;
+    let chatgpt_plan_type = auth.account_plan_type().map(|plan_type| match plan_type {
+        AccountPlanType::Free => "free".to_string(),
+        AccountPlanType::Go => "go".to_string(),
+        AccountPlanType::Plus => "plus".to_string(),
+        AccountPlanType::Pro => "pro".to_string(),
+        AccountPlanType::Team => "team".to_string(),
+        AccountPlanType::Business => "business".to_string(),
+        AccountPlanType::Enterprise => "enterprise".to_string(),
+        AccountPlanType::Edu => "edu".to_string(),
+        AccountPlanType::Unknown => "unknown".to_string(),
+    });
+
+    Ok(ChatgptAuthTokensRefreshResponse {
+        access_token,
+        chatgpt_account_id,
+        chatgpt_plan_type,
+    })
+}
+
 fn send_codex_event(app_event_tx: &AppEventSender, msg: EventMsg) {
     app_event_tx.send(AppEvent::CodexEvent(Event {
         id: String::new(),
@@ -642,9 +982,15 @@ fn legacy_notification_to_event(notification: JSONRPCNotification) -> Result<Eve
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "migration routing keeps dependencies explicit"
+)]
 async fn process_in_process_command(
     op: Op,
     thread_id: &str,
+    session_id: &ThreadId,
+    config: &Config,
     current_turn_id: &mut Option<String>,
     request_ids: &mut RequestIdSequencer,
     pending_server_requests: &mut PendingServerRequests,
@@ -1198,6 +1544,75 @@ async fn process_in_process_command(
             resolve_server_request(client, request_id, result, "item/tool/call", app_event_tx)
                 .await;
         }
+        Op::AddToHistory { text } => {
+            if let Err(err) = append_history_entry_local(config, session_id, text).await {
+                send_warning_event(
+                    app_event_tx,
+                    format!("failed to append local history: {err}"),
+                );
+            }
+        }
+        Op::GetHistoryEntryRequest { offset, log_id } => {
+            match read_history_entry_local(config, log_id, offset).await {
+                Ok(entry) => {
+                    send_codex_event(
+                        app_event_tx,
+                        EventMsg::GetHistoryEntryResponse(GetHistoryEntryResponseEvent {
+                            offset,
+                            log_id,
+                            entry,
+                        }),
+                    );
+                }
+                Err(err) => {
+                    send_warning_event(
+                        app_event_tx,
+                        format!("failed to read local history entry: {err}"),
+                    );
+                }
+            }
+        }
+        Op::ListCustomPrompts => {
+            let custom_prompts =
+                if let Some(dir) = codex_core::custom_prompts::default_prompts_dir() {
+                    codex_core::custom_prompts::discover_prompts_in(&dir).await
+                } else {
+                    Vec::new()
+                };
+            send_codex_event(
+                app_event_tx,
+                EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
+                    custom_prompts,
+                }),
+            );
+        }
+        Op::ReloadUserConfig => {
+            tracing::debug!("reload_user_config handled locally in TUI in-process mode");
+        }
+        Op::Undo => {
+            send_warning_event(app_event_tx, local_only_deferred_message("Undo"));
+        }
+        Op::OverrideTurnContext { .. } => {
+            send_warning_event(
+                app_event_tx,
+                local_only_deferred_message("OverrideTurnContext"),
+            );
+        }
+        Op::DropMemories => {
+            send_warning_event(app_event_tx, local_only_deferred_message("DropMemories"));
+        }
+        Op::UpdateMemories => {
+            send_warning_event(app_event_tx, local_only_deferred_message("UpdateMemories"));
+        }
+        Op::RunUserShellCommand { .. } => {
+            send_warning_event(
+                app_event_tx,
+                local_only_deferred_message("RunUserShellCommand"),
+            );
+        }
+        Op::ListMcpTools => {
+            send_warning_event(app_event_tx, local_only_deferred_message("ListMcpTools"));
+        }
         Op::ResolveElicitation { .. } => {
             // TODO(fcoury): support this once app-server protocol has a server-request
             // variant for MCP elicitation and a corresponding typed response payload.
@@ -1247,11 +1662,16 @@ async fn process_in_process_command(
     false
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "agent loop keeps runtime state explicit"
+)]
 async fn run_in_process_agent_loop(
     mut codex_op_rx: tokio::sync::mpsc::UnboundedReceiver<Op>,
     mut client: InProcessAppServerClient,
+    config: Config,
     thread_id: String,
-    _session_id: ThreadId,
+    session_id: ThreadId,
     app_event_tx: AppEventSender,
     mut request_ids: RequestIdSequencer,
     mut current_turn_id: Option<String>,
@@ -1266,6 +1686,8 @@ async fn run_in_process_agent_loop(
                         let should_shutdown = process_in_process_command(
                             op,
                             &thread_id,
+                            &session_id,
+                            &config,
                             &mut current_turn_id,
                             &mut request_ids,
                             &mut pending_server_requests,
@@ -1517,18 +1939,82 @@ async fn run_in_process_agent_loop(
                                     }),
                                 );
                             }
-                            ServerRequest::ChatgptAuthTokensRefresh { request_id, .. } => {
-                                // TODO(fcoury): wire a local token-refresh adapter for in-process TUI.
-                                // For now we reject explicitly to avoid request timeouts.
-                                reject_server_request(
-                                    &client,
-                                    request_id,
-                                    &method,
-                                    "chatgpt auth token refresh is not wired for in-process TUI yet"
-                                        .to_string(),
-                                    &app_event_tx,
-                                )
+                            ServerRequest::ChatgptAuthTokensRefresh { request_id, params } => {
+                                let refresh_result = tokio::task::spawn_blocking({
+                                    let config = config.clone();
+                                    move || local_external_chatgpt_tokens(&config)
+                                })
                                 .await;
+
+                                match refresh_result {
+                                    Err(err) => {
+                                        reject_server_request(
+                                            &client,
+                                            request_id,
+                                            &method,
+                                            format!(
+                                                "local chatgpt auth refresh task failed in in-process TUI: {err}"
+                                            ),
+                                            &app_event_tx,
+                                        )
+                                        .await;
+                                    }
+                                    Ok(Err(reason)) => {
+                                        reject_server_request(
+                                            &client,
+                                            request_id,
+                                            &method,
+                                            format!(
+                                                "local chatgpt auth refresh failed in in-process TUI: {reason}"
+                                            ),
+                                            &app_event_tx,
+                                        )
+                                        .await;
+                                    }
+                                    Ok(Ok(response)) => {
+                                        if let Some(previous_account_id) = params.previous_account_id.as_deref()
+                                            && previous_account_id != response.chatgpt_account_id
+                                        {
+                                            send_warning_event(
+                                                &app_event_tx,
+                                                format!(
+                                                    "local auth refresh account mismatch: expected `{previous_account_id}`, got `{}`",
+                                                    response.chatgpt_account_id
+                                                ),
+                                            );
+                                        }
+
+                                        let value = match serde_json::to_value(response) {
+                                            Ok(value) => value,
+                                            Err(err) => {
+                                                let reason = format!(
+                                                    "failed to serialize chatgpt auth refresh response: {err}"
+                                                );
+                                                send_error_event(
+                                                    &app_event_tx,
+                                                    reason.clone(),
+                                                );
+                                                reject_server_request(
+                                                    &client,
+                                                    request_id,
+                                                    &method,
+                                                    reason,
+                                                    &app_event_tx,
+                                                )
+                                                .await;
+                                                continue;
+                                            }
+                                        };
+                                        resolve_server_request(
+                                            &client,
+                                            request_id,
+                                            value,
+                                            "account/chatgptAuthTokens/refresh",
+                                            &app_event_tx,
+                                        )
+                                        .await;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1664,6 +2150,7 @@ pub(crate) fn spawn_agent(
         run_in_process_agent_loop(
             codex_op_rx,
             client,
+            config,
             thread_id,
             session_id,
             app_event_tx_clone,
@@ -1767,6 +2254,7 @@ pub(crate) fn spawn_agent_from_existing(
         run_in_process_agent_loop(
             codex_op_rx,
             client,
+            config,
             thread_id,
             session_id,
             app_event_tx_clone,
@@ -1798,12 +2286,15 @@ pub(crate) fn spawn_op_forwarder(thread: std::sync::Arc<CodexThread>) -> Unbound
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+    use codex_core::auth::login_with_chatgpt_auth_tokens;
     use codex_core::config::ConfigBuilder;
     use codex_protocol::protocol::ConversationAudioParams;
     use codex_protocol::protocol::ConversationStartParams;
     use codex_protocol::protocol::ConversationTextParams;
     use codex_protocol::protocol::RealtimeAudioFrame;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::time::Duration;
     use tokio::time::timeout;
@@ -1818,6 +2309,7 @@ mod tests {
 
     async fn assert_realtime_op_reports_expected_method(op: Op, expected_method: &str) {
         let config = test_config().await;
+        let session_id = ThreadId::new();
         let client = InProcessAppServerClient::start(in_process_start_args(&config))
             .await
             .expect("in-process app-server client");
@@ -1830,6 +2322,8 @@ mod tests {
         let should_shutdown = process_in_process_command(
             op,
             "missing-thread-id",
+            &session_id,
+            &config,
             &mut current_turn_id,
             &mut request_ids,
             &mut pending_server_requests,
@@ -1857,6 +2351,90 @@ mod tests {
         );
 
         client.shutdown().await.expect("shutdown in-process client");
+    }
+
+    async fn process_single_op(
+        config: &Config,
+        op: Op,
+    ) -> (
+        bool,
+        tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+        InProcessAppServerClient,
+    ) {
+        let session_id = ThreadId::new();
+        let thread_id = session_id.to_string();
+        let client = InProcessAppServerClient::start(in_process_start_args(config))
+            .await
+            .expect("in-process app-server client");
+        let (tx, rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let mut current_turn_id = None;
+        let mut request_ids = RequestIdSequencer::new();
+        let mut pending_server_requests = PendingServerRequests::default();
+        let should_shutdown = process_in_process_command(
+            op,
+            &thread_id,
+            &session_id,
+            config,
+            &mut current_turn_id,
+            &mut request_ids,
+            &mut pending_server_requests,
+            &client,
+            &app_event_tx,
+        )
+        .await;
+        (should_shutdown, rx, client)
+    }
+
+    fn fake_external_access_token(plan_type: &str) -> String {
+        #[derive(serde::Serialize)]
+        struct Header {
+            alg: &'static str,
+            typ: &'static str,
+        }
+
+        fn b64url_no_pad(bytes: &[u8]) -> String {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+        }
+
+        let header = Header {
+            alg: "none",
+            typ: "JWT",
+        };
+        let payload = serde_json::json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": plan_type,
+            }
+        });
+
+        let header_b64 = b64url_no_pad(
+            &serde_json::to_vec(&header).expect("serialize fake jwt header for test"),
+        );
+        let payload_b64 = b64url_no_pad(
+            &serde_json::to_vec(&payload).expect("serialize fake jwt payload for test"),
+        );
+        let signature_b64 = b64url_no_pad(b"sig");
+        format!("{header_b64}.{payload_b64}.{signature_b64}")
+    }
+
+    async fn next_codex_event(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    ) -> codex_protocol::protocol::Event {
+        let maybe_event = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out waiting for app event");
+        let event = maybe_event.expect("expected app event");
+        let AppEvent::CodexEvent(event) = event else {
+            panic!("expected codex event");
+        };
+        event
+    }
+
+    fn warning_from_event(event: codex_protocol::protocol::Event) -> WarningEvent {
+        let EventMsg::Warning(warning) = event.msg else {
+            panic!("expected warning event");
+        };
+        warning
     }
 
     #[tokio::test]
@@ -1905,5 +2483,156 @@ mod tests {
             "thread/realtime/stop",
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn list_custom_prompts_emits_response_event_locally() {
+        let config = test_config().await;
+        let (should_shutdown, mut rx, client) =
+            process_single_op(&config, Op::ListCustomPrompts).await;
+        assert_eq!(should_shutdown, false);
+
+        let event = next_codex_event(&mut rx).await;
+        let EventMsg::ListCustomPromptsResponse(_) = event.msg else {
+            panic!("expected ListCustomPromptsResponse");
+        };
+
+        client.shutdown().await.expect("shutdown in-process client");
+    }
+
+    #[tokio::test]
+    async fn add_to_history_and_get_history_entry_work_locally() {
+        let codex_home = TempDir::new().expect("create temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+        let session_id = ThreadId::new();
+        let thread_id = session_id.to_string();
+        let client = InProcessAppServerClient::start(in_process_start_args(&config))
+            .await
+            .expect("in-process app-server client");
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let mut current_turn_id = None;
+        let mut request_ids = RequestIdSequencer::new();
+        let mut pending_server_requests = PendingServerRequests::default();
+
+        let should_shutdown = process_in_process_command(
+            Op::AddToHistory {
+                text: "hello history".to_string(),
+            },
+            &thread_id,
+            &session_id,
+            &config,
+            &mut current_turn_id,
+            &mut request_ids,
+            &mut pending_server_requests,
+            &client,
+            &app_event_tx,
+        )
+        .await;
+        assert_eq!(should_shutdown, false);
+
+        let should_shutdown = process_in_process_command(
+            Op::GetHistoryEntryRequest {
+                offset: 0,
+                log_id: 0,
+            },
+            &thread_id,
+            &session_id,
+            &config,
+            &mut current_turn_id,
+            &mut request_ids,
+            &mut pending_server_requests,
+            &client,
+            &app_event_tx,
+        )
+        .await;
+        assert_eq!(should_shutdown, false);
+
+        let event = next_codex_event(&mut rx).await;
+        let EventMsg::GetHistoryEntryResponse(response) = event.msg else {
+            panic!("expected GetHistoryEntryResponse");
+        };
+        let entry = response.entry.expect("expected history entry");
+        assert_eq!(response.offset, 0);
+        assert_eq!(response.log_id, 0);
+        assert_eq!(entry.conversation_id, thread_id);
+        assert_eq!(entry.text, "hello history".to_string());
+
+        client.shutdown().await.expect("shutdown in-process client");
+    }
+
+    #[tokio::test]
+    async fn reload_user_config_is_a_local_noop() {
+        let config = test_config().await;
+        let (should_shutdown, mut rx, client) =
+            process_single_op(&config, Op::ReloadUserConfig).await;
+        assert_eq!(should_shutdown, false);
+
+        if let Ok(Some(event)) = timeout(Duration::from_millis(200), rx.recv()).await {
+            panic!("did not expect an app event: {event:?}");
+        }
+
+        client.shutdown().await.expect("shutdown in-process client");
+    }
+
+    #[tokio::test]
+    async fn deferred_op_emits_explicit_local_only_warning() {
+        let config = test_config().await;
+        let (should_shutdown, mut rx, client) = process_single_op(&config, Op::Undo).await;
+        assert_eq!(should_shutdown, false);
+
+        let event = next_codex_event(&mut rx).await;
+        let warning = warning_from_event(event);
+        assert_eq!(
+            warning.message,
+            "Undo is temporarily unavailable in in-process local-only mode"
+        );
+
+        client.shutdown().await.expect("shutdown in-process client");
+    }
+
+    #[tokio::test]
+    async fn local_external_chatgpt_refresh_reads_tokens_from_auth_storage() {
+        let codex_home = TempDir::new().expect("create temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+        let access_token = fake_external_access_token("pro");
+        login_with_chatgpt_auth_tokens(
+            &config.codex_home,
+            &access_token,
+            "workspace-1",
+            Some("pro"),
+        )
+        .expect("write external auth token");
+
+        let response =
+            local_external_chatgpt_tokens(&config).expect("local token refresh response");
+        assert_eq!(response.access_token, access_token);
+        assert_eq!(response.chatgpt_account_id, "workspace-1".to_string());
+        assert_eq!(response.chatgpt_plan_type, Some("pro".to_string()));
+    }
+
+    #[tokio::test]
+    async fn local_external_chatgpt_refresh_fails_without_external_auth() {
+        let codex_home = TempDir::new().expect("create temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+        let error =
+            local_external_chatgpt_tokens(&config).expect_err("expected local refresh error");
+        assert!(
+            error.contains("no cached auth available")
+                || error.contains("external ChatGPT token auth is not active"),
+            "unexpected error: {error}"
+        );
     }
 }
