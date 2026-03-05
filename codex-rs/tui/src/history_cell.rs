@@ -566,9 +566,12 @@ impl SubagentStatusCell {
 
 impl HistoryCell for SubagentStatusCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let state = match self.state.lock() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
+        let state = {
+            let guard = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.clone()
         };
         if state.running_agents.is_empty() {
             return Vec::new();
@@ -618,10 +621,10 @@ impl HistoryCell for SubagentStatusCell {
         if !self.animations_enabled {
             return None;
         }
-        let guard = match self.state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let guard = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = Instant::now();
         if !guard.has_animating_agents(now) {
             return None;
@@ -630,7 +633,27 @@ impl HistoryCell for SubagentStatusCell {
     }
 }
 
-#[allow(dead_code)]
+impl Renderable for SubagentStatusCell {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let lines = self.display_lines(area.width);
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        let y = if area.height == 0 {
+            0
+        } else {
+            let overflow = paragraph
+                .line_count(area.width)
+                .saturating_sub(usize::from(area.height));
+            u16::try_from(overflow).unwrap_or(u16::MAX)
+        };
+        paragraph.scroll((y, 0)).render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        HistoryCell::desired_height(self, width)
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn new_subagent_spawned_cell(name: &str, prompt_preview: &str) -> PlainHistoryCell {
     let mut lines = Vec::new();
     lines.push(Line::from(vec![

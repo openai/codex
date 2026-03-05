@@ -785,6 +785,7 @@ pub(crate) struct ChatWidget {
     codex_op_target: CodexOpTarget,
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
+    subagent_panel: Option<SubagentStatusCell>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     ///
     /// The transcript overlay appends a cached "live tail" for the current active cell. Most
@@ -4132,6 +4133,35 @@ impl ChatWidget {
         self.run_commit_tick();
     }
 
+    pub(crate) fn on_subagent_panel_updated(&mut self, panel: Arc<SubagentStatusCell>) {
+        let state_handle = panel.state_handle();
+
+        if let Some(existing) = self.subagent_panel.as_mut() {
+            if existing.matches_state(&state_handle) {
+                self.request_redraw();
+                return;
+            }
+            *existing = panel.as_ref().clone();
+            self.request_redraw();
+            return;
+        }
+
+        self.subagent_panel = Some(panel.as_ref().clone());
+        self.request_redraw();
+    }
+
+    pub(crate) fn clear_subagent_panel(&mut self) {
+        if self.subagent_panel.take().is_some() {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn on_subagent_tick(&mut self) {
+        if self.subagent_panel.is_some() {
+            self.request_redraw();
+        }
+    }
+
     /// Runs a regular periodic commit tick.
     fn run_commit_tick(&mut self) {
         self.run_commit_tick_with_scope(CommitTickScope::AnyMode);
@@ -4686,6 +4716,7 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell,
+            subagent_panel: None,
             active_cell_revision: 0,
             config,
             skills_all: Vec::new(),
@@ -4755,6 +4786,207 @@ impl ChatWidget {
             startup_tooltip_override,
             suppress_session_configured_redraw: false,
             suppress_initial_user_message_submit: false,
+            pending_notification: None,
+            quit_shortcut_expires_at: None,
+            quit_shortcut_key: None,
+            is_review_mode: false,
+            pre_review_token_info: None,
+            needs_final_message_separator: false,
+            had_work_activity: false,
+            saw_plan_update_this_turn: false,
+            saw_plan_item_this_turn: false,
+            last_plan_progress: None,
+            plan_delta_buffer: String::new(),
+            plan_item_active: false,
+            last_separator_elapsed_secs: None,
+            turn_runtime_metrics: RuntimeMetricsSummary::default(),
+            last_rendered_width: std::cell::Cell::new(None),
+            feedback,
+            current_rollout_path: None,
+            current_cwd,
+            session_network_proxy: None,
+            status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
+            last_terminal_title: None,
+            terminal_title_setup_original_items: None,
+            terminal_title_animation_origin: Instant::now(),
+            status_line_project_root_name_cache: None,
+            status_line_branch: None,
+            status_line_branch_cwd: None,
+            status_line_branch_pending: false,
+            status_line_branch_lookup_complete: false,
+            external_editor_state: ExternalEditorState::Closed,
+            realtime_conversation: RealtimeConversationUiState::default(),
+            #[cfg(test)]
+            last_replayed_agent_inbox_message: None,
+            last_rendered_user_message_event: None,
+            last_non_retry_error: None,
+        };
+
+        widget
+            .bottom_pane
+            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
+        widget
+            .bottom_pane
+            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
+        widget
+            .bottom_pane
+            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
+        widget
+            .bottom_pane
+            .set_collaboration_modes_enabled(/*enabled*/ true);
+        widget.sync_fast_command_enabled();
+        widget.sync_personality_command_enabled();
+        widget.sync_plugins_command_enabled();
+        widget
+            .bottom_pane
+            .set_queued_message_edit_binding(widget.queued_message_edit_binding);
+        #[cfg(target_os = "windows")]
+        widget.bottom_pane.set_windows_degraded_sandbox_active(
+            codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                && matches!(
+                    WindowsSandboxLevel::from_config(&widget.config),
+                    WindowsSandboxLevel::RestrictedToken
+                ),
+        );
+        widget.update_collaboration_mode_indicator();
+
+        widget
+            .bottom_pane
+            .set_connectors_enabled(widget.connectors_enabled());
+        widget.refresh_status_surfaces();
+
+        widget
+    }
+
+    /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
+    pub(crate) fn new_from_existing(
+        common: ChatWidgetInit,
+        conversation: std::sync::Arc<codex_core::CodexThread>,
+        session_configured: codex_protocol::protocol::SessionConfiguredEvent,
+    ) -> Self {
+        let ChatWidgetInit {
+            config,
+            frame_requester,
+            app_event_tx,
+            initial_user_message,
+            enhanced_keys_supported,
+            auth_manager,
+            models_manager,
+            feedback,
+            is_first_run: _,
+            feedback_audience,
+            model,
+            startup_tooltip_override: _,
+            status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
+            session_telemetry,
+        } = common;
+        let model = model.filter(|m| !m.trim().is_empty());
+        let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
+        let mut rng = rand::rng();
+        let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
+
+        let model_override = model.as_deref();
+        let header_model = model
+            .clone()
+            .unwrap_or_else(|| session_configured.model.clone());
+        let active_collaboration_mask =
+            Self::initial_collaboration_mask(&config, models_manager.as_ref(), model_override);
+        let header_model = active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.model.clone())
+            .unwrap_or(header_model);
+
+        let current_cwd = Some(session_configured.cwd.clone());
+        let codex_op_tx =
+            spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+
+        let fallback_default = Settings {
+            model: header_model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        };
+        // Collaboration modes start in Default mode.
+        let current_collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: fallback_default,
+        };
+
+        let queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info());
+        let mut widget = Self {
+            app_event_tx: app_event_tx.clone(),
+            frame_requester: frame_requester.clone(),
+            codex_op_tx,
+            bottom_pane: BottomPane::new(BottomPaneParams {
+                frame_requester,
+                app_event_tx,
+                has_input_focus: true,
+                enhanced_keys_supported,
+                placeholder_text: placeholder,
+                disable_paste_burst: config.disable_paste_burst,
+                animations_enabled: config.animations,
+                skills: None,
+            }),
+            active_cell: None,
+            subagent_panel: None,
+            active_cell_revision: 0,
+            config,
+            skills_all: Vec::new(),
+            skills_initial_state: None,
+            current_collaboration_mode,
+            active_collaboration_mask,
+            auth_manager,
+            models_manager,
+            session_telemetry,
+            session_header: SessionHeader::new(header_model),
+            initial_user_message,
+            token_info: None,
+            rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+            plan_type: None,
+            rate_limit_warnings: RateLimitWarningState::default(),
+            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            rate_limit_poller: None,
+            adaptive_chunking: AdaptiveChunkingPolicy::default(),
+            stream_controller: None,
+            plan_stream_controller: None,
+            last_copyable_output: None,
+            running_commands: HashMap::new(),
+            pending_collab_spawn_requests: HashMap::new(),
+            suppressed_exec_calls: HashSet::new(),
+            last_unified_wait: None,
+            unified_exec_wait_streak: None,
+            turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
+            task_complete_pending: false,
+            unified_exec_processes: Vec::new(),
+            agent_turn_running: false,
+            mcp_startup_status: None,
+            connectors_cache: ConnectorsCacheState::default(),
+            connectors_partial_snapshot: None,
+            connectors_prefetch_in_flight: false,
+            connectors_force_refetch_pending: false,
+            pending_mcp_output_requests: 0,
+            plugins_cache: PluginsCacheState::default(),
+            plugins_fetch_state: PluginListFetchState::default(),
+            interrupts: InterruptManager::new(),
+            reasoning_buffer: String::new(),
+            full_reasoning_buffer: String::new(),
+            current_status: StatusIndicatorState::working(),
+            pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+            terminal_title_status_kind: TerminalTitleStatusKind::Working,
+            retry_status_header: None,
+            pending_status_indicator_restore: false,
+            suppress_queue_autosend: false,
+            thread_id: None,
+            thread_name: None,
+            forked_from: None,
+            queued_user_messages: VecDeque::new(),
+            pending_steers: VecDeque::new(),
+            submit_pending_steers_after_interrupt: false,
+            queued_message_edit_binding,
+            show_welcome_banner: false,
+            startup_tooltip_override: None,
+            suppress_session_configured_redraw: true,
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
@@ -10872,8 +11104,13 @@ impl ChatWidget {
             )),
             None => RenderableItem::Owned(Box::new(())),
         };
+        let subagent_panel_renderable = match &self.subagent_panel {
+            Some(panel) => RenderableItem::Borrowed(panel).inset(Insets::tlbr(1, 0, 0, 0)),
+            None => RenderableItem::Owned(Box::new(())),
+        };
         let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
+        flex.push(0, subagent_panel_renderable);
         flex.push(
             /*flex*/ 0,
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(
