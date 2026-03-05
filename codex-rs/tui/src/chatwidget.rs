@@ -251,6 +251,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::SubagentStatusCell;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -2628,6 +2629,53 @@ impl ChatWidget {
     /// catch-up mode drains larger batches to reduce queue lag.
     pub(crate) fn on_commit_tick(&mut self) {
         self.run_commit_tick();
+    }
+
+    pub(crate) fn on_subagent_panel_updated(&mut self, panel: Arc<SubagentStatusCell>) {
+        let state_handle = panel.state_handle();
+
+        if let Some(active) = self.active_cell.as_mut()
+            && let Some(existing) = active.as_any_mut().downcast_mut::<SubagentStatusCell>()
+        {
+            if existing.matches_state(&state_handle) {
+                self.bump_active_cell_revision();
+                self.request_redraw();
+                return;
+            }
+            *existing = panel.as_ref().clone();
+            self.bump_active_cell_revision();
+            self.request_redraw();
+            return;
+        }
+
+        if self.active_cell.is_none() {
+            self.active_cell = Some(Box::new(panel.as_ref().clone()));
+            self.bump_active_cell_revision();
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn clear_subagent_panel(&mut self) {
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<SubagentStatusCell>())
+        {
+            self.active_cell = None;
+            self.bump_active_cell_revision();
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn on_subagent_tick(&mut self) {
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<SubagentStatusCell>())
+        {
+            self.bump_active_cell_revision();
+            self.request_redraw();
+        }
     }
 
     /// Runs a regular periodic commit tick.
