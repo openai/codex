@@ -258,7 +258,7 @@ mod send_input {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SendInputArgs = parse_arguments(&arguments)?;
         let receiver_thread_id = agent_id(&args.id)?;
-        let input_items = parse_collab_input(args.message, args.items)?;
+        let input_items = parse_collab_input(args.message.clone(), args.items.clone())?;
         let prompt = input_preview(&input_items);
         let (receiver_agent_nickname, receiver_agent_role) = session
             .services
@@ -289,7 +289,12 @@ mod send_input {
         let result = session
             .services
             .agent_control
-            .send_input(receiver_thread_id, input_items)
+            .send_collab_message_or_input(
+                receiver_thread_id,
+                session.conversation_id,
+                args.message,
+                args.items,
+            )
             .await
             .map_err(|err| collab_agent_error(receiver_thread_id, err));
         let status = session

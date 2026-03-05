@@ -89,6 +89,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
@@ -99,7 +100,9 @@ use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
+use codex_protocol::protocol::COLLAB_INBOX_KIND;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CollabInboxPayload;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::ErrorEvent;
@@ -124,6 +127,7 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -360,6 +364,18 @@ fn is_unified_exec_source(source: ExecCommandSource) -> bool {
         source,
         ExecCommandSource::UnifiedExecStartup | ExecCommandSource::UnifiedExecInteraction
     )
+}
+
+fn collab_inbox_message_from_item(item: &ResponseItem) -> Option<(String, String)> {
+    let ResponseItem::FunctionCallOutput { output, .. } = item else {
+        return None;
+    };
+    let text = output.body.to_text()?;
+    let payload: CollabInboxPayload = serde_json::from_str(&text).ok()?;
+    if !payload.injected || payload.kind != COLLAB_INBOX_KIND {
+        return None;
+    }
+    Some((payload.sender_thread_id.to_string(), payload.message))
 }
 
 fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
@@ -2456,6 +2472,16 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         self.add_to_history(cell);
         self.request_redraw();
+    }
+
+    fn on_raw_response_item(&mut self, event: RawResponseItemEvent) {
+        if let Some((sender, message)) = collab_inbox_message_from_item(&event.item) {
+            self.add_to_history(history_cell::new_info_event(
+                format!("Agent message: {message}"),
+                Some(format!("from {sender}")),
+            ));
+            self.request_redraw();
+        }
     }
 
     fn on_get_history_entry_response(
@@ -4823,8 +4849,8 @@ impl ChatWidget {
                     });
                 }
             }
-            EventMsg::RawResponseItem(_)
-            | EventMsg::ItemStarted(_)
+            EventMsg::RawResponseItem(ev) => self.on_raw_response_item(ev),
+            EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)

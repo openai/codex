@@ -13,8 +13,13 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::COLLAB_INBOX_KIND;
+use codex_protocol::protocol::CollabInboxPayload;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -25,6 +30,7 @@ use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
+use uuid::Uuid;
 
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
 const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
@@ -316,6 +322,76 @@ impl AgentControl {
         result
     }
 
+    pub(crate) async fn send_prompt(
+        &self,
+        agent_id: ThreadId,
+        prompt: String,
+    ) -> CodexResult<String> {
+        self.send_input(
+            agent_id,
+            vec![UserInput::Text {
+                text: prompt,
+                text_elements: Vec::new(),
+            }],
+        )
+        .await
+    }
+
+    pub(crate) async fn send_collab_message(
+        &self,
+        agent_id: ThreadId,
+        sender_thread_id: ThreadId,
+        message: String,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        if matches!(
+            thread.config_snapshot().await.session_source,
+            SessionSource::SubAgent(_)
+        ) {
+            return self.send_prompt(agent_id, message).await;
+        }
+
+        let prepend_turn_start_user_message =
+            { !thread.codex.session.active_turn.lock().await.is_some() };
+        let result = state
+            .send_op(
+                agent_id,
+                Op::InjectResponseItems {
+                    items: build_collab_inbox_items(
+                        sender_thread_id,
+                        message,
+                        prepend_turn_start_user_message,
+                    )?,
+                },
+            )
+            .await;
+        if matches!(result, Err(CodexErr::InternalAgentDied)) {
+            let _ = state.remove_thread(&agent_id).await;
+            self.state.release_spawned_thread(agent_id);
+        }
+        result
+    }
+
+    pub(crate) async fn send_collab_message_or_input(
+        &self,
+        agent_id: ThreadId,
+        sender_thread_id: ThreadId,
+        message: Option<String>,
+        items: Option<Vec<UserInput>>,
+    ) -> CodexResult<String> {
+        match (message, items) {
+            (Some(message), None) => {
+                self.send_collab_message(agent_id, sender_thread_id, message)
+                    .await
+            }
+            (None, Some(items)) => self.send_input(agent_id, items).await,
+            _ => Err(CodexErr::UnsupportedOperation(
+                "invalid collab input".to_string(),
+            )),
+        }
+    }
+
     /// Interrupt the current task for an existing agent thread.
     pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
@@ -486,6 +562,48 @@ impl AgentControl {
         parent_thread.codex.session.user_shell().shell_snapshot()
     }
 }
+
+fn build_collab_inbox_items(
+    sender_thread_id: ThreadId,
+    message: String,
+    prepend_turn_start_user_message: bool,
+) -> CodexResult<Vec<ResponseInputItem>> {
+    let mut items = Vec::new();
+    if prepend_turn_start_user_message {
+        items.push(ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: String::new(),
+            }],
+        });
+    }
+
+    let call_id = format!("collab_inbox_{}", Uuid::new_v4());
+    let output = serde_json::to_string(&CollabInboxPayload::new(sender_thread_id, message))
+        .map_err(|err| {
+            CodexErr::UnsupportedOperation(format!(
+                "failed to serialize collab inbox payload: {err}"
+            ))
+        })?;
+
+    items.extend([
+        ResponseInputItem::FunctionCall {
+            name: COLLAB_INBOX_KIND.to_string(),
+            arguments: "{}".to_string(),
+            call_id: call_id.clone(),
+        },
+        ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(output),
+                ..Default::default()
+            },
+        },
+    ]);
+
+    Ok(items)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,6 +620,7 @@ mod tests {
     use assert_matches::assert_matches;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseInputItem;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::EventMsg;
@@ -579,6 +698,135 @@ mod tests {
                 .await
                 .expect("start thread");
             (new_thread.thread_id, new_thread.thread)
+        }
+    }
+
+    #[test]
+    fn build_collab_inbox_items_emits_function_call_and_output() {
+        let sender_thread_id = ThreadId::new();
+        let items =
+            build_collab_inbox_items(sender_thread_id, "watchdog update".to_string(), false)
+                .expect("tool role should build inbox items");
+
+        assert_eq!(items.len(), 2);
+
+        let call_id = match &items[0] {
+            ResponseInputItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+            } => {
+                assert_eq!(name, COLLAB_INBOX_KIND);
+                assert_eq!(arguments, "{}");
+                call_id.clone()
+            }
+            other => panic!("expected function call item, got {other:?}"),
+        };
+
+        match &items[1] {
+            ResponseInputItem::FunctionCallOutput {
+                call_id: output_call_id,
+                output,
+            } => {
+                assert_eq!(output_call_id, &call_id);
+                let output_text = output
+                    .body
+                    .to_text()
+                    .expect("payload should convert to text");
+                let payload: CollabInboxPayload =
+                    serde_json::from_str(&output_text).expect("payload should be valid json");
+                assert!(payload.injected);
+                assert_eq!(payload.kind, COLLAB_INBOX_KIND);
+                assert_eq!(payload.sender_thread_id, sender_thread_id);
+                assert_eq!(payload.message, "watchdog update");
+            }
+            other => panic!("expected function call output item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_collab_inbox_items_prepends_empty_user_message_when_requested() {
+        let sender_thread_id = ThreadId::new();
+        let items = build_collab_inbox_items(sender_thread_id, "watchdog update".to_string(), true)
+            .expect("tool role should build inbox items");
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(
+            items[0],
+            ResponseInputItem::Message {
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: String::new(),
+                }],
+            }
+        );
+        assert_matches!(&items[1], ResponseInputItem::FunctionCall { .. });
+        assert_matches!(&items[2], ResponseInputItem::FunctionCallOutput { .. });
+    }
+
+    #[tokio::test]
+    async fn send_collab_message_to_root_thread_injects_response_items() {
+        let harness = AgentControlHarness::new().await;
+        let (receiver_thread_id, _thread) = harness.start_thread().await;
+        let sender_thread_id = ThreadId::new();
+
+        let submission_id = harness
+            .control
+            .send_collab_message(
+                receiver_thread_id,
+                sender_thread_id,
+                "watchdog update".to_string(),
+            )
+            .await
+            .expect("send_collab_message should succeed");
+        assert!(!submission_id.is_empty());
+
+        let captured = harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .find(|(thread_id, op)| {
+                *thread_id == receiver_thread_id && matches!(op, Op::InjectResponseItems { .. })
+            })
+            .expect("expected injected collab inbox op");
+
+        let Op::InjectResponseItems { items } = captured.1 else {
+            unreachable!("matched above");
+        };
+        assert_eq!(items.len(), 3);
+        match &items[0] {
+            ResponseInputItem::Message { role, content } => {
+                assert_eq!(role, "user");
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::InputText {
+                        text: String::new(),
+                    }]
+                );
+            }
+            other => panic!("expected prepended user message, got {other:?}"),
+        }
+        match &items[1] {
+            ResponseInputItem::FunctionCall {
+                name, arguments, ..
+            } => {
+                assert_eq!(name, COLLAB_INBOX_KIND);
+                assert_eq!(arguments, "{}");
+            }
+            other => panic!("expected function call item, got {other:?}"),
+        }
+        match &items[2] {
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let output_text = output
+                    .body
+                    .to_text()
+                    .expect("payload should convert to text");
+                let payload: CollabInboxPayload =
+                    serde_json::from_str(&output_text).expect("payload should be valid json");
+                assert_eq!(payload.sender_thread_id, sender_thread_id);
+                assert_eq!(payload.message, "watchdog update");
+            }
+            other => panic!("expected function call output item, got {other:?}"),
         }
     }
 
