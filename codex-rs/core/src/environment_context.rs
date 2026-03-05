@@ -88,18 +88,14 @@ impl EnvironmentContext {
     }
 }
 
-impl EnvironmentContext {
-    /// Serializes the environment context to XML. Libraries like `quick-xml`
-    /// require custom macros to handle Enums with newtypes, so we just do it
-    /// manually, to keep things simple. Output looks like:
-    ///
-    /// ```xml
-    /// <environment_context>
-    ///   <cwd>...</cwd>
-    ///   <shell>...</shell>
-    /// </environment_context>
-    /// ```
-    pub fn serialize_to_text(&self) -> String {
+impl ModelVisibleContextFragment for EnvironmentContext {
+    type Kind = ContextualUserEnvelopeKind;
+
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
+        ENVIRONMENT_CONTEXT_FRAGMENT
+    }
+
+    fn render_text(&self) -> String {
         let mut lines = Vec::new();
         if let Some(cwd) = &self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
@@ -130,18 +126,6 @@ impl EnvironmentContext {
             }
         }
         ENVIRONMENT_CONTEXT_FRAGMENT.wrap_body(lines.join("\n"))
-    }
-}
-
-impl ModelVisibleContextFragment for EnvironmentContext {
-    type Kind = ContextualUserEnvelopeKind;
-
-    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
-        ENVIRONMENT_CONTEXT_FRAGMENT
-    }
-
-    fn render_text(&self) -> String {
-        Self::serialize_to_text(self)
     }
 }
 
@@ -233,7 +217,7 @@ mod tests {
             cwd = cwd.display(),
         );
 
-        assert_eq!(context.serialize_to_text(), expected);
+        assert_eq!(context.render_text(), expected);
     }
 
     #[test]
@@ -265,7 +249,7 @@ mod tests {
             test_path_buf("/repo").display()
         );
 
-        assert_eq!(context.serialize_to_text(), expected);
+        assert_eq!(context.render_text(), expected);
     }
 
     #[test]
@@ -284,7 +268,7 @@ mod tests {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-        assert_eq!(context.serialize_to_text(), expected);
+        assert_eq!(context.render_text(), expected);
     }
 
     #[test]
@@ -303,7 +287,7 @@ mod tests {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-        assert_eq!(context.serialize_to_text(), expected);
+        assert_eq!(context.render_text(), expected);
     }
 
     #[test]
@@ -322,7 +306,7 @@ mod tests {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-        assert_eq!(context.serialize_to_text(), expected);
+        assert_eq!(context.render_text(), expected);
     }
 
     #[test]
@@ -341,7 +325,7 @@ mod tests {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-        assert_eq!(context.serialize_to_text(), expected);
+        assert_eq!(context.render_text(), expected);
     }
 
     #[test]

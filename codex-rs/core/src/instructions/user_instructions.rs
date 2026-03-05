@@ -21,18 +21,6 @@ pub(crate) struct UserInstructions {
     pub text: String,
 }
 
-impl UserInstructions {
-    pub(crate) fn serialize_to_text(&self) -> String {
-        format!(
-            "{prefix}{directory}\n\n<INSTRUCTIONS>\n{contents}\n{suffix}",
-            prefix = AGENTS_MD_FRAGMENT.start_marker(),
-            directory = self.directory,
-            contents = self.text,
-            suffix = AGENTS_MD_FRAGMENT.end_marker(),
-        )
-    }
-}
-
 impl ModelVisibleContextFragment for UserInstructions {
     type Kind = ContextualUserEnvelopeKind;
 
@@ -41,7 +29,13 @@ impl ModelVisibleContextFragment for UserInstructions {
     }
 
     fn render_text(&self) -> String {
-        Self::serialize_to_text(self)
+        format!(
+            "{prefix}{directory}\n\n<INSTRUCTIONS>\n{contents}\n{suffix}",
+            prefix = AGENTS_MD_FRAGMENT.start_marker(),
+            directory = self.directory,
+            contents = self.text,
+            suffix = AGENTS_MD_FRAGMENT.end_marker(),
+        )
     }
 }
 
@@ -79,15 +73,6 @@ pub(crate) struct SkillInstructions {
     pub contents: String,
 }
 
-impl SkillInstructions {
-    pub(crate) fn serialize_to_text(&self) -> String {
-        SKILL_FRAGMENT.wrap_body(format!(
-            "<name>{}</name>\n<path>{}</path>\n{}",
-            self.name, self.path, self.contents
-        ))
-    }
-}
-
 impl ModelVisibleContextFragment for SkillInstructions {
     type Kind = ContextualUserEnvelopeKind;
 
@@ -96,7 +81,10 @@ impl ModelVisibleContextFragment for SkillInstructions {
     }
 
     fn render_text(&self) -> String {
-        Self::serialize_to_text(self)
+        SKILL_FRAGMENT.wrap_body(format!(
+            "<name>{}</name>\n<path>{}</path>\n{}",
+            self.name, self.path, self.contents
+        ))
     }
 }
 
@@ -104,12 +92,6 @@ impl ModelVisibleContextFragment for SkillInstructions {
 #[serde(rename = "plugin_instructions", rename_all = "snake_case")]
 pub(crate) struct PluginInstructions {
     pub text: String,
-}
-
-impl PluginInstructions {
-    pub(crate) fn serialize_to_text(&self) -> String {
-        PLUGINS_FRAGMENT.wrap_body(self.text.clone())
-    }
 }
 
 impl ModelVisibleContextFragment for PluginInstructions {
@@ -120,7 +102,7 @@ impl ModelVisibleContextFragment for PluginInstructions {
     }
 
     fn render_text(&self) -> String {
-        Self::serialize_to_text(self)
+        PLUGINS_FRAGMENT.wrap_body(self.text.clone())
     }
 }
 
