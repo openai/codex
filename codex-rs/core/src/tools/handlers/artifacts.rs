@@ -389,7 +389,9 @@ mod tests {
         .expect("write render entrypoint");
 
         let runtime = codex_artifacts::load_cached_runtime(
-            codex_home.path(),
+            &codex_home
+                .path()
+                .join(codex_artifacts::DEFAULT_CACHE_ROOT_RELATIVE),
             PINNED_ARTIFACT_RUNTIME_VERSION,
         )
         .expect("resolve runtime");

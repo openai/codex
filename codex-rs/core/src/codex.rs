@@ -730,7 +730,6 @@ impl TurnContext {
                 .with_updates(Some(model.clone()), Some(reasoning_effort), None);
         let features = self.features.clone();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            codex_home: &config.codex_home,
             model_info: &model_info,
             features: &features,
             web_search_mode: self.tools_config.web_search_mode,
@@ -1104,7 +1103,6 @@ impl Session {
         let per_turn_config = Arc::new(per_turn_config);
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            codex_home: &per_turn_config.codex_home,
             model_info: &model_info,
             features: &per_turn_config.features,
             web_search_mode: Some(per_turn_config.web_search_mode.value()),
@@ -4712,7 +4710,6 @@ async fn spawn_review_thread(
     let _ = review_features.disable(crate::features::Feature::WebSearchCached);
     let review_web_search_mode = WebSearchMode::Disabled;
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        codex_home: &config.codex_home,
         model_info: &review_model_info,
         features: &review_features,
         web_search_mode: Some(review_web_search_mode),
