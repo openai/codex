@@ -3,6 +3,7 @@ use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
+use std::io::Write;
 use std::io::stdin;
 use std::io::stdout;
 use std::panic;
@@ -58,6 +59,39 @@ pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
+const DEFAULT_TERMINAL_TITLE: &str = "Codex";
+
+fn format_terminal_title(context: Option<&str>) -> String {
+    let context = context
+        .map(|text| {
+            text.chars()
+                .filter(|c| !c.is_control())
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+        .filter(|text| !text.is_empty());
+
+    match context {
+        Some(context) => format!("{DEFAULT_TERMINAL_TITLE} - {context}"),
+        None => DEFAULT_TERMINAL_TITLE.to_string(),
+    }
+}
+
+fn write_terminal_title(
+    writer: &mut impl Write,
+    current_title: &mut Option<String>,
+    context: Option<&str>,
+) -> Result<()> {
+    let title = format_terminal_title(context);
+    if current_title.as_ref() == Some(&title) {
+        return Ok(());
+    }
+    write!(writer, "\x1b]0;{title}\x07")?;
+    writer.flush()?;
+    *current_title = Some(title);
+    Ok(())
+}
 
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
@@ -255,6 +289,7 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+    current_title: Option<String>,
 }
 
 impl Tui {
@@ -283,6 +318,7 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             alt_screen_enabled: true,
+            current_title: None,
         }
     }
 
@@ -293,6 +329,12 @@ impl Tui {
 
     pub fn set_notification_method(&mut self, method: NotificationMethod) {
         self.notification_backend = Some(detect_backend(method));
+    }
+
+    pub fn set_title_context(&mut self, context: Option<&str>) -> Result<()> {
+        let current_title = &mut self.current_title;
+        let backend = self.terminal.backend_mut();
+        write_terminal_title(backend, current_title, context)
     }
 
     pub fn frame_requester(&self) -> FrameRequester {
@@ -542,5 +584,49 @@ impl Tui {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DEFAULT_TERMINAL_TITLE;
+    use super::format_terminal_title;
+    use super::write_terminal_title;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn terminal_title_defaults_to_codex() {
+        assert_eq!(format_terminal_title(None), DEFAULT_TERMINAL_TITLE);
+        assert_eq!(format_terminal_title(Some("   ")), DEFAULT_TERMINAL_TITLE);
+    }
+
+    #[test]
+    fn terminal_title_includes_thread_name() {
+        assert_eq!(
+            format_terminal_title(Some("fix title syncing")),
+            "Codex - fix title syncing"
+        );
+    }
+
+    #[test]
+    fn terminal_title_strips_control_characters() {
+        assert_eq!(
+            format_terminal_title(Some("hello\x1b\t\n\r\u{7}world")),
+            "Codex - helloworld"
+        );
+    }
+
+    #[test]
+    fn terminal_title_write_is_deduplicated() {
+        let mut output = Vec::new();
+        let mut current_title = None;
+
+        write_terminal_title(&mut output, &mut current_title, Some("plan"))
+            .expect("first title write should succeed");
+        write_terminal_title(&mut output, &mut current_title, Some("plan"))
+            .expect("duplicate title write should succeed");
+
+        assert_eq!(output, b"\x1b]0;Codex - plan\x07");
+        assert_eq!(current_title, Some("Codex - plan".to_string()));
     }
 }

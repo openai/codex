@@ -1715,6 +1715,7 @@ async fn make_chatwidget_manual(
         pending_status_indicator_restore: false,
         thread_id: None,
         thread_name: None,
+        title_override: None,
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
@@ -1752,6 +1753,41 @@ async fn make_chatwidget_manual(
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
+}
+
+#[tokio::test]
+async fn title_command_sets_manual_title_without_renaming_thread() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Title, "manual title".to_string(), Vec::new());
+
+    assert_eq!(chat.title_override(), Some("manual title".to_string()));
+    assert_eq!(chat.thread_name(), None);
+
+    while let Ok(op) = op_rx.try_recv() {
+        assert!(
+            !matches!(op, Op::SetThreadName { .. }),
+            "unexpected rename op: {op:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn empty_title_command_clears_manual_title() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_title_override(Some("manual title".to_string()));
+
+    chat.dispatch_command_with_args(SlashCommand::Title, String::new(), Vec::new());
+
+    assert_eq!(chat.title_override(), None);
+    assert_eq!(chat.thread_name(), None);
+
+    while let Ok(op) = op_rx.try_recv() {
+        assert!(
+            !matches!(op, Op::SetThreadName { .. }),
+            "unexpected rename op: {op:?}"
+        );
+    }
 }
 
 // ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper

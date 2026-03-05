@@ -607,6 +607,7 @@ pub(crate) struct ChatWidget {
     pending_status_indicator_restore: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
+    title_override: Option<String>,
     forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
@@ -2913,6 +2914,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             thread_id: None,
             thread_name: None,
+            title_override: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
@@ -3093,6 +3095,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             thread_id: None,
             thread_name: None,
+            title_override: None,
             forked_from: None,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
@@ -3262,6 +3265,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             thread_id: None,
             thread_name: None,
+            title_override: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
@@ -3607,6 +3611,9 @@ impl ChatWidget {
                 self.otel_manager.counter("codex.thread.rename", 1, &[]);
                 self.show_rename_prompt();
             }
+            SlashCommand::Title => {
+                self.show_title_prompt();
+            }
             SlashCommand::Model => {
                 self.open_model_popup();
             }
@@ -3936,6 +3943,13 @@ impl ChatWidget {
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
                 self.bottom_pane.drain_pending_submission_state();
             }
+            SlashCommand::Title => {
+                let title = codex_core::util::normalize_thread_name(trimmed);
+                let cell = Self::title_confirmation_cell(title.as_deref());
+                self.add_boxed_history(Box::new(cell));
+                self.set_title_override(title);
+                self.request_redraw();
+            }
             SlashCommand::Plan if !trimmed.is_empty() => {
                 self.dispatch_command(cmd);
                 if self.active_mode_kind() != ModeKind::Plan {
@@ -4024,6 +4038,23 @@ impl ChatWidget {
                 let cell = Self::rename_confirmation_cell(&name, thread_id);
                 tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
                 tx.send(AppEvent::CodexOp(Op::SetThreadName { name }));
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn show_title_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Set title".to_string(),
+            "Type a title and press Enter. Leave blank to clear it.".to_string(),
+            None,
+            Box::new(move |name: String| {
+                let title = codex_core::util::normalize_thread_name(&name);
+                let cell = Self::title_confirmation_cell(title.as_deref());
+                tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+                tx.send(AppEvent::SetTitle(title));
             }),
         );
 
@@ -7306,6 +7337,18 @@ impl ChatWidget {
         PlainHistoryCell::new(vec![line.into()])
     }
 
+    fn title_confirmation_cell(title: Option<&str>) -> PlainHistoryCell {
+        let line = match title {
+            Some(title) => vec![
+                "• ".into(),
+                "Title set to ".into(),
+                title.to_string().cyan(),
+            ],
+            None => vec!["• ".into(), "Title cleared".into()],
+        };
+        PlainHistoryCell::new(vec![line.into()])
+    }
+
     pub(crate) fn add_mcp_output(&mut self) {
         let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
             self.config.codex_home.clone(),
@@ -7982,6 +8025,14 @@ impl ChatWidget {
 
     pub(crate) fn thread_name(&self) -> Option<String> {
         self.thread_name.clone()
+    }
+
+    pub(crate) fn title_override(&self) -> Option<String> {
+        self.title_override.clone()
+    }
+
+    pub(crate) fn set_title_override(&mut self, title: Option<String>) {
+        self.title_override = title;
     }
 
     /// Returns the current thread's precomputed rollout path.
