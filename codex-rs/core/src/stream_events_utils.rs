@@ -64,11 +64,19 @@ async fn save_image_generation_result_to_cwd(
         .map_err(|err| {
             CodexErr::InvalidRequest(format!("invalid image generation payload: {err}"))
         })?;
-    let file_stem = if call_id.is_empty() {
-        "generated_image"
-    } else {
-        call_id
-    };
+    let mut file_stem: String = call_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if file_stem.is_empty() {
+        file_stem = "generated_image".to_string();
+    }
     let path = cwd.join(format!("{file_stem}.png"));
     tokio::fs::write(&path, bytes).await?;
     Ok(path)
@@ -181,16 +189,20 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            if let Some(mut turn_item) = handle_non_tool_response_item(&item, plan_mode) {
-                if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
-                    let path = save_image_generation_result_to_cwd(
-                        &ctx.turn_context.cwd,
-                        &image_item.id,
-                        &image_item.result,
-                    )
-                    .await?;
-                    image_item.result = path.to_string_lossy().into_owned();
-                }
+            if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode) {
+                let turn_item = match turn_item {
+                    TurnItem::ImageGeneration(mut image_item) => {
+                        let path = save_image_generation_result_to_cwd(
+                            &ctx.turn_context.cwd,
+                            &image_item.id,
+                            &image_item.result,
+                        )
+                        .await?;
+                        image_item.saved_path = Some(path.to_string_lossy().into_owned());
+                        TurnItem::ImageGeneration(image_item)
+                    }
+                    other => other,
+                };
 
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
@@ -198,6 +210,7 @@ pub(crate) async fn handle_output_item_done(
                         item.status = "in_progress".to_string();
                         item.revised_prompt = None;
                         item.result.clear();
+                        item.saved_path = None;
                     }
                     ctx.sess
                         .emit_turn_item_started(&ctx.turn_context, &started_item)
@@ -465,6 +478,22 @@ mod tests {
         assert_eq!(
             saved_path.file_name().and_then(|v| v.to_str()),
             Some("ig_123.png")
+        );
+        assert_eq!(std::fs::read(saved_path).expect("saved file"), b"foo");
+    }
+
+    #[tokio::test]
+    async fn save_image_generation_result_sanitizes_call_id_for_output_path() {
+        let dir = tempdir().expect("tempdir");
+
+        let saved_path = save_image_generation_result_to_cwd(dir.path(), "../ig/..", "Zm9v")
+            .await
+            .expect("image should be saved");
+
+        assert_eq!(saved_path.parent(), Some(dir.path()));
+        assert_eq!(
+            saved_path.file_name().and_then(|v| v.to_str()),
+            Some("___ig___.png")
         );
         assert_eq!(std::fs::read(saved_path).expect("saved file"), b"foo");
     }

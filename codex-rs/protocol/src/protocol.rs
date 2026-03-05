@@ -1898,6 +1898,9 @@ pub struct ImageGenerationEndEvent {
     #[ts(optional)]
     pub revised_prompt: Option<String>,
     pub result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub saved_path: Option<String>,
 }
 
 // Conversation kept for backward compatibility.
@@ -3270,6 +3273,7 @@ mod tests {
                 status: "in_progress".into(),
                 revised_prompt: None,
                 result: String::new(),
+                saved_path: None,
             }),
         };
 
@@ -3291,6 +3295,7 @@ mod tests {
                 status: "completed".into(),
                 revised_prompt: Some("A tiny blue square".into()),
                 result: "Zm9v".into(),
+                saved_path: Some("/tmp/ig-1.png".into()),
             }),
         };
 
@@ -3302,6 +3307,7 @@ mod tests {
                 assert_eq!(event.status, "completed");
                 assert_eq!(event.revised_prompt.as_deref(), Some("A tiny blue square"));
                 assert_eq!(event.result, "Zm9v");
+                assert_eq!(event.saved_path.as_deref(), Some("/tmp/ig-1.png"));
             }
             _ => panic!("expected ImageGenerationEnd event"),
         }
