@@ -25,6 +25,7 @@ use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Deserialize;
@@ -36,9 +37,16 @@ use std::collections::HashMap;
 
 const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
+const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
     Classic,
+    ZshFork,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum UnifiedExecBackendConfig {
+    Direct,
     ZshFork,
 }
 
@@ -46,9 +54,11 @@ pub enum ShellCommandBackendConfig {
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     shell_command_backend: ShellCommandBackendConfig,
+    pub unified_exec_backend: UnifiedExecBackendConfig,
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
+    pub web_search_tool_type: WebSearchToolType,
     pub image_gen_tool: bool,
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
@@ -88,7 +98,8 @@ impl ToolsConfig {
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
-        let include_artifact_tools = features.enabled(Feature::Artifact);
+        let include_artifact_tools =
+            features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
         let include_image_gen_tool =
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
         let include_agent_jobs = include_collab_tools && features.enabled(Feature::Sqlite);
@@ -98,6 +109,12 @@ impl ToolsConfig {
                 ShellCommandBackendConfig::ZshFork
             } else {
                 ShellCommandBackendConfig::Classic
+            };
+        let unified_exec_backend =
+            if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
+                UnifiedExecBackendConfig::ZshFork
+            } else {
+                UnifiedExecBackendConfig::Direct
             };
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
@@ -137,9 +154,11 @@ impl ToolsConfig {
         Self {
             shell_type,
             shell_command_backend,
+            unified_exec_backend,
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
+            web_search_tool_type: model_info.web_search_tool_type,
             image_gen_tool: include_image_gen_tool,
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
@@ -1387,7 +1406,7 @@ JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
 
     ToolSpec::Freeform(FreeformTool {
         name: "artifacts".to_string(),
-        description: "Runs raw JavaScript against the preinstalled Codex @oai/artifact-tool runtime for creating presentations or spreadsheets. This is plain JavaScript executed by Node with top-level await, not TypeScript: do not use type annotations, `interface`, `type`, or `import type`. Author code the same way you would for `import { Presentation, Workbook, PresentationFile, SpreadsheetFile, FileBlob, ... } from \"@oai/artifact-tool\"`, but omit that import line because the package surface is already preloaded. Named exports are available directly on `globalThis`, and the full module is available as `globalThis.artifactTool` (also aliased as `globalThis.artifacts` and `globalThis.codexArtifacts`). Node built-ins such as `node:fs/promises` may still be imported when needed for saving preview bytes. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-artifacts: timeout_ms=15000` or `// codex-artifact-tool: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
+        description: "Runs raw JavaScript against the preinstalled Codex @oai/artifact-tool runtime for creating presentations or spreadsheets. This is plain JavaScript executed by a local Node-compatible runtime with top-level await, not TypeScript: do not use type annotations, `interface`, `type`, or `import type`. Author code the same way you would for `import { Presentation, Workbook, PresentationFile, SpreadsheetFile, FileBlob, ... } from \"@oai/artifact-tool\"`, but omit that import line because the package surface is already preloaded. Named exports are available directly on `globalThis`, and the full module is available as `globalThis.artifactTool` (also aliased as `globalThis.artifacts` and `globalThis.codexArtifacts`). Node built-ins such as `node:fs/promises` may still be imported when needed for saving preview bytes. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-artifacts: timeout_ms=15000` or `// codex-artifact-tool: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
             .to_string(),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
@@ -1877,18 +1896,27 @@ pub(crate) fn build_specs(
         builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
-    match config.web_search_mode {
-        Some(WebSearchMode::Cached) => {
-            builder.push_spec(ToolSpec::WebSearch {
-                external_web_access: Some(false),
-            });
-        }
-        Some(WebSearchMode::Live) => {
-            builder.push_spec(ToolSpec::WebSearch {
-                external_web_access: Some(true),
-            });
-        }
-        Some(WebSearchMode::Disabled) | None => {}
+    let external_web_access = match config.web_search_mode {
+        Some(WebSearchMode::Cached) => Some(false),
+        Some(WebSearchMode::Live) => Some(true),
+        Some(WebSearchMode::Disabled) | None => None,
+    };
+
+    if let Some(external_web_access) = external_web_access {
+        let search_content_types = match config.web_search_tool_type {
+            WebSearchToolType::Text => None,
+            WebSearchToolType::TextAndImage => Some(
+                WEB_SEARCH_CONTENT_TYPES
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
+        };
+
+        builder.push_spec(ToolSpec::WebSearch {
+            external_web_access: Some(external_web_access),
+            search_content_types,
+        });
     }
 
     if config.image_gen_tool {
@@ -2172,6 +2200,7 @@ mod tests {
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
+                search_content_types: None,
             },
             create_view_image_tool(),
         ] {
@@ -2221,7 +2250,9 @@ mod tests {
 
     #[test]
     fn test_build_specs_artifact_tool_enabled() {
-        let config = test_config();
+        let mut config = test_config();
+        let runtime_root = tempfile::TempDir::new().expect("create temp codex home");
+        config.codex_home = runtime_root.path().to_path_buf();
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
@@ -2438,6 +2469,7 @@ mod tests {
         web_search_mode: Option<WebSearchMode>,
         expected_tools: &[&str],
     ) {
+        let _config = test_config();
         let model_info = model_info_from_models_json(model_slug);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -2486,6 +2518,7 @@ mod tests {
             tool.spec,
             ToolSpec::WebSearch {
                 external_web_access: Some(false),
+                search_content_types: None,
             }
         );
     }
@@ -2510,6 +2543,38 @@ mod tests {
             tool.spec,
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
+                search_content_types: None,
+            }
+        );
+    }
+
+    #[test]
+    fn web_search_tool_type_text_and_image_sets_search_content_types() {
+        let config = test_config();
+        let mut model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        model_info.web_search_tool_type = WebSearchToolType::TextAndImage;
+        let features = Features::with_defaults();
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Live),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+        let tool = find_tool(&tools, "web_search");
+        assert_eq!(
+            tool.spec,
+            ToolSpec::WebSearch {
+                external_web_access: Some(true),
+                search_content_types: Some(
+                    WEB_SEARCH_CONTENT_TYPES
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect()
+                ),
             }
         );
     }
@@ -2770,6 +2835,10 @@ mod tests {
             tools_config.shell_command_backend,
             ShellCommandBackendConfig::ZshFork
         );
+        assert_eq!(
+            tools_config.unified_exec_backend,
+            UnifiedExecBackendConfig::ZshFork
+        );
     }
 
     #[test]
@@ -2797,6 +2866,7 @@ mod tests {
 
     #[test]
     fn test_test_model_info_includes_sync_tool() {
+        let _config = test_config();
         let mut model_info = model_info_from_models_json("gpt-5-codex");
         model_info.experimental_supported_tools = vec![
             "test_sync_tool".to_string(),

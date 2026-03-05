@@ -588,7 +588,13 @@ mod tests {
             msg: EventMsg::ElicitationRequest(codex_protocol::approvals::ElicitationRequestEvent {
                 server_name: "server-1".to_string(),
                 id: request_id.clone(),
-                message: "Please confirm".to_string(),
+                request: codex_protocol::approvals::ElicitationRequest::Form {
+                    message: "Please confirm".to_string(),
+                    requested_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {}
+                    }),
+                },
             }),
         });
 
@@ -596,6 +602,7 @@ mod tests {
             server_name: "server-1".to_string(),
             request_id,
             decision: codex_protocol::approvals::ElicitationAction::Accept,
+            content: None,
         });
 
         let snapshot = store.snapshot();
