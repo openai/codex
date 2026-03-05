@@ -1458,6 +1458,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-app-server-client"
+version = "0.0.0"
+dependencies = [
+ "codex-app-server",
+ "codex-app-server-protocol",
+ "codex-arg0",
+ "codex-core",
+ "codex-feedback",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
 name = "codex-app-server-protocol"
 version = "0.0.0"
 dependencies = [
