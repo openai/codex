@@ -1,12 +1,11 @@
 use crate::ManagedPackage;
-use std::path::Path;
 use std::path::PathBuf;
 
 /// Immutable configuration for a [`crate::PackageManager`] instance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackageManagerConfig<P> {
-    codex_home: PathBuf,
-    package: P,
+    pub(crate) codex_home: PathBuf,
+    pub(crate) package: P,
     cache_root: Option<PathBuf>,
 }
 
@@ -24,16 +23,6 @@ impl<P> PackageManagerConfig<P> {
     pub fn with_cache_root(mut self, cache_root: PathBuf) -> Self {
         self.cache_root = Some(cache_root);
         self
-    }
-
-    /// Returns the owning Codex home directory.
-    pub fn codex_home(&self) -> &Path {
-        &self.codex_home
-    }
-
-    /// Returns the package description used by the manager.
-    pub fn package(&self) -> &P {
-        &self.package
     }
 }
 

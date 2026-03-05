@@ -36,7 +36,9 @@ pub enum ArchiveFormat {
 }
 
 /// Detects a package root with a `manifest.json` in an extraction directory.
-pub fn detect_single_package_root(extraction_root: &Path) -> Result<PathBuf, PackageManagerError> {
+pub(crate) fn detect_single_package_root(
+    extraction_root: &Path,
+) -> Result<PathBuf, PackageManagerError> {
     let direct_manifest = extraction_root.join("manifest.json");
     if direct_manifest.exists() {
         return Ok(extraction_root.to_path_buf());

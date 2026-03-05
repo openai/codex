@@ -38,11 +38,6 @@ impl<P> PackageManager<P> {
     pub fn with_client(config: PackageManagerConfig<P>, client: Client) -> Self {
         Self { client, config }
     }
-
-    /// Returns the immutable config backing this manager.
-    pub fn config(&self) -> &PackageManagerConfig<P> {
-        &self.config
-    }
 }
 
 impl<P: ManagedPackage> PackageManager<P> {
@@ -51,7 +46,7 @@ impl<P: ManagedPackage> PackageManager<P> {
         let platform = PackagePlatform::detect_current().map_err(P::Error::from)?;
         let install_dir = self
             .config
-            .package()
+            .package
             .install_dir(&self.config.cache_root(), platform);
         self.resolve_cached_at(platform, install_dir).await
     }
@@ -66,7 +61,7 @@ impl<P: ManagedPackage> PackageManager<P> {
 
         let platform = PackagePlatform::detect_current().map_err(P::Error::from)?;
         let cache_root = self.config.cache_root();
-        let install_dir = self.config.package().install_dir(&cache_root, platform);
+        let install_dir = self.config.package.install_dir(&cache_root, platform);
         if let Some(package) = self
             .resolve_cached_at(platform, install_dir.clone())
             .await?
@@ -123,10 +118,10 @@ impl<P: ManagedPackage> PackageManager<P> {
         }
 
         let manifest = self.fetch_release_manifest().await?;
-        if self.config.package().release_version(&manifest) != self.config.package().version() {
+        if self.config.package.release_version(&manifest) != self.config.package.version() {
             return Err(PackageManagerError::UnexpectedPackageVersion {
-                expected: self.config.package().version().to_string(),
-                actual: self.config.package().release_version(&manifest).to_string(),
+                expected: self.config.package.version().to_string(),
+                actual: self.config.package.release_version(&manifest).to_string(),
             }
             .into());
         }
@@ -149,13 +144,10 @@ impl<P: ManagedPackage> PackageManager<P> {
 
         // Everything below happens in a disposable staging area until the
         // extracted package has passed package-specific validation.
-        let platform_archive = self
-            .config
-            .package()
-            .platform_archive(&manifest, platform)?;
+        let platform_archive = self.config.package.platform_archive(&manifest, platform)?;
         let archive_url = self
             .config
-            .package()
+            .package
             .archive_url(&platform_archive)
             .map_err(P::Error::from)?;
         let archive_bytes = self.download_bytes(&archive_url).await?;
@@ -192,20 +184,16 @@ impl<P: ManagedPackage> PackageManager<P> {
             .map_err(P::Error::from)?;
         let extracted_root = self
             .config
-            .package()
+            .package
             .detect_extracted_root(&extraction_root)?;
         let package = self
             .config
-            .package()
+            .package
             .load_installed(extracted_root.clone(), platform)?;
-        if self.config.package().installed_version(&package) != self.config.package().version() {
+        if self.config.package.installed_version(&package) != self.config.package.version() {
             return Err(PackageManagerError::UnexpectedPackageVersion {
-                expected: self.config.package().version().to_string(),
-                actual: self
-                    .config
-                    .package()
-                    .installed_version(&package)
-                    .to_string(),
+                expected: self.config.package.version().to_string(),
+                actual: self.config.package.installed_version(&package).to_string(),
             }
             .into());
         }
@@ -259,7 +247,7 @@ impl<P: ManagedPackage> PackageManager<P> {
         // promoted tree is in place at its real cache location.
         let package = match self
             .config
-            .package()
+            .package
             .load_installed(install_dir.clone(), platform)
         {
             Ok(package) => package,
@@ -325,22 +313,18 @@ impl<P: ManagedPackage> PackageManager<P> {
             return Ok(None);
         }
 
-        let package = match self.config.package().load_installed(install_dir, platform) {
+        let package = match self.config.package.load_installed(install_dir, platform) {
             Ok(package) => package,
             Err(_) => return Ok(None),
         };
-        if self.config.package().installed_version(&package) != self.config.package().version() {
+        if self.config.package.installed_version(&package) != self.config.package.version() {
             return Ok(None);
         }
         Ok(Some(package))
     }
 
     async fn fetch_release_manifest(&self) -> Result<P::ReleaseManifest, P::Error> {
-        let manifest_url = self
-            .config
-            .package()
-            .manifest_url()
-            .map_err(P::Error::from)?;
+        let manifest_url = self.config.package.manifest_url().map_err(P::Error::from)?;
         let response = self
             .client
             .get(manifest_url.clone())

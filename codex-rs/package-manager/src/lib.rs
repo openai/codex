@@ -12,7 +12,6 @@ mod tests;
 
 pub use archive::ArchiveFormat;
 pub use archive::PackageReleaseArchive;
-pub use archive::detect_single_package_root;
 pub use config::PackageManagerConfig;
 pub use error::PackageManagerError;
 pub use manager::PackageManager;

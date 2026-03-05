@@ -1,7 +1,7 @@
 use crate::PackageManagerError;
 use crate::PackagePlatform;
 use crate::PackageReleaseArchive;
-use crate::detect_single_package_root;
+use crate::archive::detect_single_package_root;
 use serde::de::DeserializeOwned;
 use std::path::Path;
 use std::path::PathBuf;
