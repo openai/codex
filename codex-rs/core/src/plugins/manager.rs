@@ -1,8 +1,9 @@
 use super::load_plugin_manifest;
+use super::marketplace::MarketplaceError;
+use super::marketplace::resolve_marketplace_plugin;
 use super::plugin_manifest_name;
 use super::store::DEFAULT_PLUGIN_VERSION;
 use super::store::PluginId;
-use super::store::PluginInstallRequest;
 use super::store::PluginInstallResult;
 use super::store::PluginStore;
 use super::store::PluginStoreError;
@@ -37,6 +38,13 @@ const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AppConnectorId(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginInstallRequest {
+    pub plugin_name: String,
+    pub marketplace_name: String,
+    pub cwd: PathBuf,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedPlugin {
@@ -169,10 +177,17 @@ impl PluginsManager {
         &self,
         request: PluginInstallRequest,
     ) -> Result<PluginInstallResult, PluginInstallError> {
+        let resolved = resolve_marketplace_plugin(
+            &request.cwd,
+            &request.plugin_name,
+            &request.marketplace_name,
+        )?;
         let store = self.store.clone();
-        let result = tokio::task::spawn_blocking(move || store.install(request))
-            .await
-            .map_err(PluginInstallError::join)??;
+        let result = tokio::task::spawn_blocking(move || {
+            store.install(resolved.source_path.into_path_buf(), resolved.plugin_id)
+        })
+        .await
+        .map_err(PluginInstallError::join)??;
 
         ConfigService::new_with_defaults(self.codex_home.clone())
             .write_value(ConfigValueWriteParams {
@@ -195,6 +210,9 @@ impl PluginsManager {
 #[derive(Debug, thiserror::Error)]
 pub enum PluginInstallError {
     #[error("{0}")]
+    Marketplace(#[from] MarketplaceError),
+
+    #[error("{0}")]
     Store(#[from] PluginStoreError),
 
     #[error("{0}")]
@@ -207,6 +225,18 @@ pub enum PluginInstallError {
 impl PluginInstallError {
     fn join(source: tokio::task::JoinError) -> Self {
         Self::Join(source)
+    }
+
+    pub fn is_invalid_request(&self) -> bool {
+        matches!(
+            self,
+            Self::Marketplace(
+                MarketplaceError::InvalidMarketplaceFile { .. }
+                    | MarketplaceError::PluginNotFound { .. }
+                    | MarketplaceError::DuplicatePlugin { .. }
+                    | MarketplaceError::InvalidPlugin(_)
+            ) | Self::Store(PluginStoreError::Invalid(_))
+        )
     }
 }
 
@@ -879,12 +909,36 @@ mod tests {
     #[tokio::test]
     async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
         let tmp = tempfile::tempdir().unwrap();
-        write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
+        let repo_root = tmp.path().join("repo");
+        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+        write_plugin(
+            &repo_root.join(".agents/plugins"),
+            "sample-plugin",
+            "sample-plugin",
+        );
+        fs::write(
+            repo_root.join(".agents/plugins/marketplace.json"),
+            r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": {
+        "source": "local",
+        "path": "./sample-plugin"
+      }
+    }
+  ]
+}"#,
+        )
+        .unwrap();
 
         let result = PluginsManager::new(tmp.path().to_path_buf())
             .install_plugin(PluginInstallRequest {
-                source_path: tmp.path().join("sample-plugin"),
-                marketplace_name: None,
+                plugin_name: "sample-plugin".to_string(),
+                marketplace_name: "debug".to_string(),
+                cwd: repo_root.clone(),
             })
             .await
             .unwrap();
