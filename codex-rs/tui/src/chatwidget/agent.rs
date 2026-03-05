@@ -1020,6 +1020,54 @@ fn session_configured_from_thread_start_response(
     })
 }
 
+fn merge_session_configured_update(
+    current: &SessionConfiguredEvent,
+    update: SessionConfiguredEvent,
+) -> Option<SessionConfiguredEvent> {
+    if update.session_id != current.session_id {
+        return None;
+    }
+
+    let merged = SessionConfiguredEvent {
+        session_id: update.session_id,
+        forked_from_id: update.forked_from_id.or(current.forked_from_id),
+        thread_name: update.thread_name.or_else(|| current.thread_name.clone()),
+        model: update.model,
+        model_provider_id: update.model_provider_id,
+        service_tier: update.service_tier,
+        approval_policy: update.approval_policy,
+        sandbox_policy: update.sandbox_policy,
+        cwd: update.cwd,
+        reasoning_effort: update.reasoning_effort,
+        history_log_id: update.history_log_id,
+        history_entry_count: update.history_entry_count,
+        initial_messages: update
+            .initial_messages
+            .or_else(|| current.initial_messages.clone()),
+        network_proxy: update
+            .network_proxy
+            .or_else(|| current.network_proxy.clone()),
+        rollout_path: update.rollout_path.or_else(|| current.rollout_path.clone()),
+    };
+
+    let changed = merged.forked_from_id != current.forked_from_id
+        || merged.thread_name != current.thread_name
+        || merged.model != current.model
+        || merged.model_provider_id != current.model_provider_id
+        || merged.service_tier != current.service_tier
+        || merged.approval_policy != current.approval_policy
+        || merged.sandbox_policy != current.sandbox_policy
+        || merged.cwd != current.cwd
+        || merged.reasoning_effort != current.reasoning_effort
+        || merged.history_log_id != current.history_log_id
+        || merged.history_entry_count != current.history_entry_count
+        || merged.initial_messages.is_some() != current.initial_messages.is_some()
+        || merged.network_proxy != current.network_proxy
+        || merged.rollout_path != current.rollout_path;
+
+    changed.then_some(merged)
+}
+
 fn active_turn_id_from_turns(turns: &[codex_app_server_protocol::Turn]) -> Option<String> {
     turns.iter().rev().find_map(|turn| {
         if turn.status == TurnStatus::InProgress {
@@ -1806,13 +1854,14 @@ async fn run_in_process_agent_loop(
     mut client: InProcessAppServerClient,
     config: Config,
     thread_id: String,
-    session_id: ThreadId,
+    mut session_configured: SessionConfiguredEvent,
     app_event_tx: AppEventSender,
     mut request_ids: RequestIdSequencer,
     mut current_turn_id: Option<String>,
 ) {
     let mut pending_shutdown_complete = false;
     let mut pending_server_requests = PendingServerRequests::default();
+    let session_id = session_configured.session_id;
     loop {
         tokio::select! {
             maybe_op = codex_op_rx.recv() => {
@@ -2213,7 +2262,16 @@ async fn run_in_process_agent_loop(
                                 continue;
                             }
                         };
-                        if matches!(event.msg, EventMsg::SessionConfigured(_)) {
+                        if let EventMsg::SessionConfigured(update) = event.msg {
+                            if let Some(merged) =
+                                merge_session_configured_update(&session_configured, update)
+                            {
+                                session_configured = merged.clone();
+                                app_event_tx.send(AppEvent::CodexEvent(Event {
+                                    id: event.id,
+                                    msg: EventMsg::SessionConfigured(merged),
+                                }));
+                            }
                             continue;
                         }
 
@@ -2315,10 +2373,9 @@ pub(crate) fn spawn_agent(
         };
 
         let thread_id = session_configured.session_id.to_string();
-        let session_id = session_configured.session_id;
         send_codex_event(
             &app_event_tx_clone,
-            EventMsg::SessionConfigured(session_configured),
+            EventMsg::SessionConfigured(session_configured.clone()),
         );
 
         run_in_process_agent_loop(
@@ -2326,7 +2383,7 @@ pub(crate) fn spawn_agent(
             client,
             config,
             thread_id,
-            session_id,
+            session_configured,
             app_event_tx_clone,
             request_ids,
             None,
@@ -2417,12 +2474,11 @@ pub(crate) fn spawn_agent_from_existing(
             session_configured.rollout_path = thread_resume.thread.path;
         }
 
-        let session_id = session_configured.session_id;
-        let thread_id = session_id.to_string();
+        let thread_id = session_configured.session_id.to_string();
         let current_turn_id = active_turn_id_from_turns(&thread_resume.thread.turns);
         send_codex_event(
             &app_event_tx_clone,
-            EventMsg::SessionConfigured(session_configured),
+            EventMsg::SessionConfigured(session_configured.clone()),
         );
 
         run_in_process_agent_loop(
@@ -2430,7 +2486,7 @@ pub(crate) fn spawn_agent_from_existing(
             client,
             config,
             thread_id,
-            session_id,
+            session_configured,
             app_event_tx_clone,
             request_ids,
             current_turn_id,
@@ -2657,6 +2713,53 @@ mod tests {
             lagged_event_warning_message(7),
             "in-process app-server event stream lagged; dropped 7 events".to_string()
         );
+    }
+
+    fn session_configured_event() -> SessionConfiguredEvent {
+        SessionConfiguredEvent {
+            session_id: ThreadId::from_string("019cbf93-9ff5-7ac0-ac93-c8a36f0c98d3")
+                .expect("valid thread id"),
+            forked_from_id: None,
+            thread_name: Some("thread".to_string()),
+            model: "gpt-5".to_string(),
+            model_provider_id: "openai".to_string(),
+            service_tier: None,
+            approval_policy: codex_protocol::protocol::AskForApproval::Never,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+            cwd: std::env::temp_dir(),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::from("/tmp/thread.jsonl")),
+        }
+    }
+
+    #[test]
+    fn merge_session_configured_update_enriches_missing_metadata() {
+        let current = session_configured_event();
+        let mut update = session_configured_event();
+        update.forked_from_id = Some(ThreadId::new());
+        update.history_log_id = 41;
+        update.history_entry_count = 9;
+
+        let merged = merge_session_configured_update(&current, update)
+            .expect("update should enrich session metadata");
+
+        assert_eq!(merged.history_log_id, 41);
+        assert_eq!(merged.history_entry_count, 9);
+        assert!(merged.forked_from_id.is_some());
+        assert_eq!(merged.rollout_path, current.rollout_path);
+    }
+
+    #[test]
+    fn merge_session_configured_update_ignores_identical_payload() {
+        let current = session_configured_event();
+
+        let merged = merge_session_configured_update(&current, session_configured_event());
+
+        assert_eq!(merged.is_none(), true);
     }
 
     #[test]

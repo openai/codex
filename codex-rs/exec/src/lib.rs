@@ -1739,4 +1739,12 @@ mod tests {
             "in-process app-server event stream lagged; dropped 7 events".to_string()
         );
     }
+
+    #[test]
+    fn lagged_event_warning_message_is_explicit() {
+        assert_eq!(
+            lagged_event_warning_message(7),
+            "in-process app-server event stream lagged; dropped 7 events".to_string()
+        );
+    }
 }
