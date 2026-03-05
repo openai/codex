@@ -325,7 +325,8 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                     match message {
                         Some(InProcessClientMessage::Request { request, response_tx }) => {
                             let request = *request;
-                            let request_id = request.id().clone();
+                            let request_id =
+                                crate::app_server_tracing::client_request_id(&request).clone();
                             match pending_request_responses.entry(request_id.clone()) {
                                 Entry::Vacant(entry) => {
                                     entry.insert(response_tx);
