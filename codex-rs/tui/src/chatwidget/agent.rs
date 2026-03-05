@@ -98,9 +98,11 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
+use toml::Value as TomlValue;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::chatwidget::InProcessAgentContext;
 use crate::version::CODEX_CLI_VERSION;
 
 const TUI_NOTIFY_CLIENT: &str = "codex-tui";
@@ -118,7 +120,12 @@ async fn initialize_app_server_client_name(thread: &CodexThread) {
     }
 }
 
-fn in_process_start_args(config: &Config) -> InProcessClientStartArgs {
+fn in_process_start_args(
+    config: &Config,
+    arg0_paths: codex_arg0::Arg0DispatchPaths,
+    cli_overrides: Vec<(String, TomlValue)>,
+    cloud_requirements: CloudRequirementsLoader,
+) -> InProcessClientStartArgs {
     let config_warnings: Vec<ConfigWarningNotification> = config
         .startup_warnings
         .iter()
@@ -131,11 +138,11 @@ fn in_process_start_args(config: &Config) -> InProcessClientStartArgs {
         .collect();
 
     InProcessClientStartArgs {
-        arg0_paths: codex_arg0::Arg0DispatchPaths::default(),
+        arg0_paths,
         config: Arc::new(config.clone()),
-        cli_overrides: Vec::new(),
+        cli_overrides,
         loader_overrides: LoaderOverrides::default(),
-        cloud_requirements: CloudRequirementsLoader::default(),
+        cloud_requirements,
         feedback: CodexFeedback::new(),
         config_warnings,
         surface: ClientSurface::Tui,
@@ -2340,13 +2347,21 @@ pub(crate) fn spawn_agent(
     config: Config,
     app_event_tx: AppEventSender,
     _server: Arc<ThreadManager>,
+    in_process_context: InProcessAgentContext,
 ) -> UnboundedSender<Op> {
     let (codex_op_tx, codex_op_rx) = unbounded_channel::<Op>();
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
         let mut request_ids = RequestIdSequencer::new();
-        let client = match InProcessAppServerClient::start(in_process_start_args(&config)).await {
+        let client = match InProcessAppServerClient::start(in_process_start_args(
+            &config,
+            in_process_context.arg0_paths,
+            in_process_context.cli_kv_overrides,
+            in_process_context.cloud_requirements,
+        ))
+        .await
+        {
             Ok(client) => client,
             Err(err) => {
                 let message = format!("Failed to initialize in-process app-server client: {err}");
@@ -2415,13 +2430,21 @@ pub(crate) fn spawn_agent_from_existing(
     config: Config,
     mut session_configured: codex_protocol::protocol::SessionConfiguredEvent,
     app_event_tx: AppEventSender,
+    in_process_context: InProcessAgentContext,
 ) -> UnboundedSender<Op> {
     let (codex_op_tx, codex_op_rx) = unbounded_channel::<Op>();
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
         let mut request_ids = RequestIdSequencer::new();
-        let client = match InProcessAppServerClient::start(in_process_start_args(&config)).await {
+        let client = match InProcessAppServerClient::start(in_process_start_args(
+            &config,
+            in_process_context.arg0_paths,
+            in_process_context.cli_kv_overrides,
+            in_process_context.cloud_requirements,
+        ))
+        .await
+        {
             Ok(client) => client,
             Err(err) => {
                 let message = format!("failed to initialize in-process app-server client: {err}");
@@ -2554,9 +2577,14 @@ mod tests {
     async fn assert_realtime_op_reports_expected_method(op: Op, expected_method: &str) {
         let config = test_config().await;
         let session_id = ThreadId::new();
-        let client = InProcessAppServerClient::start(in_process_start_args(&config))
-            .await
-            .expect("in-process app-server client");
+        let client = InProcessAppServerClient::start(in_process_start_args(
+            &config,
+            codex_arg0::Arg0DispatchPaths::default(),
+            Vec::new(),
+            CloudRequirementsLoader::default(),
+        ))
+        .await
+        .expect("in-process app-server client");
         let (tx, mut rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(tx);
         let mut current_turn_id = None;
@@ -2607,9 +2635,14 @@ mod tests {
     ) {
         let session_id = ThreadId::new();
         let thread_id = session_id.to_string();
-        let client = InProcessAppServerClient::start(in_process_start_args(config))
-            .await
-            .expect("in-process app-server client");
+        let client = InProcessAppServerClient::start(in_process_start_args(
+            config,
+            codex_arg0::Arg0DispatchPaths::default(),
+            Vec::new(),
+            CloudRequirementsLoader::default(),
+        ))
+        .await
+        .expect("in-process app-server client");
         let (tx, rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(tx);
         let mut current_turn_id = None;
@@ -2907,9 +2940,14 @@ mod tests {
             .expect("config");
         let session_id = ThreadId::new();
         let thread_id = session_id.to_string();
-        let client = InProcessAppServerClient::start(in_process_start_args(&config))
-            .await
-            .expect("in-process app-server client");
+        let client = InProcessAppServerClient::start(in_process_start_args(
+            &config,
+            codex_arg0::Arg0DispatchPaths::default(),
+            Vec::new(),
+            CloudRequirementsLoader::default(),
+        ))
+        .await
+        .expect("in-process app-server client");
         let (tx, mut rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(tx);
         let mut current_turn_id = None;

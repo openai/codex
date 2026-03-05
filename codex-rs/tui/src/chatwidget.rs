@@ -51,6 +51,7 @@ use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
@@ -58,6 +59,7 @@ use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
 use codex_core::config::types::WindowsSandboxModeToml;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
@@ -162,6 +164,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
+use toml::Value as TomlValue;
 use tracing::debug;
 use tracing::warn;
 
@@ -463,6 +466,13 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
 }
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
+#[derive(Clone)]
+pub(crate) struct InProcessAgentContext {
+    pub(crate) arg0_paths: Arg0DispatchPaths,
+    pub(crate) cli_kv_overrides: Vec<(String, TomlValue)>,
+    pub(crate) cloud_requirements: CloudRequirementsLoader,
+}
+
 pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
     pub(crate) frame_requester: FrameRequester,
@@ -479,6 +489,7 @@ pub(crate) struct ChatWidgetInit {
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) session_telemetry: SessionTelemetry,
+    pub(crate) in_process_context: InProcessAgentContext,
 }
 
 #[derive(Default)]
@@ -3066,6 +3077,7 @@ impl ChatWidget {
             startup_tooltip_override,
             status_line_invalid_items_warned,
             session_telemetry,
+            in_process_context,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3073,7 +3085,12 @@ impl ChatWidget {
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
+        let codex_op_tx = spawn_agent(
+            config.clone(),
+            app_event_tx.clone(),
+            thread_manager,
+            in_process_context,
+        );
 
         let model_override = model.as_deref();
         let model_for_header = model
@@ -3249,6 +3266,7 @@ impl ChatWidget {
             startup_tooltip_override,
             status_line_invalid_items_warned,
             session_telemetry,
+            in_process_context: _,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3423,6 +3441,7 @@ impl ChatWidget {
             startup_tooltip_override: _,
             status_line_invalid_items_warned,
             session_telemetry,
+            in_process_context,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
@@ -3441,8 +3460,12 @@ impl ChatWidget {
             .unwrap_or(header_model);
 
         let current_cwd = Some(session_configured.cwd.clone());
-        let codex_op_tx =
-            spawn_agent_from_existing(config.clone(), session_configured, app_event_tx.clone());
+        let codex_op_tx = spawn_agent_from_existing(
+            config.clone(),
+            session_configured,
+            app_event_tx.clone(),
+            in_process_context,
+        );
 
         let fallback_default = Settings {
             model: header_model.clone(),

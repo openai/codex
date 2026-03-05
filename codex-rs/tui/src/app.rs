@@ -13,6 +13,7 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
+use crate::chatwidget::InProcessAgentContext;
 use crate::chatwidget::ThreadInputState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
@@ -40,6 +41,7 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_arg0::Arg0DispatchPaths;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -49,6 +51,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -644,6 +647,8 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) active_profile: Option<String>,
+    arg0_paths: Arg0DispatchPaths,
+    cloud_requirements: CloudRequirementsLoader,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
@@ -751,6 +756,11 @@ impl App {
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             session_telemetry: self.session_telemetry.clone(),
+            in_process_context: InProcessAgentContext {
+                arg0_paths: self.arg0_paths.clone(),
+                cli_kv_overrides: self.cli_kv_overrides.clone(),
+                cloud_requirements: self.cloud_requirements.clone(),
+            },
         }
     }
 
@@ -1546,6 +1556,11 @@ impl App {
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             session_telemetry: self.session_telemetry.clone(),
+            in_process_context: InProcessAgentContext {
+                arg0_paths: self.arg0_paths.clone(),
+                cli_kv_overrides: self.cli_kv_overrides.clone(),
+                cloud_requirements: self.cloud_requirements.clone(),
+            },
         };
         self.chat_widget = ChatWidget::new(init, self.server.clone());
         self.reset_thread_event_state();
@@ -1665,9 +1680,11 @@ impl App {
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
         mut config: Config,
+        arg0_paths: Arg0DispatchPaths,
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
         active_profile: Option<String>,
+        cloud_requirements: CloudRequirementsLoader,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
@@ -1782,6 +1799,11 @@ impl App {
                     startup_tooltip_override,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
+                    in_process_context: InProcessAgentContext {
+                        arg0_paths: arg0_paths.clone(),
+                        cli_kv_overrides: cli_kv_overrides.clone(),
+                        cloud_requirements: cloud_requirements.clone(),
+                    },
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -1817,6 +1839,11 @@ impl App {
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
+                    in_process_context: InProcessAgentContext {
+                        arg0_paths: arg0_paths.clone(),
+                        cli_kv_overrides: cli_kv_overrides.clone(),
+                        cloud_requirements: cloud_requirements.clone(),
+                    },
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
@@ -1854,6 +1881,11 @@ impl App {
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
+                    in_process_context: InProcessAgentContext {
+                        arg0_paths: arg0_paths.clone(),
+                        cli_kv_overrides: cli_kv_overrides.clone(),
+                        cloud_requirements: cloud_requirements.clone(),
+                    },
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
@@ -1874,6 +1906,8 @@ impl App {
             auth_manager: auth_manager.clone(),
             config,
             active_profile,
+            arg0_paths,
+            cloud_requirements,
             cli_kv_overrides,
             harness_overrides,
             runtime_approval_policy_override: None,
@@ -5447,6 +5481,8 @@ mod tests {
             auth_manager,
             config,
             active_profile: None,
+            arg0_paths: Arg0DispatchPaths::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
             runtime_approval_policy_override: None,
@@ -5507,6 +5543,8 @@ mod tests {
                 auth_manager,
                 config,
                 active_profile: None,
+                arg0_paths: Arg0DispatchPaths::default(),
+                cloud_requirements: CloudRequirementsLoader::default(),
                 cli_kv_overrides: Vec::new(),
                 harness_overrides: ConfigOverrides::default(),
                 runtime_approval_policy_override: None,
