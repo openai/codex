@@ -1483,6 +1483,13 @@ async fn websocket_harness_with_runtime_metrics(
     websocket_harness_with_options(server, runtime_metrics_enabled).await
 }
 
+async fn websocket_harness_with_v2(
+    server: &WebSocketTestServer,
+    runtime_metrics_enabled: bool,
+) -> WebsocketTestHarness {
+    websocket_harness_with_options(server, runtime_metrics_enabled).await
+}
+
 async fn websocket_harness_with_options(
     server: &WebSocketTestServer,
     runtime_metrics_enabled: bool,
@@ -1491,27 +1498,10 @@ async fn websocket_harness_with_options(
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());
-    if websocket_enabled {
-        config
-            .features
-            .enable(Feature::ResponsesWebsockets)
-            .expect("test config should allow feature update");
-    } else {
-        config
-            .features
-            .disable(Feature::ResponsesWebsockets)
-            .expect("test config should allow feature update");
-    }
     if runtime_metrics_enabled {
         config
             .features
             .enable(Feature::RuntimeMetrics)
-            .expect("test config should allow feature update");
-    }
-    if websocket_v2_enabled {
-        config
-            .features
-            .enable(Feature::ResponsesWebsocketsV2)
             .expect("test config should allow feature update");
     }
     let config = Arc::new(config);
