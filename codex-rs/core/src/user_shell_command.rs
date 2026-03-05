@@ -6,7 +6,7 @@ use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
-use crate::model_visible_context::USER_SHELL_COMMAND_FRAGMENT;
+use crate::model_visible_context::USER_SHELL_COMMAND_FRAGMENT_SPEC;
 use crate::tools::format_exec_output_str;
 
 fn format_duration_line(duration: Duration) -> String {
@@ -23,8 +23,8 @@ struct UserShellCommandRecord<'a> {
 impl ModelVisibleContextFragment for UserShellCommandRecord<'_> {
     type Role = ContextualUserContextRole;
 
-    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
-        USER_SHELL_COMMAND_FRAGMENT
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
+        USER_SHELL_COMMAND_FRAGMENT_SPEC
     }
 
     fn render_text(&self) -> String {
@@ -41,7 +41,7 @@ impl ModelVisibleContextFragment for UserShellCommandRecord<'_> {
             self.turn_context.truncation_policy,
         ));
         sections.push("</result>".to_string());
-        USER_SHELL_COMMAND_FRAGMENT.wrap_body(sections.join("\n"))
+        USER_SHELL_COMMAND_FRAGMENT_SPEC.wrap_body(sections.join("\n"))
     }
 }
 
@@ -83,10 +83,10 @@ mod tests {
     #[test]
     fn detects_user_shell_command_text_variants() {
         assert!(
-            USER_SHELL_COMMAND_FRAGMENT
+            USER_SHELL_COMMAND_FRAGMENT_SPEC
                 .matches_text("<user_shell_command>\necho hi\n</user_shell_command>")
         );
-        assert!(!USER_SHELL_COMMAND_FRAGMENT.matches_text("echo hi"));
+        assert!(!USER_SHELL_COMMAND_FRAGMENT_SPEC.matches_text("echo hi"));
     }
 
     #[tokio::test]

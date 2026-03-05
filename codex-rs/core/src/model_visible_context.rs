@@ -49,12 +49,12 @@ impl ModelVisibleContextRole for ContextualUserContextRole {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ModelVisibleContextEnvelope {
+pub(crate) struct ModelVisibleContextFragmentSpec {
     start_marker: Option<&'static str>,
     end_marker: Option<&'static str>,
 }
 
-impl ModelVisibleContextEnvelope {
+impl ModelVisibleContextFragmentSpec {
     pub(crate) const fn markerless() -> Self {
         Self {
             start_marker: None,
@@ -135,7 +135,7 @@ impl ModelVisibleContextEnvelope {
 pub(crate) trait ModelVisibleContextFragment {
     type Role: ModelVisibleContextRole;
 
-    fn spec(&self) -> ModelVisibleContextEnvelope;
+    fn spec(&self) -> ModelVisibleContextFragmentSpec;
 
     fn render_text(&self) -> String;
 
@@ -174,48 +174,48 @@ pub(crate) trait TurnBackedContextFragment: ModelVisibleContextFragment + Sized 
     ) -> Option<Self>;
 }
 
-/// Untagged developer-envelope fragments, including `DeveloperInstructions`.
-pub(crate) const DEVELOPER_FRAGMENT: ModelVisibleContextEnvelope =
-    ModelVisibleContextEnvelope::markerless();
-/// AGENTS.md / user-instructions contextual-user fragments.
-pub(crate) const AGENTS_MD_FRAGMENT: ModelVisibleContextEnvelope =
-    ModelVisibleContextEnvelope::contextual_user(AGENTS_MD_START_MARKER, AGENTS_MD_END_MARKER);
-/// Environment-context contextual-user fragments.
-pub(crate) const ENVIRONMENT_CONTEXT_FRAGMENT: ModelVisibleContextEnvelope =
-    ModelVisibleContextEnvelope::contextual_user(
+/// Untagged developer-envelope fragment spec, including `DeveloperInstructions`.
+pub(crate) const DEVELOPER_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
+    ModelVisibleContextFragmentSpec::markerless();
+/// AGENTS.md / user-instructions contextual-user fragment spec.
+pub(crate) const AGENTS_MD_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
+    ModelVisibleContextFragmentSpec::contextual_user(AGENTS_MD_START_MARKER, AGENTS_MD_END_MARKER);
+/// Environment-context contextual-user fragment spec.
+pub(crate) const ENVIRONMENT_CONTEXT_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
+    ModelVisibleContextFragmentSpec::contextual_user(
         ENVIRONMENT_CONTEXT_OPEN_TAG,
         ENVIRONMENT_CONTEXT_CLOSE_TAG,
     );
-/// Skill contextual-user fragments.
-pub(crate) const SKILL_FRAGMENT: ModelVisibleContextEnvelope =
-    ModelVisibleContextEnvelope::contextual_user(SKILL_OPEN_TAG, SKILL_CLOSE_TAG);
-/// User-shell-command contextual-user fragments.
-pub(crate) const USER_SHELL_COMMAND_FRAGMENT: ModelVisibleContextEnvelope =
-    ModelVisibleContextEnvelope::contextual_user(
+/// Skill contextual-user fragment spec.
+pub(crate) const SKILL_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
+    ModelVisibleContextFragmentSpec::contextual_user(SKILL_OPEN_TAG, SKILL_CLOSE_TAG);
+/// User-shell-command contextual-user fragment spec.
+pub(crate) const USER_SHELL_COMMAND_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
+    ModelVisibleContextFragmentSpec::contextual_user(
         USER_SHELL_COMMAND_OPEN_TAG,
         USER_SHELL_COMMAND_CLOSE_TAG,
     );
-/// Turn-aborted contextual-user fragments.
-pub(crate) const TURN_ABORTED_FRAGMENT: ModelVisibleContextEnvelope =
-    ModelVisibleContextEnvelope::contextual_user(TURN_ABORTED_OPEN_TAG, TURN_ABORTED_CLOSE_TAG);
-/// Plugin contextual-user fragments.
-pub(crate) const PLUGINS_FRAGMENT: ModelVisibleContextEnvelope =
-    ModelVisibleContextEnvelope::contextual_user(PLUGINS_OPEN_TAG, PLUGINS_CLOSE_TAG);
+/// Turn-aborted contextual-user fragment spec.
+pub(crate) const TURN_ABORTED_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
+    ModelVisibleContextFragmentSpec::contextual_user(TURN_ABORTED_OPEN_TAG, TURN_ABORTED_CLOSE_TAG);
+/// Plugin contextual-user fragment spec.
+pub(crate) const PLUGINS_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
+    ModelVisibleContextFragmentSpec::contextual_user(PLUGINS_OPEN_TAG, PLUGINS_CLOSE_TAG);
 
-const CONTEXTUAL_USER_FRAGMENTS: &[ModelVisibleContextEnvelope] = &[
-    AGENTS_MD_FRAGMENT,
-    ENVIRONMENT_CONTEXT_FRAGMENT,
-    SKILL_FRAGMENT,
-    USER_SHELL_COMMAND_FRAGMENT,
-    TURN_ABORTED_FRAGMENT,
-    PLUGINS_FRAGMENT,
+const CONTEXTUAL_USER_FRAGMENT_SPECS: &[ModelVisibleContextFragmentSpec] = &[
+    AGENTS_MD_FRAGMENT_SPEC,
+    ENVIRONMENT_CONTEXT_FRAGMENT_SPEC,
+    SKILL_FRAGMENT_SPEC,
+    USER_SHELL_COMMAND_FRAGMENT_SPEC,
+    TURN_ABORTED_FRAGMENT_SPEC,
+    PLUGINS_FRAGMENT_SPEC,
 ];
 
 pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
     let ContentItem::InputText { text } = content_item else {
         return false;
     };
-    CONTEXTUAL_USER_FRAGMENTS
+    CONTEXTUAL_USER_FRAGMENT_SPECS
         .iter()
         .any(|definition| definition.matches_text(text))
 }
@@ -223,8 +223,8 @@ pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
 impl ModelVisibleContextFragment for DeveloperInstructions {
     type Role = DeveloperContextRole;
 
-    fn spec(&self) -> ModelVisibleContextEnvelope {
-        DEVELOPER_FRAGMENT
+    fn spec(&self) -> ModelVisibleContextFragmentSpec {
+        DEVELOPER_FRAGMENT_SPEC
     }
 
     fn render_text(&self) -> String {
@@ -260,6 +260,6 @@ mod tests {
 
     #[test]
     fn developer_spec_does_not_match_contextual_user_text() {
-        assert!(!DEVELOPER_FRAGMENT.matches_text("<permissions instructions>body"));
+        assert!(!DEVELOPER_FRAGMENT_SPEC.matches_text("<permissions instructions>body"));
     }
 }

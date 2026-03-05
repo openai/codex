@@ -1,6 +1,6 @@
 use crate::codex::TurnContext;
 use crate::model_visible_context::ContextualUserContextRole;
-use crate::model_visible_context::ENVIRONMENT_CONTEXT_FRAGMENT;
+use crate::model_visible_context::ENVIRONMENT_CONTEXT_FRAGMENT_SPEC;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::TurnBackedContextFragment;
 use crate::shell::Shell;
@@ -91,8 +91,8 @@ impl EnvironmentContext {
 impl ModelVisibleContextFragment for EnvironmentContext {
     type Role = ContextualUserContextRole;
 
-    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
-        ENVIRONMENT_CONTEXT_FRAGMENT
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
+        ENVIRONMENT_CONTEXT_FRAGMENT_SPEC
     }
 
     fn render_text(&self) -> String {
@@ -125,7 +125,7 @@ impl ModelVisibleContextFragment for EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
-        ENVIRONMENT_CONTEXT_FRAGMENT.wrap_body(lines.join("\n"))
+        ENVIRONMENT_CONTEXT_FRAGMENT_SPEC.wrap_body(lines.join("\n"))
     }
 }
 

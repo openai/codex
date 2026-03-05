@@ -7,9 +7,9 @@ use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::TurnBackedContextFragment;
 use codex_protocol::protocol::TurnContextItem;
 
-use crate::model_visible_context::AGENTS_MD_FRAGMENT;
-use crate::model_visible_context::PLUGINS_FRAGMENT;
-use crate::model_visible_context::SKILL_FRAGMENT;
+use crate::model_visible_context::AGENTS_MD_FRAGMENT_SPEC;
+use crate::model_visible_context::PLUGINS_FRAGMENT_SPEC;
+use crate::model_visible_context::SKILL_FRAGMENT_SPEC;
 use crate::shell::Shell;
 
 pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
@@ -24,17 +24,17 @@ pub(crate) struct UserInstructions {
 impl ModelVisibleContextFragment for UserInstructions {
     type Role = ContextualUserContextRole;
 
-    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
-        AGENTS_MD_FRAGMENT
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
+        AGENTS_MD_FRAGMENT_SPEC
     }
 
     fn render_text(&self) -> String {
         format!(
             "{prefix}{directory}\n\n<INSTRUCTIONS>\n{contents}\n{suffix}",
-            prefix = AGENTS_MD_FRAGMENT.start_marker(),
+            prefix = AGENTS_MD_FRAGMENT_SPEC.start_marker(),
             directory = self.directory,
             contents = self.text,
-            suffix = AGENTS_MD_FRAGMENT.end_marker(),
+            suffix = AGENTS_MD_FRAGMENT_SPEC.end_marker(),
         )
     }
 }
@@ -76,12 +76,12 @@ pub(crate) struct SkillInstructions {
 impl ModelVisibleContextFragment for SkillInstructions {
     type Role = ContextualUserContextRole;
 
-    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
-        SKILL_FRAGMENT
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
+        SKILL_FRAGMENT_SPEC
     }
 
     fn render_text(&self) -> String {
-        SKILL_FRAGMENT.wrap_body(format!(
+        SKILL_FRAGMENT_SPEC.wrap_body(format!(
             "<name>{}</name>\n<path>{}</path>\n{}",
             self.name, self.path, self.contents
         ))
@@ -97,12 +97,12 @@ pub(crate) struct PluginInstructions {
 impl ModelVisibleContextFragment for PluginInstructions {
     type Role = ContextualUserContextRole;
 
-    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
-        PLUGINS_FRAGMENT
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
+        PLUGINS_FRAGMENT_SPEC
     }
 
     fn render_text(&self) -> String {
-        PLUGINS_FRAGMENT.wrap_body(self.text.clone())
+        PLUGINS_FRAGMENT_SPEC.wrap_body(self.text.clone())
     }
 }
 
@@ -139,10 +139,10 @@ mod tests {
 
     #[test]
     fn test_is_user_instructions() {
-        assert!(AGENTS_MD_FRAGMENT.matches_text(
+        assert!(AGENTS_MD_FRAGMENT_SPEC.matches_text(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>"
         ));
-        assert!(!AGENTS_MD_FRAGMENT.matches_text("test_text"));
+        assert!(!AGENTS_MD_FRAGMENT_SPEC.matches_text("test_text"));
     }
 
     #[test]
@@ -172,10 +172,10 @@ mod tests {
 
     #[test]
     fn test_is_skill_instructions() {
-        assert!(SKILL_FRAGMENT.matches_text(
+        assert!(SKILL_FRAGMENT_SPEC.matches_text(
             "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
         ));
-        assert!(!SKILL_FRAGMENT.matches_text("regular text"));
+        assert!(!SKILL_FRAGMENT_SPEC.matches_text("regular text"));
     }
 
     #[test]
