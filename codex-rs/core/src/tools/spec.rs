@@ -1881,30 +1881,27 @@ pub(crate) fn build_specs(
         builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
-    let search_content_types = match config.web_search_tool_type {
-        WebSearchToolType::Text => None,
-        WebSearchToolType::TextAndImage => Some(
-            WEB_SEARCH_CONTENT_TYPES
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-        ),
+    let external_web_access = match config.web_search_mode {
+        Some(WebSearchMode::Cached) => Some(false),
+        Some(WebSearchMode::Live) => Some(true),
+        Some(WebSearchMode::Disabled) | None => None,
     };
 
-    match config.web_search_mode {
-        Some(WebSearchMode::Cached) => {
-            builder.push_spec(ToolSpec::WebSearch {
-                external_web_access: Some(false),
-                search_content_types: search_content_types.clone(),
-            });
-        }
-        Some(WebSearchMode::Live) => {
-            builder.push_spec(ToolSpec::WebSearch {
-                external_web_access: Some(true),
-                search_content_types,
-            });
-        }
-        Some(WebSearchMode::Disabled) | None => {}
+    if let Some(external_web_access) = external_web_access {
+        let search_content_types = match config.web_search_tool_type {
+            WebSearchToolType::Text => None,
+            WebSearchToolType::TextAndImage => Some(
+                WEB_SEARCH_CONTENT_TYPES
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
+        };
+
+        builder.push_spec(ToolSpec::WebSearch {
+            external_web_access: Some(external_web_access),
+            search_content_types,
+        });
     }
 
     if config.image_gen_tool {
