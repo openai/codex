@@ -959,23 +959,40 @@ fn server_request_method_name(request: &ServerRequest) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+fn normalize_legacy_notification_method(method: &str) -> &str {
+    method.strip_prefix("codex/event/").unwrap_or(method)
+}
+
 fn legacy_notification_to_event(notification: JSONRPCNotification) -> Result<Event, String> {
-    let mut value = notification
+    let value = notification
         .params
         .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
-    let serde_json::Value::Object(ref mut object) = value else {
+    let method = notification.method;
+    let normalized_method = normalize_legacy_notification_method(&method).to_string();
+    let serde_json::Value::Object(object) = value else {
         return Err(format!(
             "legacy notification `{}` params were not an object",
-            notification.method
+            method
+        ));
+    };
+    let mut event_payload = if let Some(serde_json::Value::Object(msg_payload)) = object.get("msg")
+    {
+        serde_json::Value::Object(msg_payload.clone())
+    } else {
+        serde_json::Value::Object(object)
+    };
+    let serde_json::Value::Object(ref mut object) = event_payload else {
+        return Err(format!(
+            "legacy notification `{method}` event payload was not an object"
         ));
     };
     object.insert(
         "type".to_string(),
-        serde_json::Value::String(notification.method),
+        serde_json::Value::String(normalized_method),
     );
 
-    let msg: EventMsg =
-        serde_json::from_value(value).map_err(|err| format!("failed to decode event: {err}"))?;
+    let msg: EventMsg = serde_json::from_value(event_payload)
+        .map_err(|err| format!("failed to decode event: {err}"))?;
     Ok(Event {
         id: String::new(),
         msg,
@@ -2435,6 +2452,64 @@ mod tests {
             panic!("expected warning event");
         };
         warning
+    }
+
+    #[test]
+    fn legacy_notification_decodes_prefixed_warning_with_direct_payload() {
+        let notification = JSONRPCNotification {
+            method: "codex/event/warning".to_string(),
+            params: Some(serde_json::json!({
+                "message": "heads up",
+            })),
+        };
+
+        let event = legacy_notification_to_event(notification).expect("decode warning");
+        let EventMsg::Warning(warning) = event.msg else {
+            panic!("expected warning event");
+        };
+        assert_eq!(warning.message, "heads up".to_string());
+    }
+
+    #[test]
+    fn legacy_notification_decodes_prefixed_warning_with_event_wrapper_payload() {
+        let notification = JSONRPCNotification {
+            method: "codex/event/warning".to_string(),
+            params: Some(serde_json::json!({
+                "conversationId": "thread-1",
+                "id": "submission-1",
+                "msg": {
+                    "message": "wrapped warning",
+                    "type": "warning",
+                },
+            })),
+        };
+
+        let event = legacy_notification_to_event(notification).expect("decode wrapped warning");
+        let EventMsg::Warning(warning) = event.msg else {
+            panic!("expected warning event");
+        };
+        assert_eq!(warning.message, "wrapped warning".to_string());
+    }
+
+    #[test]
+    fn legacy_notification_decodes_prefixed_mcp_startup_complete() {
+        let notification = JSONRPCNotification {
+            method: "codex/event/mcp_startup_complete".to_string(),
+            params: Some(serde_json::json!({
+                "ready": ["server-a"],
+                "failed": [],
+                "cancelled": [],
+            })),
+        };
+
+        let event =
+            legacy_notification_to_event(notification).expect("decode mcp startup complete");
+        let EventMsg::McpStartupComplete(payload) = event.msg else {
+            panic!("expected mcp startup complete event");
+        };
+        assert_eq!(payload.ready, vec!["server-a".to_string()]);
+        assert!(payload.failed.is_empty());
+        assert!(payload.cancelled.is_empty());
     }
 
     #[tokio::test]
