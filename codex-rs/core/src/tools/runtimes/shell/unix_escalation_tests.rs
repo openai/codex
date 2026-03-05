@@ -20,6 +20,7 @@ use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxPermissions;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+use crate::skills::SkillMetadata;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::PolicyParser;
@@ -30,6 +31,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::SkillScope;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::ExecResult;
@@ -57,6 +59,20 @@ fn host_absolute_path(segments: &[&str]) -> String {
 
 fn starlark_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn test_skill_metadata(permission_profile: Option<PermissionProfile>) -> SkillMetadata {
+    SkillMetadata {
+        name: "skill".to_string(),
+        description: "description".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        permission_profile,
+        path_to_skills_md: PathBuf::from("/tmp/skill/SKILL.md"),
+        scope: SkillScope::User,
+    }
 }
 
 #[test]
@@ -243,6 +259,42 @@ fn shell_request_escalation_execution_is_explicit() {
                 macos_seatbelt_profile_extensions: Some(macos_seatbelt_profile_extensions),
             },
         )),
+    );
+}
+
+#[test]
+fn skill_escalation_execution_uses_additional_permissions() {
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: None,
+            write: Some(vec![
+                AbsolutePathBuf::from_absolute_path("/tmp/output").unwrap(),
+            ]),
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(Some(
+            requested_permissions.clone(),
+        ))),
+        EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
+            requested_permissions,
+        )),
+    );
+}
+
+#[test]
+fn skill_escalation_execution_ignores_empty_permissions() {
+    assert_eq!(
+        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(Some(
+            PermissionProfile::default(),
+        ))),
+        EscalationExecution::TurnDefault,
+    );
+    assert_eq!(
+        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(None)),
+        EscalationExecution::TurnDefault,
     );
 }
 
