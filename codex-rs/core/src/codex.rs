@@ -156,7 +156,8 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
-use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::DEVELOPER_FRAGMENT_SPEC;
+use crate::model_visible_context::DeveloperContextRole;
 use crate::model_visible_context::TurnContextDiffFragment;
 use crate::model_visible_context::TurnContextDiffParams;
 use codex_config::CONFIG_TOML_FILE;
@@ -2541,18 +2542,20 @@ impl Session {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
-        let fragment =
-            DeveloperInstructions::new(format!("Approved command prefix saved:\n{prefixes}"));
+        let text = format!("Approved command prefix saved:\n{prefixes}");
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            let message = fragment.into_message();
+            let message =
+                DEVELOPER_FRAGMENT_SPEC.into_message::<DeveloperContextRole>(text.clone());
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
             return;
         }
 
         if self
-            .inject_response_items(vec![fragment.into_response_input_item()])
+            .inject_response_items(vec![
+                DEVELOPER_FRAGMENT_SPEC.into_response_input_item::<DeveloperContextRole>(text),
+            ])
             .await
             .is_err()
         {
@@ -2633,20 +2636,23 @@ impl Session {
             NetworkPolicyRuleAction::Allow => ("Allowed", "allowlist"),
             NetworkPolicyRuleAction::Deny => ("Denied", "denylist"),
         };
-        let fragment = DeveloperInstructions::new(format!(
+        let text = format!(
             "{action} network rule saved in execpolicy ({list_name}): {}",
             amendment.host
-        ));
+        );
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            let message = fragment.into_message();
+            let message =
+                DEVELOPER_FRAGMENT_SPEC.into_message::<DeveloperContextRole>(text.clone());
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
             return;
         }
 
         if self
-            .inject_response_items(vec![fragment.into_response_input_item()])
+            .inject_response_items(vec![
+                DEVELOPER_FRAGMENT_SPEC.into_response_input_item::<DeveloperContextRole>(text),
+            ])
             .await
             .is_err()
         {

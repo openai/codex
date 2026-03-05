@@ -148,14 +148,6 @@ pub(crate) trait ModelVisibleContextFragment {
         self.spec().into_content_item(self.render_text())
     }
 
-    fn into_response_input_item(self) -> ResponseInputItem
-    where
-        Self: Sized,
-    {
-        self.spec()
-            .into_response_input_item::<Self::Role>(self.render_text())
-    }
-
     fn into_message(self) -> ResponseItem
     where
         Self: Sized,
