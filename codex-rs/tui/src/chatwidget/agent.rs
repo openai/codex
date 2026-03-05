@@ -33,6 +33,10 @@ use codex_app_server_protocol::SkillsRemoteWriteResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
+use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
+use codex_app_server_protocol::ThreadRealtimeStartResponse;
+use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackResponse;
@@ -732,6 +736,78 @@ async fn process_in_process_command(
                     *current_turn_id = Some(response.turn.id);
                 }
                 Err(err) => send_error_event(app_event_tx, err),
+            }
+        }
+        Op::RealtimeConversationStart(params) => {
+            let request = ClientRequest::ThreadRealtimeStart {
+                request_id: request_ids.next(),
+                params: codex_app_server_protocol::ThreadRealtimeStartParams {
+                    thread_id: thread_id.to_string(),
+                    prompt: params.prompt,
+                    session_id: params.session_id,
+                },
+            };
+            if let Err(err) = send_request_with_response::<ThreadRealtimeStartResponse>(
+                client,
+                request,
+                "thread/realtime/start",
+            )
+            .await
+            {
+                send_error_event(app_event_tx, err);
+            }
+        }
+        Op::RealtimeConversationAudio(params) => {
+            let request = ClientRequest::ThreadRealtimeAppendAudio {
+                request_id: request_ids.next(),
+                params: codex_app_server_protocol::ThreadRealtimeAppendAudioParams {
+                    thread_id: thread_id.to_string(),
+                    audio: params.frame.into(),
+                },
+            };
+            if let Err(err) = send_request_with_response::<ThreadRealtimeAppendAudioResponse>(
+                client,
+                request,
+                "thread/realtime/appendAudio",
+            )
+            .await
+            {
+                send_error_event(app_event_tx, err);
+            }
+        }
+        Op::RealtimeConversationText(params) => {
+            let request = ClientRequest::ThreadRealtimeAppendText {
+                request_id: request_ids.next(),
+                params: codex_app_server_protocol::ThreadRealtimeAppendTextParams {
+                    thread_id: thread_id.to_string(),
+                    text: params.text,
+                },
+            };
+            if let Err(err) = send_request_with_response::<ThreadRealtimeAppendTextResponse>(
+                client,
+                request,
+                "thread/realtime/appendText",
+            )
+            .await
+            {
+                send_error_event(app_event_tx, err);
+            }
+        }
+        Op::RealtimeConversationClose => {
+            let request = ClientRequest::ThreadRealtimeStop {
+                request_id: request_ids.next(),
+                params: codex_app_server_protocol::ThreadRealtimeStopParams {
+                    thread_id: thread_id.to_string(),
+                },
+            };
+            if let Err(err) = send_request_with_response::<ThreadRealtimeStopResponse>(
+                client,
+                request,
+                "thread/realtime/stop",
+            )
+            .await
+            {
+                send_error_event(app_event_tx, err);
             }
         }
         Op::CleanBackgroundTerminals => {
@@ -1717,4 +1793,117 @@ pub(crate) fn spawn_op_forwarder(thread: std::sync::Arc<CodexThread>) -> Unbound
     });
 
     codex_op_tx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::config::ConfigBuilder;
+    use codex_protocol::protocol::ConversationAudioParams;
+    use codex_protocol::protocol::ConversationStartParams;
+    use codex_protocol::protocol::ConversationTextParams;
+    use codex_protocol::protocol::RealtimeAudioFrame;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::unbounded_channel;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    async fn test_config() -> Config {
+        ConfigBuilder::default()
+            .codex_home(std::env::temp_dir())
+            .build()
+            .await
+            .expect("config")
+    }
+
+    async fn assert_realtime_op_reports_expected_method(op: Op, expected_method: &str) {
+        let config = test_config().await;
+        let client = InProcessAppServerClient::start(in_process_start_args(&config))
+            .await
+            .expect("in-process app-server client");
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let mut current_turn_id = None;
+        let mut request_ids = RequestIdSequencer::new();
+        let mut pending_server_requests = PendingServerRequests::default();
+
+        let should_shutdown = process_in_process_command(
+            op,
+            "missing-thread-id",
+            &mut current_turn_id,
+            &mut request_ids,
+            &mut pending_server_requests,
+            &client,
+            &app_event_tx,
+        )
+        .await;
+        assert_eq!(should_shutdown, false);
+
+        let maybe_event = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out waiting for app event");
+        let event = maybe_event.expect("expected app event");
+        let AppEvent::CodexEvent(event) = event else {
+            panic!("expected codex event");
+        };
+        let EventMsg::Error(error_event) = event.msg else {
+            panic!("expected error event");
+        };
+        assert_eq!(error_event.codex_error_info, None);
+        assert!(
+            error_event.message.contains(expected_method),
+            "expected error message to contain `{expected_method}`, got `{}`",
+            error_event.message
+        );
+
+        client.shutdown().await.expect("shutdown in-process client");
+    }
+
+    #[tokio::test]
+    async fn realtime_start_op_routes_to_thread_realtime_start_method() {
+        assert_realtime_op_reports_expected_method(
+            Op::RealtimeConversationStart(ConversationStartParams {
+                prompt: "hello".to_string(),
+                session_id: None,
+            }),
+            "thread/realtime/start",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn realtime_audio_op_routes_to_thread_realtime_append_audio_method() {
+        assert_realtime_op_reports_expected_method(
+            Op::RealtimeConversationAudio(ConversationAudioParams {
+                frame: RealtimeAudioFrame {
+                    data: "aGVsbG8=".to_string(),
+                    sample_rate: 24_000,
+                    num_channels: 1,
+                    samples_per_channel: Some(1),
+                },
+            }),
+            "thread/realtime/appendAudio",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn realtime_text_op_routes_to_thread_realtime_append_text_method() {
+        assert_realtime_op_reports_expected_method(
+            Op::RealtimeConversationText(ConversationTextParams {
+                text: "hello".to_string(),
+            }),
+            "thread/realtime/appendText",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn realtime_close_op_routes_to_thread_realtime_stop_method() {
+        assert_realtime_op_reports_expected_method(
+            Op::RealtimeConversationClose,
+            "thread/realtime/stop",
+        )
+        .await;
+    }
 }
