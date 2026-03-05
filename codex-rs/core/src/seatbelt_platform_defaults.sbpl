@@ -7,6 +7,7 @@
   (subpath "/Library/Preferences/Logging")
   (subpath "/private/var/db/DarwinDirectory/local/recordStore.data")
   (subpath "/private/var/db/timezone")
+  (subpath "/System/Library/CoreServices")
   (subpath "/usr/lib")
   (subpath "/usr/share")
   (subpath "/Library/Preferences")
