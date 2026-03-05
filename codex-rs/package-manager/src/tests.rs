@@ -39,6 +39,7 @@ use zip::write::SimpleFileOptions;
 struct TestPackage {
     base_url: Url,
     version: String,
+    fail_on_final_install_dir: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -108,6 +109,16 @@ impl ManagedPackage for TestPackage {
         root_dir: PathBuf,
         platform: PackagePlatform,
     ) -> Result<Self::Installed, Self::Error> {
+        if self.fail_on_final_install_dir
+            && root_dir
+                .file_name()
+                .is_some_and(|name| name == platform.as_str())
+        {
+            return Err(PackageManagerError::ArchiveExtraction(format!(
+                "refusing final install dir {}",
+                root_dir.display()
+            )));
+        }
         let manifest_path = root_dir.join("manifest.json");
         let version =
             std::fs::read_to_string(&manifest_path).map_err(|source| PackageManagerError::Io {
@@ -157,6 +168,7 @@ async fn ensure_installed_downloads_and_extracts_zip_package() {
         base_url: Url::parse(&format!("{}/", server.uri()))
             .unwrap_or_else(|error| panic!("{error}")),
         version: version.to_string(),
+        fail_on_final_install_dir: false,
     };
     let manager = PackageManager::new(PackageManagerConfig::new(
         codex_home.path().to_path_buf(),
@@ -209,6 +221,7 @@ async fn resolve_cached_uses_custom_cache_root() {
                 base_url: Url::parse("https://example.test/")
                     .unwrap_or_else(|error| panic!("{error}")),
                 version: "0.1.0".to_string(),
+                fail_on_final_install_dir: false,
             },
         )
         .with_cache_root(cache_root.clone()),
@@ -276,6 +289,7 @@ async fn ensure_installed_replaces_invalid_cached_install() {
             base_url: Url::parse(&format!("{}/", server.uri()))
                 .unwrap_or_else(|error| panic!("{error}")),
             version: version.to_string(),
+            fail_on_final_install_dir: false,
         },
     ));
 
@@ -319,6 +333,7 @@ async fn ensure_installed_rejects_manifest_version_mismatch() {
             base_url: Url::parse(&format!("{}/", server.uri()))
                 .unwrap_or_else(|error| panic!("{error}")),
             version: version.to_string(),
+            fail_on_final_install_dir: false,
         },
     ));
 
@@ -372,6 +387,7 @@ async fn ensure_installed_serializes_concurrent_installs() {
             base_url: Url::parse(&format!("{}/", server.uri()))
                 .unwrap_or_else(|error| panic!("{error}")),
             version: version.to_string(),
+            fail_on_final_install_dir: false,
         },
     );
     let manager_one = PackageManager::new(config.clone());
@@ -435,6 +451,7 @@ async fn ensure_installed_rejects_unexpected_archive_size() {
             base_url: Url::parse(&format!("{}/", server.uri()))
                 .unwrap_or_else(|error| panic!("{error}")),
             version: version.to_string(),
+            fail_on_final_install_dir: false,
         },
     ));
 
@@ -477,6 +494,84 @@ async fn staged_install_restore_keeps_previous_install_on_failed_promotion() {
         std::fs::read_to_string(install_dir.join("manifest.json"))
             .unwrap_or_else(|error| panic!("{error}")),
         "0.1.0"
+    );
+}
+
+#[tokio::test]
+async fn ensure_installed_restores_previous_install_when_final_validation_fails() {
+    let server = MockServer::start().await;
+    let version = "0.1.0";
+    let platform = PackagePlatform::detect_current().unwrap_or_else(|error| panic!("{error}"));
+    let archive_name = format!("test-package-v{version}-{}.zip", platform.as_str());
+    let archive_bytes = build_zip_archive(version);
+    let archive_sha = format!("{:x}", Sha256::digest(&archive_bytes));
+    let manifest = serde_json::json!({
+        "package_version": version,
+        "platforms": {
+            platform.as_str(): {
+                "archive": archive_name,
+                "sha256": archive_sha,
+                "format": "zip",
+                "size_bytes": archive_bytes.len(),
+            }
+        }
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("/test-package-v{version}-manifest.json")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&manifest))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{archive_name}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(archive_bytes))
+        .mount(&server)
+        .await;
+
+    let codex_home = TempDir::new().unwrap_or_else(|error| panic!("{error}"));
+    let install_dir = codex_home
+        .path()
+        .join("packages")
+        .join("test-package")
+        .join(version)
+        .join(platform.as_str());
+    std::fs::create_dir_all(&install_dir).unwrap_or_else(|error| panic!("{error}"));
+    std::fs::write(install_dir.join("manifest.json"), "0.0.9")
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let error = PackageManager::new(PackageManagerConfig::new(
+        codex_home.path().to_path_buf(),
+        TestPackage {
+            base_url: Url::parse(&format!("{}/", server.uri()))
+                .unwrap_or_else(|error| panic!("{error}")),
+            version: version.to_string(),
+            fail_on_final_install_dir: true,
+        },
+    ))
+    .ensure_installed()
+    .await
+    .expect_err("final validation should fail");
+
+    assert!(
+        matches!(error, PackageManagerError::ArchiveExtraction(message) if message.contains("refusing final install dir"))
+    );
+    assert_eq!(
+        std::fs::read_to_string(install_dir.join("manifest.json"))
+            .unwrap_or_else(|error| panic!("{error}")),
+        "0.0.9"
+    );
+    assert!(
+        !install_dir
+            .parent()
+            .unwrap_or_else(|| panic!("install dir should have a parent"))
+            .read_dir()
+            .unwrap_or_else(|error| panic!("{error}"))
+            .any(|entry| {
+                entry
+                    .unwrap_or_else(|error| panic!("{error}"))
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".replaced-")
+            })
     );
 }
 

@@ -254,11 +254,59 @@ impl<P: ManagedPackage> PackageManager<P> {
             return Err(error.into());
         }
 
+        // Validate from the final install path before deleting the quarantined
+        // previous install. Some packages may only fully validate once the
+        // promoted tree is in place at its real cache location.
+        let package = match self
+            .config
+            .package()
+            .load_installed(install_dir.clone(), platform)
+        {
+            Ok(package) => package,
+            Err(error) => {
+                if let Some(replaced_install_dir) = replaced_install_dir.as_deref() {
+                    // Final validation failed after promotion, so discard the
+                    // broken install and restore the last known-good copy.
+                    if fs::try_exists(&install_dir)
+                        .await
+                        .map_err(|source| PackageManagerError::Io {
+                            context: format!("failed to read {}", install_dir.display()),
+                            source,
+                        })
+                        .map_err(P::Error::from)?
+                    {
+                        fs::remove_dir_all(&install_dir)
+                            .await
+                            .map_err(|source| PackageManagerError::Io {
+                                context: format!(
+                                    "failed to remove invalid install {} after final validation failed",
+                                    install_dir.display()
+                                ),
+                                source,
+                            })
+                            .map_err(P::Error::from)?;
+                    }
+                    fs::rename(replaced_install_dir, &install_dir)
+                        .await
+                        .map_err(|source| PackageManagerError::Io {
+                            context: format!(
+                                "failed to restore {} from {} after final validation failed",
+                                install_dir.display(),
+                                replaced_install_dir.display()
+                            ),
+                            source,
+                        })
+                        .map_err(P::Error::from)?;
+                }
+                return Err(error);
+            }
+        };
+
         if let Some(replaced_install_dir) = replaced_install_dir {
             let _ = fs::remove_dir_all(replaced_install_dir).await;
         }
 
-        self.config.package().load_installed(install_dir, platform)
+        Ok(package)
     }
 
     async fn resolve_cached_at(
