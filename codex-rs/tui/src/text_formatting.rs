@@ -114,6 +114,33 @@ pub(crate) fn truncate_text(text: &str, max_graphemes: usize) -> String {
     }
 }
 
+/// Extract the first Markdown bold chunk (`**...**`) from `text`.
+///
+/// Returns trimmed inner text when both delimiters are present and non-empty.
+/// If the opening delimiter is present without a closing delimiter, returns `None`
+/// so callers can wait for additional streamed text.
+pub(crate) fn extract_first_bold(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'*' && bytes[i + 1] == b'*' {
+            let start = i + 2;
+            let mut j = start;
+            while j + 1 < bytes.len() {
+                if bytes[j] == b'*' && bytes[j + 1] == b'*' {
+                    let inner = &text[start..j];
+                    let trimmed = inner.trim();
+                    return (!trimmed.is_empty()).then_some(trimmed.to_string());
+                }
+                j += 1;
+            }
+            return None;
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Truncate a path-like string to the given display width, keeping leading and trailing segments
 /// where possible and inserting a single Unicode ellipsis between them. If an individual segment
 /// cannot fit, it is front-truncated with an ellipsis.
@@ -438,6 +465,26 @@ mod tests {
         let truncated = truncate_text(&text, 10);
         assert_eq!(truncated, "aaaaaaa...");
         assert_eq!(truncated.len(), 10); // 7 'a's + 3 dots
+    }
+
+    #[test]
+    fn test_extract_first_bold_returns_first_chunk() {
+        let text = "hello **Working on parser** and **another**";
+        assert_eq!(
+            extract_first_bold(text),
+            Some("Working on parser".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_first_bold_ignores_empty_inner_text() {
+        assert_eq!(extract_first_bold("start **** end"), None);
+        assert_eq!(extract_first_bold("start **   ** end"), None);
+    }
+
+    #[test]
+    fn test_extract_first_bold_requires_closing_delimiter() {
+        assert_eq!(extract_first_bold("start **incomplete"), None);
     }
 
     #[test]

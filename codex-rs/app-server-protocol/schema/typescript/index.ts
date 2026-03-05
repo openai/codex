@@ -29,6 +29,7 @@ export type { CollabAgentInteractionEndEvent } from "./CollabAgentInteractionEnd
 export type { CollabAgentRef } from "./CollabAgentRef";
 export type { CollabAgentSpawnBeginEvent } from "./CollabAgentSpawnBeginEvent";
 export type { CollabAgentSpawnEndEvent } from "./CollabAgentSpawnEndEvent";
+export type { CollabAgentSpawnMode } from "./CollabAgentSpawnMode";
 export type { CollabAgentStatusEntry } from "./CollabAgentStatusEntry";
 export type { CollabCloseBeginEvent } from "./CollabCloseBeginEvent";
 export type { CollabCloseEndEvent } from "./CollabCloseEndEvent";

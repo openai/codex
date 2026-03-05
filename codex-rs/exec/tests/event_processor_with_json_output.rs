@@ -44,6 +44,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabAgentSpawnMode;
 use codex_protocol::protocol::CollabWaitingEndEvent;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -576,6 +577,7 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             new_agent_nickname: None,
             new_agent_role: None,
             prompt: prompt.clone(),
+            spawn_mode: CollabAgentSpawnMode::Spawn,
             status: AgentStatus::Running,
         }),
     );
