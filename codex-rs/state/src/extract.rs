@@ -252,6 +252,7 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
+                trace_id: None,
                 cwd: PathBuf::from("/parent/workspace"),
                 current_date: None,
                 timezone: None,
@@ -289,6 +290,7 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
+                trace_id: None,
                 cwd: PathBuf::from("/fallback/workspace"),
                 current_date: None,
                 timezone: None,
