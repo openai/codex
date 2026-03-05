@@ -40,7 +40,8 @@ js_repl_node_path = "/absolute/path/to/node"
 ## Module resolution
 
 `js_repl` resolves **bare** specifiers (for example `await import("pkg")`) using an ordered
-search path. Path-style specifiers (`./`, `../`, absolute paths, `file:` URLs) are rejected.
+search path. Local file imports are also supported for relative paths, absolute paths, and
+`file://` URLs that point to ESM `.js` / `.mjs` files.
 
 Module resolution proceeds in the following order:
 
@@ -50,6 +51,9 @@ Module resolution proceeds in the following order:
 
 For `CODEX_JS_REPL_NODE_MODULE_DIRS` and `js_repl_node_module_dirs`, module resolution is attempted in the order provided with earlier entries taking precedence.
 
+Bare package imports always use this REPL-wide search path, even when they originate from an
+imported local file. They are not resolved relative to the imported file's location.
+
 ## Usage
 
 - `js_repl` is a freeform tool: send raw JavaScript source text.
@@ -57,6 +61,10 @@ For `CODEX_JS_REPL_NODE_MODULE_DIRS` and `js_repl_node_module_dirs`, module reso
   - `// codex-js-repl: timeout_ms=15000`
 - Top-level bindings persist across calls.
 - Top-level static import declarations (for example `import x from "pkg"`) are currently unsupported; use dynamic imports with `await import("pkg")`.
+- Imported local files must be ESM `.js` / `.mjs` files and run in the same REPL VM context as the calling cell.
+- Static imports inside imported local files may only target other local `.js` / `.mjs` files via relative paths, absolute paths, or `file://` URLs. Bare package and builtin imports from local files must stay dynamic via `await import(...)`.
+- `import.meta.resolve()` returns importable strings such as `file://...`, bare package names, and `node:fs`; the returned value can be passed back to `await import(...)`.
+- Local file modules reload between execs, so a later `await import("./file.js")` picks up edits and fixed failures. Top-level bindings you already created still persist until `js_repl_reset`.
 - Use `js_repl_reset` to clear the kernel state.
 
 ## Helper APIs inside the kernel
@@ -66,6 +74,7 @@ For `CODEX_JS_REPL_NODE_MODULE_DIRS` and `js_repl_node_module_dirs`, module reso
 - `codex.tmpDir`: per-session scratch directory path.
 - `codex.tool(name, args?)`: executes a normal Codex tool call from inside `js_repl` (including shell tools like `shell` / `shell_command` when available).
 - `codex.emitImage(imageLike)`: explicitly adds exactly one image to the outer `js_repl` function output.
+- Imported local files run in the same VM context, so they can also access `codex.*`, the captured `console`, and Node-like `import.meta` helpers.
 - Each `codex.tool(...)` call emits a bounded summary at `info` level from the `codex_core::tools::js_repl` logger. At `trace` level, the same path also logs the exact raw response object or error string seen by JavaScript.
 - Nested `codex.tool(...)` outputs stay inside JavaScript unless you emit them explicitly.
 - `codex.emitImage(...)` accepts a direct image URL, a single `input_image` item, an object like `{ bytes, mimeType }`, or a raw tool response object that contains exactly one image and no text.
