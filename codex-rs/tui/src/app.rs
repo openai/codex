@@ -1043,7 +1043,7 @@ impl App {
                 thread_label,
                 server_name: ev.server_name.clone(),
                 request_id: ev.id.clone(),
-                message: ev.message.clone(),
+                message: ev.request.message().to_string(),
             }),
             _ => None,
         }
