@@ -158,6 +158,10 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
+use crate::model_visible_context::DEVELOPER_FRAGMENT_SPEC;
+use crate::model_visible_context::DeveloperContextRole;
+use crate::model_visible_context::TurnContextDiffFragment;
+use crate::model_visible_context::TurnContextDiffParams;
 use codex_config::CONFIG_TOML_FILE;
 
 mod rollout_reconstruction;
@@ -206,6 +210,7 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
+use crate::plugins::render_plugin_instructions;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -355,7 +360,6 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_plugins = plugins_manager.plugins_for_config(&config);
         let loaded_skills = skills_manager.skills_for_config(&config);
 
         for err in &loaded_skills.errors {
@@ -392,12 +396,8 @@ impl Codex {
 
         let allowed_skills_for_implicit_invocation =
             loaded_skills.allowed_skills_for_implicit_invocation();
-        let user_instructions = get_user_instructions(
-            &config,
-            Some(&allowed_skills_for_implicit_invocation),
-            Some(loaded_plugins.capability_summaries()),
-        )
-        .await;
+        let user_instructions =
+            get_user_instructions(&config, Some(&allowed_skills_for_implicit_invocation)).await;
 
         let exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
             .await
@@ -2382,13 +2382,16 @@ impl Session {
         };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
-        crate::context_manager::updates::build_settings_update_items(
-            reference_context_item,
-            previous_turn_settings.as_ref(),
-            current_context,
+        let diff_context = TurnContextDiffParams::new(
             shell.as_ref(),
+            previous_turn_settings.as_ref(),
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
+        );
+        crate::context_manager::updates::build_settings_update_items(
+            reference_context_item,
+            current_context,
+            &diff_context,
         )
     }
 
@@ -2546,19 +2549,19 @@ impl Session {
             return;
         };
         let text = format!("Approved command prefix saved:\n{prefixes}");
-        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
+            let message =
+                DEVELOPER_FRAGMENT_SPEC.into_message::<DeveloperContextRole>(text.clone());
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
             return;
         }
 
         if self
-            .inject_response_items(vec![ResponseInputItem::Message {
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
-            }])
+            .inject_response_items(vec![
+                DEVELOPER_FRAGMENT_SPEC.into_response_input_item::<DeveloperContextRole>(text),
+            ])
             .await
             .is_err()
         {
@@ -2643,19 +2646,19 @@ impl Session {
             "{action} network rule saved in execpolicy ({list_name}): {}",
             amendment.host
         );
-        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
+            let message =
+                DEVELOPER_FRAGMENT_SPEC.into_message::<DeveloperContextRole>(text.clone());
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
             return;
         }
 
         if self
-            .inject_response_items(vec![ResponseInputItem::Message {
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
-            }])
+            .inject_response_items(vec![
+                DEVELOPER_FRAGMENT_SPEC.into_response_input_item::<DeveloperContextRole>(text),
+            ])
             .await
             .is_err()
         {
@@ -3035,9 +3038,10 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
-        let mut developer_sections = Vec::<String>::with_capacity(8);
-        let mut contextual_user_sections = Vec::<String>::with_capacity(2);
-        let shell = self.user_shell();
+        let mut developer_envelope =
+            crate::context_manager::updates::DeveloperEnvelopeBuilder::default();
+        let mut contextual_user_envelope =
+            crate::context_manager::updates::ContextualUserEnvelopeBuilder::default();
         let (reference_context_item, previous_turn_settings, collaboration_mode, base_instructions) = {
             let state = self.state.lock().await;
             (
@@ -3047,47 +3051,50 @@ impl Session {
                 state.session_configuration.base_instructions.clone(),
             )
         };
+        let shell = self.user_shell();
+        let exec_policy = self.services.exec_policy.current();
+        let diff_context = TurnContextDiffParams::new(
+            shell.as_ref(),
+            previous_turn_settings.as_ref(),
+            exec_policy.as_ref(),
+            self.features.enabled(Feature::Personality),
+        );
         if let Some(model_switch_message) =
             crate::context_manager::updates::build_model_instructions_update_item(
                 previous_turn_settings.as_ref(),
                 turn_context,
             )
         {
-            developer_sections.push(model_switch_message.into_text());
+            developer_envelope.push(model_switch_message);
         }
-        developer_sections.push(
-            DeveloperInstructions::from_policy(
-                turn_context.sandbox_policy.get(),
-                turn_context.approval_policy.value(),
-                self.services.exec_policy.current().as_ref(),
-                &turn_context.cwd,
-                turn_context.features.enabled(Feature::RequestPermissions),
-            )
-            .into_text(),
-        );
+        developer_envelope.push(DeveloperInstructions::from_policy(
+            turn_context.sandbox_policy.get(),
+            turn_context.approval_policy.value(),
+            exec_policy.as_ref(),
+            &turn_context.cwd,
+            turn_context.features.enabled(Feature::RequestPermissions),
+        ));
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
-            developer_sections.push(developer_instructions.to_string());
+            developer_envelope.push(DeveloperInstructions::new(developer_instructions));
         }
-        // Add developer instructions for memories.
         if turn_context.features.enabled(Feature::MemoryTool)
             && turn_context.config.memories.use_memories
             && let Some(memory_prompt) =
                 build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
         {
-            developer_sections.push(memory_prompt);
+            developer_envelope.push(memory_prompt);
         }
-        // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
             DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
         {
-            developer_sections.push(collab_instructions.into_text());
+            developer_envelope.push(collab_instructions);
         }
-        if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
+        if let Some(realtime_update) = crate::context_manager::updates::build_realtime_update_item(
             reference_context_item.as_ref(),
             previous_turn_settings.as_ref(),
             turn_context,
         ) {
-            developer_sections.push(realtime_update.into_text());
+            developer_envelope.push(realtime_update);
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
@@ -3102,52 +3109,62 @@ impl Session {
                         personality,
                     )
             {
-                developer_sections.push(
-                    DeveloperInstructions::personality_spec_message(personality_message)
-                        .into_text(),
-                );
+                developer_envelope.push(DeveloperInstructions::personality_spec_message(
+                    personality_message,
+                ));
             }
         }
         if turn_context.features.enabled(Feature::Apps) {
-            developer_sections.push(render_apps_section());
+            developer_envelope.push(render_apps_section());
         }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
                 turn_context.config.commit_attribution.as_deref(),
             )
         {
-            developer_sections.push(commit_message_instruction);
+            developer_envelope.push(commit_message_instruction);
         }
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            contextual_user_sections.push(
-                UserInstructions {
-                    text: user_instructions.to_string(),
-                    directory: turn_context.cwd.to_string_lossy().into_owned(),
-                }
-                .serialize_to_text(),
-            );
+        if let Some(user_instructions) =
+            <UserInstructions as TurnContextDiffFragment>::from_turn_context(
+                turn_context,
+                &diff_context,
+            )
+        {
+            contextual_user_envelope.push_fragment(user_instructions);
+        }
+        let loaded_plugins = self
+            .services
+            .plugins_manager
+            .plugins_for_config(&turn_context.config);
+        if let Some(plugin_instructions) =
+            render_plugin_instructions(loaded_plugins.capability_summaries())
+        {
+            contextual_user_envelope.push_fragment(plugin_instructions);
         }
         let subagents = self
             .services
             .agent_control
             .format_environment_context_subagents(self.conversation_id)
             .await;
-        contextual_user_sections.push(
-            EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
-                .with_subagents(subagents)
-                .serialize_to_xml(),
-        );
+        if let Some(environment_context) =
+            <EnvironmentContext as TurnContextDiffFragment>::from_turn_context(
+                turn_context,
+                &diff_context,
+            )
+        {
+            contextual_user_envelope.push_fragment(environment_context);
+        }
+        if let Some(subagent_roster) = crate::session_prefix::SubagentRosterContext::new(subagents)
+        {
+            developer_envelope.push(subagent_roster);
+        }
 
         let mut items = Vec::with_capacity(2);
-        if let Some(developer_message) =
-            crate::context_manager::updates::build_developer_update_item(developer_sections)
-        {
+        if let Some(developer_message) = developer_envelope.build() {
             items.push(developer_message);
         }
-        if let Some(contextual_user_message) =
-            crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
-        {
-            items.push(contextual_user_message);
+        if let Some(model_visible_context) = contextual_user_envelope.build() {
+            items.push(model_visible_context);
         }
         items
     }
@@ -9920,7 +9937,7 @@ mod tests {
                     let ContentItem::InputText { text } = content_item else {
                         return false;
                     };
-                    text.contains(crate::contextual_user_message::TURN_ABORTED_OPEN_TAG)
+                    text.contains(crate::model_visible_context::TURN_ABORTED_OPEN_TAG)
                 })
             }),
             "expected a model-visible turn aborted marker in history after interrupt"
@@ -10013,8 +10030,11 @@ mod tests {
                 .as_ref()
                 .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
         {
-            let msg =
-                DeveloperInstructions::personality_spec_message(personality_message).into();
+            let msg = {
+                let fragment =
+                    DeveloperInstructions::personality_spec_message(personality_message);
+                fragment.into_message()
+            };
             let insert_at = initial_context
                 .iter()
                 .position(|m| matches!(m, ResponseItem::Message { role, .. } if role == "developer"))

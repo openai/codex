@@ -245,34 +245,22 @@ fn canonicalize_snapshot_text(text: &str) -> String {
         return "<AGENTS_MD>".to_string();
     }
     if text.starts_with("<environment_context>") {
-        let subagent_count = text
-            .split_once("<subagents>")
-            .and_then(|(_, rest)| rest.split_once("</subagents>"))
-            .map(|(subagents, _)| {
-                subagents
-                    .lines()
-                    .filter(|line| line.trim_start().starts_with("- "))
-                    .count()
-            })
-            .unwrap_or(0);
-        let subagents_suffix = if subagent_count > 0 {
-            format!(":subagents={subagent_count}")
-        } else {
-            String::new()
-        };
         if let (Some(cwd_start), Some(cwd_end)) = (text.find("<cwd>"), text.find("</cwd>")) {
             let cwd = &text[cwd_start + "<cwd>".len()..cwd_end];
             return if cwd.ends_with("PRETURN_CONTEXT_DIFF_CWD") {
-                format!("<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD{subagents_suffix}>")
+                "<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>".to_string()
             } else {
-                format!("<ENVIRONMENT_CONTEXT:cwd=<CWD>{subagents_suffix}>")
+                "<ENVIRONMENT_CONTEXT:cwd=<CWD>>".to_string()
             };
         }
-        return if subagent_count > 0 {
-            format!("<ENVIRONMENT_CONTEXT{subagents_suffix}>")
-        } else {
-            "<ENVIRONMENT_CONTEXT>".to_string()
-        };
+        return "<ENVIRONMENT_CONTEXT>".to_string();
+    }
+    if text.starts_with("<subagents>") {
+        let subagent_count = text
+            .lines()
+            .filter(|line| line.trim_start().starts_with("- "))
+            .count();
+        return format!("<SUBAGENTS:count={subagent_count}>");
     }
     if text.starts_with("You are performing a CONTEXT CHECKPOINT COMPACTION.") {
         return "<SUMMARIZATION_PROMPT>".to_string();
@@ -354,13 +342,13 @@ mod tests {
     }
 
     #[test]
-    fn redacted_text_mode_normalizes_environment_context_with_subagents() {
+    fn redacted_text_mode_normalizes_subagents_fragment() {
         let items = vec![json!({
             "type": "message",
-            "role": "user",
+            "role": "developer",
             "content": [{
                 "type": "input_text",
-                "text": "<environment_context>\n  <cwd>/tmp/example</cwd>\n  <shell>bash</shell>\n  <subagents>\n    - agent-1: atlas\n    - agent-2\n  </subagents>\n</environment_context>"
+                "text": "<subagents>\n  - agent-1: atlas\n  - agent-2\n</subagents>"
             }]
         })];
 
@@ -369,10 +357,7 @@ mod tests {
             &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::RedactedText),
         );
 
-        assert_eq!(
-            rendered,
-            "00:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>:subagents=2>"
-        );
+        assert_eq!(rendered, "00:message/developer:<SUBAGENTS:count=2>");
     }
 
     #[test]

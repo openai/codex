@@ -1,10 +1,16 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use codex_protocol::models::ResponseItem;
+use crate::codex::TurnContext;
+use crate::model_visible_context::ContextualUserContextRole;
+use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::TurnContextDiffFragment;
+use crate::model_visible_context::TurnContextDiffParams;
+use codex_protocol::protocol::TurnContextItem;
 
-use crate::contextual_user_message::AGENTS_MD_FRAGMENT;
-use crate::contextual_user_message::SKILL_FRAGMENT;
+use crate::model_visible_context::AGENTS_MD_FRAGMENT_SPEC;
+use crate::model_visible_context::PLUGINS_FRAGMENT_SPEC;
+use crate::model_visible_context::SKILL_FRAGMENT_SPEC;
 
 pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
 
@@ -15,21 +21,50 @@ pub(crate) struct UserInstructions {
     pub text: String,
 }
 
-impl UserInstructions {
-    pub(crate) fn serialize_to_text(&self) -> String {
+impl ModelVisibleContextFragment for UserInstructions {
+    type Role = ContextualUserContextRole;
+
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
+        AGENTS_MD_FRAGMENT_SPEC
+    }
+
+    fn render_text(&self) -> String {
         format!(
             "{prefix}{directory}\n\n<INSTRUCTIONS>\n{contents}\n{suffix}",
-            prefix = AGENTS_MD_FRAGMENT.start_marker(),
+            prefix = AGENTS_MD_FRAGMENT_SPEC.start_marker(),
             directory = self.directory,
             contents = self.text,
-            suffix = AGENTS_MD_FRAGMENT.end_marker(),
+            suffix = AGENTS_MD_FRAGMENT_SPEC.end_marker(),
         )
     }
 }
 
-impl From<UserInstructions> for ResponseItem {
-    fn from(ui: UserInstructions) -> Self {
-        AGENTS_MD_FRAGMENT.into_message(ui.serialize_to_text())
+impl TurnContextDiffFragment for UserInstructions {
+    fn from_turn_context(
+        turn_context: &TurnContext,
+        _context: &TurnContextDiffParams<'_>,
+    ) -> Option<Self> {
+        let text = turn_context.user_instructions.as_ref()?.clone();
+        Some(Self {
+            directory: turn_context.cwd.to_string_lossy().into_owned(),
+            text,
+        })
+    }
+
+    fn diff_from_turn_context_item(
+        previous: &TurnContextItem,
+        turn_context: &TurnContext,
+        context: &TurnContextDiffParams<'_>,
+    ) -> Option<Self> {
+        let current = Self::from_turn_context(turn_context, context)?;
+        let previous_directory = previous.cwd.to_string_lossy().into_owned();
+        if previous.user_instructions.as_deref() == Some(current.text.as_str())
+            && previous_directory == current.directory
+        {
+            return None;
+        }
+
+        Some(current)
     }
 }
 
@@ -41,14 +76,36 @@ pub(crate) struct SkillInstructions {
     pub contents: String,
 }
 
-impl SkillInstructions {}
+impl ModelVisibleContextFragment for SkillInstructions {
+    type Role = ContextualUserContextRole;
 
-impl From<SkillInstructions> for ResponseItem {
-    fn from(si: SkillInstructions) -> Self {
-        SKILL_FRAGMENT.into_message(SKILL_FRAGMENT.wrap(format!(
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
+        SKILL_FRAGMENT_SPEC
+    }
+
+    fn render_text(&self) -> String {
+        SKILL_FRAGMENT_SPEC.wrap_body(format!(
             "<name>{}</name>\n<path>{}</path>\n{}",
-            si.name, si.path, si.contents
-        )))
+            self.name, self.path, self.contents
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename = "plugin_instructions", rename_all = "snake_case")]
+pub(crate) struct PluginInstructions {
+    pub text: String,
+}
+
+impl ModelVisibleContextFragment for PluginInstructions {
+    type Role = ContextualUserContextRole;
+
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
+        PLUGINS_FRAGMENT_SPEC
+    }
+
+    fn render_text(&self) -> String {
+        PLUGINS_FRAGMENT_SPEC.wrap_body(self.text.clone())
     }
 }
 
@@ -56,6 +113,7 @@ impl From<SkillInstructions> for ResponseItem {
 mod tests {
     use super::*;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -64,7 +122,7 @@ mod tests {
             directory: "test_directory".to_string(),
             text: "test_text".to_string(),
         };
-        let response_item: ResponseItem = user_instructions.into();
+        let response_item = user_instructions.into_message();
 
         let ResponseItem::Message { role, content, .. } = response_item else {
             panic!("expected ResponseItem::Message");
@@ -84,10 +142,10 @@ mod tests {
 
     #[test]
     fn test_is_user_instructions() {
-        assert!(AGENTS_MD_FRAGMENT.matches_text(
+        assert!(AGENTS_MD_FRAGMENT_SPEC.matches_text(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>"
         ));
-        assert!(!AGENTS_MD_FRAGMENT.matches_text("test_text"));
+        assert!(!AGENTS_MD_FRAGMENT_SPEC.matches_text("test_text"));
     }
 
     #[test]
@@ -97,7 +155,7 @@ mod tests {
             path: "skills/demo/SKILL.md".to_string(),
             contents: "body".to_string(),
         };
-        let response_item: ResponseItem = skill_instructions.into();
+        let response_item = skill_instructions.into_message();
 
         let ResponseItem::Message { role, content, .. } = response_item else {
             panic!("expected ResponseItem::Message");
@@ -117,9 +175,29 @@ mod tests {
 
     #[test]
     fn test_is_skill_instructions() {
-        assert!(SKILL_FRAGMENT.matches_text(
+        assert!(SKILL_FRAGMENT_SPEC.matches_text(
             "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
         ));
-        assert!(!SKILL_FRAGMENT.matches_text("regular text"));
+        assert!(!SKILL_FRAGMENT_SPEC.matches_text("regular text"));
+    }
+
+    #[test]
+    fn test_plugin_instructions() {
+        let plugin_instructions = PluginInstructions {
+            text: "## Plugins\n- `sample`".to_string(),
+        };
+        let response_item = plugin_instructions.into_message();
+
+        let ResponseItem::Message { role, content, .. } = response_item else {
+            panic!("expected ResponseItem::Message");
+        };
+
+        assert_eq!(role, "user");
+
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected one InputText content item");
+        };
+
+        assert_eq!(text, "<plugins>\n## Plugins\n- `sample`\n</plugins>");
     }
 }

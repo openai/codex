@@ -8,6 +8,7 @@ use crate::analytics_client::SkillInvocation;
 use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
 use crate::mentions::build_skill_name_counts;
+use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::skills::SkillMetadata;
 use codex_otel::OtelManager;
 use codex_protocol::models::ResponseItem;
@@ -46,11 +47,12 @@ pub(crate) async fn build_skill_injections(
                     skill_path: skill.path_to_skills_md.clone(),
                     invocation_type: InvocationType::Explicit,
                 });
-                result.items.push(ResponseItem::from(SkillInstructions {
+                let fragment = SkillInstructions {
                     name: skill.name.clone(),
                     path: skill.path_to_skills_md.to_string_lossy().into_owned(),
                     contents,
-                }));
+                };
+                result.items.push(fragment.into_message());
             }
             Err(err) => {
                 emit_skill_injected_metric(otel, skill, "error");

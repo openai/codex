@@ -361,6 +361,9 @@ impl Default for BaseInstructions {
 
 /// Developer-provided guidance that is injected into a turn as a developer role
 /// message.
+///
+/// In `codex-core`, this is one implementation of the shared model-visible
+/// fragment path used to assemble prompt context.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(rename = "developer_instructions", rename_all = "snake_case")]
 pub struct DeveloperInstructions {
@@ -449,31 +452,46 @@ impl DeveloperInstructions {
         Self { text }
     }
 
-    pub fn model_switch_message(model_instructions: String) -> Self {
-        DeveloperInstructions::new(format!(
+    pub fn model_switch_text(model_instructions: String) -> String {
+        format!(
             "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{model_instructions}\n</model_switch>"
-        ))
+        )
+    }
+
+    pub fn model_switch_message(model_instructions: String) -> Self {
+        DeveloperInstructions::new(Self::model_switch_text(model_instructions))
+    }
+
+    pub fn realtime_start_text() -> String {
+        format!(
+            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
+            REALTIME_START_INSTRUCTIONS.trim()
+        )
     }
 
     pub fn realtime_start_message() -> Self {
-        DeveloperInstructions::new(format!(
-            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
-            REALTIME_START_INSTRUCTIONS.trim()
-        ))
+        DeveloperInstructions::new(Self::realtime_start_text())
+    }
+
+    pub fn realtime_end_text(reason: &str) -> String {
+        format!(
+            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n\nReason: {reason}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
+            REALTIME_END_INSTRUCTIONS.trim()
+        )
     }
 
     pub fn realtime_end_message(reason: &str) -> Self {
-        DeveloperInstructions::new(format!(
-            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n\nReason: {reason}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
-            REALTIME_END_INSTRUCTIONS.trim()
-        ))
+        DeveloperInstructions::new(Self::realtime_end_text(reason))
+    }
+
+    pub fn personality_spec_text(spec: String) -> String {
+        format!(
+            "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} </personality_spec>"
+        )
     }
 
     pub fn personality_spec_message(spec: String) -> Self {
-        let message = format!(
-            "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} </personality_spec>"
-        );
-        DeveloperInstructions::new(message)
+        DeveloperInstructions::new(Self::personality_spec_text(spec))
     }
 
     pub fn from_policy(
@@ -509,17 +527,36 @@ impl DeveloperInstructions {
         )
     }
 
+    pub fn from_policy_text(
+        sandbox_policy: &SandboxPolicy,
+        approval_policy: AskForApproval,
+        exec_policy: &Policy,
+        cwd: &Path,
+        request_permission_enabled: bool,
+    ) -> String {
+        Self::from_policy(
+            sandbox_policy,
+            approval_policy,
+            exec_policy,
+            cwd,
+            request_permission_enabled,
+        )
+        .into_text()
+    }
+
     /// Returns developer instructions from a collaboration mode if they exist and are non-empty.
     pub fn from_collaboration_mode(collaboration_mode: &CollaborationMode) -> Option<Self> {
+        Self::from_collaboration_mode_text(collaboration_mode).map(DeveloperInstructions::new)
+    }
+
+    pub fn from_collaboration_mode_text(collaboration_mode: &CollaborationMode) -> Option<String> {
         collaboration_mode
             .settings
             .developer_instructions
             .as_ref()
             .filter(|instructions| !instructions.is_empty())
             .map(|instructions| {
-                DeveloperInstructions::new(format!(
-                    "{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}"
-                ))
+                format!("{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}")
             })
     }
 
@@ -634,20 +671,6 @@ fn render_command_prefix(prefix: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{tokens}]")
-}
-
-impl From<DeveloperInstructions> for ResponseItem {
-    fn from(di: DeveloperInstructions) -> Self {
-        ResponseItem::Message {
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: di.into_text(),
-            }],
-            end_turn: None,
-            phase: None,
-        }
-    }
 }
 
 impl From<SandboxMode> for DeveloperInstructions {

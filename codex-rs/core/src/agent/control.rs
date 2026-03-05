@@ -456,7 +456,7 @@ impl AgentControl {
                 return;
             };
             parent_thread
-                .inject_user_message_without_turn(format_subagent_notification_message(
+                .inject_developer_message_without_turn(format_subagent_notification_message(
                     &child_thread_id.to_string(),
                     &status,
                 ))
@@ -497,8 +497,8 @@ mod tests {
     use crate::config::Config;
     use crate::config::ConfigBuilder;
     use crate::config_loader::LoaderOverrides;
-    use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
     use crate::features::Feature;
+    use crate::model_visible_context::SUBAGENT_NOTIFICATION_OPEN_TAG;
     use assert_matches::assert_matches;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::models::ContentItem;
@@ -587,7 +587,7 @@ mod tests {
             let ResponseItem::Message { role, content, .. } = item else {
                 return false;
             };
-            if role != "user" {
+            if role != "developer" {
                 return false;
             }
             content.iter().any(|content_item| match content_item {
