@@ -20,13 +20,23 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
+use codex_app_server_protocol::McpServerRefreshResponse;
+use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SkillsRemoteReadResponse;
+use codex_app_server_protocol::SkillsRemoteWriteResponse;
+use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
@@ -53,10 +63,14 @@ use codex_protocol::models::MacOsPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::ListRemoteSkillsResponseEvent;
+use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RemoteSkillDownloadedEvent;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -343,6 +357,135 @@ fn request_user_input_questions_to_core(
         .collect()
 }
 
+fn skill_scope_to_core(
+    scope: codex_app_server_protocol::SkillScope,
+) -> codex_protocol::protocol::SkillScope {
+    match scope {
+        codex_app_server_protocol::SkillScope::User => codex_protocol::protocol::SkillScope::User,
+        codex_app_server_protocol::SkillScope::Repo => codex_protocol::protocol::SkillScope::Repo,
+        codex_app_server_protocol::SkillScope::System => {
+            codex_protocol::protocol::SkillScope::System
+        }
+        codex_app_server_protocol::SkillScope::Admin => codex_protocol::protocol::SkillScope::Admin,
+    }
+}
+
+fn skill_interface_to_core(
+    interface: codex_app_server_protocol::SkillInterface,
+) -> codex_protocol::protocol::SkillInterface {
+    codex_protocol::protocol::SkillInterface {
+        display_name: interface.display_name,
+        short_description: interface.short_description,
+        icon_small: interface.icon_small,
+        icon_large: interface.icon_large,
+        brand_color: interface.brand_color,
+        default_prompt: interface.default_prompt,
+    }
+}
+
+fn skill_dependencies_to_core(
+    dependencies: codex_app_server_protocol::SkillDependencies,
+) -> codex_protocol::protocol::SkillDependencies {
+    codex_protocol::protocol::SkillDependencies {
+        tools: dependencies
+            .tools
+            .into_iter()
+            .map(|tool| codex_protocol::protocol::SkillToolDependency {
+                r#type: tool.r#type,
+                value: tool.value,
+                description: tool.description,
+                transport: tool.transport,
+                command: tool.command,
+                url: tool.url,
+            })
+            .collect(),
+    }
+}
+
+fn skill_metadata_to_core(
+    metadata: codex_app_server_protocol::SkillMetadata,
+) -> codex_protocol::protocol::SkillMetadata {
+    codex_protocol::protocol::SkillMetadata {
+        name: metadata.name,
+        description: metadata.description,
+        short_description: metadata.short_description,
+        interface: metadata.interface.map(skill_interface_to_core),
+        dependencies: metadata.dependencies.map(skill_dependencies_to_core),
+        path: metadata.path,
+        scope: skill_scope_to_core(metadata.scope),
+        enabled: metadata.enabled,
+    }
+}
+
+fn skills_list_entry_to_core(
+    entry: codex_app_server_protocol::SkillsListEntry,
+) -> codex_protocol::protocol::SkillsListEntry {
+    codex_protocol::protocol::SkillsListEntry {
+        cwd: entry.cwd,
+        skills: entry
+            .skills
+            .into_iter()
+            .map(skill_metadata_to_core)
+            .collect(),
+        errors: entry
+            .errors
+            .into_iter()
+            .map(|error| codex_protocol::protocol::SkillErrorInfo {
+                path: error.path,
+                message: error.message,
+            })
+            .collect(),
+    }
+}
+
+fn remote_skill_summary_to_core(
+    summary: codex_app_server_protocol::RemoteSkillSummary,
+) -> codex_protocol::protocol::RemoteSkillSummary {
+    codex_protocol::protocol::RemoteSkillSummary {
+        id: summary.id,
+        name: summary.name,
+        description: summary.description,
+    }
+}
+
+fn remote_scope_to_protocol(
+    scope: codex_protocol::protocol::RemoteSkillHazelnutScope,
+) -> codex_app_server_protocol::HazelnutScope {
+    match scope {
+        codex_protocol::protocol::RemoteSkillHazelnutScope::WorkspaceShared => {
+            codex_app_server_protocol::HazelnutScope::WorkspaceShared
+        }
+        codex_protocol::protocol::RemoteSkillHazelnutScope::AllShared => {
+            codex_app_server_protocol::HazelnutScope::AllShared
+        }
+        codex_protocol::protocol::RemoteSkillHazelnutScope::Personal => {
+            codex_app_server_protocol::HazelnutScope::Personal
+        }
+        codex_protocol::protocol::RemoteSkillHazelnutScope::Example => {
+            codex_app_server_protocol::HazelnutScope::Example
+        }
+    }
+}
+
+fn product_surface_to_protocol(
+    product_surface: codex_protocol::protocol::RemoteSkillProductSurface,
+) -> codex_app_server_protocol::ProductSurface {
+    match product_surface {
+        codex_protocol::protocol::RemoteSkillProductSurface::Chatgpt => {
+            codex_app_server_protocol::ProductSurface::Chatgpt
+        }
+        codex_protocol::protocol::RemoteSkillProductSurface::Codex => {
+            codex_app_server_protocol::ProductSurface::Codex
+        }
+        codex_protocol::protocol::RemoteSkillProductSurface::Api => {
+            codex_app_server_protocol::ProductSurface::Api
+        }
+        codex_protocol::protocol::RemoteSkillProductSurface::Atlas => {
+            codex_app_server_protocol::ProductSurface::Atlas
+        }
+    }
+}
+
 async fn resolve_server_request(
     client: &InProcessAppServerClient,
     request_id: RequestId,
@@ -589,6 +732,201 @@ async fn process_in_process_command(
                     *current_turn_id = Some(response.turn.id);
                 }
                 Err(err) => send_error_event(app_event_tx, err),
+            }
+        }
+        Op::CleanBackgroundTerminals => {
+            let request = ClientRequest::ThreadBackgroundTerminalsClean {
+                request_id: request_ids.next(),
+                params: codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams {
+                    thread_id: thread_id.to_string(),
+                },
+            };
+            if let Err(err) = send_request_with_response::<ThreadBackgroundTerminalsCleanResponse>(
+                client,
+                request,
+                "thread/backgroundTerminals/clean",
+            )
+            .await
+            {
+                send_error_event(app_event_tx, err);
+            }
+        }
+        Op::ListModels => {
+            let request = ClientRequest::ModelList {
+                request_id: request_ids.next(),
+                params: ModelListParams::default(),
+            };
+            if let Err(err) =
+                send_request_with_response::<ModelListResponse>(client, request, "model/list").await
+            {
+                send_error_event(app_event_tx, err);
+            }
+        }
+        Op::RefreshMcpServers { config: _ } => {
+            let request = ClientRequest::McpServerRefresh {
+                request_id: request_ids.next(),
+                params: None,
+            };
+            if let Err(err) = send_request_with_response::<McpServerRefreshResponse>(
+                client,
+                request,
+                "config/mcpServer/reload",
+            )
+            .await
+            {
+                send_error_event(app_event_tx, err);
+            }
+        }
+        Op::ListSkills { cwds, force_reload } => {
+            let request = ClientRequest::SkillsList {
+                request_id: request_ids.next(),
+                params: codex_app_server_protocol::SkillsListParams {
+                    cwds,
+                    force_reload,
+                    per_cwd_extra_user_roots: None,
+                },
+            };
+            match send_request_with_response::<SkillsListResponse>(client, request, "skills/list")
+                .await
+            {
+                Ok(response) => {
+                    send_codex_event(
+                        app_event_tx,
+                        EventMsg::ListSkillsResponse(ListSkillsResponseEvent {
+                            skills: response
+                                .data
+                                .into_iter()
+                                .map(skills_list_entry_to_core)
+                                .collect(),
+                        }),
+                    );
+                }
+                Err(err) => send_error_event(app_event_tx, err),
+            }
+        }
+        Op::ListRemoteSkills {
+            hazelnut_scope,
+            product_surface,
+            enabled,
+        } => {
+            let request = ClientRequest::SkillsRemoteList {
+                request_id: request_ids.next(),
+                params: codex_app_server_protocol::SkillsRemoteReadParams {
+                    hazelnut_scope: remote_scope_to_protocol(hazelnut_scope),
+                    product_surface: product_surface_to_protocol(product_surface),
+                    enabled: enabled.unwrap_or(false),
+                },
+            };
+            match send_request_with_response::<SkillsRemoteReadResponse>(
+                client,
+                request,
+                "skills/remote/list",
+            )
+            .await
+            {
+                Ok(response) => {
+                    send_codex_event(
+                        app_event_tx,
+                        EventMsg::ListRemoteSkillsResponse(ListRemoteSkillsResponseEvent {
+                            skills: response
+                                .data
+                                .into_iter()
+                                .map(remote_skill_summary_to_core)
+                                .collect(),
+                        }),
+                    );
+                }
+                Err(err) => send_error_event(app_event_tx, err),
+            }
+        }
+        Op::DownloadRemoteSkill { hazelnut_id } => {
+            let request = ClientRequest::SkillsRemoteExport {
+                request_id: request_ids.next(),
+                params: codex_app_server_protocol::SkillsRemoteWriteParams { hazelnut_id },
+            };
+            match send_request_with_response::<SkillsRemoteWriteResponse>(
+                client,
+                request,
+                "skills/remote/export",
+            )
+            .await
+            {
+                Ok(response) => {
+                    let id = response.id;
+                    send_codex_event(
+                        app_event_tx,
+                        EventMsg::RemoteSkillDownloaded(RemoteSkillDownloadedEvent {
+                            id: id.clone(),
+                            name: id,
+                            path: response.path,
+                        }),
+                    );
+                }
+                Err(err) => send_error_event(app_event_tx, err),
+            }
+        }
+        Op::Compact => {
+            let request = ClientRequest::ThreadCompactStart {
+                request_id: request_ids.next(),
+                params: codex_app_server_protocol::ThreadCompactStartParams {
+                    thread_id: thread_id.to_string(),
+                },
+            };
+            if let Err(err) = send_request_with_response::<ThreadCompactStartResponse>(
+                client,
+                request,
+                "thread/compact/start",
+            )
+            .await
+            {
+                send_error_event(app_event_tx, err);
+            }
+        }
+        Op::ThreadRollback { num_turns } => {
+            let request = ClientRequest::ThreadRollback {
+                request_id: request_ids.next(),
+                params: codex_app_server_protocol::ThreadRollbackParams {
+                    thread_id: thread_id.to_string(),
+                    num_turns,
+                },
+            };
+            match send_request_with_response::<ThreadRollbackResponse>(
+                client,
+                request,
+                "thread/rollback",
+            )
+            .await
+            {
+                Ok(response) => {
+                    *current_turn_id = active_turn_id_from_turns(&response.thread.turns);
+                }
+                Err(err) => {
+                    send_codex_event(
+                        app_event_tx,
+                        EventMsg::Error(codex_protocol::protocol::ErrorEvent {
+                            message: err,
+                            codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                        }),
+                    );
+                }
+            }
+        }
+        Op::SetThreadName { name } => {
+            let request = ClientRequest::ThreadSetName {
+                request_id: request_ids.next(),
+                params: codex_app_server_protocol::ThreadSetNameParams {
+                    thread_id: thread_id.to_string(),
+                    name,
+                },
+            };
+            if let Err(err) = send_request_with_response::<ThreadSetNameResponse>(
+                client,
+                request,
+                "thread/name/set",
+            )
+            .await
+            {
+                send_error_event(app_event_tx, err);
             }
         }
         Op::ExecApproval { id, decision, .. } => {
