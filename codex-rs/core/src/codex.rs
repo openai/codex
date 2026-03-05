@@ -4549,7 +4549,24 @@ mod handlers {
             };
             recorder.rollout_path().to_path_buf()
         };
-        sess.flush_rollout().await;
+        if let Some(recorder) = {
+            let guard = sess.services.rollout.lock().await;
+            guard.clone()
+        } && let Err(err) = recorder.flush().await
+        {
+            sess.send_event_raw(Event {
+                id: turn_context.sub_id.clone(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!(
+                        "failed to flush rollout `{}` for rollback replay: {err}",
+                        rollout_path.display()
+                    ),
+                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                }),
+            })
+            .await;
+            return;
+        }
 
         let initial_history =
             match RolloutRecorder::get_rollout_history(rollout_path.as_path()).await {
