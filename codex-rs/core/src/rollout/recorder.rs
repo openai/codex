@@ -1207,7 +1207,10 @@ mod tests {
             .codex_home(home.path().to_path_buf())
             .build()
             .await?;
-        config.features.disable(Feature::Sqlite);
+        config
+            .features
+            .disable(Feature::Sqlite)
+            .expect("test config should allow sqlite to be disabled");
 
         let newest = write_session_file(home.path(), "2025-01-03T12-00-00", Uuid::from_u128(9001))?;
         let middle = write_session_file(home.path(), "2025-01-02T12-00-00", Uuid::from_u128(9002))?;
@@ -1253,7 +1256,10 @@ mod tests {
             .codex_home(home.path().to_path_buf())
             .build()
             .await?;
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow sqlite");
 
         let uuid = Uuid::from_u128(9010);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
@@ -1319,7 +1325,10 @@ mod tests {
             .codex_home(home.path().to_path_buf())
             .build()
             .await?;
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow sqlite");
 
         let uuid = Uuid::from_u128(9011);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");

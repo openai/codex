@@ -76,7 +76,10 @@ async fn run_js_repl_turn(
     calls: &[(&str, &str)],
 ) -> Result<ResponseMock> {
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::JsRepl);
+        config
+            .features
+            .enable(Feature::JsRepl)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(server).await?;
 
@@ -112,7 +115,10 @@ async fn js_repl_is_not_advertised_when_startup_node_is_incompatible() -> Result
     let old_node = write_too_old_node_script(temp.path())?;
 
     let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::JsRepl);
+        config
+            .features
+            .enable(Feature::JsRepl)
+            .expect("test config should allow feature update");
         config.js_repl_node_path = Some(old_node);
     });
     let test = builder.build(&server).await?;
@@ -164,7 +170,10 @@ async fn js_repl_persists_top_level_bindings_and_supports_tla() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::JsRepl);
+        config
+            .features
+            .enable(Feature::JsRepl)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 

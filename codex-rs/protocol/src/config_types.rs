@@ -118,6 +118,7 @@ pub enum WebSearchMode {
 #[strum(serialize_all = "lowercase")]
 pub enum ServiceTier {
     Fast,
+    Flex,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]

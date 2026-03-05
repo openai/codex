@@ -12,6 +12,7 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
+use crate::chatwidget::ThreadInputState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -254,6 +255,7 @@ struct SessionSummary {
 struct ThreadEventSnapshot {
     session_configured: Option<Event>,
     events: Vec<Event>,
+    input_state: Option<ThreadInputState>,
 }
 
 #[derive(Debug)]
@@ -262,6 +264,7 @@ struct ThreadEventStore {
     buffer: VecDeque<Event>,
     user_message_ids: HashSet<String>,
     pending_interactive_replay: PendingInteractiveReplayState,
+    input_state: Option<ThreadInputState>,
     capacity: usize,
     active: bool,
 }
@@ -273,6 +276,7 @@ impl ThreadEventStore {
             buffer: VecDeque::new(),
             user_message_ids: HashSet::new(),
             pending_interactive_replay: PendingInteractiveReplayState::default(),
+            input_state: None,
             capacity,
             active: false,
         }
@@ -342,6 +346,7 @@ impl ThreadEventStore {
                 })
                 .cloned()
                 .collect(),
+            input_state: self.input_state.clone(),
         }
     }
 
@@ -917,13 +922,15 @@ impl App {
         let Some(active_id) = self.active_thread_id else {
             return;
         };
-        let Some(receiver) = self.active_thread_rx.take() else {
-            return;
-        };
+        let input_state = self.chat_widget.capture_thread_input_state();
         if let Some(channel) = self.thread_event_channels.get_mut(&active_id) {
+            let receiver = self.active_thread_rx.take();
             let mut store = channel.store.lock().await;
             store.active = false;
-            channel.receiver = Some(receiver);
+            store.input_state = input_state;
+            if let Some(receiver) = receiver {
+                channel.receiver = Some(receiver);
+            }
         }
     }
 
@@ -1335,7 +1342,7 @@ impl App {
         self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
 
         self.reset_for_thread_switch(tui)?;
-        self.replay_thread_snapshot(snapshot);
+        self.replay_thread_snapshot(snapshot, !is_replay_only);
         if is_replay_only {
             self.chat_widget.add_info_message(
                 format!("Agent thread {thread_id} is closed. Replaying saved transcript."),
@@ -1473,12 +1480,23 @@ impl App {
         (active_thread_id != primary_thread_id).then_some((active_thread_id, primary_thread_id))
     }
 
-    fn replay_thread_snapshot(&mut self, snapshot: ThreadEventSnapshot) {
+    fn replay_thread_snapshot(
+        &mut self,
+        snapshot: ThreadEventSnapshot,
+        resume_restored_queue: bool,
+    ) {
         if let Some(event) = snapshot.session_configured {
             self.handle_codex_event_replay(event);
         }
+        self.chat_widget.set_queue_autosend_suppressed(true);
+        self.chat_widget
+            .restore_thread_input_state(snapshot.input_state);
         for event in snapshot.events {
             self.handle_codex_event_replay(event);
+        }
+        self.chat_widget.set_queue_autosend_suppressed(false);
+        if resume_restored_queue {
+            self.chat_widget.maybe_send_next_queued_input();
         }
         self.refresh_status_line();
     }
@@ -2835,25 +2853,31 @@ impl App {
                     .with_profile(self.active_profile.as_deref());
                 for (feature, enabled) in &updates {
                     let feature_key = feature.key();
-                    if *enabled {
-                        // Update the in-memory configs.
-                        self.config.features.enable(*feature);
-                        self.chat_widget.set_feature_enabled(*feature, true);
+                    if let Err(err) = self.config.features.set_enabled(*feature, *enabled) {
+                        tracing::error!(
+                            error = %err,
+                            feature = feature_key,
+                            "failed to update constrained feature flags"
+                        );
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to update experimental feature `{feature_key}`: {err}"
+                        ));
+                        continue;
+                    }
+                    let effective_enabled = self.config.features.enabled(*feature);
+                    self.chat_widget
+                        .set_feature_enabled(*feature, effective_enabled);
+                    if effective_enabled {
                         builder = builder.set_feature_enabled(feature_key, true);
+                    } else if feature.default_enabled() {
+                        builder = builder.set_feature_enabled(feature_key, false);
                     } else {
-                        // Update the in-memory configs.
-                        self.config.features.disable(*feature);
-                        self.chat_widget.set_feature_enabled(*feature, false);
-                        if feature.default_enabled() {
-                            builder = builder.set_feature_enabled(feature_key, false);
-                        } else {
-                            // If the feature already default to `false`, we drop the key
-                            // in the config file so that the user does not miss the feature
-                            // once it gets globally released.
-                            builder = builder.with_edits(vec![ConfigEdit::ClearPath {
-                                segments: vec!["features".to_string(), feature_key.to_string()],
-                            }]);
-                        }
+                        // If the feature already default to `false`, we drop the key
+                        // in the config file so that the user does not miss the feature
+                        // once it gets globally released.
+                        builder = builder.with_edits(vec![ConfigEdit::ClearPath {
+                            segments: vec!["features".to_string(), feature_key.to_string()],
+                        }]);
                     }
                 }
                 if windows_sandbox_changed {
@@ -3661,7 +3685,12 @@ mod tests {
     use codex_core::config::types::ModelAvailabilityNuxConfig;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::CollaborationModeMask;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
     use codex_protocol::openai_models::ModelAvailabilityNux;
+    use codex_protocol::protocol::AgentMessageDeltaEvent;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -3669,6 +3698,10 @@ mod tests {
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadRolledBackEvent;
+    use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnAbortedEvent;
+    use codex_protocol::protocol::TurnCompleteEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
@@ -3969,6 +4002,764 @@ mod tests {
             .expect("channel closed unexpectedly");
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_thread_snapshot_restores_draft_and_queued_input() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.thread_event_channels.insert(
+            thread_id,
+            ThreadEventChannel::new_with_session_configured(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                Event {
+                    id: "session-configured".to_string(),
+                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                        session_id: thread_id,
+                        forked_from_id: None,
+                        thread_name: None,
+                        model: "gpt-test".to_string(),
+                        model_provider_id: "test-provider".to_string(),
+                        service_tier: None,
+                        approval_policy: AskForApproval::Never,
+                        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                        cwd: PathBuf::from("/tmp/project"),
+                        reasoning_effort: None,
+                        history_log_id: 0,
+                        history_entry_count: 0,
+                        initial_messages: None,
+                        network_proxy: None,
+                        rollout_path: Some(PathBuf::new()),
+                    }),
+                },
+            ),
+        );
+        app.activate_thread_channel(thread_id).await;
+
+        app.chat_widget
+            .apply_external_edit("draft prompt".to_string());
+        app.chat_widget.submit_user_message_with_mode(
+            "queued follow-up".to_string(),
+            CollaborationModeMask {
+                name: "Default".to_string(),
+                mode: None,
+                model: None,
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        );
+        let expected_input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected thread input state");
+
+        app.store_active_thread_receiver().await;
+
+        let snapshot = {
+            let channel = app
+                .thread_event_channels
+                .get(&thread_id)
+                .expect("thread channel should exist");
+            let store = channel.store.lock().await;
+            assert_eq!(store.input_state, Some(expected_input_state));
+            store.snapshot()
+        };
+
+        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+
+        app.replay_thread_snapshot(snapshot, true);
+
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
+        assert!(app.chat_widget.queued_user_message_texts().is_empty());
+        match next_user_turn_op(&mut new_op_rx) {
+            Op::UserTurn { items, .. } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "queued follow-up".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected queued follow-up submission, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn replayed_turn_complete_submits_restored_queued_follow_up() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session_configured = Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        };
+        app.chat_widget
+            .handle_codex_event(session_configured.clone());
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-started".to_string(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "agent-delta".to_string(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "streaming".to_string(),
+            }),
+        });
+        app.chat_widget
+            .apply_external_edit("queued follow-up".to_string());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected queued follow-up state");
+
+        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.chat_widget.handle_codex_event(session_configured);
+        while new_op_rx.try_recv().is_ok() {}
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session_configured: None,
+                events: vec![Event {
+                    id: "turn-complete".to_string(),
+                    msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                        turn_id: "turn-1".to_string(),
+                        last_agent_message: None,
+                    }),
+                }],
+                input_state: Some(input_state),
+            },
+            true,
+        );
+
+        match next_user_turn_op(&mut new_op_rx) {
+            Op::UserTurn { items, .. } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "queued follow-up".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected queued follow-up submission, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn replay_only_thread_keeps_restored_queue_visible() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session_configured = Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        };
+        app.chat_widget
+            .handle_codex_event(session_configured.clone());
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-started".to_string(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "agent-delta".to_string(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "streaming".to_string(),
+            }),
+        });
+        app.chat_widget
+            .apply_external_edit("queued follow-up".to_string());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected queued follow-up state");
+
+        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.chat_widget.handle_codex_event(session_configured);
+        while new_op_rx.try_recv().is_ok() {}
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session_configured: None,
+                events: vec![Event {
+                    id: "turn-complete".to_string(),
+                    msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                        turn_id: "turn-1".to_string(),
+                        last_agent_message: None,
+                    }),
+                }],
+                input_state: Some(input_state),
+            },
+            false,
+        );
+
+        assert_eq!(
+            app.chat_widget.queued_user_message_texts(),
+            vec!["queued follow-up".to_string()]
+        );
+        assert!(
+            new_op_rx.try_recv().is_err(),
+            "replay-only threads should not auto-submit restored queue"
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_thread_snapshot_keeps_queue_when_running_state_only_comes_from_snapshot() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session_configured = Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        };
+        app.chat_widget
+            .handle_codex_event(session_configured.clone());
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-started".to_string(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "agent-delta".to_string(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "streaming".to_string(),
+            }),
+        });
+        app.chat_widget
+            .apply_external_edit("queued follow-up".to_string());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected queued follow-up state");
+
+        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.chat_widget.handle_codex_event(session_configured);
+        while new_op_rx.try_recv().is_ok() {}
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session_configured: None,
+                events: vec![],
+                input_state: Some(input_state),
+            },
+            true,
+        );
+
+        assert_eq!(
+            app.chat_widget.queued_user_message_texts(),
+            vec!["queued follow-up".to_string()]
+        );
+        assert!(
+            new_op_rx.try_recv().is_err(),
+            "restored queue should stay queued when replay did not prove the turn finished"
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_thread_snapshot_does_not_submit_queue_before_replay_catches_up() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session_configured = Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        };
+        app.chat_widget
+            .handle_codex_event(session_configured.clone());
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-started".to_string(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "agent-delta".to_string(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "streaming".to_string(),
+            }),
+        });
+        app.chat_widget
+            .apply_external_edit("queued follow-up".to_string());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected queued follow-up state");
+
+        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.chat_widget.handle_codex_event(session_configured);
+        while new_op_rx.try_recv().is_ok() {}
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session_configured: None,
+                events: vec![
+                    Event {
+                        id: "older-turn-complete".to_string(),
+                        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                            turn_id: "turn-0".to_string(),
+                            last_agent_message: None,
+                        }),
+                    },
+                    Event {
+                        id: "latest-turn-started".to_string(),
+                        msg: EventMsg::TurnStarted(TurnStartedEvent {
+                            turn_id: "turn-1".to_string(),
+                            model_context_window: None,
+                            collaboration_mode_kind: Default::default(),
+                        }),
+                    },
+                ],
+                input_state: Some(input_state),
+            },
+            true,
+        );
+
+        assert!(
+            new_op_rx.try_recv().is_err(),
+            "queued follow-up should stay queued until the latest turn completes"
+        );
+        assert_eq!(
+            app.chat_widget.queued_user_message_texts(),
+            vec!["queued follow-up".to_string()]
+        );
+
+        app.chat_widget.handle_codex_event(Event {
+            id: "latest-turn-complete".to_string(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".to_string(),
+                last_agent_message: None,
+            }),
+        });
+
+        match next_user_turn_op(&mut new_op_rx) {
+            Op::UserTurn { items, .. } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "queued follow-up".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected queued follow-up submission, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn replay_thread_snapshot_restores_pending_pastes_for_submit() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.thread_event_channels.insert(
+            thread_id,
+            ThreadEventChannel::new_with_session_configured(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                Event {
+                    id: "session-configured".to_string(),
+                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                        session_id: thread_id,
+                        forked_from_id: None,
+                        thread_name: None,
+                        model: "gpt-test".to_string(),
+                        model_provider_id: "test-provider".to_string(),
+                        service_tier: None,
+                        approval_policy: AskForApproval::Never,
+                        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                        cwd: PathBuf::from("/tmp/project"),
+                        reasoning_effort: None,
+                        history_log_id: 0,
+                        history_entry_count: 0,
+                        initial_messages: None,
+                        network_proxy: None,
+                        rollout_path: Some(PathBuf::new()),
+                    }),
+                },
+            ),
+        );
+        app.activate_thread_channel(thread_id).await;
+
+        let large = "x".repeat(1005);
+        app.chat_widget.handle_paste(large.clone());
+        let expected_input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected thread input state");
+
+        app.store_active_thread_receiver().await;
+
+        let snapshot = {
+            let channel = app
+                .thread_event_channels
+                .get(&thread_id)
+                .expect("thread channel should exist");
+            let store = channel.store.lock().await;
+            assert_eq!(store.input_state, Some(expected_input_state));
+            store.snapshot()
+        };
+
+        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.replay_thread_snapshot(snapshot, true);
+
+        assert_eq!(app.chat_widget.composer_text_with_pending(), large);
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match next_user_turn_op(&mut new_op_rx) {
+            Op::UserTurn { items, .. } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: large,
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected restored paste submission, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn replay_thread_snapshot_restores_collaboration_mode_for_draft_submit() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session_configured = Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        };
+        app.chat_widget
+            .handle_codex_event(session_configured.clone());
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::High));
+        app.chat_widget
+            .set_collaboration_mask(CollaborationModeMask {
+                name: "Plan".to_string(),
+                mode: Some(ModeKind::Plan),
+                model: Some("gpt-restored".to_string()),
+                reasoning_effort: Some(Some(ReasoningEffortConfig::High)),
+                developer_instructions: None,
+            });
+        app.chat_widget
+            .apply_external_edit("draft prompt".to_string());
+        let input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected draft input state");
+
+        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.chat_widget.handle_codex_event(session_configured);
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+        app.chat_widget
+            .set_collaboration_mask(CollaborationModeMask {
+                name: "Default".to_string(),
+                mode: Some(ModeKind::Default),
+                model: Some("gpt-replacement".to_string()),
+                reasoning_effort: Some(Some(ReasoningEffortConfig::Low)),
+                developer_instructions: None,
+            });
+        while new_op_rx.try_recv().is_ok() {}
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session_configured: None,
+                events: vec![],
+                input_state: Some(input_state),
+            },
+            true,
+        );
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match next_user_turn_op(&mut new_op_rx) {
+            Op::UserTurn {
+                items,
+                model,
+                effort,
+                collaboration_mode,
+                ..
+            } => {
+                assert_eq!(
+                    items,
+                    vec![UserInput::Text {
+                        text: "draft prompt".to_string(),
+                        text_elements: Vec::new(),
+                    }]
+                );
+                assert_eq!(model, "gpt-restored".to_string());
+                assert_eq!(effort, Some(ReasoningEffortConfig::High));
+                assert_eq!(
+                    collaboration_mode,
+                    Some(CollaborationMode {
+                        mode: ModeKind::Plan,
+                        settings: Settings {
+                            model: "gpt-restored".to_string(),
+                            reasoning_effort: Some(ReasoningEffortConfig::High),
+                            developer_instructions: None,
+                        },
+                    })
+                );
+            }
+            other => panic!("expected restored draft submission, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn replay_thread_snapshot_restores_collaboration_mode_without_input() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session_configured = Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        };
+        app.chat_widget
+            .handle_codex_event(session_configured.clone());
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::High));
+        app.chat_widget
+            .set_collaboration_mask(CollaborationModeMask {
+                name: "Plan".to_string(),
+                mode: Some(ModeKind::Plan),
+                model: Some("gpt-restored".to_string()),
+                reasoning_effort: Some(Some(ReasoningEffortConfig::High)),
+                developer_instructions: None,
+            });
+        let input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected collaboration-only input state");
+
+        let (chat_widget, _app_event_tx, _rx, _new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.chat_widget.handle_codex_event(session_configured);
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+        app.chat_widget
+            .set_collaboration_mask(CollaborationModeMask {
+                name: "Default".to_string(),
+                mode: Some(ModeKind::Default),
+                model: Some("gpt-replacement".to_string()),
+                reasoning_effort: Some(Some(ReasoningEffortConfig::Low)),
+                developer_instructions: None,
+            });
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session_configured: None,
+                events: vec![],
+                input_state: Some(input_state),
+            },
+            true,
+        );
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Plan
+        );
+        assert_eq!(app.chat_widget.current_model(), "gpt-restored");
+        assert_eq!(
+            app.chat_widget.current_reasoning_effort(),
+            Some(ReasoningEffortConfig::High)
+        );
+    }
+
+    #[tokio::test]
+    async fn replayed_interrupted_turn_restores_queued_input_to_composer() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session_configured = Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        };
+        app.chat_widget
+            .handle_codex_event(session_configured.clone());
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-started".to_string(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "agent-delta".to_string(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "streaming".to_string(),
+            }),
+        });
+        app.chat_widget
+            .apply_external_edit("queued follow-up".to_string());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected queued follow-up state");
+
+        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.chat_widget.handle_codex_event(session_configured);
+        while new_op_rx.try_recv().is_ok() {}
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session_configured: None,
+                events: vec![Event {
+                    id: "turn-aborted".to_string(),
+                    msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                        turn_id: Some("turn-1".to_string()),
+                        reason: TurnAbortReason::ReviewEnded,
+                    }),
+                }],
+                input_state: Some(input_state),
+            },
+            true,
+        );
+
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "queued follow-up"
+        );
+        assert!(app.chat_widget.queued_user_message_texts().is_empty());
+        assert!(
+            new_op_rx.try_recv().is_err(),
+            "replayed interrupted turns should restore queued input for editing, not submit it"
+        );
     }
 
     #[tokio::test]
@@ -4556,6 +5347,17 @@ mod tests {
             rx,
             op_rx,
         )
+    }
+
+    fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
+        let mut seen = Vec::new();
+        while let Ok(op) = op_rx.try_recv() {
+            if matches!(op, Op::UserTurn { .. }) {
+                return op;
+            }
+            seen.push(format!("{op:?}"));
+        }
+        panic!("expected UserTurn op, saw: {seen:?}");
     }
 
     fn test_otel_manager(config: &Config, model: &str) -> OtelManager {

@@ -34,6 +34,8 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
+use codex_otel::set_parent_from_context;
+use codex_otel::traceparent_context_from_env;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::AskForApproval;
@@ -58,9 +60,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use supports_color::Stream;
 use tokio::sync::Mutex;
+use tracing::Instrument;
 use tracing::debug;
 use tracing::error;
+use tracing::field;
 use tracing::info;
+use tracing::info_span;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
@@ -92,6 +97,32 @@ struct ThreadEventEnvelope {
     thread: Arc<codex_core::CodexThread>,
     event: Event,
     suppress_output: bool,
+}
+
+struct ExecRunArgs {
+    command: Option<ExecCommand>,
+    config: Config,
+    cursor_ansi: bool,
+    dangerously_bypass_approvals_and_sandbox: bool,
+    exec_span: tracing::Span,
+    images: Vec<PathBuf>,
+    json_mode: bool,
+    last_message_file: Option<PathBuf>,
+    model_provider: Option<String>,
+    oss: bool,
+    output_schema_path: Option<PathBuf>,
+    prompt: Option<String>,
+    skip_git_repo_check: bool,
+    stderr_with_ansi: bool,
+}
+
+fn exec_root_span() -> tracing::Span {
+    info_span!(
+        "codex.exec",
+        otel.kind = "internal",
+        thread.id = field::Empty,
+        turn.id = field::Empty,
+    )
 }
 
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
@@ -347,6 +378,48 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .with(otel_logger_layer)
         .try_init();
 
+    let exec_span = exec_root_span();
+    if let Some(context) = traceparent_context_from_env() {
+        set_parent_from_context(&exec_span, context);
+    }
+    run_exec_session(ExecRunArgs {
+        command,
+        config,
+        cursor_ansi,
+        dangerously_bypass_approvals_and_sandbox,
+        exec_span: exec_span.clone(),
+        images,
+        json_mode,
+        last_message_file,
+        model_provider,
+        oss,
+        output_schema_path,
+        prompt,
+        skip_git_repo_check,
+        stderr_with_ansi,
+    })
+    .instrument(exec_span)
+    .await
+}
+
+async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
+    let ExecRunArgs {
+        command,
+        config,
+        cursor_ansi,
+        dangerously_bypass_approvals_and_sandbox,
+        exec_span,
+        images,
+        json_mode,
+        last_message_file,
+        model_provider,
+        oss,
+        output_schema_path,
+        prompt,
+        skip_git_repo_check,
+        stderr_with_ansi,
+    } = args;
+
     let mut event_processor: Box<dyn EventProcessor> = match json_mode {
         true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
         _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
@@ -435,6 +508,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     } else {
         thread_manager.start_thread(config.clone()).await?
     };
+    let primary_thread_id_for_span = primary_thread_id.to_string();
+    exec_span.record("thread.id", primary_thread_id_for_span.as_str());
+
     let (initial_operation, prompt_summary) = match (command, prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
@@ -554,7 +630,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         });
     }
 
-    match initial_operation {
+    let task_id = match initial_operation {
         InitialOperation::UserTurn {
             items,
             output_schema,
@@ -583,6 +659,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             task_id
         }
     };
+    exec_span.record("turn.id", task_id.as_str());
 
     // Run the loop until the task is complete.
     // Track whether a fatal error was reported by the server so we can
@@ -934,11 +1011,42 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_otel::set_parent_from_w3c_trace_context;
+    use opentelemetry::trace::TraceContextExt;
+    use opentelemetry::trace::TraceId;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+    fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
+        let provider = SdkTracerProvider::builder().build();
+        let tracer = provider.tracer("codex-exec-tests");
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer))
+    }
 
     #[test]
     fn exec_defaults_analytics_to_enabled() {
         assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
+    }
+
+    #[test]
+    fn exec_root_span_can_be_parented_from_trace_context() {
+        let subscriber = test_tracing_subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let parent = codex_protocol::protocol::W3cTraceContext {
+            traceparent: Some("00-00000000000000000000000000000077-0000000000000088-01".into()),
+            tracestate: Some("vendor=value".into()),
+        };
+        let exec_span = exec_root_span();
+        assert!(set_parent_from_w3c_trace_context(&exec_span, &parent));
+
+        let trace_id = exec_span.context().span().span_context().trace_id();
+        assert_eq!(
+            trace_id,
+            TraceId::from_hex("00000000000000000000000000000077").expect("trace id")
+        );
     }
 
     #[test]

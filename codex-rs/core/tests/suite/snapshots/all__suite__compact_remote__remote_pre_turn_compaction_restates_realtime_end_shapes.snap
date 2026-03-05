@@ -17,7 +17,7 @@ Scenario: Remote pre-turn auto-compaction after realtime was closed between turn
 00:compaction:encrypted=true
 01:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <realtime_conversation>\nRealtime conversation ended.\n\nYou are...
+    [02] <realtime_conversation>\nRealtime conversation ended.\n\nSubsequ...
 02:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>

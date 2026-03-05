@@ -7,7 +7,6 @@ use crate::trace_context::context_from_trace_headers;
 use gethostname::gethostname;
 use opentelemetry::Context;
 use opentelemetry::KeyValue;
-use opentelemetry::context::ContextGuard;
 use opentelemetry::global;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
@@ -28,7 +27,6 @@ use opentelemetry_sdk::trace::BatchSpanProcessor;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::Tracer;
 use opentelemetry_semantic_conventions as semconv;
-use std::cell::RefCell;
 use std::env;
 use std::error::Error;
 use std::sync::OnceLock;
@@ -43,10 +41,6 @@ const HOST_NAME_ATTRIBUTE: &str = "host.name";
 const TRACEPARENT_ENV_VAR: &str = "TRACEPARENT";
 const TRACESTATE_ENV_VAR: &str = "TRACESTATE";
 static TRACEPARENT_CONTEXT: OnceLock<Option<Context>> = OnceLock::new();
-
-thread_local! {
-    static TRACEPARENT_GUARD: RefCell<Option<ContextGuard>> = const { RefCell::new(None) };
-}
 pub struct OtelProvider {
     pub logger: Option<SdkLoggerProvider>,
     pub tracer_provider: Option<SdkTracerProvider>,
@@ -113,10 +107,6 @@ impl OtelProvider {
             global::set_tracer_provider(provider);
             global::set_text_map_propagator(TraceContextPropagator::new());
         }
-        if tracer.is_some() {
-            attach_traceparent_context();
-        }
-
         Ok(Some(Self {
             logger,
             tracer_provider,
@@ -174,18 +164,6 @@ pub fn traceparent_context_from_env() -> Option<Context> {
     TRACEPARENT_CONTEXT
         .get_or_init(load_traceparent_context)
         .clone()
-}
-
-fn attach_traceparent_context() {
-    TRACEPARENT_GUARD.with(|guard| {
-        let mut guard = guard.borrow_mut();
-        if guard.is_some() {
-            return;
-        }
-        if let Some(context) = traceparent_context_from_env() {
-            *guard = Some(context.attach());
-        }
-    });
 }
 
 fn load_traceparent_context() -> Option<Context> {

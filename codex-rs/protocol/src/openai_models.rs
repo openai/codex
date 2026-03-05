@@ -245,6 +245,8 @@ pub struct ModelInfo {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
+    #[serde(default)]
+    pub supports_image_detail_original: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
     /// Token threshold for automatic compaction. When omitted, core derives it
@@ -515,6 +517,7 @@ mod tests {
             apply_patch_tool_type: None,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
+            supports_image_detail_original: false,
             context_window: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
@@ -703,6 +706,7 @@ mod tests {
                 "limit": 10000
             },
             "supports_parallel_tool_calls": false,
+            "supports_image_detail_original": false,
             "context_window": null,
             "auto_compact_token_limit": null,
             "effective_context_window_percent": 95,
@@ -713,6 +717,7 @@ mod tests {
         .expect("deserialize model info");
 
         assert_eq!(model.availability_nux, None);
+        assert!(!model.supports_image_detail_original);
     }
 
     #[test]

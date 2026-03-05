@@ -1,0 +1,25 @@
+---
+source: tui/src/bottom_pane/pending_input_preview.rs
+assertion_line: 252
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 52, height: 4 },
+    content: [
+        "  ! pending steer: Please continue.                 ",
+        "  ! pending steer: Check the last command output.   ",
+        "  ↳ Queued follow-up question                       ",
+        "    ⌥ + ↑ edit                                      ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 35, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 49, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 29, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 14, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

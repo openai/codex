@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -29,6 +30,7 @@ use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
+use crate::plugins::AppConnectorId;
 use crate::token_data::TokenData;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -353,6 +355,48 @@ pub fn merge_connectors(
     merged
 }
 
+pub fn merge_plugin_apps(
+    connectors: Vec<AppInfo>,
+    plugin_apps: Vec<AppConnectorId>,
+) -> Vec<AppInfo> {
+    let mut merged = connectors;
+    let mut connector_ids = merged
+        .iter()
+        .map(|connector| connector.id.clone())
+        .collect::<HashSet<_>>();
+
+    for connector_id in plugin_apps {
+        if connector_ids.insert(connector_id.0.clone()) {
+            merged.push(plugin_app_to_app_info(connector_id));
+        }
+    }
+
+    merged.sort_by(|left, right| {
+        right
+            .is_accessible
+            .cmp(&left.is_accessible)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    merged
+}
+
+pub fn merge_plugin_apps_with_accessible(
+    plugin_apps: Vec<AppConnectorId>,
+    accessible_connectors: Vec<AppInfo>,
+) -> Vec<AppInfo> {
+    let accessible_connector_ids: HashSet<&str> = accessible_connectors
+        .iter()
+        .map(|connector| connector.id.as_str())
+        .collect();
+    let plugin_connectors = plugin_apps
+        .into_iter()
+        .filter(|connector_id| accessible_connector_ids.contains(connector_id.0.as_str()))
+        .map(plugin_app_to_app_info)
+        .collect::<Vec<_>>();
+    merge_connectors(plugin_connectors, accessible_connectors)
+}
+
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
     let apps_config = read_apps_config(config);
     if let Some(apps_config) = apps_config.as_ref() {
@@ -575,6 +619,28 @@ where
     accessible
 }
 
+fn plugin_app_to_app_info(connector_id: AppConnectorId) -> AppInfo {
+    // Leave the placeholder name as the connector id so merge_connectors() can
+    // replace it with canonical app metadata from directory fetches or
+    // connector_name values from codex_apps tool discovery.
+    let connector_id = connector_id.0;
+    let name = connector_id.clone();
+    AppInfo {
+        id: connector_id.clone(),
+        name: name.clone(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some(connector_install_url(&name, &connector_id)),
+        is_accessible: false,
+        is_enabled: true,
+    }
+}
+
 fn normalize_connector_value(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -645,6 +711,46 @@ mod tests {
             is_accessible: false,
             is_enabled: true,
         }
+    }
+
+    #[test]
+    fn merge_connectors_replaces_plugin_placeholder_name_with_accessible_name() {
+        let plugin = plugin_app_to_app_info(AppConnectorId("calendar".to_string()));
+        let accessible = AppInfo {
+            id: "calendar".to_string(),
+            name: "Google Calendar".to_string(),
+            description: Some("Plan events".to_string()),
+            logo_url: Some("https://example.com/logo.png".to_string()),
+            logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
+            distribution_channel: Some("workspace".to_string()),
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: None,
+            is_accessible: true,
+            is_enabled: true,
+        };
+
+        let merged = merge_connectors(vec![plugin], vec![accessible]);
+
+        assert_eq!(
+            merged,
+            vec![AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Plan events".to_string()),
+                logo_url: Some("https://example.com/logo.png".to_string()),
+                logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
+                distribution_channel: Some("workspace".to_string()),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some(connector_install_url("calendar", "calendar")),
+                is_accessible: true,
+                is_enabled: true,
+            }]
+        );
+        assert_eq!(connector_mention_slug(&merged[0]), "google-calendar");
     }
 
     #[test]

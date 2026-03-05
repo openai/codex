@@ -973,7 +973,7 @@ fn apply_spawn_agent_runtime_overrides(
 
 fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
     if child_depth >= config.agent_max_depth {
-        config.features.disable(Feature::Collab);
+        let _ = config.features.disable(Feature::Collab);
     }
 }
 

@@ -282,6 +282,9 @@ pub(crate) async fn backfill_sessions(
                     let mut metadata = outcome.metadata;
                     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
                     let memory_mode = outcome.memory_mode.unwrap_or_else(|| "enabled".to_string());
+                    if let Ok(Some(existing_metadata)) = runtime.get_thread(metadata.id).await {
+                        metadata.prefer_existing_git_info(&existing_metadata);
+                    }
                     if rollout.archived && metadata.archived_at.is_none() {
                         let fallback_archived_at = metadata.updated_at;
                         metadata.archived_at = file_modified_time_utc(&rollout.path)
@@ -503,6 +506,7 @@ mod tests {
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::CompactedItem;
+    use codex_protocol::protocol::GitInfo;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SessionMeta;
@@ -669,12 +673,14 @@ mod tests {
             "2026-01-27T12-34-56",
             "2026-01-27T12:34:56Z",
             first_uuid,
+            None,
         );
         let second_path = write_rollout_in_sessions(
             codex_home.as_path(),
             "2026-01-27T12-35-56",
             "2026-01-27T12:35:56Z",
             second_uuid,
+            None,
         );
 
         let runtime =
@@ -731,6 +737,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn backfill_sessions_preserves_existing_git_branch_and_fills_missing_git_fields() {
+        let dir = tempdir().expect("tempdir");
+        let codex_home = dir.path().to_path_buf();
+        let thread_uuid = Uuid::new_v4();
+        let rollout_path = write_rollout_in_sessions(
+            codex_home.as_path(),
+            "2026-01-27T12-34-56",
+            "2026-01-27T12:34:56Z",
+            thread_uuid,
+            Some(GitInfo {
+                commit_hash: Some("rollout-sha".to_string()),
+                branch: Some("rollout-branch".to_string()),
+                repository_url: Some("git@example.com:openai/codex.git".to_string()),
+            }),
+        );
+
+        let runtime =
+            codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+                .await
+                .expect("initialize runtime");
+        let thread_id = ThreadId::from_string(&thread_uuid.to_string()).expect("thread id");
+        let mut existing = extract_metadata_from_rollout(&rollout_path, "test-provider", None)
+            .await
+            .expect("extract")
+            .metadata;
+        existing.git_sha = None;
+        existing.git_branch = Some("sqlite-branch".to_string());
+        existing.git_origin_url = None;
+        runtime
+            .upsert_thread(&existing)
+            .await
+            .expect("existing metadata upsert");
+
+        let mut config = crate::config::test_config();
+        config.codex_home = codex_home.clone();
+        config.model_provider_id = "test-provider".to_string();
+        backfill_sessions(runtime.as_ref(), &config, None).await;
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("get thread")
+            .expect("thread exists");
+        assert_eq!(persisted.git_sha.as_deref(), Some("rollout-sha"));
+        assert_eq!(persisted.git_branch.as_deref(), Some("sqlite-branch"));
+        assert_eq!(
+            persisted.git_origin_url.as_deref(),
+            Some("git@example.com:openai/codex.git")
+        );
+    }
+
+    #[tokio::test]
     async fn backfill_sessions_normalizes_cwd_before_upsert() {
         let dir = tempdir().expect("tempdir");
         let codex_home = dir.path().to_path_buf();
@@ -742,6 +800,7 @@ mod tests {
             "2026-01-27T12:34:56Z",
             thread_uuid,
             session_cwd.clone(),
+            None,
         );
 
         let runtime =
@@ -770,6 +829,7 @@ mod tests {
         filename_ts: &str,
         event_ts: &str,
         thread_uuid: Uuid,
+        git: Option<GitInfo>,
     ) -> PathBuf {
         write_rollout_in_sessions_with_cwd(
             codex_home,
@@ -777,6 +837,7 @@ mod tests {
             event_ts,
             thread_uuid,
             codex_home.to_path_buf(),
+            git,
         )
     }
 
@@ -786,6 +847,7 @@ mod tests {
         event_ts: &str,
         thread_uuid: Uuid,
         cwd: PathBuf,
+        git: Option<GitInfo>,
     ) -> PathBuf {
         let id = ThreadId::from_string(&thread_uuid.to_string()).expect("thread id");
         let sessions_dir = codex_home.join("sessions");
@@ -808,7 +870,7 @@ mod tests {
         };
         let session_meta_line = SessionMetaLine {
             meta: session_meta,
-            git: None,
+            git,
         };
         let rollout_line = RolloutLine {
             timestamp: event_ts.to_string(),

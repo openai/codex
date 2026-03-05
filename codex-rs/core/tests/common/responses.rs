@@ -582,25 +582,6 @@ pub fn ev_completed(id: &str) -> Value {
     })
 }
 
-pub fn ev_done() -> Value {
-    serde_json::json!({
-        "type": "response.done",
-        "response": {
-            "usage": {"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}
-        }
-    })
-}
-
-pub fn ev_done_with_id(id: &str) -> Value {
-    serde_json::json!({
-        "type": "response.done",
-        "response": {
-            "id": id,
-            "usage": {"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}
-        }
-    })
-}
-
 /// Convenience: SSE event for a created response with a specific id.
 pub fn ev_response_created(id: &str) -> Value {
     serde_json::json!({
@@ -754,6 +735,24 @@ pub fn ev_web_search_call_done(id: &str, status: &str, query: &str) -> Value {
             "id": id,
             "status": status,
             "action": {"type": "search", "query": query}
+        }
+    })
+}
+
+pub fn ev_image_generation_call(
+    id: &str,
+    status: &str,
+    revised_prompt: &str,
+    result: &str,
+) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "image_generation_call",
+            "id": id,
+            "status": status,
+            "revised_prompt": revised_prompt,
+            "result": result,
         }
     })
 }

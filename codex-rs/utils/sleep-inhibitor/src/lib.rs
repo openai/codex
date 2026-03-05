@@ -29,6 +29,7 @@ use windows_inhibitor as imp;
 #[derive(Debug)]
 pub struct SleepInhibitor {
     enabled: bool,
+    turn_running: bool,
     platform: imp::SleepInhibitor,
 }
 
@@ -36,12 +37,14 @@ impl SleepInhibitor {
     pub fn new(enabled: bool) -> Self {
         Self {
             enabled,
+            turn_running: false,
             platform: imp::SleepInhibitor::new(),
         }
     }
 
     /// Update the active turn state; turns sleep prevention on/off as needed.
     pub fn set_turn_running(&mut self, turn_running: bool) {
+        self.turn_running = turn_running;
         if !self.enabled {
             self.release();
             return;
@@ -61,6 +64,11 @@ impl SleepInhibitor {
     fn release(&mut self) {
         self.platform.release();
     }
+
+    /// Return the latest turn-running state requested by the caller.
+    pub fn is_turn_running(&self) -> bool {
+        self.turn_running
+    }
 }
 
 #[cfg(test)]
@@ -71,14 +79,18 @@ mod tests {
     fn sleep_inhibitor_toggles_without_panicking() {
         let mut inhibitor = SleepInhibitor::new(true);
         inhibitor.set_turn_running(true);
+        assert!(inhibitor.is_turn_running());
         inhibitor.set_turn_running(false);
+        assert!(!inhibitor.is_turn_running());
     }
 
     #[test]
     fn sleep_inhibitor_disabled_does_not_panic() {
         let mut inhibitor = SleepInhibitor::new(false);
         inhibitor.set_turn_running(true);
+        assert!(inhibitor.is_turn_running());
         inhibitor.set_turn_running(false);
+        assert!(!inhibitor.is_turn_running());
     }
 
     #[test]
