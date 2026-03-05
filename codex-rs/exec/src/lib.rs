@@ -858,9 +858,13 @@ async fn resolve_thread_path_by_id_or_name(
     id_or_name: &str,
 ) -> anyhow::Result<Option<PathBuf>> {
     if Uuid::parse_str(id_or_name).is_ok() {
-        find_thread_path_by_id_str(&config.codex_home, id_or_name).await
+        find_thread_path_by_id_str(&config.codex_home, id_or_name)
+            .await
+            .map_err(anyhow::Error::from)
     } else {
-        find_thread_path_by_name_str(&config.codex_home, id_or_name).await
+        find_thread_path_by_name_str(&config.codex_home, id_or_name)
+            .await
+            .map_err(anyhow::Error::from)
     }
 }
 
