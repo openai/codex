@@ -81,7 +81,7 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
         assert_eq!(first_json["type"], "session.update");
         assert_eq!(
             first_json["session"]["type"],
-            Value::String("quicksilver".to_string())
+            Value::String("realtime".to_string())
         );
         assert_eq!(
             first_json["session"]["instructions"],
@@ -94,6 +94,30 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
         assert_eq!(
             first_json["session"]["audio"]["input"]["format"]["rate"],
             Value::from(24_000)
+        );
+        assert_eq!(
+            first_json["session"]["audio"]["input"]["turn_detection"]["type"],
+            Value::String("semantic_vad".to_string())
+        );
+        assert_eq!(
+            first_json["session"]["audio"]["input"]["turn_detection"]["interrupt_response"],
+            Value::Bool(false)
+        );
+        assert_eq!(
+            first_json["session"]["audio"]["input"]["turn_detection"]["create_response"],
+            Value::Bool(true)
+        );
+        assert_eq!(
+            first_json["session"]["tool_choice"],
+            Value::String("auto".to_string())
+        );
+        assert_eq!(
+            first_json["session"]["tools"][0]["type"],
+            Value::String("function".to_string())
+        );
+        assert_eq!(
+            first_json["session"]["tools"][0]["name"],
+            Value::String("codex".to_string())
         );
 
         ws.send(Message::Text(
@@ -119,7 +143,7 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
 
         ws.send(Message::Text(
             json!({
-                "type": "conversation.output_audio.delta",
+                "type": "response.output_audio.delta",
                 "delta": "AQID",
                 "sample_rate": 48000,
                 "channels": 1
@@ -311,7 +335,7 @@ async fn realtime_ws_e2e_disconnected_emitted_once() {
 }
 
 #[tokio::test]
-async fn realtime_ws_e2e_ignores_unknown_text_events() {
+async fn realtime_ws_e2e_forwards_unknown_text_events() {
     let (addr, server) = spawn_realtime_ws_server(|mut ws: RealtimeWsStream| async move {
         let first = ws
             .next()
@@ -361,13 +385,26 @@ async fn realtime_ws_e2e_ignores_unknown_text_events() {
         .await
         .expect("connect");
 
-    let event = connection
+    let first_event = connection
         .next_event()
         .await
         .expect("next event")
         .expect("event");
     assert_eq!(
-        event,
+        first_event,
+        RealtimeEvent::ConversationItemAdded(json!({
+            "type": "response.created",
+            "response": {"id": "resp_unknown"}
+        }))
+    );
+
+    let second_event = connection
+        .next_event()
+        .await
+        .expect("next event")
+        .expect("event");
+    assert_eq!(
+        second_event,
         RealtimeEvent::SessionUpdated {
             session_id: "sess_after_unknown".to_string(),
             instructions: Some("backend prompt".to_string()),

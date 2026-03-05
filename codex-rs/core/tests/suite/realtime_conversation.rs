@@ -42,7 +42,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
             vec![],
             vec![
                 json!({
-                    "type": "conversation.output_audio.delta",
+                    "type": "response.output_audio.delta",
                     "delta": "AQID",
                     "sample_rate": 24000,
                     "channels": 1
@@ -141,7 +141,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     );
     assert_eq!(
         server.handshakes()[1].uri(),
-        "/v1/realtime?intent=quicksilver&model=realtime-test-model"
+        "/v1/realtime?model=gpt-realtime-1.5"
     );
     let mut request_types = [
         connection[1].body_json()["type"]
@@ -387,7 +387,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
                 "session": { "id": "sess_new", "instructions": "new" }
             })],
             vec![json!({
-                "type": "conversation.output_audio.delta",
+                "type": "response.output_audio.delta",
                 "delta": "AQID",
                 "sample_rate": 24000,
                 "channels": 1
@@ -600,14 +600,10 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
                 "type": "session.updated",
                 "session": { "id": "sess_1", "instructions": "backend prompt" }
             }),
-            json!({
-                "type": "conversation.handoff.requested",
-                "handoff_id": "handoff_1",
-                "item_id": "item_1",
-                "input_transcript": "delegate hello",
-                "messages": [{ "role": "user", "text": "delegate hello" }]
-            }),
+            realtime_handoff_requested_event("handoff_1", "item_1", "delegate hello"),
         ],
+        vec![],
+        vec![],
         vec![],
     ]])
     .await;
@@ -652,7 +648,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while tokio::time::Instant::now() < deadline {
         let connections = realtime_server.connections();
-        if connections.len() == 1 && connections[0].len() >= 2 {
+        if connections.len() == 1 && connections[0].len() >= 4 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -660,22 +656,46 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
 
     let realtime_connections = realtime_server.connections();
     assert_eq!(realtime_connections.len(), 1);
-    assert_eq!(realtime_connections[0].len(), 2);
+    assert_eq!(realtime_connections[0].len(), 4);
     assert_eq!(
         realtime_connections[0][0].body_json()["type"].as_str(),
         Some("session.update")
     );
     assert_eq!(
         realtime_connections[0][1].body_json()["type"].as_str(),
-        Some("conversation.handoff.append")
+        Some("conversation.item.create")
     );
     assert_eq!(
-        realtime_connections[0][1].body_json()["handoff_id"].as_str(),
+        realtime_connections[0][1].body_json()["item"]["type"].as_str(),
+        Some("message")
+    );
+    assert_eq!(
+        realtime_connections[0][1].body_json()["item"]["role"].as_str(),
+        Some("assistant")
+    );
+    assert_eq!(
+        realtime_connections[0][1].body_json()["item"]["content"][0]["type"].as_str(),
+        Some("output_text")
+    );
+    assert_eq!(
+        realtime_connections[0][1].body_json()["item"]["content"][0]["text"].as_str(),
+        Some("assistant says hi")
+    );
+    assert_eq!(
+        realtime_connections[0][2].body_json()["type"].as_str(),
+        Some("conversation.item.create")
+    );
+    assert_eq!(
+        realtime_connections[0][2].body_json()["item"]["type"].as_str(),
+        Some("function_call_output")
+    );
+    assert_eq!(
+        realtime_connections[0][2].body_json()["item"]["call_id"].as_str(),
         Some("handoff_1")
     );
     assert_eq!(
-        realtime_connections[0][1].body_json()["output_text"].as_str(),
-        Some("assistant says hi")
+        realtime_connections[0][3].body_json()["type"].as_str(),
+        Some("response.create")
     );
 
     realtime_server.shutdown().await;
@@ -719,18 +739,14 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
                 "type": "session.updated",
                 "session": { "id": "sess_item_done", "instructions": "backend prompt" }
             }),
-            json!({
-                "type": "conversation.handoff.requested",
-                "handoff_id": "handoff_item_done",
-                "item_id": "item_item_done",
-                "input_transcript": "delegate now",
-                "messages": [{ "role": "user", "text": "delegate now" }]
-            }),
+            realtime_handoff_requested_event("handoff_item_done", "item_item_done", "delegate now"),
         ],
         vec![json!({
             "type": "conversation.item.done",
             "item": { "id": "item_item_done" }
         })],
+        vec![],
+        vec![],
         vec![],
     ]])
     .await;
@@ -769,14 +785,22 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
     let first_append = realtime_server.wait_for_request(0, 1).await;
     assert_eq!(
         first_append.body_json()["type"].as_str(),
-        Some("conversation.handoff.append")
+        Some("conversation.item.create")
     );
     assert_eq!(
-        first_append.body_json()["handoff_id"].as_str(),
-        Some("handoff_item_done")
+        first_append.body_json()["item"]["type"].as_str(),
+        Some("message")
     );
     assert_eq!(
-        first_append.body_json()["output_text"].as_str(),
+        first_append.body_json()["item"]["role"].as_str(),
+        Some("assistant")
+    );
+    assert_eq!(
+        first_append.body_json()["item"]["content"][0]["type"].as_str(),
+        Some("output_text")
+    );
+    assert_eq!(
+        first_append.body_json()["item"]["content"][0]["text"].as_str(),
         Some("assistant message 1")
     );
 
@@ -793,14 +817,22 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
     let second_append = realtime_server.wait_for_request(0, 2).await;
     assert_eq!(
         second_append.body_json()["type"].as_str(),
-        Some("conversation.handoff.append")
+        Some("conversation.item.create")
     );
     assert_eq!(
-        second_append.body_json()["handoff_id"].as_str(),
-        Some("handoff_item_done")
+        second_append.body_json()["item"]["type"].as_str(),
+        Some("message")
     );
     assert_eq!(
-        second_append.body_json()["output_text"].as_str(),
+        second_append.body_json()["item"]["role"].as_str(),
+        Some("assistant")
+    );
+    assert_eq!(
+        second_append.body_json()["item"]["content"][0]["type"].as_str(),
+        Some("output_text")
+    );
+    assert_eq!(
+        second_append.body_json()["item"]["content"][0]["text"].as_str(),
         Some("assistant message 2")
     );
 
@@ -816,6 +848,30 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
     })
     .await;
 
+    let final_tool_call = realtime_server.wait_for_request(0, 3).await;
+    assert_eq!(
+        final_tool_call.body_json()["type"].as_str(),
+        Some("conversation.item.create")
+    );
+    assert_eq!(
+        final_tool_call.body_json()["item"]["type"].as_str(),
+        Some("function_call_output")
+    );
+    assert_eq!(
+        final_tool_call.body_json()["item"]["call_id"].as_str(),
+        Some("handoff_item_done")
+    );
+    assert_eq!(
+        final_tool_call.body_json()["item"]["output"].as_str(),
+        Some("{\"content\":\"assistant message 2\"}")
+    );
+
+    let response_create = realtime_server.wait_for_request(0, 4).await;
+    assert_eq!(
+        response_create.body_json()["type"].as_str(),
+        Some("response.create")
+    );
+
     realtime_server.shutdown().await;
     api_server.shutdown().await;
     Ok(())
@@ -823,6 +879,23 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
 
 fn sse_event(event: Value) -> String {
     responses::sse(vec![event])
+}
+
+fn realtime_handoff_requested_event(handoff_id: &str, item_id: &str, prompt: &str) -> Value {
+    json!({
+        "type": "response.done",
+        "response": {
+            "output": [
+                {
+                    "id": item_id,
+                    "type": "function_call",
+                    "name": "codex",
+                    "call_id": handoff_id,
+                    "arguments": json!({ "prompt": prompt }).to_string(),
+                }
+            ]
+        }
+    })
 }
 
 fn message_input_texts(body: &Value, role: &str) -> Vec<String> {
@@ -859,13 +932,7 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
             "type": "session.updated",
             "session": { "id": "sess_inbound", "instructions": "backend prompt" }
         }),
-        json!({
-            "type": "conversation.handoff.requested",
-            "handoff_id": "handoff_inbound",
-            "item_id": "item_inbound",
-            "input_transcript": "text from realtime",
-            "messages": [{ "role": "user", "text": "text from realtime" }]
-        }),
+        realtime_handoff_requested_event("handoff_inbound", "item_inbound", "text from realtime"),
     ]]])
     .await;
 
@@ -943,15 +1010,25 @@ async fn inbound_handoff_request_uses_all_messages() -> Result<()> {
             "session": { "id": "sess_inbound_multi", "instructions": "backend prompt" }
         }),
         json!({
-            "type": "conversation.handoff.requested",
-            "handoff_id": "handoff_inbound_multi",
-            "item_id": "item_inbound_multi",
-            "input_transcript": "ignored",
-            "messages": [
-                { "role": "assistant", "text": "assistant context" },
-                { "role": "user", "text": "delegated query" },
-                { "role": "assistant", "text": "assist confirm" },
-            ]
+            "type": "response.done",
+            "response": {
+                "output": [
+                    {
+                        "id": "item_inbound_multi",
+                        "type": "function_call",
+                        "name": "codex",
+                        "call_id": "handoff_inbound_multi",
+                        "arguments": json!({
+                            "input_transcript": "ignored",
+                            "messages": [
+                                { "role": "assistant", "text": "assistant context" },
+                                { "role": "user", "text": "delegated query" },
+                                { "role": "assistant", "text": "assist confirm" },
+                            ]
+                        }).to_string(),
+                    }
+                ]
+            }
         }),
     ]]])
     .await;
@@ -1013,7 +1090,7 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
             }
         }),
         json!({
-            "type": "conversation.output_audio.delta",
+            "type": "response.output_audio.delta",
             "delta": "AQID",
             "sample_rate": 24000,
             "channels": 1
@@ -1103,13 +1180,11 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
                 "type": "session.updated",
                 "session": { "id": "sess_echo_guard", "instructions": "backend prompt" }
             }),
-            json!({
-                "type": "conversation.handoff.requested",
-                "handoff_id": "handoff_echo_guard",
-                "item_id": "item_echo_guard",
-                "input_transcript": "delegate now",
-                "messages": [{"role": "user", "text": "delegate now"}]
-            }),
+            realtime_handoff_requested_event(
+                "handoff_echo_guard",
+                "item_echo_guard",
+                "delegate now",
+            ),
         ],
         vec![
             json!({
@@ -1121,7 +1196,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
                 }
             }),
             json!({
-                "type": "conversation.output_audio.delta",
+                "type": "response.output_audio.delta",
                 "delta": "AQID",
                 "sample_rate": 24000,
                 "channels": 1
@@ -1169,22 +1244,30 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
     let mirrored_request = realtime_server.wait_for_request(0, 1).await;
     let mirrored_request_body = mirrored_request.body_json();
     eprintln!(
-        "[realtime test +{}ms] saw mirrored request type={:?} handoff_id={:?} text={:?}",
+        "[realtime test +{}ms] saw mirrored request type={:?} role={:?} text={:?}",
         start.elapsed().as_millis(),
         mirrored_request_body["type"].as_str(),
-        mirrored_request_body["handoff_id"].as_str(),
-        mirrored_request_body["output_text"].as_str(),
+        mirrored_request_body["item"]["role"].as_str(),
+        mirrored_request_body["item"]["content"][0]["text"].as_str(),
     );
     assert_eq!(
         mirrored_request_body["type"].as_str(),
-        Some("conversation.handoff.append")
+        Some("conversation.item.create")
     );
     assert_eq!(
-        mirrored_request_body["handoff_id"].as_str(),
-        Some("handoff_echo_guard")
+        mirrored_request_body["item"]["type"].as_str(),
+        Some("message")
     );
     assert_eq!(
-        mirrored_request_body["output_text"].as_str(),
+        mirrored_request_body["item"]["role"].as_str(),
+        Some("assistant")
+    );
+    assert_eq!(
+        mirrored_request_body["item"]["content"][0]["type"].as_str(),
+        Some("output_text")
+    );
+    assert_eq!(
+        mirrored_request_body["item"]["content"][0]["text"].as_str(),
         Some("assistant says hi")
     );
 
@@ -1251,15 +1334,13 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
             "type": "session.updated",
             "session": { "id": "sess_non_blocking", "instructions": "backend prompt" }
         }),
+        realtime_handoff_requested_event(
+            "handoff_non_blocking",
+            "item_non_blocking",
+            "delegate now",
+        ),
         json!({
-            "type": "conversation.handoff.requested",
-            "handoff_id": "handoff_non_blocking",
-            "item_id": "item_non_blocking",
-            "input_transcript": "delegate now",
-            "messages": [{"role": "user", "text": "delegate now"}]
-        }),
-        json!({
-            "type": "conversation.output_audio.delta",
+            "type": "response.output_audio.delta",
             "delta": "AQID",
             "sample_rate": 24000,
             "channels": 1
@@ -1378,13 +1459,11 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
             "type": "session.updated",
             "session": { "id": "sess_steer", "instructions": "backend prompt" }
         })],
-        vec![json!({
-            "type": "conversation.handoff.requested",
-            "handoff_id": "handoff_steer",
-            "item_id": "item_steer",
-            "input_transcript": "steer via realtime",
-            "messages": [{ "role": "user", "text": "steer via realtime" }]
-        })],
+        vec![realtime_handoff_requested_event(
+            "handoff_steer",
+            "item_steer",
+            "steer via realtime",
+        )],
     ]])
     .await;
 
@@ -1509,15 +1588,9 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
             "type": "session.updated",
             "session": { "id": "sess_handoff_request", "instructions": "backend prompt" }
         }),
+        realtime_handoff_requested_event("handoff_audio", "item_audio", delegated_text),
         json!({
-            "type": "conversation.handoff.requested",
-            "handoff_id": "handoff_audio",
-            "item_id": "item_audio",
-            "input_transcript": delegated_text,
-            "messages": [{ "role": "user", "text": delegated_text }]
-        }),
-        json!({
-            "type": "conversation.output_audio.delta",
+            "type": "response.output_audio.delta",
             "delta": "AQID",
             "sample_rate": 24000,
             "channels": 1

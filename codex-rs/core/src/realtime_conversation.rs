@@ -43,6 +43,7 @@ const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const USER_TEXT_IN_QUEUE_CAPACITY: usize = 64;
 const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
+const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
 
 pub(crate) struct RealtimeConversationManager {
     state: Mutex<Option<ConversationState>>,
@@ -52,12 +53,19 @@ pub(crate) struct RealtimeConversationManager {
 struct RealtimeHandoffState {
     output_tx: Sender<HandoffOutput>,
     active_handoff: Arc<Mutex<Option<String>>>,
+    last_output_text: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct HandoffOutput {
-    handoff_id: String,
-    output_text: String,
+enum HandoffOutput {
+    TextUpdate {
+        handoff_id: String,
+        output_text: String,
+    },
+    FinalToolCall {
+        call_id: String,
+        output_text: String,
+    },
 }
 
 impl RealtimeHandoffState {
@@ -65,6 +73,7 @@ impl RealtimeHandoffState {
         Self {
             output_tx,
             active_handoff: Arc::new(Mutex::new(None)),
+            last_output_text: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -72,10 +81,28 @@ impl RealtimeHandoffState {
         let Some(handoff_id) = self.active_handoff.lock().await.clone() else {
             return Ok(());
         };
+        *self.last_output_text.lock().await = Some(output_text.clone());
 
         self.output_tx
-            .send(HandoffOutput {
+            .send(HandoffOutput::TextUpdate {
                 handoff_id,
+                output_text,
+            })
+            .await
+            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+        Ok(())
+    }
+
+    async fn send_final_output(&self) -> CodexResult<()> {
+        let Some(call_id) = self.active_handoff.lock().await.clone() else {
+            return Ok(());
+        };
+        let Some(output_text) = self.last_output_text.lock().await.clone() else {
+            return Ok(());
+        };
+        self.output_tx
+            .send(HandoffOutput::FinalToolCall {
+                call_id,
                 output_text,
             })
             .await
@@ -232,6 +259,17 @@ impl RealtimeConversationManager {
         handoff.send_output(output_text).await
     }
 
+    pub(crate) async fn handoff_complete(&self) -> CodexResult<()> {
+        let handoff = {
+            let guard = self.state.lock().await;
+            guard.as_ref().map(|state| state.handoff.clone())
+        };
+        let Some(handoff) = handoff else {
+            return Ok(());
+        };
+        handoff.send_final_output().await
+    }
+
     pub(crate) async fn active_handoff_id(&self) -> Option<String> {
         let handoff = {
             let guard = self.state.lock().await;
@@ -247,6 +285,7 @@ impl RealtimeConversationManager {
         };
         if let Some(handoff) = handoff {
             *handoff.active_handoff.lock().await = None;
+            *handoff.last_output_text.lock().await = None;
         }
     }
 
@@ -282,7 +321,7 @@ pub(crate) async fn handle_start(
         .experimental_realtime_ws_backend_prompt
         .clone()
         .unwrap_or(params.prompt);
-    let model = config.experimental_realtime_ws_model.clone();
+    let model = Some(DEFAULT_REALTIME_MODEL.to_string());
 
     let requested_session_id = params
         .session_id
@@ -495,17 +534,39 @@ fn spawn_realtime_input_task(
                 }
                 handoff_output = handoff_output_rx.recv() => {
                     match handoff_output {
-                        Ok(HandoffOutput {
-                            handoff_id,
-                            output_text,
-                        }) => {
-                            if let Err(err) = writer
-                                .send_conversation_handoff_append(handoff_id, output_text)
-                                .await
-                            {
-                                let mapped_error = map_api_error(err);
-                                warn!("failed to send handoff output: {mapped_error}");
-                                break;
+                        Ok(handoff_output) => {
+                            match handoff_output {
+                                HandoffOutput::TextUpdate {
+                                    handoff_id,
+                                    output_text,
+                                } => {
+                                    if let Err(err) = writer
+                                        .send_conversation_handoff_append(handoff_id, output_text)
+                                        .await
+                                    {
+                                        let mapped_error = map_api_error(err);
+                                        warn!("failed to send handoff output: {mapped_error}");
+                                        break;
+                                    }
+                                }
+                                HandoffOutput::FinalToolCall {
+                                    call_id,
+                                    output_text,
+                                } => {
+                                    if let Err(err) = writer
+                                        .send_function_call_output(call_id, output_text)
+                                        .await
+                                    {
+                                        let mapped_error = map_api_error(err);
+                                        warn!("failed to send handoff tool output: {mapped_error}");
+                                        break;
+                                    }
+                                    if let Err(err) = writer.send_response_create().await {
+                                        let mapped_error = map_api_error(err);
+                                        warn!("failed to send handoff response.create: {mapped_error}");
+                                        break;
+                                    }
+                                }
                             }
                         }
                         Err(_) => break,
@@ -517,6 +578,7 @@ fn spawn_realtime_input_task(
                             if let RealtimeEvent::HandoffRequested(handoff) = &event {
                                 *handoff_state.active_handoff.lock().await =
                                     Some(handoff.handoff_id.clone());
+                                *handoff_state.last_output_text.lock().await = None;
                             }
                             let should_stop = matches!(&event, RealtimeEvent::Error(_));
                             if events_tx.send(event).await.is_err() {
@@ -676,7 +738,7 @@ mod tests {
         let output_1 = rx.recv().await.expect("recv");
         assert_eq!(
             output_1,
-            HandoffOutput {
+            HandoffOutput::TextUpdate {
                 handoff_id: "handoff_1".to_string(),
                 output_text: "result".to_string(),
             }
@@ -685,7 +747,7 @@ mod tests {
         let output_2 = rx.recv().await.expect("recv");
         assert_eq!(
             output_2,
-            HandoffOutput {
+            HandoffOutput::TextUpdate {
                 handoff_id: "handoff_1".to_string(),
                 output_text: "result 2".to_string(),
             }
@@ -697,5 +759,28 @@ mod tests {
             .await
             .expect("send");
         assert!(rx.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sends_final_tool_call_output_for_active_handoff() {
+        let (tx, rx) = bounded(4);
+        let state = RealtimeHandoffState::new(tx);
+        *state.active_handoff.lock().await = Some("handoff_2".to_string());
+
+        state
+            .send_output("final text".to_string())
+            .await
+            .expect("send");
+        let _ = rx.recv().await.expect("recv text update");
+
+        state.send_final_output().await.expect("send final output");
+        let final_output = rx.recv().await.expect("recv final output");
+        assert_eq!(
+            final_output,
+            HandoffOutput::FinalToolCall {
+                call_id: "handoff_2".to_string(),
+                output_text: "final text".to_string(),
+            }
+        );
     }
 }

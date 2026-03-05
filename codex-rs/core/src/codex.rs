@@ -2433,6 +2433,9 @@ impl Session {
         if !matches!(msg, EventMsg::TurnComplete(_)) {
             return;
         }
+        if let Err(err) = self.conversation.handoff_complete().await {
+            debug!("failed to send final realtime handoff tool output: {err}");
+        }
         self.conversation.clear_active_handoff().await;
     }
 
