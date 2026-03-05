@@ -45,6 +45,8 @@ use toml::Value as TomlValue;
 use tracing::warn;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// JSON-RPC overload code used by app-server when bounded queues are saturated.
+const OVERLOADED_ERROR_CODE: i64 = -32001;
 
 /// Raw app-server request result for typed in-process requests.
 ///
@@ -325,7 +327,7 @@ impl InProcessAppServerClient {
                                         let _ = handle.fail_server_request(
                                             request.id().clone(),
                                             JSONRPCErrorError {
-                                                code: -32001,
+                                                code: OVERLOADED_ERROR_CODE,
                                                 message: "in-process app-server event queue is full".to_string(),
                                                 data: None,
                                             },
@@ -349,7 +351,7 @@ impl InProcessAppServerClient {
                                     let _ = handle.fail_server_request(
                                         request.id().clone(),
                                         JSONRPCErrorError {
-                                            code: -32001,
+                                            code: OVERLOADED_ERROR_CODE,
                                             message: "in-process app-server event queue is full".to_string(),
                                             data: None,
                                         },
@@ -537,6 +539,7 @@ impl InProcessAppServerClient {
         }
 
         if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut worker_handle).await {
+            warn!("in-process app-server worker did not shut down within timeout; aborting");
             worker_handle.abort();
             let _ = worker_handle.await;
         }
