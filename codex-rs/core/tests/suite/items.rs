@@ -269,7 +269,7 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+    let TestCodex { codex, cwd, .. } = test_codex().build(&server).await?;
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
@@ -303,7 +303,12 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     assert_eq!(end.call_id, "ig_123");
     assert_eq!(end.status, "completed");
     assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
-    assert_eq!(end.result, "Zm9v");
+    let expected_saved_path = cwd.path().join("ig_123.png");
+    assert_eq!(
+        end.result,
+        expected_saved_path.to_string_lossy().into_owned()
+    );
+    assert_eq!(std::fs::read(expected_saved_path)?, b"foo");
 
     Ok(())
 }

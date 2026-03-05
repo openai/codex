@@ -1,6 +1,10 @@
+use std::path::Path;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
@@ -48,6 +52,26 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
         return Some(combined);
     }
     None
+}
+
+async fn save_image_generation_result_to_cwd(
+    cwd: &Path,
+    call_id: &str,
+    result: &str,
+) -> Result<PathBuf> {
+    let bytes = BASE64_STANDARD
+        .decode(result.trim().as_bytes())
+        .map_err(|err| {
+            CodexErr::InvalidRequest(format!("invalid image generation payload: {err}"))
+        })?;
+    let file_stem = if call_id.is_empty() {
+        "generated_image"
+    } else {
+        call_id
+    };
+    let path = cwd.join(format!("{file_stem}.png"));
+    tokio::fs::write(&path, bytes).await?;
+    Ok(path)
 }
 
 /// Persist a completed model response item and record any cited memory usage.
@@ -157,7 +181,17 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode) {
+            if let Some(mut turn_item) = handle_non_tool_response_item(&item, plan_mode) {
+                if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
+                    let path = save_image_generation_result_to_cwd(
+                        &ctx.turn_context.cwd,
+                        &image_item.id,
+                        &image_item.result,
+                    )
+                    .await?;
+                    image_item.result = path.to_string_lossy().into_owned();
+                }
+
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -326,10 +360,13 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
 mod tests {
     use super::handle_non_tool_response_item;
     use super::last_assistant_message_from_item;
+    use super::save_image_generation_result_to_cwd;
+    use crate::error::CodexErr;
     use codex_protocol::items::TurnItem;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
 
     fn assistant_output_text(text: &str) -> ResponseItem {
         ResponseItem::Message {
@@ -387,5 +424,69 @@ mod tests {
         let item = assistant_output_text("<proposed_plan>\n- x\n</proposed_plan>");
 
         assert_eq!(last_assistant_message_from_item(&item, true), None);
+    }
+
+    #[tokio::test]
+    async fn save_image_generation_result_saves_base64_to_png_in_cwd() {
+        let dir = tempdir().expect("tempdir");
+
+        let saved_path = save_image_generation_result_to_cwd(dir.path(), "ig_123", "Zm9v")
+            .await
+            .expect("image should be saved");
+
+        assert_eq!(
+            saved_path.file_name().and_then(|v| v.to_str()),
+            Some("ig_123.png")
+        );
+        assert_eq!(std::fs::read(saved_path).expect("saved file"), b"foo");
+    }
+
+    #[tokio::test]
+    async fn save_image_generation_result_rejects_data_url_payload() {
+        let dir = tempdir().expect("tempdir");
+        let result = "data:image/jpeg;base64,Zm9v";
+
+        let err = save_image_generation_result_to_cwd(dir.path(), "ig_456", result)
+            .await
+            .expect_err("data url payload should error");
+        assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn save_image_generation_result_overwrites_existing_file() {
+        let dir = tempdir().expect("tempdir");
+        let existing_path = dir.path().join("ig_123.png");
+        std::fs::write(&existing_path, b"existing").expect("seed existing image");
+
+        let saved_path = save_image_generation_result_to_cwd(dir.path(), "ig_123", "Zm9v")
+            .await
+            .expect("image should be saved");
+
+        assert_eq!(
+            saved_path.file_name().and_then(|v| v.to_str()),
+            Some("ig_123.png")
+        );
+        assert_eq!(std::fs::read(saved_path).expect("saved file"), b"foo");
+    }
+
+    #[tokio::test]
+    async fn save_image_generation_result_rejects_non_standard_base64() {
+        let dir = tempdir().expect("tempdir");
+
+        let err = save_image_generation_result_to_cwd(dir.path(), "ig_urlsafe", "_-8")
+            .await
+            .expect_err("non-standard base64 should error");
+        assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn save_image_generation_result_rejects_non_base64_data_urls() {
+        let dir = tempdir().expect("tempdir");
+
+        let err =
+            save_image_generation_result_to_cwd(dir.path(), "ig_svg", "data:image/svg+xml,<svg/>")
+                .await
+                .expect_err("non-base64 data url should error");
+        assert!(matches!(err, CodexErr::InvalidRequest(_)));
     }
 }
