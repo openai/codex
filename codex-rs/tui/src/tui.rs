@@ -61,6 +61,13 @@ pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 const DEFAULT_TERMINAL_TITLE: &str = "Codex";
 
+fn has_spinner_prefix(context: &str) -> bool {
+    matches!(
+        context.chars().next(),
+        Some('⠋' | '⠙' | '⠹' | '⠸' | '⠼' | '⠴' | '⠦' | '⠧' | '⠇' | '⠏')
+    )
+}
+
 fn format_terminal_title(context: Option<&str>) -> String {
     let context = context
         .map(|text| {
@@ -73,6 +80,9 @@ fn format_terminal_title(context: Option<&str>) -> String {
         .filter(|text| !text.is_empty());
 
     match context {
+        Some(context) if has_spinner_prefix(&context) => {
+            format!("{DEFAULT_TERMINAL_TITLE} {context}")
+        }
         Some(context) => format!("{DEFAULT_TERMINAL_TITLE} - {context}"),
         None => DEFAULT_TERMINAL_TITLE.to_string(),
     }
@@ -605,6 +615,15 @@ mod tests {
         assert_eq!(
             format_terminal_title(Some("fix title syncing")),
             "Codex - fix title syncing"
+        );
+    }
+
+    #[test]
+    fn terminal_title_places_spinner_after_codex() {
+        assert_eq!(format_terminal_title(Some("⠋")), "Codex ⠋");
+        assert_eq!(
+            format_terminal_title(Some("⠋ - fix title syncing")),
+            "Codex ⠋ - fix title syncing"
         );
     }
 
