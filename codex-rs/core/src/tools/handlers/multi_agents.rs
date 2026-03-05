@@ -6,7 +6,12 @@
 //! then optionally layer role-specific config on top.
 
 use crate::agent::AgentStatus;
+use crate::agent::RemovedWatchdog;
+use crate::agent::WatchdogParentCompactionResult;
+use crate::agent::WatchdogRegistration;
 use crate::agent::exceeds_thread_spawn_depth_limit;
+use crate::agent::next_thread_spawn_depth;
+use crate::agent::role::default_spawn_mode_for_role;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
@@ -88,6 +93,10 @@ impl ToolHandler for MultiAgentHandler {
             "spawn_agent" => spawn::handle(session, turn, call_id, arguments).await,
             "send_input" => send_input::handle(session, turn, call_id, arguments).await,
             "resume_agent" => resume_agent::handle(session, turn, call_id, arguments).await,
+            "compact_parent_context" => {
+                compact_parent_context::handle(session, turn, call_id, arguments).await
+            }
+            "list_agents" => list_agents::handle(session, turn, call_id, arguments).await,
             "wait" => wait::handle(session, turn, call_id, arguments).await,
             "close_agent" => close_agent::handle(session, turn, call_id, arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(
@@ -102,10 +111,16 @@ mod spawn {
     use crate::agent::control::SpawnAgentOptions;
     use crate::agent::role::DEFAULT_ROLE_NAME;
     use crate::agent::role::apply_role_to_config;
-
-    use crate::agent::exceeds_thread_spawn_depth_limit;
-    use crate::agent::next_thread_spawn_depth;
+    use std::collections::HashSet;
     use std::sync::Arc;
+
+    #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    enum SpawnMode {
+        Spawn,
+        Fork,
+        Watchdog,
+    }
 
     #[derive(Debug, Deserialize)]
     struct SpawnAgentArgs {
@@ -114,6 +129,8 @@ mod spawn {
         agent_type: Option<String>,
         #[serde(default)]
         fork_context: bool,
+        #[serde(default, alias = "mode")]
+        spawn_mode: Option<SpawnMode>,
     }
 
     #[derive(Debug, Serialize)]
@@ -134,11 +151,26 @@ mod spawn {
             .as_deref()
             .map(str::trim)
             .filter(|role| !role.is_empty());
+        let default_spawn_mode = match default_spawn_mode_for_role(&turn.config, role_name) {
+            crate::config::AgentRoleSpawnMode::Spawn => SpawnMode::Spawn,
+            crate::config::AgentRoleSpawnMode::Fork => SpawnMode::Fork,
+        };
+        let spawn_mode = args
+            .spawn_mode
+            .or_else(|| (args.fork_context && args.spawn_mode.is_none()).then_some(SpawnMode::Fork))
+            .unwrap_or(default_spawn_mode);
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
         let max_depth = turn.config.agent_max_depth;
+        if matches!(spawn_mode, SpawnMode::Watchdog)
+            && matches!(session_source, SessionSource::SubAgent(_))
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "watchdogs can only be spawned by root agents".to_string(),
+            ));
+        }
         if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
             return Err(FunctionCallError::RespondToModel(
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
@@ -155,31 +187,71 @@ mod spawn {
                 .into(),
             )
             .await;
-        let mut config =
-            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+        let config_strategy = match spawn_mode {
+            SpawnMode::Spawn => SpawnConfigStrategy::ContextFreeSpawn,
+            SpawnMode::Fork | SpawnMode::Watchdog => SpawnConfigStrategy::ForkLike,
+        };
+        let mut config = build_agent_spawn_config_with_strategy(
+            &session.get_base_instructions().await,
+            turn.as_ref(),
+            child_depth,
+            config_strategy,
+        )?;
         apply_role_to_config(&mut config, role_name)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
-
-        let result = session
-            .services
-            .agent_control
-            .spawn_agent_with_options(
-                config,
-                input_items,
-                Some(thread_spawn_source(
+        let spawn_source = thread_spawn_source(session.conversation_id, child_depth, role_name);
+        let result = match spawn_mode {
+            SpawnMode::Spawn => {
+                session
+                    .services
+                    .agent_control
+                    .spawn_agent(config, input_items, Some(spawn_source))
+                    .await
+            }
+            SpawnMode::Fork if args.fork_context => {
+                session
+                    .services
+                    .agent_control
+                    .spawn_agent_with_options(
+                        config,
+                        input_items,
+                        Some(spawn_source),
+                        SpawnAgentOptions {
+                            fork_parent_spawn_call_id: Some(call_id.clone()),
+                        },
+                    )
+                    .await
+            }
+            SpawnMode::Fork => {
+                session
+                    .services
+                    .agent_control
+                    .fork_agent(
+                        config,
+                        input_items,
+                        session.conversation_id,
+                        usize::MAX,
+                        spawn_source,
+                    )
+                    .await
+            }
+            SpawnMode::Watchdog => {
+                spawn_watchdog(
+                    &session.services.agent_control,
+                    config,
+                    prompt.clone(),
                     session.conversation_id,
                     child_depth,
-                    role_name,
-                )),
-                SpawnAgentOptions {
-                    fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
-                },
-            )
-            .await
-            .map_err(collab_spawn_error);
+                    watchdog_interval(&turn.config)?,
+                    spawn_source,
+                )
+                .await
+            }
+        }
+        .map_err(collab_spawn_error);
         let (new_thread_id, status) = match &result {
             Ok(thread_id) => (
                 Some(*thread_id),
@@ -230,6 +302,69 @@ mod spawn {
             success: Some(true),
         })
     }
+
+    fn watchdog_interval(config: &Config) -> Result<i64, FunctionCallError> {
+        let interval = config.watchdog_interval_s;
+        if interval <= 0 {
+            return Err(FunctionCallError::RespondToModel(
+                "watchdog_interval_s must be greater than zero".to_string(),
+            ));
+        }
+        Ok(interval)
+    }
+
+    async fn spawn_watchdog(
+        agent_control: &crate::agent::AgentControl,
+        config: Config,
+        prompt: String,
+        owner_thread_id: ThreadId,
+        child_depth: i32,
+        interval_s: i64,
+        spawn_source: SessionSource,
+    ) -> crate::error::Result<ThreadId> {
+        let target_thread_id = agent_control
+            .spawn_agent_handle(config.clone(), Some(spawn_source))
+            .await?;
+        let superseded_before_register = agent_control
+            .unregister_watchdogs_for_owner(owner_thread_id)
+            .await;
+        shutdown_removed_watchdogs(agent_control, superseded_before_register).await;
+        let registration = WatchdogRegistration {
+            owner_thread_id,
+            target_thread_id,
+            child_depth,
+            interval_s,
+            prompt,
+            config,
+        };
+        let superseded_after_register = match agent_control.register_watchdog(registration).await {
+            Ok(removed) => removed,
+            Err(err) => {
+                let _ = agent_control.shutdown_agent(target_thread_id).await;
+                return Err(err);
+            }
+        };
+        shutdown_removed_watchdogs(agent_control, superseded_after_register).await;
+        Ok(target_thread_id)
+    }
+
+    async fn shutdown_removed_watchdogs(
+        agent_control: &crate::agent::AgentControl,
+        removed_watchdogs: Vec<RemovedWatchdog>,
+    ) {
+        let mut thread_ids = HashSet::new();
+        for removed in removed_watchdogs {
+            thread_ids.insert(removed.target_thread_id);
+            if let Some(helper_id) = removed.active_helper_id {
+                thread_ids.insert(helper_id);
+            }
+        }
+        let mut thread_ids = thread_ids.into_iter().collect::<Vec<_>>();
+        thread_ids.sort_by_key(ToString::to_string);
+        for thread_id in thread_ids {
+            let _ = agent_control.shutdown_agent(thread_id).await;
+        }
+    }
 }
 
 mod send_input {
@@ -238,7 +373,7 @@ mod send_input {
 
     #[derive(Debug, Deserialize)]
     struct SendInputArgs {
-        id: String,
+        id: Option<String>,
         message: Option<String>,
         items: Option<Vec<UserInput>>,
         #[serde(default)]
@@ -257,7 +392,14 @@ mod send_input {
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SendInputArgs = parse_arguments(&arguments)?;
-        let receiver_thread_id = agent_id(&args.id)?;
+        let receiver_thread_id = match args.id.as_deref().map(str::trim) {
+            Some(id) if !id.is_empty() && !matches!(id, "parent" | "root") => agent_id(id)?,
+            _ => session.parent_thread_id().await.ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "send_input requires an id when no parent agent is available".to_string(),
+                )
+            })?,
+        };
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
         let (receiver_agent_nickname, receiver_agent_role) = session
@@ -313,6 +455,7 @@ mod send_input {
             )
             .await;
         let submission_id = result?;
+        session.mark_turn_used_collab_send_input();
 
         let content = serde_json::to_string(&SendInputResult { submission_id }).map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize send_input result: {err}"))
@@ -464,6 +607,159 @@ mod resume_agent {
     }
 }
 
+mod compact_parent_context {
+    use super::*;
+    use std::sync::Arc;
+
+    #[derive(Debug, Deserialize)]
+    struct CompactParentContextArgs {
+        reason: Option<String>,
+        evidence: Option<String>,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct CompactParentContextResult {
+        parent_id: String,
+        submission_id: String,
+    }
+
+    pub async fn handle(
+        session: Arc<Session>,
+        _turn: Arc<TurnContext>,
+        _call_id: String,
+        arguments: String,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        let args: CompactParentContextArgs = parse_arguments(&arguments)?;
+        let _reason = args.reason.and_then(|reason| {
+            let trimmed = reason.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        });
+        let _evidence = args.evidence.and_then(|evidence| {
+            let trimmed = evidence.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        });
+
+        let helper_thread_id = session.conversation_id;
+        let result = session
+            .services
+            .agent_control
+            .compact_parent_for_watchdog_helper(helper_thread_id)
+            .await
+            .map_err(|err| collab_agent_error(helper_thread_id, err))?;
+
+        let (parent_thread_id, submission_id) = match result {
+            WatchdogParentCompactionResult::NotWatchdogHelper => {
+                return Err(FunctionCallError::RespondToModel(
+                    "compact_parent_context is only available to active watchdog helpers"
+                        .to_string(),
+                ));
+            }
+            WatchdogParentCompactionResult::ParentBusy { parent_thread_id } => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "parent agent {parent_thread_id} has an active turn; compact_parent_context requires an idle parent"
+                )));
+            }
+            WatchdogParentCompactionResult::AlreadyInProgress { parent_thread_id } => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "parent agent {parent_thread_id} already has a compaction in progress"
+                )));
+            }
+            WatchdogParentCompactionResult::Submitted {
+                parent_thread_id,
+                submission_id,
+            } => (parent_thread_id, submission_id),
+        };
+
+        let content = serde_json::to_string(&CompactParentContextResult {
+            parent_id: parent_thread_id.to_string(),
+            submission_id,
+        })
+        .map_err(|err| {
+            FunctionCallError::Fatal(format!(
+                "failed to serialize compact_parent_context result: {err}"
+            ))
+        })?;
+
+        Ok(ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            success: Some(true),
+        })
+    }
+}
+
+mod list_agents {
+    use super::*;
+    use std::sync::Arc;
+
+    #[derive(Debug, Deserialize)]
+    struct ListAgentsArgs {
+        id: Option<String>,
+        #[serde(default = "default_recursive")]
+        recursive: bool,
+        #[serde(default)]
+        all: bool,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ListAgentsResult {
+        agents: Vec<ListAgentEntry>,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ListAgentEntry {
+        id: String,
+        parent_id: String,
+        status: AgentStatus,
+        depth: usize,
+    }
+
+    fn default_recursive() -> bool {
+        true
+    }
+
+    pub async fn handle(
+        session: Arc<Session>,
+        _turn: Arc<TurnContext>,
+        _call_id: String,
+        arguments: String,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        let args: ListAgentsArgs = parse_arguments(&arguments)?;
+        let owner_thread_id = match args.id.as_deref().map(str::trim) {
+            Some(id) if !id.is_empty() && !matches!(id, "self") => agent_id(id)?,
+            _ => session.conversation_id,
+        };
+
+        let listings = session
+            .services
+            .agent_control
+            .list_agents(owner_thread_id, args.recursive, args.all)
+            .await
+            .map_err(collab_spawn_error)?;
+
+        let agents = listings
+            .into_iter()
+            .map(|entry| ListAgentEntry {
+                id: entry.thread_id.to_string(),
+                parent_id: entry
+                    .parent_thread_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_default(),
+                status: entry.status,
+                depth: entry.depth,
+            })
+            .collect();
+
+        let content = serde_json::to_string(&ListAgentsResult { agents }).map_err(|err| {
+            FunctionCallError::Fatal(format!("failed to serialize list_agents result: {err}"))
+        })?;
+
+        Ok(ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            success: Some(true),
+        })
+    }
+}
+
 pub(crate) mod wait {
     use super::*;
     use crate::agent::status::is_final;
@@ -471,6 +767,7 @@ pub(crate) mod wait {
     use futures::StreamExt;
     use futures::stream::FuturesUnordered;
     use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::watch::Receiver;
@@ -496,17 +793,44 @@ pub(crate) mod wait {
         call_id: String,
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
+        if let Some(owner_thread_id) = session
+            .services
+            .agent_control
+            .watchdog_owner_for_active_helper(session.conversation_id)
+            .await
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "wait is not available to watchdog check-in agents. This thread is a one-shot watchdog check-in for owner {owner_thread_id}. Send the result to the parent/root agent with `send_input` (or finish with a final message for fallback delivery) and end your turn."
+            )));
+        }
+
         let args: WaitArgs = parse_arguments(&arguments)?;
         if args.ids.is_empty() {
             return Err(FunctionCallError::RespondToModel(
                 "ids must be non-empty".to_owned(),
             ));
         }
-        let receiver_thread_ids = args
+        let requested_thread_ids = args
             .ids
             .iter()
             .map(|id| agent_id(id))
             .collect::<Result<Vec<_>, _>>()?;
+        let event_receiver_thread_ids = requested_thread_ids.clone();
+        let watchdog_target_ids = session
+            .services
+            .agent_control
+            .watchdog_targets(&requested_thread_ids)
+            .await;
+        let mut receiver_thread_ids = Vec::new();
+        let mut watchdog_statuses = Vec::new();
+        split_wait_ids(
+            &session,
+            requested_thread_ids,
+            &watchdog_target_ids,
+            &mut receiver_thread_ids,
+            &mut watchdog_statuses,
+        )
+        .await;
         let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
         for receiver_thread_id in &receiver_thread_ids {
             let (agent_nickname, agent_role) = session
@@ -540,13 +864,40 @@ pub(crate) mod wait {
                 &turn,
                 CollabWaitingBeginEvent {
                     sender_thread_id: session.conversation_id,
-                    receiver_thread_ids: receiver_thread_ids.clone(),
+                    receiver_thread_ids: event_receiver_thread_ids,
                     receiver_agents: receiver_agents.clone(),
                     call_id: call_id.clone(),
                 }
                 .into(),
             )
             .await;
+
+        if receiver_thread_ids.is_empty() {
+            let statuses_map = watchdog_statuses.into_iter().collect::<HashMap<_, _>>();
+            session
+                .send_event(
+                    &turn,
+                    CollabWaitingEndEvent {
+                        sender_thread_id: session.conversation_id,
+                        call_id,
+                        agent_statuses: Vec::new(),
+                        statuses: statuses_map.clone(),
+                    }
+                    .into(),
+                )
+                .await;
+
+            let content = serde_json::to_string(&WaitResult {
+                status: statuses_map,
+                timed_out: false,
+            })
+            .map_err(|err| {
+                FunctionCallError::Fatal(format!("failed to serialize wait result: {err}"))
+            })?;
+            return Err(FunctionCallError::RespondToModel(format!(
+                "wait cannot be used to wait for watchdog check-ins. You passed only watchdog handle ids. Watchdog check-ins only happen after the current turn ends and the owner thread is idle for at least watchdog_interval_s. `wait` on a watchdog handle is status-only and cannot confirm a new check-in. Do not poll with `wait`, `list_agents`, or shell `sleep`: the owner thread is still active during this turn, so those calls cannot make the watchdog fire. Do not call `wait` again on this watchdog handle in this turn. Continue the task now or end the turn so the watchdog can check in later. Current watchdog handle statuses: {content}"
+            )));
+        }
 
         let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
         let mut initial_final_statuses = Vec::new();
@@ -563,8 +914,9 @@ pub(crate) mod wait {
                     initial_final_statuses.push((*id, AgentStatus::NotFound));
                 }
                 Err(err) => {
-                    let mut statuses = HashMap::with_capacity(1);
+                    let mut statuses = HashMap::with_capacity(1 + watchdog_statuses.len());
                     statuses.insert(*id, session.services.agent_control.get_status(*id).await);
+                    statuses.extend(watchdog_statuses.iter().cloned());
                     session
                         .send_event(
                             &turn,
@@ -620,11 +972,16 @@ pub(crate) mod wait {
         };
 
         // Convert payload.
-        let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+        let wait_timed_out = statuses.is_empty();
+        let mut statuses_with_watchdogs = statuses;
+        statuses_with_watchdogs.extend(watchdog_statuses);
+        let statuses_map = statuses_with_watchdogs
+            .into_iter()
+            .collect::<HashMap<_, _>>();
         let agent_statuses = build_wait_agent_statuses(&statuses_map, &receiver_agents);
         let result = WaitResult {
             status: statuses_map.clone(),
-            timed_out: statuses.is_empty(),
+            timed_out: wait_timed_out,
         };
 
         // Final event emission.
@@ -672,6 +1029,23 @@ pub(crate) mod wait {
             }
         }
     }
+
+    async fn split_wait_ids(
+        session: &Arc<Session>,
+        requested_thread_ids: Vec<ThreadId>,
+        watchdog_target_ids: &HashSet<ThreadId>,
+        receiver_thread_ids: &mut Vec<ThreadId>,
+        watchdog_statuses: &mut Vec<(ThreadId, AgentStatus)>,
+    ) {
+        for thread_id in requested_thread_ids {
+            if watchdog_target_ids.contains(&thread_id) {
+                let status = session.services.agent_control.get_status(thread_id).await;
+                watchdog_statuses.push((thread_id, status));
+            } else {
+                receiver_thread_ids.push(thread_id);
+            }
+        }
+    }
 }
 
 pub mod close_agent {
@@ -716,6 +1090,23 @@ pub mod close_agent {
         {
             Ok(mut status_rx) => status_rx.borrow_and_update().clone(),
             Err(err) => {
+                let removed_watchdog = session
+                    .services
+                    .agent_control
+                    .unregister_watchdog(agent_id)
+                    .await;
+                if let Some(helper_id) = removed_watchdog.and_then(|entry| entry.active_helper_id) {
+                    let _ = session
+                        .services
+                        .agent_control
+                        .shutdown_agent(helper_id)
+                        .await;
+                }
+                let _ = session
+                    .services
+                    .agent_control
+                    .shutdown_agent(agent_id)
+                    .await;
                 let status = session.services.agent_control.get_status(agent_id).await;
                 session
                     .send_event(
@@ -726,24 +1117,49 @@ pub mod close_agent {
                             receiver_thread_id: agent_id,
                             receiver_agent_nickname: receiver_agent_nickname.clone(),
                             receiver_agent_role: receiver_agent_role.clone(),
-                            status,
+                            status: status.clone(),
                         }
                         .into(),
                     )
                     .await;
-                return Err(collab_agent_error(agent_id, err));
+                return if matches!(err, CodexErr::ThreadNotFound(_)) {
+                    let content = serde_json::to_string(&CloseAgentResult { status }).map_err(
+                        |serialize_err| {
+                            FunctionCallError::Fatal(format!(
+                                "failed to serialize close_agent result: {serialize_err}"
+                            ))
+                        },
+                    )?;
+
+                    Ok(ToolOutput::Function {
+                        body: FunctionCallOutputBody::Text(content),
+                        success: Some(true),
+                    })
+                } else {
+                    Err(collab_agent_error(agent_id, err))
+                };
             }
         };
-        let result = if !matches!(status, AgentStatus::Shutdown) {
-            session
+        let removed_watchdog = session
+            .services
+            .agent_control
+            .unregister_watchdog(agent_id)
+            .await;
+        if let Some(helper_id) = removed_watchdog.and_then(|entry| entry.active_helper_id) {
+            let _ = session
                 .services
                 .agent_control
-                .shutdown_agent(agent_id)
-                .await
-                .map_err(|err| collab_agent_error(agent_id, err))
-                .map(|_| ())
-        } else {
-            Ok(())
+                .shutdown_agent(helper_id)
+                .await;
+        }
+        let result = match session
+            .services
+            .agent_control
+            .shutdown_agent(agent_id)
+            .await
+        {
+            Ok(_) | Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) => Ok(()),
+            Err(err) => Err(collab_agent_error(agent_id, err)),
         };
         session
             .send_event(
@@ -913,8 +1329,32 @@ pub(crate) fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
     turn: &TurnContext,
 ) -> Result<Config, FunctionCallError> {
+    build_agent_spawn_config_with_strategy(
+        base_instructions,
+        turn,
+        next_thread_spawn_depth(&turn.session_source),
+        SpawnConfigStrategy::ContextFreeSpawn,
+    )
+}
+
+fn build_agent_spawn_config_with_strategy(
+    base_instructions: &BaseInstructions,
+    turn: &TurnContext,
+    child_depth: i32,
+    strategy: SpawnConfigStrategy,
+) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn)?;
     config.base_instructions = Some(base_instructions.text.clone());
+    let base_config = turn.config.as_ref();
+    match strategy {
+        SpawnConfigStrategy::ContextFreeSpawn => {
+            config.developer_instructions = base_config.developer_instructions.clone();
+        }
+        SpawnConfigStrategy::ForkLike => {
+            config.developer_instructions = turn.developer_instructions.clone();
+        }
+    }
+    apply_spawn_agent_overrides(&mut config, child_depth);
     Ok(config)
 }
 
@@ -926,6 +1366,7 @@ fn build_agent_resume_config(
     apply_spawn_agent_overrides(&mut config, child_depth);
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
+    config.developer_instructions = turn.config.developer_instructions.clone();
     Ok(config)
 }
 
@@ -936,7 +1377,6 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallE
     config.model_provider = turn.provider.clone();
     config.model_reasoning_effort = turn.reasoning_effort;
     config.model_reasoning_summary = Some(turn.reasoning_summary);
-    config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
 
@@ -975,6 +1415,12 @@ fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
     if child_depth >= config.agent_max_depth {
         let _ = config.features.disable(Feature::Collab);
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpawnConfigStrategy {
+    ContextFreeSpawn,
+    ForkLike,
 }
 
 #[cfg(test)]
