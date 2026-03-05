@@ -819,7 +819,9 @@ impl SubagentRegistry {
 
         match &self.panel_state {
             Some(existing) => {
-                let mut guard = existing.lock().expect("subagent panel state lock");
+                let mut guard = existing
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 *guard = state;
             }
             None => {
@@ -5156,6 +5158,64 @@ mod tests {
             ),
             other => panic!("expected restored paste submission, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn queued_subagent_panel_update_mounts_on_fresh_chat_widget_after_thread_switch() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let root_thread_id = ThreadId::new();
+        let subagent_thread_id = ThreadId::new();
+
+        app.primary_thread_id = Some(root_thread_id);
+        app.active_thread_id = Some(root_thread_id);
+        app.subagents.set_root_thread(root_thread_id);
+
+        let mut info = SubagentInfo::new(
+            1,
+            "watchdog-agent".to_string(),
+            "watchdog idle".to_string(),
+            CollabAgentSpawnMode::Watchdog,
+        );
+        info.status = AgentStatus::PendingInit;
+        info.latest_preview = "watchdog idle".to_string();
+        info.latest_update_at = Instant::now();
+        app.subagents.order.push(subagent_thread_id);
+        app.subagents.agents.insert(subagent_thread_id, info);
+
+        app.sync_subagent_panel_state();
+
+        let queued_panel = match app_event_rx.try_recv() {
+            Ok(AppEvent::UpdateSubagentPanel(panel)) => panel,
+            other => panic!("expected queued subagent panel update, got {other:?}"),
+        };
+
+        let (fresh_chat_widget, _fresh_app_event_tx, _fresh_rx, _fresh_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = fresh_chat_widget;
+        app.chat_widget.set_composer_text(
+            "back on the root thread".to_string(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        app.chat_widget.on_subagent_panel_updated(queued_panel);
+
+        let width = 80;
+        let height = app.chat_widget.desired_height(width);
+        let mut terminal =
+            ratatui::Terminal::new(crate::test_backend::VT100Backend::new(width, height))
+                .expect("create terminal");
+        terminal.set_viewport_area(ratatui::prelude::Rect::new(0, 0, width, height));
+        terminal
+            .draw(|f| app.chat_widget.render(f.area(), f.buffer_mut()))
+            .expect("render fresh widget with queued subagent panel");
+        let screen = terminal.backend().vt100().screen().contents();
+
+        assert!(
+            screen.contains("Subagents"),
+            "queued subagent panel update should mount on the fresh widget"
+        );
+        assert!(screen.contains("watchdog-agent"));
     }
 
     #[tokio::test]
