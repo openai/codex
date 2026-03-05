@@ -89,7 +89,7 @@ impl Error for TypedRequestError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Transport { source, .. } => Some(source),
-            Self::Server { source, .. } => Some(source),
+            Self::Server { .. } => None,
             Self::Deserialize { source, .. } => Some(source),
         }
     }
@@ -535,6 +535,8 @@ mod tests {
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
 
     async fn build_test_config() -> Config {
         match ConfigBuilder::default().build().await {
@@ -655,7 +657,7 @@ mod tests {
                 message: "internal".to_string(),
             },
         };
-        assert_eq!(std::error::Error::source(&server).is_some(), true);
+        assert_eq!(std::error::Error::source(&server).is_some(), false);
 
         let deserialize = TypedRequestError::Deserialize {
             method: "thread/start".to_string(),
@@ -663,5 +665,33 @@ mod tests {
                 .expect_err("invalid integer should return deserialize error"),
         };
         assert_eq!(std::error::Error::source(&deserialize).is_some(), true);
+    }
+
+    #[tokio::test]
+    async fn next_event_surfaces_lagged_markers() {
+        let (command_tx, _command_rx) = mpsc::channel(1);
+        let (event_tx, event_rx) = mpsc::channel(1);
+        let worker_handle = tokio::spawn(async {});
+        event_tx
+            .send(InProcessServerEvent::Lagged { skipped: 3 })
+            .await
+            .expect("lagged marker should enqueue");
+        drop(event_tx);
+
+        let mut client = InProcessAppServerClient {
+            command_tx,
+            event_rx,
+            worker_handle,
+        };
+
+        let event = timeout(Duration::from_secs(2), client.next_event())
+            .await
+            .expect("lagged marker should arrive before timeout");
+        assert!(matches!(
+            event,
+            Some(InProcessServerEvent::Lagged { skipped: 3 })
+        ));
+
+        client.shutdown().await.expect("shutdown should complete");
     }
 }

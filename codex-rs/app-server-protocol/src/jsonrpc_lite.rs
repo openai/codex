@@ -1,9 +1,6 @@
 //! We do not do true JSON-RPC 2.0, as we neither send nor expect the
 //! "jsonrpc": "2.0" field.
 
-use std::error::Error;
-use std::fmt;
-
 use codex_protocol::protocol::W3cTraceContext;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -79,11 +76,3 @@ pub struct JSONRPCErrorError {
     pub data: Option<serde_json::Value>,
     pub message: String,
 }
-
-impl fmt::Display for JSONRPCErrorError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (code {})", self.message, self.code)
-    }
-}
-
-impl Error for JSONRPCErrorError {}
