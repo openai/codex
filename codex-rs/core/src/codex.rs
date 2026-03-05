@@ -2541,7 +2541,7 @@ impl Session {
             DeveloperInstructions::new(format!("Approved command prefix saved:\n{prefixes}"));
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            let message = fragment.spec().into_message(fragment.render_text());
+            let message = fragment.into_message();
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
             return;
@@ -2635,7 +2635,7 @@ impl Session {
         ));
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            let message = fragment.spec().into_message(fragment.render_text());
+            let message = fragment.into_message();
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
             return;
@@ -9931,7 +9931,7 @@ mod tests {
             let msg = {
                 let fragment =
                     DeveloperInstructions::personality_spec_message(personality_message);
-                fragment.spec().into_message(fragment.render_text())
+                fragment.into_message()
             };
             let insert_at = initial_context
                 .iter()

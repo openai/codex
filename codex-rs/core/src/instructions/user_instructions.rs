@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::codex::TurnContext;
+use crate::model_visible_context::ContextualUserEnvelopeKind;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::TurnContextFragment;
 use codex_protocol::protocol::TurnContextItem;
@@ -33,6 +34,8 @@ impl UserInstructions {
 }
 
 impl ModelVisibleContextFragment for UserInstructions {
+    type Kind = ContextualUserEnvelopeKind;
+
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         AGENTS_MD_FRAGMENT
     }
@@ -94,6 +97,8 @@ impl SkillInstructions {
 }
 
 impl ModelVisibleContextFragment for SkillInstructions {
+    type Kind = ContextualUserEnvelopeKind;
+
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         SKILL_FRAGMENT
     }
@@ -116,6 +121,8 @@ impl PluginInstructions {
 }
 
 impl ModelVisibleContextFragment for PluginInstructions {
+    type Kind = ContextualUserEnvelopeKind;
+
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         PLUGINS_FRAGMENT
     }
@@ -138,9 +145,7 @@ mod tests {
             directory: "test_directory".to_string(),
             text: "test_text".to_string(),
         };
-        let response_item = user_instructions
-            .spec()
-            .into_message(user_instructions.render_text());
+        let response_item = user_instructions.into_message();
 
         let ResponseItem::Message { role, content, .. } = response_item else {
             panic!("expected ResponseItem::Message");
@@ -173,9 +178,7 @@ mod tests {
             path: "skills/demo/SKILL.md".to_string(),
             contents: "body".to_string(),
         };
-        let response_item = skill_instructions
-            .spec()
-            .into_message(skill_instructions.render_text());
+        let response_item = skill_instructions.into_message();
 
         let ResponseItem::Message { role, content, .. } = response_item else {
             panic!("expected ResponseItem::Message");
@@ -206,9 +209,7 @@ mod tests {
         let plugin_instructions = PluginInstructions {
             text: "## Plugins\n- `sample`".to_string(),
         };
-        let response_item = plugin_instructions
-            .spec()
-            .into_message(plugin_instructions.render_text());
+        let response_item = plugin_instructions.into_message();
 
         let ResponseItem::Message { role, content, .. } = response_item else {
             panic!("expected ResponseItem::Message");

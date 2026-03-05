@@ -52,9 +52,7 @@ pub(crate) async fn build_skill_injections(
                     path: skill.path_to_skills_md.to_string_lossy().into_owned(),
                     contents,
                 };
-                result
-                    .items
-                    .push(fragment.spec().into_message(fragment.render_text()));
+                result.items.push(fragment.into_message());
             }
             Err(err) => {
                 emit_skill_injected_metric(otel, skill, "error");

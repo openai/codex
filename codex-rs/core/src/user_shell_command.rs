@@ -4,6 +4,7 @@ use codex_protocol::models::ResponseItem;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
+use crate::model_visible_context::ContextualUserEnvelopeKind;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::USER_SHELL_COMMAND_FRAGMENT;
 use crate::tools::format_exec_output_str;
@@ -20,6 +21,8 @@ struct UserShellCommandRecord<'a> {
 }
 
 impl ModelVisibleContextFragment for UserShellCommandRecord<'_> {
+    type Kind = ContextualUserEnvelopeKind;
+
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         USER_SHELL_COMMAND_FRAGMENT
     }
@@ -61,12 +64,12 @@ pub fn user_shell_command_record_item(
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
 ) -> ResponseItem {
-    let record = UserShellCommandRecord {
+    UserShellCommandRecord {
         command,
         exec_output,
         turn_context,
-    };
-    USER_SHELL_COMMAND_FRAGMENT.into_message(record.render_text())
+    }
+    .into_message()
 }
 
 #[cfg(test)]
