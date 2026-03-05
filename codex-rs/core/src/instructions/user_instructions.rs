@@ -4,7 +4,6 @@ use serde::Serialize;
 use crate::codex::TurnContext;
 use crate::contextual_user_message::ModelVisibleFragment;
 use crate::contextual_user_message::TurnContextFragment;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 
 use crate::contextual_user_message::AGENTS_MD_FRAGMENT;
@@ -76,12 +75,6 @@ impl TurnContextFragment for UserInstructions {
     }
 }
 
-impl From<UserInstructions> for ResponseItem {
-    fn from(ui: UserInstructions) -> Self {
-        ui.into_response_item()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "skill_instructions", rename_all = "snake_case")]
 pub(crate) struct SkillInstructions {
@@ -109,16 +102,11 @@ impl ModelVisibleFragment for SkillInstructions {
     }
 }
 
-impl From<SkillInstructions> for ResponseItem {
-    fn from(si: SkillInstructions) -> Self {
-        si.into_response_item()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -127,7 +115,9 @@ mod tests {
             directory: "test_directory".to_string(),
             text: "test_text".to_string(),
         };
-        let response_item: ResponseItem = user_instructions.into();
+        let response_item = user_instructions
+            .spec()
+            .into_message(user_instructions.render_text());
 
         let ResponseItem::Message { role, content, .. } = response_item else {
             panic!("expected ResponseItem::Message");
@@ -160,7 +150,9 @@ mod tests {
             path: "skills/demo/SKILL.md".to_string(),
             contents: "body".to_string(),
         };
-        let response_item: ResponseItem = skill_instructions.into();
+        let response_item = skill_instructions
+            .spec()
+            .into_message(skill_instructions.render_text());
 
         let ResponseItem::Message { role, content, .. } = response_item else {
             panic!("expected ResponseItem::Message");

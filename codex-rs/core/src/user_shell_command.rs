@@ -61,12 +61,12 @@ pub fn user_shell_command_record_item(
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
 ) -> ResponseItem {
-    UserShellCommandRecord {
+    let record = UserShellCommandRecord {
         command,
         exec_output,
         turn_context,
-    }
-    .into_response_item()
+    };
+    USER_SHELL_COMMAND_FRAGMENT.into_message(record.render_text())
 }
 
 #[cfg(test)]

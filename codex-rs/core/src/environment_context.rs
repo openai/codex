@@ -3,7 +3,6 @@ use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::contextual_user_message::ModelVisibleFragment;
 use crate::contextual_user_message::TurnContextFragment;
 use crate::shell::Shell;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use serde::Deserialize;
@@ -195,12 +194,6 @@ impl TurnContextFragment for EnvironmentContext {
             turn_context.timezone.clone(),
             network,
         ))
-    }
-}
-
-impl From<EnvironmentContext> for ResponseItem {
-    fn from(ec: EnvironmentContext) -> Self {
-        ec.into_response_item()
     }
 }
 

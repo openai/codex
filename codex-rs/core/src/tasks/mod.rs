@@ -392,8 +392,8 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             let marker = TurnAbortedMarker {
                 guidance: TURN_ABORTED_INTERRUPTED_GUIDANCE,
-            }
-            .into_response_item();
+            };
+            let marker = marker.spec().into_message(marker.render_text());
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
             self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])

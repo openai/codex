@@ -2541,11 +2541,11 @@ impl Session {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
-        let text = format!("Approved command prefix saved:\n{prefixes}");
-        let fragment = DeveloperInstructions::new(text.clone());
-        let message = fragment.clone().into_response_item();
+        let fragment =
+            DeveloperInstructions::new(format!("Approved command prefix saved:\n{prefixes}"));
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
+            let message = fragment.spec().into_message(fragment.render_text());
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
             return;
@@ -2633,14 +2633,13 @@ impl Session {
             NetworkPolicyRuleAction::Allow => ("Allowed", "allowlist"),
             NetworkPolicyRuleAction::Deny => ("Denied", "denylist"),
         };
-        let text = format!(
+        let fragment = DeveloperInstructions::new(format!(
             "{action} network rule saved in execpolicy ({list_name}): {}",
             amendment.host
-        );
-        let fragment = DeveloperInstructions::new(text.clone());
-        let message = fragment.clone().into_response_item();
+        ));
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
+            let message = fragment.spec().into_message(fragment.render_text());
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
             return;
@@ -9924,8 +9923,11 @@ mod tests {
                 .as_ref()
                 .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
         {
-            let msg =
-                DeveloperInstructions::personality_spec_message(personality_message).into();
+            let msg = {
+                let fragment =
+                    DeveloperInstructions::personality_spec_message(personality_message);
+                fragment.spec().into_message(fragment.render_text())
+            };
             let insert_at = initial_context
                 .iter()
                 .position(|m| matches!(m, ResponseItem::Message { role, .. } if role == "developer"))

@@ -109,13 +109,24 @@ impl ModelVisibleFragmentSpec {
         format!("{}\n{}\n{}", self.start_marker(), body, self.end_marker())
     }
 
+    pub(crate) fn into_content_item(self, text: String) -> ContentItem {
+        ContentItem::InputText { text }
+    }
+
     pub(crate) fn into_message(self, text: String) -> ResponseItem {
         ResponseItem::Message {
             id: None,
             role: self.envelope.response_role().to_string(),
-            content: vec![ContentItem::InputText { text }],
+            content: vec![self.into_content_item(text)],
             end_turn: None,
             phase: None,
+        }
+    }
+
+    pub(crate) fn into_response_input_item(self, text: String) -> ResponseInputItem {
+        ResponseInputItem::Message {
+            role: self.envelope.response_role().to_string(),
+            content: vec![self.into_content_item(text)],
         }
     }
 }
@@ -131,26 +142,14 @@ pub(crate) trait ModelVisibleFragment {
     where
         Self: Sized,
     {
-        ContentItem::InputText {
-            text: self.render_text(),
-        }
-    }
-
-    fn into_response_item(self) -> ResponseItem
-    where
-        Self: Sized,
-    {
-        self.spec().into_message(self.render_text())
+        self.spec().into_content_item(self.render_text())
     }
 
     fn into_response_input_item(self) -> ResponseInputItem
     where
         Self: Sized,
     {
-        ResponseInputItem::Message {
-            role: self.spec().envelope().response_role().to_string(),
-            content: vec![self.into_content_item()],
-        }
+        self.spec().into_response_input_item(self.render_text())
     }
 }
 

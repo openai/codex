@@ -639,20 +639,6 @@ fn render_command_prefix(prefix: &[String]) -> String {
     format!("[{tokens}]")
 }
 
-impl From<DeveloperInstructions> for ResponseItem {
-    fn from(di: DeveloperInstructions) -> Self {
-        ResponseItem::Message {
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: di.into_text(),
-            }],
-            end_turn: None,
-            phase: None,
-        }
-    }
-}
-
 impl From<SandboxMode> for DeveloperInstructions {
     fn from(mode: SandboxMode) -> Self {
         let network_access = match mode {
