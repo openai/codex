@@ -3,6 +3,8 @@
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -49,6 +51,41 @@ pub(crate) struct RunningTask {
     pub(crate) turn_context: Arc<TurnContext>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct TurnTimingState {
+    started_at: Option<Instant>,
+    first_token_at: Option<Instant>,
+    first_message_at: Option<Instant>,
+}
+
+impl TurnTimingState {
+    pub(crate) fn mark_turn_started(&mut self, started_at: Instant) {
+        self.started_at = Some(started_at);
+        self.first_token_at = None;
+        self.first_message_at = None;
+    }
+
+    pub(crate) fn record_turn_ttft(&mut self) -> Option<Duration> {
+        if self.first_token_at.is_some() {
+            return None;
+        }
+        let started_at = self.started_at?;
+        let first_token_at = Instant::now();
+        self.first_token_at = Some(first_token_at);
+        Some(first_token_at.duration_since(started_at))
+    }
+
+    pub(crate) fn record_turn_ttfm(&mut self) -> Option<Duration> {
+        if self.first_message_at.is_some() {
+            return None;
+        }
+        let started_at = self.started_at?;
+        let first_message_at = Instant::now();
+        self.first_message_at = Some(first_message_at);
+        Some(first_message_at.duration_since(started_at))
+    }
 }
 
 impl ActiveTurn {
@@ -155,5 +192,34 @@ impl ActiveTurn {
     pub(crate) async fn clear_pending(&self) {
         let mut ts = self.turn_state.lock().await;
         ts.clear_pending();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TurnTimingState;
+    use std::time::Instant;
+
+    #[test]
+    fn turn_timing_state_records_ttft_only_once_per_turn() {
+        let mut state = TurnTimingState::default();
+        assert_eq!(state.record_turn_ttft(), None);
+
+        state.mark_turn_started(Instant::now());
+        assert!(state.record_turn_ttft().is_some());
+        assert!(state.first_token_at.is_some());
+        assert_eq!(state.record_turn_ttft(), None);
+    }
+
+    #[test]
+    fn turn_timing_state_records_ttfm_independently_of_ttft() {
+        let mut state = TurnTimingState::default();
+        state.mark_turn_started(Instant::now());
+
+        assert!(state.record_turn_ttft().is_some());
+        assert!(state.record_turn_ttfm().is_some());
+        assert!(state.first_token_at.is_some());
+        assert!(state.first_message_at.is_some());
+        assert_eq!(state.record_turn_ttfm(), None);
     }
 }

@@ -265,6 +265,7 @@ use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
+use crate::state::TurnTimingState;
 use crate::state_db;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::RegularTask;
@@ -331,6 +332,8 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+const TURN_TTFT_DURATION_METRIC: &str = "codex.turn.ttft.duration_ms";
+const TURN_TTFM_DURATION_METRIC: &str = "codex.turn.ttfm.duration_ms";
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -689,6 +692,7 @@ pub(crate) struct TurnContext {
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) turn_skills: TurnSkillsContext,
+    pub(crate) turn_timing_state: Arc<Mutex<TurnTimingState>>,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -777,6 +781,7 @@ impl TurnContext {
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
             turn_skills: self.turn_skills.clone(),
+            turn_timing_state: Arc::clone(&self.turn_timing_state),
         }
     }
 
@@ -1158,6 +1163,7 @@ impl Session {
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
             turn_skills: TurnSkillsContext::new(skills_outcome),
+            turn_timing_state: Arc::new(Mutex::new(TurnTimingState::default())),
         }
     }
 
@@ -2462,6 +2468,28 @@ impl Session {
         }
     }
 
+    async fn maybe_record_turn_ttft_metric(&self, turn_context: &TurnContext) {
+        let mut turn_timing_state = turn_context.turn_timing_state.lock().await;
+        let Some(duration) = turn_timing_state.record_turn_ttft() else {
+            return;
+        };
+        drop(turn_timing_state);
+        turn_context
+            .otel_manager
+            .record_duration(TURN_TTFT_DURATION_METRIC, duration, &[]);
+    }
+
+    async fn maybe_record_turn_ttfm_metric(&self, turn_context: &TurnContext) {
+        let mut turn_timing_state = turn_context.turn_timing_state.lock().await;
+        let Some(duration) = turn_timing_state.record_turn_ttfm() else {
+            return;
+        };
+        drop(turn_timing_state);
+        turn_context
+            .otel_manager
+            .record_duration(TURN_TTFM_DURATION_METRIC, duration, &[]);
+    }
+
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
         self.send_event(
             turn_context,
@@ -2479,6 +2507,9 @@ impl Session {
         turn_context: &TurnContext,
         item: TurnItem,
     ) {
+        if matches!(&item, TurnItem::AgentMessage(_)) {
+            self.maybe_record_turn_ttfm_metric(turn_context).await;
+        }
         self.send_event(
             turn_context,
             EventMsg::ItemCompleted(ItemCompletedEvent {
@@ -4807,6 +4838,7 @@ async fn spawn_review_thread(
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
+        turn_timing_state: Arc::new(Mutex::new(TurnTimingState::default())),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -5914,6 +5946,40 @@ fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String 
         .collect()
 }
 
+fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { .. } => {
+            raw_assistant_output_text_from_item(item).is_some_and(|text| !text.is_empty())
+        }
+        ResponseItem::Reasoning {
+            summary, content, ..
+        } => {
+            summary.iter().any(|entry| match entry {
+                codex_protocol::models::ReasoningItemReasoningSummary::SummaryText { text } => {
+                    !text.is_empty()
+                }
+            }) || content.as_ref().is_some_and(|entries| {
+                entries.iter().any(|entry| match entry {
+                    codex_protocol::models::ReasoningItemContent::ReasoningText { text }
+                    | codex_protocol::models::ReasoningItemContent::Text { text } => {
+                        !text.is_empty()
+                    }
+                })
+            })
+        }
+        ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Compaction { .. } => true,
+        ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::Other => false,
+    }
+}
+
 fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
     match msg {
         EventMsg::AgentMessage(event) => Some(event.message.clone()),
@@ -6368,6 +6434,9 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                if response_item_records_turn_ttft(&item) {
+                    sess.maybe_record_turn_ttft_metric(&turn_context).await;
+                }
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
@@ -6415,6 +6484,9 @@ async fn try_run_sampling_request(
                 needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
+                if response_item_records_turn_ttft(&item) {
+                    sess.maybe_record_turn_ttft_metric(&turn_context).await;
+                }
                 if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode) {
                     let mut turn_item = turn_item;
                     let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
@@ -6509,6 +6581,7 @@ async fn try_run_sampling_request(
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {
+                sess.maybe_record_turn_ttft_metric(&turn_context).await;
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
                 if let Some(active) = active_item.as_ref() {
@@ -6541,6 +6614,7 @@ async fn try_run_sampling_request(
                 delta,
                 summary_index,
             } => {
+                sess.maybe_record_turn_ttft_metric(&turn_context).await;
                 if let Some(active) = active_item.as_ref() {
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
@@ -6571,6 +6645,7 @@ async fn try_run_sampling_request(
                 delta,
                 content_index,
             } => {
+                sess.maybe_record_turn_ttft_metric(&turn_context).await;
                 if let Some(active) = active_item.as_ref() {
                     let event = ReasoningRawContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
@@ -10295,5 +10370,61 @@ mod tests {
         );
 
         pretty_assertions::assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn response_item_records_turn_ttft_for_first_output_signals() {
+        use codex_protocol::models::ContentItem;
+        use codex_protocol::models::ResponseItem;
+
+        assert!(response_item_records_turn_ttft(
+            &ResponseItem::FunctionCall {
+                id: None,
+                name: "shell".to_string(),
+                arguments: "{}".to_string(),
+                call_id: "call-1".to_string(),
+            }
+        ));
+        assert!(response_item_records_turn_ttft(
+            &ResponseItem::CustomToolCall {
+                id: None,
+                status: None,
+                call_id: "call-2".to_string(),
+                name: "custom".to_string(),
+                input: "echo hi".to_string(),
+            }
+        ));
+        assert!(response_item_records_turn_ttft(&ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "hello".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }));
+    }
+
+    #[test]
+    fn response_item_records_turn_ttft_ignores_empty_non_output_items() {
+        use codex_protocol::models::ContentItem;
+        use codex_protocol::models::FunctionCallOutputPayload;
+        use codex_protocol::models::ResponseItem;
+
+        assert!(!response_item_records_turn_ttft(&ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: String::new(),
+            }],
+            end_turn: None,
+            phase: None,
+        }));
+        assert!(!response_item_records_turn_ttft(
+            &ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            }
+        ));
     }
 }
