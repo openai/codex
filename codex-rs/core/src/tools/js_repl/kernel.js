@@ -1228,15 +1228,27 @@ function parseImageDetail(detail) {
   return detail;
 }
 
+function normalizeEmitImageUrl(value) {
+  if (typeof value !== "string" || !value) {
+    throw new Error("codex.emitImage expected a non-empty image_url");
+  }
+  if (!/^data:/i.test(value)) {
+    throw new Error("codex.emitImage only accepts data URLs");
+  }
+  return value;
+}
+
 function parseInputImageItem(value) {
   if (!isPlainObject(value) || value.type !== "input_image") {
     return null;
   }
-  if (typeof value.image_url !== "string" || !value.image_url) {
-    throw new Error("codex.emitImage expected a non-empty image_url");
-  }
   return {
-    images: [{ image_url: value.image_url, detail: parseImageDetail(value.detail) }],
+    images: [
+      {
+        image_url: normalizeEmitImageUrl(value.image_url),
+        detail: parseImageDetail(value.detail),
+      },
+    ],
     textCount: 0,
   };
 }
@@ -1253,11 +1265,8 @@ function parseContentItems(items) {
       throw new Error("codex.emitImage received malformed content items");
     }
     if (item.type === "input_image") {
-      if (typeof item.image_url !== "string" || !item.image_url) {
-        throw new Error("codex.emitImage expected a non-empty image_url");
-      }
       images.push({
-        image_url: item.image_url,
+        image_url: normalizeEmitImageUrl(item.image_url),
         detail: parseImageDetail(item.detail),
       });
       continue;
@@ -1308,7 +1317,7 @@ function normalizeMcpImageData(data, mimeType) {
   if (typeof data !== "string" || !data) {
     throw new Error("codex.emitImage expected MCP image data");
   }
-  if (data.startsWith("data:")) {
+  if (/^data:/i.test(data)) {
     return data;
   }
   const normalizedMimeType =
@@ -1375,10 +1384,7 @@ function requireSingleImage(parsed) {
 
 function normalizeEmitImageValue(value) {
   if (typeof value === "string") {
-    if (!value) {
-      throw new Error("codex.emitImage expected a non-empty image URL");
-    }
-    return { image_url: value };
+    return { image_url: normalizeEmitImageUrl(value) };
   }
 
   const directItem = parseInputImageItem(value);
