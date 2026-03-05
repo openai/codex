@@ -44,6 +44,7 @@ use codex_core::plugins::PluginsManager;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::WebSearchAction;
@@ -1099,7 +1100,12 @@ pub(crate) fn new_session_info(
     } else {
         if config.show_tooltips
             && let Some(tooltips) = tooltip_override
-                .or_else(|| tooltips::get_tooltip(auth_plan))
+                .or_else(|| {
+                    tooltips::get_tooltip(
+                        auth_plan,
+                        matches!(config.service_tier, Some(ServiceTier::Fast)),
+                    )
+                })
                 .map(TooltipHistoryCell::new)
         {
             parts.push(Box::new(tooltips));
@@ -2191,6 +2197,21 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     let lines: Vec<Line<'static>> = vec![
         vec!["• ".dim(), "Viewed Image".bold()].into(),
         vec!["  └ ".dim(), display_path.dim()].into(),
+    ];
+
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_image_generation_call(
+    call_id: String,
+    status: String,
+    revised_prompt: Option<String>,
+) -> PlainHistoryCell {
+    let detail = revised_prompt.unwrap_or_else(|| call_id.clone());
+
+    let lines: Vec<Line<'static>> = vec![
+        vec!["• ".dim(), "Generated Image".bold()].into(),
+        vec!["  └ ".dim(), format!("{status}: {detail}").dim()].into(),
     ];
 
     PlainHistoryCell { lines }

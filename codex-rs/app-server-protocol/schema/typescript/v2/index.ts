@@ -124,6 +124,8 @@ export type { OverriddenMetadata } from "./OverriddenMetadata";
 export type { PatchApplyStatus } from "./PatchApplyStatus";
 export type { PatchChangeKind } from "./PatchChangeKind";
 export type { PlanDeltaNotification } from "./PlanDeltaNotification";
+export type { PluginInstallParams } from "./PluginInstallParams";
+export type { PluginInstallResponse } from "./PluginInstallResponse";
 export type { ProductSurface } from "./ProductSurface";
 export type { ProfileV2 } from "./ProfileV2";
 export type { RateLimitSnapshot } from "./RateLimitSnapshot";

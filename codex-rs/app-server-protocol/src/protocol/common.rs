@@ -264,6 +264,10 @@ client_request_definitions! {
         params: v2::SkillsConfigWriteParams,
         response: v2::SkillsConfigWriteResponse,
     },
+    PluginInstall => "plugin/install" {
+        params: v2::PluginInstallParams,
+        response: v2::PluginInstallResponse,
+    },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
         inspect_params: true,

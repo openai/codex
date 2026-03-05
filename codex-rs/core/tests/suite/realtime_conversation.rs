@@ -912,7 +912,11 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
 
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
-    assert!(user_texts.iter().any(|text| text == "text from realtime"));
+    assert!(
+        user_texts
+            .iter()
+            .any(|text| text == "user: text from realtime")
+    );
 
     realtime_server.shutdown().await;
     Ok(())
@@ -982,11 +986,8 @@ async fn inbound_handoff_request_uses_all_messages() -> Result<()> {
 
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
-    assert!(
-        user_texts
-            .iter()
-            .any(|text| text == "assistant context\ndelegated query\nassist confirm")
-    );
+    assert!(user_texts.iter().any(|text| text
+        == "assistant: assistant context\nuser: delegated query\nassistant: assist confirm"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -1468,9 +1469,17 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     let second_texts = message_input_texts(&second_body, "user");
 
     assert!(first_texts.iter().any(|text| text == "first prompt"));
-    assert!(!first_texts.iter().any(|text| text == "steer via realtime"));
+    assert!(
+        !first_texts
+            .iter()
+            .any(|text| text == "user: steer via realtime")
+    );
     assert!(second_texts.iter().any(|text| text == "first prompt"));
-    assert!(second_texts.iter().any(|text| text == "steer via realtime"));
+    assert!(
+        second_texts
+            .iter()
+            .any(|text| text == "user: steer via realtime")
+    );
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;
@@ -1578,7 +1587,8 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
     assert_eq!(requests.len(), 1);
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
     let first_texts = message_input_texts(&first_body, "user");
-    assert!(first_texts.iter().any(|text| text == delegated_text));
+    let expected_text = format!("user: {delegated_text}");
+    assert!(first_texts.iter().any(|text| text == &expected_text));
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;

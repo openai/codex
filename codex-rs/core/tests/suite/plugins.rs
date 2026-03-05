@@ -170,6 +170,18 @@ async fn plugin_skills_append_to_instructions() -> Result<()> {
         .as_str()
         .expect("instructions text");
     assert!(
+        instructions_text.contains("## Plugins"),
+        "expected plugins section present"
+    );
+    assert!(
+        instructions_text.contains("### Available plugins\n- `sample`"),
+        "expected enabled plugin list in instructions"
+    );
+    assert!(
+        instructions_text.contains("### How to use plugins"),
+        "expected plugin usage guidance heading"
+    );
+    assert!(
         instructions_text.contains("## Skills"),
         "expected skills section present"
     );
@@ -182,6 +194,10 @@ async fn plugin_skills_append_to_instructions() -> Result<()> {
     assert!(
         instructions_text.contains(&expected_path_str),
         "expected path {expected_path_str} in instructions"
+    );
+    assert!(
+        instructions_text.find("## Plugins") < instructions_text.find("## Skills"),
+        "expected plugins section before skills section"
     );
 
     Ok(())
