@@ -1930,12 +1930,20 @@ impl InitialHistory {
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
                     RolloutItem::SessionMeta(meta_line) => meta_line.meta.forked_from_id,
-                    _ => None,
+                    RolloutItem::ForkReference(_)
+                    | RolloutItem::ResponseItem(_)
+                    | RolloutItem::Compacted(_)
+                    | RolloutItem::TurnContext(_)
+                    | RolloutItem::EventMsg(_) => None,
                 })
             }
             InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.id),
-                _ => None,
+                RolloutItem::ForkReference(_)
+                | RolloutItem::ResponseItem(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
             }),
         }
     }
@@ -1965,7 +1973,11 @@ impl InitialHistory {
                     .iter()
                     .filter_map(|ri| match ri {
                         RolloutItem::EventMsg(ev) => Some(ev.clone()),
-                        _ => None,
+                        RolloutItem::SessionMeta(_)
+                        | RolloutItem::ForkReference(_)
+                        | RolloutItem::ResponseItem(_)
+                        | RolloutItem::Compacted(_)
+                        | RolloutItem::TurnContext(_) => None,
                     })
                     .collect(),
             ),
@@ -1974,7 +1986,11 @@ impl InitialHistory {
                     .iter()
                     .filter_map(|ri| match ri {
                         RolloutItem::EventMsg(ev) => Some(ev.clone()),
-                        _ => None,
+                        RolloutItem::SessionMeta(_)
+                        | RolloutItem::ForkReference(_)
+                        | RolloutItem::ResponseItem(_)
+                        | RolloutItem::Compacted(_)
+                        | RolloutItem::TurnContext(_) => None,
                     })
                     .collect(),
             ),
@@ -1988,12 +2004,20 @@ impl InitialHistory {
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
                     RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
-                    _ => None,
+                    RolloutItem::ForkReference(_)
+                    | RolloutItem::ResponseItem(_)
+                    | RolloutItem::Compacted(_)
+                    | RolloutItem::TurnContext(_)
+                    | RolloutItem::EventMsg(_) => None,
                 })
             }
             InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
-                _ => None,
+                RolloutItem::ForkReference(_)
+                | RolloutItem::ResponseItem(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
             }),
         }
     }
@@ -2004,12 +2028,20 @@ impl InitialHistory {
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
                     RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
-                    _ => None,
+                    RolloutItem::ForkReference(_)
+                    | RolloutItem::ResponseItem(_)
+                    | RolloutItem::Compacted(_)
+                    | RolloutItem::TurnContext(_)
+                    | RolloutItem::EventMsg(_) => None,
                 })
             }
             InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
-                _ => None,
+                RolloutItem::ForkReference(_)
+                | RolloutItem::ResponseItem(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
             }),
         }
     }
@@ -2018,7 +2050,11 @@ impl InitialHistory {
 fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
     items.iter().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.cwd.clone()),
-        _ => None,
+        RolloutItem::ForkReference(_)
+        | RolloutItem::ResponseItem(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::EventMsg(_) => None,
     })
 }
 
@@ -2173,9 +2209,16 @@ pub struct SessionMetaLine {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+pub struct ForkReferenceItem {
+    pub rollout_path: PathBuf,
+    pub nth_user_message: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
+    ForkReference(ForkReferenceItem),
     ResponseItem(ResponseItem),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),

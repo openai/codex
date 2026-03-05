@@ -26,6 +26,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::ForkReferenceItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -409,7 +410,13 @@ impl ThreadManager {
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let history = truncate_before_nth_user_message(history, nth_user_message);
+        let mut history = truncate_before_nth_user_message(history, nth_user_message);
+        if let InitialHistory::Forked(items) = &mut history {
+            items.push(RolloutItem::ForkReference(ForkReferenceItem {
+                rollout_path: path.clone(),
+                nth_user_message,
+            }));
+        }
         Box::pin(self.state.spawn_thread(
             config,
             history,

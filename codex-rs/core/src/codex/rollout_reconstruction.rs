@@ -83,11 +83,95 @@ fn finalize_active_segment<'a>(
 }
 
 impl Session {
+    pub(super) async fn materialize_rollout_items_for_replay(
+        &self,
+        rollout_items: &[RolloutItem],
+    ) -> Vec<RolloutItem> {
+        const MAX_FORK_REFERENCE_DEPTH: usize = 8;
+        let codex_home = {
+            self.state
+                .lock()
+                .await
+                .session_configuration
+                .codex_home
+                .clone()
+        };
+
+        let mut materialized = Vec::new();
+        let mut stack: Vec<(Vec<RolloutItem>, usize, usize)> = vec![(rollout_items.to_vec(), 0, 0)];
+
+        while let Some((items, mut idx, depth)) = stack.pop() {
+            while idx < items.len() {
+                match &items[idx] {
+                    RolloutItem::ForkReference(reference) => {
+                        if depth >= MAX_FORK_REFERENCE_DEPTH {
+                            warn!(
+                                "skipping fork reference recursion at depth {} for {:?}",
+                                depth, reference.rollout_path
+                            );
+                            idx += 1;
+                            continue;
+                        }
+
+                        let resolved_rollout_path =
+                            match crate::resolve_fork_reference_rollout_path(
+                                &codex_home,
+                                &reference.rollout_path,
+                            )
+                            .await
+                            {
+                                Ok(path) => path,
+                                Err(err) => {
+                                    warn!(
+                                        "failed to resolve fork reference rollout {:?}: {err}",
+                                        reference.rollout_path
+                                    );
+                                    idx += 1;
+                                    continue;
+                                }
+                            };
+                        let parent_history = match RolloutRecorder::get_rollout_history(
+                            &resolved_rollout_path,
+                        )
+                        .await
+                        {
+                            Ok(history) => history,
+                            Err(err) => {
+                                warn!(
+                                    "failed to load fork reference rollout {:?} (resolved from {:?}): {err}",
+                                    resolved_rollout_path, reference.rollout_path
+                                );
+                                idx += 1;
+                                continue;
+                            }
+                        };
+                        let parent_items = crate::rollout::truncation::truncate_rollout_before_nth_user_message_from_start(
+                            &parent_history.get_rollout_items(),
+                            reference.nth_user_message,
+                        );
+
+                        stack.push((items, idx + 1, depth));
+                        stack.push((parent_items, 0, depth + 1));
+                        break;
+                    }
+                    item => materialized.push(item.clone()),
+                }
+                idx += 1;
+            }
+        }
+
+        materialized
+    }
+
     pub(super) async fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
+        let rollout_items = self
+            .materialize_rollout_items_for_replay(rollout_items)
+            .await;
+        let rollout_items = rollout_items.as_slice();
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
@@ -203,6 +287,7 @@ impl Session {
                 }
                 RolloutItem::ResponseItem(_)
                 | RolloutItem::EventMsg(_)
+                | RolloutItem::ForkReference(_)
                 | RolloutItem::SessionMeta(_) => {}
             }
 
@@ -271,6 +356,7 @@ impl Session {
                     history.drop_last_n_user_turns(rollback.num_turns);
                 }
                 RolloutItem::EventMsg(_)
+                | RolloutItem::ForkReference(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::SessionMeta(_) => {}
             }
