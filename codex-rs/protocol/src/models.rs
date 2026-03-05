@@ -109,15 +109,28 @@ pub enum MacOsAutomationValue {
     BundleIds(Vec<String>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum MacOsPreferencesPermission {
+    None,
     // IMPORTANT: ReadOnly needs to be the default because it's the
     // security-sensitive default and keeps cf prefs working.
     #[default]
     ReadOnly,
     ReadWrite,
-    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize, JsonSchema, TS)]
@@ -1400,6 +1413,12 @@ mod tests {
         let permission = serde_json::from_str::<MacOsPreferencesPermission>("\"read_write\"")
             .expect("deserialize macos preferences permission");
         assert_eq!(permission, MacOsPreferencesPermission::ReadWrite);
+    }
+
+    #[test]
+    fn macos_preferences_permission_order_matches_permissiveness() {
+        assert!(MacOsPreferencesPermission::None < MacOsPreferencesPermission::ReadOnly);
+        assert!(MacOsPreferencesPermission::ReadOnly < MacOsPreferencesPermission::ReadWrite);
     }
 
     #[test]

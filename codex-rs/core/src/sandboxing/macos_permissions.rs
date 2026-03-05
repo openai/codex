@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use codex_protocol::models::MacOsAutomationPermission;
@@ -40,17 +39,10 @@ fn union_macos_preferences_permission(
     base: &MacOsPreferencesPermission,
     requested: &MacOsPreferencesPermission,
 ) -> MacOsPreferencesPermission {
-    match preferences_permission_rank(base).cmp(&preferences_permission_rank(requested)) {
-        Ordering::Less => requested.clone(),
-        Ordering::Equal | Ordering::Greater => base.clone(),
-    }
-}
-
-fn preferences_permission_rank(permission: &MacOsPreferencesPermission) -> u8 {
-    match permission {
-        MacOsPreferencesPermission::None => 0,
-        MacOsPreferencesPermission::ReadOnly => 1,
-        MacOsPreferencesPermission::ReadWrite => 2,
+    if base < requested {
+        requested.clone()
+    } else {
+        base.clone()
     }
 }
 
@@ -86,6 +78,8 @@ fn union_macos_automation_permission(
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::merge_macos_seatbelt_profile_extensions;
+    use super::union_macos_automation_permission;
+    use super::union_macos_preferences_permission;
     use codex_protocol::models::MacOsAutomationPermission;
     use codex_protocol::models::MacOsPreferencesPermission;
     use codex_protocol::models::MacOsSeatbeltProfileExtensions;
@@ -126,5 +120,25 @@ mod tests {
                 macos_calendar: true,
             }
         );
+    }
+
+    #[test]
+    fn union_macos_preferences_permission_does_not_downgrade() {
+        let base = MacOsPreferencesPermission::ReadWrite;
+        let requested = MacOsPreferencesPermission::ReadOnly;
+
+        let merged = union_macos_preferences_permission(&base, &requested);
+
+        assert_eq!(merged, MacOsPreferencesPermission::ReadWrite);
+    }
+
+    #[test]
+    fn union_macos_automation_permission_all_is_dominant() {
+        let base = MacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string()]);
+        let requested = MacOsAutomationPermission::All;
+
+        let merged = union_macos_automation_permission(&base, &requested);
+
+        assert_eq!(merged, MacOsAutomationPermission::All);
     }
 }
