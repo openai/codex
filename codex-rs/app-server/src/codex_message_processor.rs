@@ -6493,6 +6493,14 @@ fn collect_resume_override_mismatches(
             config_snapshot.model_provider_id
         ));
     }
+    if let Some(requested_service_tier) = request.service_tier.as_ref()
+        && requested_service_tier != &config_snapshot.service_tier
+    {
+        mismatch_details.push(format!(
+            "service_tier requested={requested_service_tier:?} active={:?}",
+            config_snapshot.service_tier
+        ));
+    }
     if let Some(requested_cwd) = request.cwd.as_deref() {
         let requested_cwd_path = std::path::PathBuf::from(requested_cwd);
         if requested_cwd_path != config_snapshot.cwd {
@@ -7257,6 +7265,43 @@ mod tests {
             input_schema: json!({"properties": {}}),
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
+    fn collect_resume_override_mismatches_includes_service_tier() {
+        let request = ThreadResumeParams {
+            thread_id: "thread-1".to_string(),
+            history: None,
+            path: None,
+            model: None,
+            model_provider: None,
+            service_tier: Some(Some(codex_protocol::config_types::ServiceTier::Fast)),
+            cwd: None,
+            approval_policy: None,
+            sandbox: None,
+            config: None,
+            base_instructions: None,
+            developer_instructions: None,
+            personality: None,
+            persist_extended_history: false,
+        };
+        let config_snapshot = ThreadConfigSnapshot {
+            model: "gpt-5".to_string(),
+            model_provider_id: "openai".to_string(),
+            service_tier: Some(codex_protocol::config_types::ServiceTier::Flex),
+            approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+            cwd: PathBuf::from("/tmp"),
+            ephemeral: false,
+            reasoning_effort: None,
+            personality: None,
+            session_source: SessionSource::Cli,
+        };
+
+        assert_eq!(
+            collect_resume_override_mismatches(&request, &config_snapshot),
+            vec!["service_tier requested=Some(Fast) active=Some(Flex)".to_string()]
+        );
     }
 
     #[test]

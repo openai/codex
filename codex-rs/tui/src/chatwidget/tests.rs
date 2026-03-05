@@ -7459,6 +7459,26 @@ async fn user_turn_carries_service_tier_after_fast_toggle() {
 }
 
 #[tokio::test]
+async fn fast_status_indicator_requires_chatgpt_auth() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_service_tier(Some(ServiceTier::Fast));
+
+    assert!(!chat.should_show_fast_status(chat.current_service_tier()));
+
+    set_chatgpt_auth(&mut chat);
+
+    assert!(chat.should_show_fast_status(chat.current_service_tier()));
+}
+
+#[tokio::test]
+async fn fast_status_indicator_is_hidden_when_fast_mode_is_off() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    set_chatgpt_auth(&mut chat);
+
+    assert!(!chat.should_show_fast_status(chat.current_service_tier()));
+}
+
+#[tokio::test]
 async fn approvals_popup_shows_disabled_presets() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
