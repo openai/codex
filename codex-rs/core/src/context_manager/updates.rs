@@ -235,11 +235,19 @@ pub(crate) fn build_settings_update_items(
         developer_envelope.push(fragment);
     }
     let mut contextual_user_envelope = ContextualUserEnvelopeBuilder::default();
-    if let Some(previous) = previous
-        && let Some(environment_update) =
-            EnvironmentContext::diff_from_turn_context_item(previous, next, shell)
-    {
-        contextual_user_envelope.push_fragment(environment_update);
+    let contextual_user_fragments: [Option<
+        Box<dyn ModelVisibleContextFragment<Kind = ContextualUserEnvelopeKind>>,
+    >; 1] = [previous.and_then(|previous| {
+        EnvironmentContext::diff_from_turn_context_item(previous, next, shell).map(|fragment| {
+            Box::new(fragment)
+                as Box<dyn ModelVisibleContextFragment<Kind = ContextualUserEnvelopeKind>>
+        })
+    })];
+    for fragment in contextual_user_fragments.into_iter().flatten() {
+        contextual_user_envelope
+            .0
+            .content
+            .push(fragment.spec().into_content_item(fragment.render_text()));
     }
 
     let mut items = Vec::with_capacity(2);
