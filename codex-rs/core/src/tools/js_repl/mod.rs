@@ -2124,7 +2124,11 @@ mod tests {
         // integration tests instead.
         cfg!(target_os = "macos")
     }
-    fn write_js_repl_test_package(base: &Path, name: &str, value: &str) -> anyhow::Result<()> {
+    fn write_js_repl_test_package_source(
+        base: &Path,
+        name: &str,
+        source: &str,
+    ) -> anyhow::Result<()> {
         let pkg_dir = base.join("node_modules").join(name);
         fs::create_dir_all(&pkg_dir)?;
         fs::write(
@@ -2133,9 +2137,15 @@ mod tests {
                 "{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"exports\": {{\n    \"import\": \"./index.js\"\n  }}\n}}\n"
             ),
         )?;
-        fs::write(
-            pkg_dir.join("index.js"),
-            format!("export const value = \"{value}\";\n"),
+        fs::write(pkg_dir.join("index.js"), source)?;
+        Ok(())
+    }
+
+    fn write_js_repl_test_package(base: &Path, name: &str, value: &str) -> anyhow::Result<()> {
+        write_js_repl_test_package_source(
+            base,
+            name,
+            &format!("export const value = \"{value}\";\n"),
         )?;
         Ok(())
     }
