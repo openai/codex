@@ -43,6 +43,7 @@ impl ArtifactsClient {
         request: ArtifactBuildRequest,
     ) -> Result<ArtifactCommandOutput, ArtifactsError> {
         let runtime = self.resolve_runtime().await?;
+        let js_runtime = runtime.resolve_js_runtime()?;
         let staging_dir = TempDir::new().map_err(|source| ArtifactsError::Io {
             context: "failed to create build staging directory".to_string(),
             source,
@@ -56,7 +57,7 @@ impl ArtifactsClient {
                 source,
             })?;
 
-        let mut command = Command::new(runtime.node_path());
+        let mut command = Command::new(js_runtime.executable_path());
         command
             .arg(&script_path)
             .current_dir(&request.cwd)
@@ -67,6 +68,9 @@ impl ArtifactsClient {
             )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if js_runtime.requires_electron_run_as_node() {
+            command.env("ELECTRON_RUN_AS_NODE", "1");
+        }
         for (key, value) in &request.env {
             command.env(key, value);
         }
@@ -83,13 +87,17 @@ impl ArtifactsClient {
         request: ArtifactRenderCommandRequest,
     ) -> Result<ArtifactCommandOutput, ArtifactsError> {
         let runtime = self.resolve_runtime().await?;
-        let mut command = Command::new(runtime.node_path());
+        let js_runtime = runtime.resolve_js_runtime()?;
+        let mut command = Command::new(js_runtime.executable_path());
         command
             .arg(runtime.render_cli_path())
             .args(request.target.to_args())
             .current_dir(&request.cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if js_runtime.requires_electron_run_as_node() {
+            command.env("ELECTRON_RUN_AS_NODE", "1");
+        }
         for (key, value) in &request.env {
             command.env(key, value);
         }

@@ -1548,6 +1548,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "url",
+ "which",
  "wiremock",
  "zip",
 ]
@@ -2212,6 +2213,7 @@ dependencies = [
 name = "codex-package-manager"
 version = "0.0.0"
 dependencies = [
+ "fd-lock",
  "flate2",
  "pretty_assertions",
  "reqwest",

@@ -13,9 +13,82 @@ use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
 use url::Url;
+use which::which;
 
 pub const DEFAULT_RELEASE_TAG_PREFIX: &str = "artifact-runtime-v";
 pub const DEFAULT_CACHE_ROOT_RELATIVE: &str = "packages/artifacts";
+pub const DEFAULT_RELEASE_BASE_URL: &str = "https://github.com/openai/codex/releases/download/";
+const CODEX_APP_PRODUCT_NAMES: [&str; 6] = [
+    "Codex",
+    "Codex (Dev)",
+    "Codex (Agent)",
+    "Codex (Nightly)",
+    "Codex (Alpha)",
+    "Codex (Beta)",
+];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JsRuntimeKind {
+    Node,
+    Electron,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JsRuntime {
+    executable_path: PathBuf,
+    kind: JsRuntimeKind,
+}
+
+impl JsRuntime {
+    fn node(executable_path: PathBuf) -> Self {
+        Self {
+            executable_path,
+            kind: JsRuntimeKind::Node,
+        }
+    }
+
+    fn electron(executable_path: PathBuf) -> Self {
+        Self {
+            executable_path,
+            kind: JsRuntimeKind::Electron,
+        }
+    }
+
+    pub fn executable_path(&self) -> &Path {
+        &self.executable_path
+    }
+
+    pub fn requires_electron_run_as_node(&self) -> bool {
+        self.kind == JsRuntimeKind::Electron
+    }
+}
+
+pub fn is_js_runtime_available(codex_home: &Path, runtime_version: &str) -> bool {
+    load_cached_runtime(codex_home, runtime_version)
+        .ok()
+        .and_then(|runtime| runtime.resolve_js_runtime().ok())
+        .or_else(resolve_machine_js_runtime)
+        .is_some()
+}
+
+pub fn load_cached_runtime(
+    codex_home: &Path,
+    runtime_version: &str,
+) -> Result<InstalledArtifactRuntime, ArtifactRuntimeError> {
+    let platform = ArtifactRuntimePlatform::detect_current()?;
+    let install_dir = cached_runtime_install_dir(codex_home, runtime_version, platform);
+    if !install_dir.exists() {
+        return Err(ArtifactRuntimeError::Io {
+            context: format!(
+                "artifact runtime {runtime_version} is not installed at {}",
+                install_dir.display()
+            ),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "missing artifact runtime"),
+        });
+    }
+
+    InstalledArtifactRuntime::load(install_dir, platform)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactRuntimeReleaseLocator {
@@ -56,8 +129,24 @@ impl ArtifactRuntimeReleaseLocator {
 
     pub fn manifest_url(&self) -> Result<Url, PackageManagerError> {
         self.base_url
-            .join(&self.manifest_file_name())
+            .join(&format!(
+                "{}/{}",
+                self.release_tag(),
+                self.manifest_file_name()
+            ))
             .map_err(PackageManagerError::InvalidBaseUrl)
+    }
+
+    pub fn default(runtime_version: impl Into<String>) -> Self {
+        Self::new(
+            match Url::parse(DEFAULT_RELEASE_BASE_URL) {
+                Ok(url) => url,
+                Err(error) => {
+                    panic!("hard-coded artifact runtime release base URL must be valid: {error}")
+                }
+            },
+            runtime_version,
+        )
     }
 }
 
@@ -74,6 +163,13 @@ impl ArtifactRuntimeManagerConfig {
                 ArtifactRuntimePackage::new(release),
             ),
         }
+    }
+
+    pub fn with_default_release(codex_home: PathBuf, runtime_version: impl Into<String>) -> Self {
+        Self::new(
+            codex_home,
+            ArtifactRuntimeReleaseLocator::default(runtime_version),
+        )
     }
 
     pub fn with_cache_root(mut self, cache_root: PathBuf) -> Self {
@@ -163,7 +259,11 @@ impl ManagedPackage for ArtifactRuntimePackage {
     fn archive_url(&self, archive: &PackageReleaseArchive) -> Result<Url, PackageManagerError> {
         self.release
             .base_url()
-            .join(&archive.archive)
+            .join(&format!(
+                "{}/{}",
+                self.release.release_tag(),
+                archive.archive
+            ))
             .map_err(PackageManagerError::InvalidBaseUrl)
     }
 
@@ -285,6 +385,8 @@ impl InstalledArtifactRuntime {
             &root_dir,
             &manifest.entrypoints.render_cli.relative_path,
         )?;
+        verify_required_runtime_path(&build_js_path)?;
+        verify_required_runtime_path(&render_cli_path)?;
 
         Ok(Self::new(
             root_dir,
@@ -324,6 +426,18 @@ impl InstalledArtifactRuntime {
     pub fn render_cli_path(&self) -> &Path {
         &self.render_cli_path
     }
+
+    pub fn resolve_js_runtime(&self) -> Result<JsRuntime, ArtifactRuntimeError> {
+        resolve_js_runtime_from_candidates(
+            Some(self.node_path()),
+            system_node_runtime(),
+            system_electron_runtime(),
+            codex_app_runtime_candidates(),
+        )
+        .ok_or_else(|| ArtifactRuntimeError::MissingJsRuntime {
+            root_dir: self.root_dir.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Error)]
@@ -344,6 +458,125 @@ pub enum ArtifactRuntimeError {
     },
     #[error("runtime path `{0}` is invalid")]
     InvalidRuntimePath(String),
+    #[error(
+        "no compatible JavaScript runtime found for artifact runtime at {root_dir}; install Node or the Codex desktop app"
+    )]
+    MissingJsRuntime { root_dir: PathBuf },
+}
+
+fn cached_runtime_install_dir(
+    codex_home: &Path,
+    runtime_version: &str,
+    platform: ArtifactRuntimePlatform,
+) -> PathBuf {
+    codex_home
+        .join(DEFAULT_CACHE_ROOT_RELATIVE)
+        .join(runtime_version)
+        .join(platform.as_str())
+}
+
+fn resolve_machine_js_runtime() -> Option<JsRuntime> {
+    resolve_js_runtime_from_candidates(
+        None,
+        system_node_runtime(),
+        system_electron_runtime(),
+        codex_app_runtime_candidates(),
+    )
+}
+
+fn resolve_js_runtime_from_candidates(
+    preferred_node_path: Option<&Path>,
+    node_runtime: Option<JsRuntime>,
+    electron_runtime: Option<JsRuntime>,
+    codex_app_candidates: Vec<PathBuf>,
+) -> Option<JsRuntime> {
+    preferred_node_path
+        .and_then(node_runtime_from_path)
+        .or(node_runtime)
+        .or(electron_runtime)
+        .or_else(|| {
+            codex_app_candidates
+                .into_iter()
+                .find_map(|candidate| electron_runtime_from_path(&candidate))
+        })
+}
+
+fn system_node_runtime() -> Option<JsRuntime> {
+    which("node")
+        .ok()
+        .and_then(|path| node_runtime_from_path(&path))
+}
+
+fn system_electron_runtime() -> Option<JsRuntime> {
+    which("electron")
+        .ok()
+        .and_then(|path| electron_runtime_from_path(&path))
+}
+
+fn node_runtime_from_path(path: &Path) -> Option<JsRuntime> {
+    path.is_file().then(|| JsRuntime::node(path.to_path_buf()))
+}
+
+fn electron_runtime_from_path(path: &Path) -> Option<JsRuntime> {
+    path.is_file()
+        .then(|| JsRuntime::electron(path.to_path_buf()))
+}
+
+fn codex_app_runtime_candidates() -> Vec<PathBuf> {
+    match std::env::consts::OS {
+        "macos" => {
+            let mut roots = vec![PathBuf::from("/Applications")];
+            if let Some(home) = std::env::var_os("HOME") {
+                roots.push(PathBuf::from(home).join("Applications"));
+            }
+
+            roots
+                .into_iter()
+                .flat_map(|root| {
+                    CODEX_APP_PRODUCT_NAMES
+                        .into_iter()
+                        .map(move |product_name| {
+                            root.join(format!("{product_name}.app"))
+                                .join("Contents")
+                                .join("MacOS")
+                                .join(product_name)
+                        })
+                })
+                .collect()
+        }
+        "windows" => {
+            let mut roots = Vec::new();
+            if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+                roots.push(PathBuf::from(local_app_data).join("Programs"));
+            }
+            if let Some(program_files) = std::env::var_os("ProgramFiles") {
+                roots.push(PathBuf::from(program_files));
+            }
+            if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+                roots.push(PathBuf::from(program_files_x86));
+            }
+
+            roots
+                .into_iter()
+                .flat_map(|root| {
+                    CODEX_APP_PRODUCT_NAMES
+                        .into_iter()
+                        .map(move |product_name| {
+                            root.join(product_name).join(format!("{product_name}.exe"))
+                        })
+                })
+                .collect()
+        }
+        "linux" => [PathBuf::from("/opt"), PathBuf::from("/usr/lib")]
+            .into_iter()
+            .flat_map(|root| {
+                CODEX_APP_PRODUCT_NAMES
+                    .into_iter()
+                    .map(move |product_name| root.join(product_name).join(product_name))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn resolve_relative_runtime_path(
@@ -367,6 +600,17 @@ fn resolve_relative_runtime_path(
         ));
     }
     Ok(root_dir.join(relative))
+}
+
+fn verify_required_runtime_path(path: &Path) -> Result<(), ArtifactRuntimeError> {
+    if path.is_file() {
+        return Ok(());
+    }
+
+    Err(ArtifactRuntimeError::Io {
+        context: format!("required runtime file is missing: {}", path.display()),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "missing runtime file"),
+    })
 }
 
 #[cfg(test)]
@@ -397,7 +641,20 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
             url.as_str(),
-            "https://example.test/releases/artifact-runtime-v0.1.0-manifest.json"
+            "https://example.test/releases/artifact-runtime-v0.1.0/artifact-runtime-v0.1.0-manifest.json"
+        );
+    }
+
+    #[test]
+    fn default_release_locator_uses_openai_codex_github_releases() {
+        let locator = ArtifactRuntimeReleaseLocator::default("0.1.0");
+        let url = locator
+            .manifest_url()
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        assert_eq!(
+            url.as_str(),
+            "https://github.com/openai/codex/releases/download/artifact-runtime-v0.1.0/artifact-runtime-v0.1.0-manifest.json"
         );
     }
 
@@ -430,13 +687,15 @@ mod tests {
         };
         Mock::given(method("GET"))
             .and(path(format!(
-                "/artifact-runtime-v{runtime_version}-manifest.json"
+                "/artifact-runtime-v{runtime_version}/artifact-runtime-v{runtime_version}-manifest.json"
             )))
             .respond_with(ResponseTemplate::new(200).set_body_json(&manifest))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
-            .and(path(format!("/{archive_name}")))
+            .and(path(format!(
+                "/artifact-runtime-v{runtime_version}/{archive_name}"
+            )))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(archive_bytes))
             .mount(&server)
             .await;
@@ -467,8 +726,31 @@ mod tests {
         assert!(
             runtime
                 .render_cli_path()
-                .ends_with(Path::new("granola-render/dist/cli.mjs"))
+                .ends_with(Path::new("granola-render/dist/render_cli.mjs"))
         );
+        assert_eq!(
+            runtime.resolve_js_runtime().expect("resolve js runtime"),
+            JsRuntime::node(runtime.node_path().to_path_buf())
+        );
+    }
+
+    #[test]
+    fn resolve_js_runtime_uses_codex_app_electron_candidate() {
+        let temp_dir = TempDir::new().unwrap_or_else(|error| panic!("{error}"));
+        let electron_path = temp_dir.path().join("Codex");
+        let missing_node = temp_dir.path().join("missing-node");
+        std::fs::write(&electron_path, "#!/bin/sh\n").unwrap_or_else(|error| panic!("{error}"));
+
+        let runtime = resolve_js_runtime_from_candidates(
+            Some(missing_node.as_path()),
+            None,
+            None,
+            vec![electron_path.clone()],
+        )
+        .expect("resolve js runtime");
+
+        assert_eq!(runtime, JsRuntime::electron(electron_path));
+        assert!(runtime.requires_electron_run_as_node());
     }
 
     fn build_zip_archive(runtime_version: &str) -> Vec<u8> {
@@ -482,8 +764,11 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{error}"));
             zip.write_all(&manifest)
                 .unwrap_or_else(|error| panic!("{error}"));
-            zip.start_file("artifact-runtime/node/bin/node", options)
-                .unwrap_or_else(|error| panic!("{error}"));
+            zip.start_file(
+                "artifact-runtime/node/bin/node",
+                options.unix_permissions(0o755),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
             zip.write_all(b"#!/bin/sh\n")
                 .unwrap_or_else(|error| panic!("{error}"));
             zip.start_file(
@@ -493,8 +778,11 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error}"));
             zip.write_all(b"export const ok = true;\n")
                 .unwrap_or_else(|error| panic!("{error}"));
-            zip.start_file("artifact-runtime/granola-render/dist/cli.mjs", options)
-                .unwrap_or_else(|error| panic!("{error}"));
+            zip.start_file(
+                "artifact-runtime/granola-render/dist/render_cli.mjs",
+                options,
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
             zip.write_all(b"export const ok = true;\n")
                 .unwrap_or_else(|error| panic!("{error}"));
             zip.finish().unwrap_or_else(|error| panic!("{error}"));
@@ -514,7 +802,7 @@ mod tests {
                     relative_path: "artifact-tool/dist/artifact_tool.mjs".to_string(),
                 },
                 render_cli: RuntimePathEntry {
-                    relative_path: "granola-render/dist/cli.mjs".to_string(),
+                    relative_path: "granola-render/dist/render_cli.mjs".to_string(),
                 },
             },
         }
