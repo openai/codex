@@ -40,7 +40,8 @@ js_repl_node_path = "/absolute/path/to/node"
 ## Module resolution
 
 `js_repl` resolves **bare** specifiers (for example `await import("pkg")`) using an ordered
-search path. Path-style specifiers (`./`, `../`, absolute paths, `file:` URLs) are rejected.
+search path. Local file imports are also supported for relative paths, absolute paths, and
+`file://` URLs that point to ESM `.js` / `.mjs` files.
 
 Module resolution proceeds in the following order:
 
@@ -50,6 +51,9 @@ Module resolution proceeds in the following order:
 
 For `CODEX_JS_REPL_NODE_MODULE_DIRS` and `js_repl_node_module_dirs`, module resolution is attempted in the order provided with earlier entries taking precedence.
 
+Bare package imports always use this REPL-wide search path, even when they originate from an
+imported local file. They are not resolved relative to the imported file's location.
+
 ## Usage
 
 - `js_repl` is a freeform tool: send raw JavaScript source text.
@@ -57,6 +61,8 @@ For `CODEX_JS_REPL_NODE_MODULE_DIRS` and `js_repl_node_module_dirs`, module reso
   - `// codex-js-repl: timeout_ms=15000`
 - Top-level bindings persist across calls.
 - Top-level static import declarations (for example `import x from "pkg"`) are currently unsupported; use dynamic imports with `await import("pkg")`.
+- Imported local files must be ESM `.js` / `.mjs` files. Their own static imports may only target other local `.js` / `.mjs` files via relative or absolute paths.
+- `import.meta.resolve()` returns Node-style strings such as `file://...` and `node:fs`; the returned `file://` URLs can be passed back to `await import(...)`.
 - Use `js_repl_reset` to clear the kernel state.
 
 ## Helper APIs inside the kernel

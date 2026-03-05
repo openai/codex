@@ -9,7 +9,9 @@ const { builtinModules, createRequire } = require("node:module");
 const { createInterface } = require("node:readline");
 const { performance } = require("node:perf_hooks");
 const path = require("node:path");
-const { URL, URLSearchParams, pathToFileURL } = require("node:url");
+const { URL, URLSearchParams, fileURLToPath, pathToFileURL } = require(
+  "node:url",
+);
 const { inspect, TextDecoder, TextEncoder } = require("node:util");
 const vm = require("node:vm");
 
@@ -221,6 +223,17 @@ function isExplicitRelativePathSpecifier(specifier) {
   );
 }
 
+function isFileUrlSpecifier(specifier) {
+  if (typeof specifier !== "string" || !specifier.startsWith("file:")) {
+    return false;
+  }
+  try {
+    return new URL(specifier).protocol === "file:";
+  } catch {
+    return false;
+  }
+}
+
 function isPathSpecifier(specifier) {
   if (
     typeof specifier !== "string" ||
@@ -229,7 +242,11 @@ function isPathSpecifier(specifier) {
   ) {
     return false;
   }
-  return isExplicitRelativePathSpecifier(specifier) || path.isAbsolute(specifier);
+  return (
+    isExplicitRelativePathSpecifier(specifier) ||
+    path.isAbsolute(specifier) ||
+    isFileUrlSpecifier(specifier)
+  );
 }
 
 function isBarePackageSpecifier(specifier) {
@@ -287,13 +304,22 @@ function resolveBareSpecifier(specifier) {
 }
 
 function resolvePathSpecifier(specifier, referrerIdentifier = null) {
-  const baseDir =
-    referrerIdentifier && path.isAbsolute(referrerIdentifier)
-      ? path.dirname(referrerIdentifier)
-      : process.cwd();
-  const candidate = path.isAbsolute(specifier)
-    ? specifier
-    : path.resolve(baseDir, specifier);
+  let candidate;
+  if (isFileUrlSpecifier(specifier)) {
+    try {
+      candidate = fileURLToPath(new URL(specifier));
+    } catch (err) {
+      throw new Error(`Failed to resolve module "${specifier}": ${err.message}`);
+    }
+  } else {
+    const baseDir =
+      referrerIdentifier && path.isAbsolute(referrerIdentifier)
+        ? path.dirname(referrerIdentifier)
+        : process.cwd();
+    candidate = path.isAbsolute(specifier)
+      ? specifier
+      : path.resolve(baseDir, specifier);
+  }
 
   let resolvedPath;
   try {
@@ -347,7 +373,7 @@ function resolveSpecifier(specifier, referrerIdentifier = null) {
 
   if (!isBarePackageSpecifier(specifier)) {
     throw new Error(
-      `Unsupported import specifier "${specifier}" in js_repl. Use a package name like "lodash" or "@scope/pkg", or a relative/absolute .js/.mjs path.`,
+      `Unsupported import specifier "${specifier}" in js_repl. Use a package name like "lodash" or "@scope/pkg", or a relative/absolute/file:// .js/.mjs path.`,
     );
   }
 

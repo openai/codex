@@ -3467,12 +3467,12 @@ await codex.emitImage(out);
         write_js_repl_test_module(
             cwd_dir.path(),
             "child.js",
-            "export const value = \"child\";\n",
+            "export const value = \"child-export\";\n",
         )?;
         write_js_repl_test_module(
             cwd_dir.path(),
             "meta.js",
-            "console.log(import.meta.url);\nconsole.log(import.meta.filename);\nconsole.log(import.meta.dirname);\nconsole.log(import.meta.main);\nconsole.log(import.meta.resolve(\"./child.js\"));\nconsole.log(import.meta.resolve(\"node:fs\"));\n",
+            "console.log(import.meta.url);\nconsole.log(import.meta.filename);\nconsole.log(import.meta.dirname);\nconsole.log(import.meta.main);\nconsole.log(import.meta.resolve(\"./child.js\"));\nconsole.log(import.meta.resolve(\"node:fs\"));\nconsole.log((await import(import.meta.resolve(\"./child.js\"))).value);\n",
         )?;
         let child_path = fs::canonicalize(cwd_dir.path().join("child.js"))?;
         let child_url = url::Url::from_file_path(&child_path)
@@ -3513,6 +3513,7 @@ await codex.emitImage(out);
         assert!(result.output.contains("false"));
         assert!(result.output.contains(&child_url));
         assert!(result.output.contains("node:fs"));
+        assert!(result.output.contains("child-export"));
         Ok(())
     }
 
@@ -3676,20 +3677,20 @@ await codex.emitImage(out);
                 .contains("Directory imports are not supported")
         );
 
-        let file_url = manager
+        let unsupported_url = manager
             .execute(
                 session,
                 turn,
                 tracker,
                 JsReplArgs {
-                    code: "await import(\"file:///tmp/test.js\");".to_string(),
+                    code: "await import(\"https://example.com/test.js\");".to_string(),
                     timeout_ms: Some(10_000),
                 },
             )
             .await
-            .expect_err("expected file url import to be rejected");
+            .expect_err("expected unsupported url import to be rejected");
         assert!(
-            file_url
+            unsupported_url
                 .to_string()
                 .contains("Unsupported import specifier")
         );
