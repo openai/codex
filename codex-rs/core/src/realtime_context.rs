@@ -2,11 +2,18 @@ use crate::codex::Session;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
+use chrono::Utc;
+use codex_state::SortKey;
 use codex_state::Stage1Output;
+use codex_state::ThreadMetadata;
+use dirs::home_dir;
+use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::DirEntry;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use tracing::debug;
 use tracing::warn;
 
@@ -16,6 +23,9 @@ const RECENT_WORK_SECTION_TOKEN_BUDGET: usize = 2_200;
 const WORKSPACE_SECTION_TOKEN_BUDGET: usize = 1_600;
 const NOTES_SECTION_TOKEN_BUDGET: usize = 300;
 const MAX_STAGE1_OUTPUTS: usize = 3;
+const MAX_RECENT_THREADS: usize = 40;
+const MAX_RECENT_WORK_GROUPS: usize = 8;
+const MAX_RECENT_WORK_ENTRIES_PER_GROUP: usize = 4;
 const TREE_MAX_DEPTH: usize = 2;
 const DIR_ENTRY_LIMIT: usize = 20;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
@@ -39,8 +49,9 @@ pub(crate) async fn build_realtime_startup_context(
     let config = sess.get_config().await;
     let cwd = config.cwd.clone();
     let memories = load_global_memories(sess).await;
+    let recent_threads = load_recent_threads(sess).await;
     let user_section = build_user_section(&memories);
-    let recent_work_section = build_recent_work_section(&memories);
+    let recent_work_section = build_recent_work_section(&cwd, &recent_threads);
     let workspace_section = build_workspace_section(&cwd);
 
     if user_section.is_none() && recent_work_section.is_none() && workspace_section.is_none() {
@@ -48,7 +59,6 @@ pub(crate) async fn build_realtime_startup_context(
         return None;
     }
 
-    let notes_section = build_notes_section();
     let mut parts = vec![STARTUP_CONTEXT_HEADER.to_string()];
 
     let has_user_section = user_section.is_some();
@@ -72,8 +82,11 @@ pub(crate) async fn build_realtime_startup_context(
     ) {
         parts.push(section);
     }
-    if let Some(section) = format_section("Notes", Some(notes_section), NOTES_SECTION_TOKEN_BUDGET)
-    {
+    if let Some(section) = format_section(
+        "Notes",
+        Some("Built at realtime startup from persisted thread metadata in the state DB, optional global Codex memories for user context, and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, and project-doc prompt blends.".to_string()),
+        NOTES_SECTION_TOKEN_BUDGET,
+    ) {
         parts.push(section);
     }
 
@@ -89,59 +102,123 @@ pub(crate) async fn build_realtime_startup_context(
     Some(context)
 }
 
-#[derive(Default)]
-struct GlobalMemories {
-    entries: Vec<Stage1Output>,
-}
-
-async fn load_global_memories(sess: &Session) -> GlobalMemories {
+async fn load_global_memories(sess: &Session) -> Vec<Stage1Output> {
     let Some(state_db) = sess.services.state_db.as_ref() else {
-        return GlobalMemories::default();
+        return Vec::new();
     };
 
     match state_db
         .list_stage1_outputs_for_global(MAX_STAGE1_OUTPUTS)
         .await
     {
-        Ok(entries) => GlobalMemories { entries },
+        Ok(entries) => entries,
         Err(err) => {
             warn!("failed to load realtime startup memories from state db: {err}");
-            GlobalMemories::default()
+            Vec::new()
         }
     }
 }
 
-fn build_user_section(memories: &GlobalMemories) -> Option<String> {
+fn build_user_section(memories: &[Stage1Output]) -> Option<String> {
     let sections = memories
-        .entries
         .iter()
         .filter_map(|entry| format_memory_entry(entry, &entry.raw_memory))
         .collect::<Vec<_>>();
     (!sections.is_empty()).then(|| sections.join("\n\n"))
 }
 
-fn build_recent_work_section(memories: &GlobalMemories) -> Option<String> {
-    let sections = memories
-        .entries
-        .iter()
-        .filter_map(|entry| format_memory_entry(entry, &entry.rollout_summary))
+async fn load_recent_threads(sess: &Session) -> Vec<ThreadMetadata> {
+    let Some(state_db) = sess.services.state_db.as_ref() else {
+        return Vec::new();
+    };
+
+    match state_db
+        .list_threads(
+            MAX_RECENT_THREADS,
+            None,
+            SortKey::UpdatedAt,
+            &[],
+            None,
+            false,
+            None,
+        )
+        .await
+    {
+        Ok(page) => page.items,
+        Err(err) => {
+            warn!("failed to load realtime startup threads from state db: {err}");
+            Vec::new()
+        }
+    }
+}
+
+fn build_recent_work_section(cwd: &Path, recent_threads: &[ThreadMetadata]) -> Option<String> {
+    let mut groups: HashMap<PathBuf, Vec<&ThreadMetadata>> = HashMap::new();
+    for entry in recent_threads {
+        groups.entry(entry.cwd.clone()).or_default().push(entry);
+    }
+
+    let current_cwd = cwd.to_path_buf();
+    let mut groups = groups.into_iter().collect::<Vec<_>>();
+    groups.sort_by(|(left_cwd, left_entries), (right_cwd, right_entries)| {
+        let left_latest = left_entries
+            .iter()
+            .map(|entry| entry.updated_at)
+            .max()
+            .unwrap_or_else(Utc::now);
+        let right_latest = right_entries
+            .iter()
+            .map(|entry| entry.updated_at)
+            .max()
+            .unwrap_or_else(Utc::now);
+        (
+            *left_cwd != current_cwd,
+            Reverse(left_latest),
+            left_cwd.as_os_str(),
+        )
+            .cmp(&(
+                *right_cwd != current_cwd,
+                Reverse(right_latest),
+                right_cwd.as_os_str(),
+            ))
+    });
+
+    let sections = groups
+        .into_iter()
+        .take(MAX_RECENT_WORK_GROUPS)
+        .filter_map(|(group_cwd, mut entries)| {
+            entries.sort_by_key(|entry| Reverse(entry.updated_at));
+            format_thread_group(&group_cwd, entries)
+        })
         .collect::<Vec<_>>();
     (!sections.is_empty()).then(|| sections.join("\n\n"))
 }
 
 fn build_workspace_section(cwd: &Path) -> Option<String> {
+    build_workspace_section_with_user_root(cwd, home_dir())
+}
+
+fn build_workspace_section_with_user_root(
+    cwd: &Path,
+    user_root: Option<PathBuf>,
+) -> Option<String> {
     let git_root = resolve_root_git_project_for_trust(cwd);
     let cwd_tree = render_tree(cwd);
     let git_root_tree = git_root
         .as_ref()
         .filter(|git_root| git_root.as_path() != cwd)
         .and_then(|git_root| render_tree(git_root));
-    let parent_layout = git_root
+    let user_root_tree = user_root
         .as_ref()
-        .and_then(|_| cwd.parent())
-        .and_then(|parent| render_parent_layout(parent, cwd.file_name()));
+        .filter(|user_root| user_root.as_path() != cwd)
+        .filter(|user_root| {
+            git_root
+                .as_ref()
+                .is_none_or(|git_root| git_root.as_path() != user_root.as_path())
+        })
+        .and_then(|user_root| render_tree(user_root));
 
-    if cwd_tree.is_none() && git_root.is_none() && parent_layout.is_none() {
+    if cwd_tree.is_none() && git_root.is_none() && user_root_tree.is_none() {
         return None;
     }
 
@@ -153,6 +230,9 @@ fn build_workspace_section(cwd: &Path) -> Option<String> {
     if let Some(git_root) = &git_root {
         lines.push(format!("Git root: {}", git_root.display()));
         lines.push(format!("Git project: {}", display_name(git_root)));
+    }
+    if let Some(user_root) = &user_root {
+        lines.push(format!("User root: {}", user_root.display()));
     }
 
     if let Some(tree) = cwd_tree {
@@ -167,10 +247,10 @@ fn build_workspace_section(cwd: &Path) -> Option<String> {
         lines.extend(tree);
     }
 
-    if let Some(layout) = parent_layout {
+    if let Some(tree) = user_root_tree {
         lines.push(String::new());
-        lines.push("Parent workspace layout:".to_string());
-        lines.extend(layout);
+        lines.push("User root tree:".to_string());
+        lines.extend(tree);
     }
 
     Some(lines.join("\n"))
@@ -219,30 +299,6 @@ fn collect_tree_lines(dir: &Path, depth: usize, lines: &mut Vec<String>) {
     }
 }
 
-fn render_parent_layout(parent: &Path, current: Option<&OsStr>) -> Option<Vec<String>> {
-    let entries = read_sorted_entries(parent).ok()?;
-    if entries.len() <= 1 {
-        return None;
-    }
-
-    let mut lines = Vec::new();
-    for entry in entries.into_iter().take(DIR_ENTRY_LIMIT) {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        let name = entry.file_name();
-        let mut label = name.to_string_lossy().into_owned();
-        if file_type.is_dir() {
-            label.push('/');
-        }
-        if current.is_some_and(|current| current == name) {
-            label.push_str(" (current)");
-        }
-        lines.push(format!("- {label}"));
-    }
-    (!lines.is_empty()).then_some(lines)
-}
-
 fn read_sorted_entries(dir: &Path) -> io::Result<Vec<DirEntry>> {
     let mut entries = std::fs::read_dir(dir)?
         .filter_map(Result::ok)
@@ -268,10 +324,6 @@ fn is_noisy_name(name: &OsStr) -> bool {
     NOISY_DIR_NAMES.iter().any(|noisy| *noisy == name)
 }
 
-fn build_notes_section() -> String {
-    "Built at realtime startup from persisted global Codex memories in the state DB and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, and project-doc prompt blends.".to_string()
-}
-
 fn format_section(title: &str, body: Option<String>, budget_tokens: usize) -> Option<String> {
     let body = body?;
     let body = body.trim();
@@ -285,12 +337,8 @@ fn format_section(title: &str, body: Option<String>, budget_tokens: usize) -> Op
     ))
 }
 
-fn normalize_text(text: &str) -> String {
-    text.replace("\r\n", "\n").trim().to_string()
-}
-
 fn format_memory_entry(entry: &Stage1Output, body: &str) -> Option<String> {
-    let body = normalize_text(body);
+    let body = body.replace("\r\n", "\n").trim().to_string();
     if body.is_empty() {
         return None;
     }
@@ -305,6 +353,40 @@ fn format_memory_entry(entry: &Stage1Output, body: &str) -> Option<String> {
     lines.push(String::new());
     lines.push(body);
     Some(lines.join("\n"))
+}
+
+fn format_thread_group(cwd: &Path, entries: Vec<&ThreadMetadata>) -> Option<String> {
+    let latest = entries.first()?;
+    let mut lines = vec![
+        format!("### {}", cwd.display()),
+        format!("Recent sessions: {}", entries.len()),
+        format!("Latest activity: {}", latest.updated_at.to_rfc3339()),
+    ];
+
+    if let Some(git_branch) = latest
+        .git_branch
+        .as_deref()
+        .filter(|git_branch| !git_branch.is_empty())
+    {
+        lines.push(format!("Latest branch: {git_branch}"));
+    }
+
+    lines.push(String::new());
+
+    for entry in entries.into_iter().take(MAX_RECENT_WORK_ENTRIES_PER_GROUP) {
+        let summary = if !entry.title.trim().is_empty() {
+            entry.title.trim()
+        } else if let Some(first_user_message) = entry.first_user_message.as_deref() {
+            first_user_message.trim()
+        } else {
+            continue;
+        };
+        if !summary.is_empty() {
+            lines.push(format!("- {summary}"));
+        }
+    }
+
+    (lines.len() > 4).then(|| lines.join("\n"))
 }
 
 fn display_name(path: &Path) -> String {
@@ -327,14 +409,15 @@ fn approx_token_count(text: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::GlobalMemories;
     use super::build_recent_work_section;
     use super::build_user_section;
     use super::build_workspace_section;
+    use super::build_workspace_section_with_user_root;
     use chrono::TimeZone;
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_state::Stage1Output;
+    use codex_state::ThreadMetadata;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
@@ -360,10 +443,43 @@ mod tests {
         }
     }
 
+    fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMetadata {
+        ThreadMetadata {
+            id: ThreadId::new(),
+            rollout_path: PathBuf::from("/tmp/rollout.jsonl"),
+            created_at: Utc
+                .timestamp_opt(1_709_251_100, 0)
+                .single()
+                .expect("valid timestamp"),
+            updated_at: Utc
+                .timestamp_opt(1_709_251_200, 0)
+                .single()
+                .expect("valid timestamp"),
+            source: "cli".to_string(),
+            agent_nickname: None,
+            agent_role: None,
+            model_provider: "test-provider".to_string(),
+            cwd: PathBuf::from(cwd),
+            cli_version: "test".to_string(),
+            title: title.to_string(),
+            sandbox_policy: "workspace-write".to_string(),
+            approval_mode: "never".to_string(),
+            tokens_used: 0,
+            first_user_message: Some(first_user_message.to_string()),
+            archived_at: None,
+            git_sha: None,
+            git_branch: Some("main".to_string()),
+            git_origin_url: None,
+        }
+    }
+
     #[test]
     fn workspace_section_requires_meaningful_structure() {
         let cwd = TempDir::new().expect("tempdir");
-        assert_eq!(build_workspace_section(cwd.path()), None);
+        assert_eq!(
+            build_workspace_section_with_user_root(cwd.path(), None),
+            None
+        );
     }
 
     #[test]
@@ -379,21 +495,55 @@ mod tests {
     }
 
     #[test]
-    fn recent_work_section_uses_rollout_summaries() {
-        let memories = GlobalMemories {
-            entries: vec![stage1_output("user memory", "recent")],
-        };
+    fn workspace_section_includes_user_root_tree_when_distinct() {
+        let root = TempDir::new().expect("tempdir");
+        let cwd = root.path().join("cwd");
+        let git_root = root.path().join("git");
+        let user_root = root.path().join("home");
 
-        let section = build_recent_work_section(&memories).expect("recent work section");
-        assert!(section.contains("cwd: /tmp/workspace"));
-        assert!(section.contains("recent"));
+        fs::create_dir_all(cwd.join("docs")).expect("create cwd docs dir");
+        fs::write(cwd.join("README.md"), "hello").expect("write cwd readme");
+        fs::create_dir_all(git_root.join(".git")).expect("create git dir");
+        fs::write(git_root.join("Cargo.toml"), "[workspace]").expect("write git root marker");
+        fs::create_dir_all(user_root.join("code")).expect("create user root child");
+        fs::write(user_root.join(".zshrc"), "export TEST=1").expect("write home file");
+
+        let section = build_workspace_section_with_user_root(cwd.as_path(), Some(user_root))
+            .expect("workspace section");
+        assert!(section.contains("User root tree:"));
+        assert!(section.contains("- code/"));
+        assert!(section.contains("- .zshrc"));
+    }
+
+    #[test]
+    fn recent_work_section_groups_threads_by_cwd() {
+        let recent_threads = vec![
+            thread_metadata(
+                "/tmp/workspace-a",
+                "Investigate realtime startup context",
+                "ignored",
+            ),
+            thread_metadata(
+                "/tmp/workspace-a",
+                "Trim websocket startup payload",
+                "ignored",
+            ),
+            thread_metadata("/tmp/workspace-b", "", "Inspect flaky test"),
+        ];
+        let current_cwd = PathBuf::from("/tmp/workspace-a");
+
+        let section = build_recent_work_section(current_cwd.as_path(), &recent_threads)
+            .expect("recent work section");
+        assert!(section.contains("### /tmp/workspace-a"));
+        assert!(section.contains("Recent sessions: 2"));
+        assert!(section.contains("Investigate realtime startup context"));
+        assert!(section.contains("### /tmp/workspace-b"));
+        assert!(section.contains("Inspect flaky test"));
     }
 
     #[test]
     fn user_section_uses_raw_memories() {
-        let memories = GlobalMemories {
-            entries: vec![stage1_output("prefers concise updates", "recent")],
-        };
+        let memories = vec![stage1_output("prefers concise updates", "recent")];
 
         let section = build_user_section(&memories).expect("user section");
         assert!(section.contains("prefers concise updates"));

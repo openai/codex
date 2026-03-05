@@ -74,7 +74,9 @@ async fn seed_stage1_output(
     metadata_builder.cwd = test.workspace_path(format!("workspace-{rollout_slug}"));
     metadata_builder.model_provider = Some("test-provider".to_string());
     metadata_builder.git_branch = Some(format!("branch-{rollout_slug}"));
-    let metadata = metadata_builder.build("test-provider");
+    let mut metadata = metadata_builder.build("test-provider");
+    metadata.title = rollout_summary.to_string();
+    metadata.first_user_message = Some(raw_memory.to_string());
     db.upsert_thread(&metadata).await?;
 
     let claim = db
@@ -702,8 +704,10 @@ async fn conversation_start_injects_startup_context_from_global_memories() -> Re
 
     assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
     assert!(startup_context.contains("User profile: principal engineer"));
+    assert!(startup_context.contains("### "));
+    assert!(startup_context.contains("Recent sessions: 1"));
+    assert!(startup_context.contains("Latest branch: branch-latest"));
     assert!(startup_context.contains("Recent work: cleaned up startup flows"));
-    assert!(startup_context.contains("git_branch: branch-latest"));
     assert!(startup_context.contains("## Machine / Workspace Map"));
     assert!(startup_context.contains("README.md"));
     assert!(!startup_context.contains(MEMORY_PROMPT_PHRASE));
