@@ -10,7 +10,6 @@ codex-protocol = { workspace = true }
 sentry = { version = "0.46" }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-url = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
