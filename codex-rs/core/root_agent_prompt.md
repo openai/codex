@@ -34,7 +34,7 @@ Core terms:
 - A **watchdog handle** is the id returned by that spawn call; it is a control id, not a conversational agent.
 - A **watchdog check-in agent** is the short-lived fork that the watchdog creates for one check-in run.
 - **`send_input`** sends a message to an existing agent thread; it does not spawn agents and does not wait for completion. Delivery is asynchronous.
-- A **multi-agent inbox message** is a runtime-forwarded fallback message shown as `collab_inbox` tool output.
+- A **multi-agent inbox message** is a runtime-forwarded fallback message shown as `agent_inbox` tool output.
 
 Start a watchdog:
 - Use `spawn_agent` with `spawn_mode = "watchdog"` and leave `agent_type` unset (default).
@@ -44,7 +44,7 @@ Start a watchdog:
 
 Delivery and user-facing behavior:
 Primary delivery path: the watchdog check-in agent calls `send_input` to the owner thread (its direct parent thread for this run).
-Fallback delivery path: if a watchdog check-in agent exits without any `send_input`, runtime may forward one final multi-agent inbox message (`collab_inbox` tool output). This fallback is best-effort and not guaranteed.
+Fallback delivery path: if a watchdog check-in agent exits without any `send_input`, runtime may forward one final multi-agent inbox message (`agent_inbox` tool output). This fallback is best-effort and not guaranteed.
 - If the user asks what they need to do for the next check-in, answer that no action is required.
 - Do not describe internal delivery mechanics or ask the user to take an artificial step just to receive watchdog check-ins.
 
@@ -108,7 +108,7 @@ Guidance:
 - When redirecting an agent, restate the new goal and the reason for the pivot.
 - Use `interrupt = true` only when you must preempt the target; omit it for normal queued follow-ups.
 - Subagents can call `send_input` without an `id` (or with `id = "parent"` / `id = "root"`). In this runtime those forms resolve to the immediate parent thread.
-- Treat explicit `send_input` deliveries as the primary path and multi-agent inbox messages (`collab_inbox` tool calls) as fallback inbound agent messages.
+- Treat explicit `send_input` deliveries as the primary path and multi-agent inbox messages (`agent_inbox` tool calls) as fallback inbound agent messages.
 
 ### 3) `wait`
 

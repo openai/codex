@@ -674,8 +674,8 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
-    turn_used_collab_send_input: AtomicBool,
-    last_completed_turn_used_collab_send_input: AtomicBool,
+    turn_used_agent_send_input: AtomicBool,
+    last_completed_turn_used_agent_send_input: AtomicBool,
 }
 
 #[derive(Clone, Debug)]
@@ -1605,8 +1605,8 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
-            turn_used_collab_send_input: AtomicBool::new(false),
-            last_completed_turn_used_collab_send_input: AtomicBool::new(false),
+            turn_used_agent_send_input: AtomicBool::new(false),
+            last_completed_turn_used_agent_send_input: AtomicBool::new(false),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -1739,26 +1739,26 @@ impl Session {
         }
     }
 
-    pub(crate) fn mark_turn_used_collab_send_input(&self) {
-        self.turn_used_collab_send_input
+    pub(crate) fn mark_turn_used_agent_send_input(&self) {
+        self.turn_used_agent_send_input
             .store(true, Ordering::Release);
     }
 
-    pub(crate) fn reset_turn_collab_send_input_flag(&self) {
-        self.turn_used_collab_send_input
+    pub(crate) fn reset_turn_agent_send_input_flag(&self) {
+        self.turn_used_agent_send_input
             .store(false, Ordering::Release);
     }
 
-    pub(crate) fn snapshot_collab_send_input_on_turn_complete(&self) {
-        let used_collab_send_input = self
-            .turn_used_collab_send_input
+    pub(crate) fn snapshot_agent_send_input_on_turn_complete(&self) {
+        let used_agent_send_input = self
+            .turn_used_agent_send_input
             .swap(false, Ordering::AcqRel);
-        self.last_completed_turn_used_collab_send_input
-            .store(used_collab_send_input, Ordering::Release);
+        self.last_completed_turn_used_agent_send_input
+            .store(used_agent_send_input, Ordering::Release);
     }
 
-    pub(crate) fn last_completed_turn_used_collab_send_input(&self) -> bool {
-        self.last_completed_turn_used_collab_send_input
+    pub(crate) fn last_completed_turn_used_agent_send_input(&self) -> bool {
+        self.last_completed_turn_used_agent_send_input
             .load(Ordering::Acquire)
     }
 
@@ -8580,8 +8580,8 @@ mod tests {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
-            turn_used_collab_send_input: AtomicBool::new(false),
-            last_completed_turn_used_collab_send_input: AtomicBool::new(false),
+            turn_used_agent_send_input: AtomicBool::new(false),
+            last_completed_turn_used_agent_send_input: AtomicBool::new(false),
         };
 
         (session, turn_context)
@@ -8931,8 +8931,8 @@ mod tests {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
-            turn_used_collab_send_input: AtomicBool::new(false),
-            last_completed_turn_used_collab_send_input: AtomicBool::new(false),
+            turn_used_agent_send_input: AtomicBool::new(false),
+            last_completed_turn_used_agent_send_input: AtomicBool::new(false),
         });
 
         (session, turn_context, rx_event)

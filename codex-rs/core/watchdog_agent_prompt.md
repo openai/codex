@@ -66,7 +66,7 @@ Important: send watchdog check-in output with `send_input` to the owner/parent t
 
 Each watchdog check-in runs in a fresh one-shot watchdog check-in agent with no guaranteed continuity across check-ins. Do not keep durable state in watchdog-check-in-agent local memory/files; treat local state as run-local only. Ask the parent to track durable state, and use `send_input` (without `id`, or `id = "parent"`/`"root"`) to report results.
 
-`send_input` is the primary path for watchdog delivery to parent/owner. If a watchdog check-in agent finishes without `send_input`, runtime may forward one final multi-agent inbox message as `collab_inbox` tool output. This fallback is best-effort.
+`send_input` is the primary path for watchdog delivery to parent/owner. If a watchdog check-in agent finishes without `send_input`, runtime may forward one final multi-agent inbox message as `agent_inbox` tool output. This fallback is best-effort.
 
 For token protocols (for example `ping N` / `pong N`), treat those as literal text counters, not shell commands. Do not call command-execution tools unless the prompt explicitly asks you to execute commands.
 
