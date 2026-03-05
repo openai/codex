@@ -679,7 +679,8 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
     assert!(startup_context.contains("### "));
     assert!(startup_context.contains("Recent sessions: 1"));
     assert!(startup_context.contains("Latest branch: branch-latest"));
-    assert!(startup_context.contains("Recent work: cleaned up startup flows"));
+    assert!(startup_context.contains("User asks:"));
+    assert!(startup_context.contains("Investigate realtime startup context"));
     assert!(startup_context.contains("## Machine / Workspace Map"));
     assert!(startup_context.contains("README.md"));
     assert!(!startup_context.contains(MEMORY_PROMPT_PHRASE));

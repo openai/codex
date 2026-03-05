@@ -8,12 +8,14 @@ use codex_state::ThreadMetadata;
 use dirs::home_dir;
 use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::DirEntry;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
+use tracing::info;
 use tracing::warn;
 
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.\nThis is background context about recent work and machine/workspace layout. It may be incomplete or stale. Use it to inform responses, and do not repeat it back unless relevant.";
@@ -22,7 +24,9 @@ const WORKSPACE_SECTION_TOKEN_BUDGET: usize = 1_600;
 const NOTES_SECTION_TOKEN_BUDGET: usize = 300;
 const MAX_RECENT_THREADS: usize = 40;
 const MAX_RECENT_WORK_GROUPS: usize = 8;
-const MAX_RECENT_WORK_ENTRIES_PER_GROUP: usize = 4;
+const MAX_CURRENT_CWD_ASKS: usize = 8;
+const MAX_OTHER_CWD_ASKS: usize = 5;
+const MAX_ASK_CHARS: usize = 240;
 const TREE_MAX_DEPTH: usize = 2;
 const DIR_ENTRY_LIMIT: usize = 20;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
@@ -89,6 +93,7 @@ pub(crate) async fn build_realtime_startup_context(
         has_workspace_section,
         "built realtime startup context"
     );
+    info!("realtime startup context: {context}");
     Some(context)
 }
 
@@ -120,12 +125,15 @@ async fn load_recent_threads(sess: &Session) -> Vec<ThreadMetadata> {
 fn build_recent_work_section(cwd: &Path, recent_threads: &[ThreadMetadata]) -> Option<String> {
     let mut groups: HashMap<PathBuf, Vec<&ThreadMetadata>> = HashMap::new();
     for entry in recent_threads {
-        groups.entry(entry.cwd.clone()).or_default().push(entry);
+        let group =
+            resolve_root_git_project_for_trust(&entry.cwd).unwrap_or_else(|| entry.cwd.clone());
+        groups.entry(group).or_default().push(entry);
     }
 
-    let current_cwd = cwd.to_path_buf();
+    let current_group =
+        resolve_root_git_project_for_trust(cwd).unwrap_or_else(|| cwd.to_path_buf());
     let mut groups = groups.into_iter().collect::<Vec<_>>();
-    groups.sort_by(|(left_cwd, left_entries), (right_cwd, right_entries)| {
+    groups.sort_by(|(left_group, left_entries), (right_group, right_entries)| {
         let left_latest = left_entries
             .iter()
             .map(|entry| entry.updated_at)
@@ -137,23 +145,23 @@ fn build_recent_work_section(cwd: &Path, recent_threads: &[ThreadMetadata]) -> O
             .max()
             .unwrap_or_else(Utc::now);
         (
-            *left_cwd != current_cwd,
+            *left_group != current_group,
             Reverse(left_latest),
-            left_cwd.as_os_str(),
+            left_group.as_os_str(),
         )
             .cmp(&(
-                *right_cwd != current_cwd,
+                *right_group != current_group,
                 Reverse(right_latest),
-                right_cwd.as_os_str(),
+                right_group.as_os_str(),
             ))
     });
 
     let sections = groups
         .into_iter()
         .take(MAX_RECENT_WORK_GROUPS)
-        .filter_map(|(group_cwd, mut entries)| {
+        .filter_map(|(group, mut entries)| {
             entries.sort_by_key(|entry| Reverse(entry.updated_at));
-            format_thread_group(&group_cwd, entries)
+            format_thread_group(&current_group, &group, entries)
         })
         .collect::<Vec<_>>();
     (!sections.is_empty()).then(|| sections.join("\n\n"))
@@ -286,7 +294,7 @@ fn read_sorted_entries(dir: &Path) -> io::Result<Vec<DirEntry>> {
 
 fn is_noisy_name(name: &OsStr) -> bool {
     let name = name.to_string_lossy();
-    NOISY_DIR_NAMES.iter().any(|noisy| *noisy == name)
+    name.starts_with('.') || NOISY_DIR_NAMES.iter().any(|noisy| *noisy == name)
 }
 
 fn format_section(title: &str, body: Option<String>, budget_tokens: usize) -> Option<String> {
@@ -302,10 +310,19 @@ fn format_section(title: &str, body: Option<String>, budget_tokens: usize) -> Op
     ))
 }
 
-fn format_thread_group(cwd: &Path, entries: Vec<&ThreadMetadata>) -> Option<String> {
+fn format_thread_group(
+    current_group: &Path,
+    group: &Path,
+    entries: Vec<&ThreadMetadata>,
+) -> Option<String> {
     let latest = entries.first()?;
+    let group_label = if resolve_root_git_project_for_trust(latest.cwd.as_path()).is_some() {
+        format!("### Git repo: {}", group.display())
+    } else {
+        format!("### Directory: {}", group.display())
+    };
     let mut lines = vec![
-        format!("### {}", cwd.display()),
+        group_label,
         format!("Recent sessions: {}", entries.len()),
         format!("Latest activity: {}", latest.updated_at.to_rfc3339()),
     ];
@@ -319,21 +336,44 @@ fn format_thread_group(cwd: &Path, entries: Vec<&ThreadMetadata>) -> Option<Stri
     }
 
     lines.push(String::new());
+    lines.push("User asks:".to_string());
 
-    for entry in entries.into_iter().take(MAX_RECENT_WORK_ENTRIES_PER_GROUP) {
-        let summary = if !entry.title.trim().is_empty() {
-            entry.title.trim()
-        } else if let Some(first_user_message) = entry.first_user_message.as_deref() {
-            first_user_message.trim()
-        } else {
+    let mut seen = HashSet::new();
+    let max_asks = if group == current_group {
+        MAX_CURRENT_CWD_ASKS
+    } else {
+        MAX_OTHER_CWD_ASKS
+    };
+
+    for entry in entries {
+        let Some(first_user_message) = entry.first_user_message.as_deref() else {
             continue;
         };
-        if !summary.is_empty() {
-            lines.push(format!("- {summary}"));
+        let ask = first_user_message
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let dedupe_key = format!("{}:{ask}", entry.cwd.display());
+        if ask.is_empty() || !seen.insert(dedupe_key) {
+            continue;
+        }
+        let ask = if ask.chars().count() > MAX_ASK_CHARS {
+            format!(
+                "{}...",
+                ask.chars()
+                    .take(MAX_ASK_CHARS.saturating_sub(3))
+                    .collect::<String>()
+            )
+        } else {
+            ask
+        };
+        lines.push(format!("- {}: {ask}", entry.cwd.display()));
+        if seen.len() == max_asks {
+            break;
         }
     }
 
-    (lines.len() > 4).then(|| lines.join("\n"))
+    (lines.len() > 5).then(|| lines.join("\n"))
 }
 
 fn display_name(path: &Path) -> String {
@@ -366,6 +406,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
     use tempfile::TempDir;
 
     fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMetadata {
@@ -437,32 +478,55 @@ mod tests {
             .expect("workspace section");
         assert!(section.contains("User root tree:"));
         assert!(section.contains("- code/"));
-        assert!(section.contains("- .zshrc"));
+        assert!(!section.contains("- .zshrc"));
     }
 
     #[test]
     fn recent_work_section_groups_threads_by_cwd() {
+        let root = TempDir::new().expect("tempdir");
+        let repo = root.path().join("repo");
+        let workspace_a = repo.join("workspace-a");
+        let workspace_b = repo.join("workspace-b");
+        let outside = root.path().join("outside");
+
+        fs::create_dir(&repo).expect("create repo dir");
+        Command::new("git")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(["init"])
+            .current_dir(&repo)
+            .output()
+            .expect("git init");
+        fs::create_dir_all(&workspace_a).expect("create workspace a");
+        fs::create_dir_all(&workspace_b).expect("create workspace b");
+        fs::create_dir_all(&outside).expect("create outside dir");
+
         let recent_threads = vec![
             thread_metadata(
-                "/tmp/workspace-a",
+                workspace_a.to_string_lossy().as_ref(),
                 "Investigate realtime startup context",
-                "ignored",
+                "Log the startup context before sending it",
             ),
             thread_metadata(
-                "/tmp/workspace-a",
+                workspace_b.to_string_lossy().as_ref(),
                 "Trim websocket startup payload",
-                "ignored",
+                "Remove memories from the realtime startup context",
             ),
-            thread_metadata("/tmp/workspace-b", "", "Inspect flaky test"),
+            thread_metadata(outside.to_string_lossy().as_ref(), "", "Inspect flaky test"),
         ];
-        let current_cwd = PathBuf::from("/tmp/workspace-a");
+        let current_cwd = workspace_a;
+        let repo = fs::canonicalize(repo).expect("canonicalize repo");
 
         let section = build_recent_work_section(current_cwd.as_path(), &recent_threads)
             .expect("recent work section");
-        assert!(section.contains("### /tmp/workspace-a"));
+        assert!(section.contains(&format!("### Git repo: {}", repo.display())));
         assert!(section.contains("Recent sessions: 2"));
-        assert!(section.contains("Investigate realtime startup context"));
-        assert!(section.contains("### /tmp/workspace-b"));
-        assert!(section.contains("Inspect flaky test"));
+        assert!(section.contains("User asks:"));
+        assert!(section.contains(&format!(
+            "- {}: Log the startup context before sending it",
+            current_cwd.display()
+        )));
+        assert!(section.contains(&format!("### Directory: {}", outside.display())));
+        assert!(section.contains(&format!("- {}: Inspect flaky test", outside.display())));
     }
 }
