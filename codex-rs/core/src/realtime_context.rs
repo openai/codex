@@ -4,7 +4,6 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 use chrono::Utc;
 use codex_state::SortKey;
-use codex_state::Stage1Output;
 use codex_state::ThreadMetadata;
 use dirs::home_dir;
 use std::cmp::Reverse;
@@ -17,12 +16,10 @@ use std::path::PathBuf;
 use tracing::debug;
 use tracing::warn;
 
-const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.\nThis is background context about the user, recent work, and machine/workspace layout. It may be incomplete or stale. Use it to inform responses, and do not repeat it back unless relevant.";
-const USER_SECTION_TOKEN_BUDGET: usize = 800;
+const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.\nThis is background context about recent work and machine/workspace layout. It may be incomplete or stale. Use it to inform responses, and do not repeat it back unless relevant.";
 const RECENT_WORK_SECTION_TOKEN_BUDGET: usize = 2_200;
 const WORKSPACE_SECTION_TOKEN_BUDGET: usize = 1_600;
 const NOTES_SECTION_TOKEN_BUDGET: usize = 300;
-const MAX_STAGE1_OUTPUTS: usize = 3;
 const MAX_RECENT_THREADS: usize = 40;
 const MAX_RECENT_WORK_GROUPS: usize = 8;
 const MAX_RECENT_WORK_ENTRIES_PER_GROUP: usize = 4;
@@ -48,26 +45,20 @@ pub(crate) async fn build_realtime_startup_context(
 ) -> Option<String> {
     let config = sess.get_config().await;
     let cwd = config.cwd.clone();
-    let memories = load_global_memories(sess).await;
     let recent_threads = load_recent_threads(sess).await;
-    let user_section = build_user_section(&memories);
     let recent_work_section = build_recent_work_section(&cwd, &recent_threads);
     let workspace_section = build_workspace_section(&cwd);
 
-    if user_section.is_none() && recent_work_section.is_none() && workspace_section.is_none() {
+    if recent_work_section.is_none() && workspace_section.is_none() {
         debug!("realtime startup context unavailable; skipping injection");
         return None;
     }
 
     let mut parts = vec![STARTUP_CONTEXT_HEADER.to_string()];
 
-    let has_user_section = user_section.is_some();
     let has_recent_work_section = recent_work_section.is_some();
     let has_workspace_section = workspace_section.is_some();
 
-    if let Some(section) = format_section("User", user_section, USER_SECTION_TOKEN_BUDGET) {
-        parts.push(section);
-    }
     if let Some(section) = format_section(
         "Recent Work",
         recent_work_section,
@@ -84,7 +75,7 @@ pub(crate) async fn build_realtime_startup_context(
     }
     if let Some(section) = format_section(
         "Notes",
-        Some("Built at realtime startup from persisted thread metadata in the state DB, optional global Codex memories for user context, and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, and project-doc prompt blends.".to_string()),
+        Some("Built at realtime startup from persisted thread metadata in the state DB and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, project-doc prompt blends, and memory summaries.".to_string()),
         NOTES_SECTION_TOKEN_BUDGET,
     ) {
         parts.push(section);
@@ -94,37 +85,11 @@ pub(crate) async fn build_realtime_startup_context(
     debug!(
         approx_tokens = approx_token_count(&context),
         bytes = context.len(),
-        has_user_section,
         has_recent_work_section,
         has_workspace_section,
         "built realtime startup context"
     );
     Some(context)
-}
-
-async fn load_global_memories(sess: &Session) -> Vec<Stage1Output> {
-    let Some(state_db) = sess.services.state_db.as_ref() else {
-        return Vec::new();
-    };
-
-    match state_db
-        .list_stage1_outputs_for_global(MAX_STAGE1_OUTPUTS)
-        .await
-    {
-        Ok(entries) => entries,
-        Err(err) => {
-            warn!("failed to load realtime startup memories from state db: {err}");
-            Vec::new()
-        }
-    }
-}
-
-fn build_user_section(memories: &[Stage1Output]) -> Option<String> {
-    let sections = memories
-        .iter()
-        .filter_map(|entry| format_memory_entry(entry, &entry.raw_memory))
-        .collect::<Vec<_>>();
-    (!sections.is_empty()).then(|| sections.join("\n\n"))
 }
 
 async fn load_recent_threads(sess: &Session) -> Vec<ThreadMetadata> {
@@ -337,24 +302,6 @@ fn format_section(title: &str, body: Option<String>, budget_tokens: usize) -> Op
     ))
 }
 
-fn format_memory_entry(entry: &Stage1Output, body: &str) -> Option<String> {
-    let body = body.replace("\r\n", "\n").trim().to_string();
-    if body.is_empty() {
-        return None;
-    }
-
-    let mut lines = vec![
-        format!("### {}", entry.source_updated_at.to_rfc3339()),
-        format!("cwd: {}", entry.cwd.display()),
-    ];
-    if let Some(git_branch) = entry.git_branch.as_deref() {
-        lines.push(format!("git_branch: {git_branch}"));
-    }
-    lines.push(String::new());
-    lines.push(body);
-    Some(lines.join("\n"))
-}
-
 fn format_thread_group(cwd: &Path, entries: Vec<&ThreadMetadata>) -> Option<String> {
     let latest = entries.first()?;
     let mut lines = vec![
@@ -410,38 +357,16 @@ fn approx_token_count(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::build_recent_work_section;
-    use super::build_user_section;
     use super::build_workspace_section;
     use super::build_workspace_section_with_user_root;
     use chrono::TimeZone;
     use chrono::Utc;
     use codex_protocol::ThreadId;
-    use codex_state::Stage1Output;
     use codex_state::ThreadMetadata;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
-
-    fn stage1_output(raw_memory: &str, rollout_summary: &str) -> Stage1Output {
-        Stage1Output {
-            thread_id: ThreadId::new(),
-            rollout_path: PathBuf::from("/tmp/rollout.jsonl"),
-            source_updated_at: Utc
-                .timestamp_opt(1_709_251_200, 0)
-                .single()
-                .expect("valid timestamp"),
-            raw_memory: raw_memory.to_string(),
-            rollout_summary: rollout_summary.to_string(),
-            rollout_slug: Some("slug".to_string()),
-            cwd: PathBuf::from("/tmp/workspace"),
-            git_branch: Some("main".to_string()),
-            generated_at: Utc
-                .timestamp_opt(1_709_251_260, 0)
-                .single()
-                .expect("valid timestamp"),
-        }
-    }
 
     fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMetadata {
         ThreadMetadata {
@@ -539,14 +464,5 @@ mod tests {
         assert!(section.contains("Investigate realtime startup context"));
         assert!(section.contains("### /tmp/workspace-b"));
         assert!(section.contains("Inspect flaky test"));
-    }
-
-    #[test]
-    fn user_section_uses_raw_memories() {
-        let memories = vec![stage1_output("prefers concise updates", "recent")];
-
-        let section = build_user_section(&memories).expect("user section");
-        assert!(section.contains("prefers concise updates"));
-        assert!(section.contains("git_branch: main"));
     }
 }

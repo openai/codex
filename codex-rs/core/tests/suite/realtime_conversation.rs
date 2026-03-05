@@ -16,7 +16,6 @@ use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
-use codex_state::Stage1JobClaimOutcome;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
 use core_test_support::responses::start_websocket_server;
@@ -55,11 +54,11 @@ fn websocket_request_instructions(
         .map(str::to_owned)
 }
 
-async fn seed_stage1_output(
+async fn seed_recent_thread(
     test: &TestCodex,
-    raw_memory: &str,
-    rollout_summary: &str,
-    rollout_slug: &str,
+    title: &str,
+    first_user_message: &str,
+    slug: &str,
 ) -> Result<()> {
     let db = test.codex.state_db().context("state db enabled")?;
     let thread_id = ThreadId::new();
@@ -71,40 +70,13 @@ async fn seed_stage1_output(
         updated_at,
         SessionSource::Cli,
     );
-    metadata_builder.cwd = test.workspace_path(format!("workspace-{rollout_slug}"));
+    metadata_builder.cwd = test.workspace_path(format!("workspace-{slug}"));
     metadata_builder.model_provider = Some("test-provider".to_string());
-    metadata_builder.git_branch = Some(format!("branch-{rollout_slug}"));
+    metadata_builder.git_branch = Some(format!("branch-{slug}"));
     let mut metadata = metadata_builder.build("test-provider");
-    metadata.title = rollout_summary.to_string();
-    metadata.first_user_message = Some(raw_memory.to_string());
+    metadata.title = title.to_string();
+    metadata.first_user_message = Some(first_user_message.to_string());
     db.upsert_thread(&metadata).await?;
-
-    let claim = db
-        .try_claim_stage1_job(
-            thread_id,
-            ThreadId::new(),
-            updated_at.timestamp(),
-            3_600,
-            64,
-        )
-        .await?;
-    let ownership_token = match claim {
-        Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
-        other => panic!("unexpected stage-1 claim outcome: {other:?}"),
-    };
-
-    assert!(
-        db.mark_stage1_job_succeeded(
-            thread_id,
-            &ownership_token,
-            updated_at.timestamp(),
-            raw_memory,
-            rollout_summary,
-            Some(rollout_slug),
-        )
-        .await?,
-        "stage-1 success should enqueue global consolidation"
-    );
 
     Ok(())
 }
@@ -657,7 +629,7 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_start_injects_startup_context_from_global_memories() -> Result<()> {
+async fn conversation_start_injects_startup_context_from_thread_history() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_websocket_server(vec![
@@ -671,10 +643,10 @@ async fn conversation_start_injects_startup_context_from_global_memories() -> Re
 
     let mut builder = test_codex();
     let test = builder.build_with_websocket_server(&server).await?;
-    seed_stage1_output(
+    seed_recent_thread(
         &test,
-        "User profile: principal engineer focused on Codex reliability and realtime UX.",
         "Recent work: cleaned up startup flows and reviewed websocket routing.",
+        "Investigate realtime startup context",
         "latest",
     )
     .await?;
@@ -703,7 +675,7 @@ async fn conversation_start_injects_startup_context_from_global_memories() -> Re
         .expect("startup context request should contain instructions");
 
     assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
-    assert!(startup_context.contains("User profile: principal engineer"));
+    assert!(!startup_context.contains("## User"));
     assert!(startup_context.contains("### "));
     assert!(startup_context.contains("Recent sessions: 1"));
     assert!(startup_context.contains("Latest branch: branch-latest"));
@@ -783,7 +755,7 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
     let oversized_summary = "recent work ".repeat(3_500);
     let mut builder = test_codex();
     let test = builder.build_with_websocket_server(&server).await?;
-    seed_stage1_output(&test, &oversized_summary, "summary", "oversized").await?;
+    seed_recent_thread(&test, &oversized_summary, "summary", "oversized").await?;
     fs::write(test.workspace_path("marker.txt"), "marker")?;
 
     test.codex
