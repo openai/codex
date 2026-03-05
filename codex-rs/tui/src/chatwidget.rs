@@ -7068,7 +7068,7 @@ impl ChatWidget {
                 .auth_manager
                 .auth_cached()
                 .as_ref()
-                .is_some_and(|auth| auth.is_chatgpt_auth())
+                .is_some_and(CodexAuth::is_chatgpt_auth)
     }
 
     fn fast_mode_enabled(&self) -> bool {
