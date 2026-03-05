@@ -29,6 +29,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
 pub use artifacts::ArtifactsHandler;
+pub(crate) use artifacts::PINNED_ARTIFACT_RUNTIME_VERSION;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;

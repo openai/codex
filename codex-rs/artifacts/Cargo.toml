@@ -13,6 +13,7 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "process", "time"] }
 url = { workspace = true }
+which = { workspace = true }
 
 [lints]
 workspace = true
