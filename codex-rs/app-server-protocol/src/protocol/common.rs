@@ -110,6 +110,15 @@ macro_rules! client_request_definitions {
             )*
         }
 
+        impl ClientRequest {
+            /// Returns the request id regardless of method variant.
+            pub fn id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+        }
+
         impl crate::experimental_api::ExperimentalApi for ClientRequest {
             fn experimental_reason(&self) -> Option<&'static str> {
                 match self {
