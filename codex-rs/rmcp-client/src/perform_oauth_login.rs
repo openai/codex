@@ -9,6 +9,8 @@ use anyhow::anyhow;
 use anyhow::bail;
 use reqwest::ClientBuilder;
 use reqwest::Url;
+use rmcp::transport::auth::AuthorizationManager;
+use rmcp::transport::auth::AuthorizationMetadata;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
 use tiny_http::Server;
@@ -26,9 +28,10 @@ use crate::utils::build_default_headers;
 
 const DEFAULT_CIMD_CLIENT_METADATA_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/codex-rs/client-metadata.json";
-const DYNAMIC_CLIENT_REGISTRATION_UNSUPPORTED_ERROR: &str =
-    "dynamic client registration not supported";
+const CLIENT_ID_METADATA_DOCUMENT_SUPPORTED_FIELD: &str = "client_id_metadata_document_supported";
 const DEFAULT_CIMD_CALLBACK_PORT: u16 = 33418;
+const DEFAULT_CIMD_REDIRECT_URI_ROOT: &str = "http://127.0.0.1:33418/";
+const DEFAULT_CIMD_REDIRECT_URI_CALLBACK: &str = "http://127.0.0.1:33418/callback";
 
 struct OauthHeaders {
     http_headers: Option<HashMap<String, String>>,
@@ -442,44 +445,71 @@ async fn start_oauth_authorization(
     scope_refs: &[&str],
     redirect_uri: &str,
 ) -> Result<OAuthState> {
-    let mut oauth_state = OAuthState::new(server_url, Some(http_client.clone())).await?;
-    match oauth_state
-        .start_authorization(scope_refs, redirect_uri, Some("Codex"))
+    let metadata = discover_oauth_authorization_metadata(server_url, http_client.clone())
         .await
-    {
-        Ok(()) => Ok(oauth_state),
-        Err(err) => {
-            let err = anyhow!(err);
-            if is_dynamic_client_registration_unsupported(&err) {
-                let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
-                oauth_state
-                    .start_authorization_with_metadata_url(
-                        scope_refs,
-                        redirect_uri,
-                        Some("Codex"),
-                        Some(DEFAULT_CIMD_CLIENT_METADATA_URL),
-                    )
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to start OAuth authorization with default client metadata URL after dynamic registration fallback: {err:#}"
-                        )
-                    })?;
-                Ok(oauth_state)
-            } else {
-                Err(err).context("failed to start OAuth authorization")
-            }
-        }
+        .context("failed to discover OAuth authorization metadata")?;
+    let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
+
+    if should_use_default_cimd_metadata(&metadata) {
+        validate_redirect_uri_for_default_cimd_metadata(redirect_uri)?;
+        oauth_state
+            .start_authorization_with_metadata_url(
+                scope_refs,
+                redirect_uri,
+                Some("Codex"),
+                Some(DEFAULT_CIMD_CLIENT_METADATA_URL),
+            )
+            .await
+            .context("failed to start OAuth authorization with default client metadata URL")?;
+    } else {
+        oauth_state
+            .start_authorization(scope_refs, redirect_uri, Some("Codex"))
+            .await
+            .context("failed to start OAuth authorization")?;
     }
+
+    Ok(oauth_state)
 }
 
-fn is_dynamic_client_registration_unsupported(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        cause
-            .to_string()
-            .to_ascii_lowercase()
-            .contains(DYNAMIC_CLIENT_REGISTRATION_UNSUPPORTED_ERROR)
-    })
+async fn discover_oauth_authorization_metadata(
+    server_url: &str,
+    http_client: reqwest::Client,
+) -> Result<AuthorizationMetadata> {
+    let mut manager = AuthorizationManager::new(server_url)
+        .await
+        .context("failed to create OAuth authorization manager")?;
+    manager
+        .with_client(http_client)
+        .context("failed to configure OAuth HTTP client")?;
+    manager
+        .discover_metadata()
+        .await
+        .context("failed to discover OAuth server metadata")
+}
+
+fn should_use_default_cimd_metadata(metadata: &AuthorizationMetadata) -> bool {
+    metadata.registration_endpoint.is_none() && client_id_metadata_document_supported(metadata)
+}
+
+fn client_id_metadata_document_supported(metadata: &AuthorizationMetadata) -> bool {
+    metadata
+        .additional_fields
+        .get(CLIENT_ID_METADATA_DOCUMENT_SUPPORTED_FIELD)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn validate_redirect_uri_for_default_cimd_metadata(redirect_uri: &str) -> Result<()> {
+    if matches!(
+        redirect_uri,
+        DEFAULT_CIMD_REDIRECT_URI_ROOT | DEFAULT_CIMD_REDIRECT_URI_CALLBACK
+    ) {
+        return Ok(());
+    }
+
+    bail!(
+        "MCP OAuth callback URL `{redirect_uri}` is incompatible with built-in Codex client metadata; use `{DEFAULT_CIMD_REDIRECT_URI_ROOT}` or `{DEFAULT_CIMD_REDIRECT_URI_CALLBACK}`"
+    )
 }
 
 fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
@@ -509,13 +539,20 @@ mod tests {
     use serde_json::json;
     use tokio::task::JoinHandle;
 
+    use super::CLIENT_ID_METADATA_DOCUMENT_SUPPORTED_FIELD;
     use super::CallbackOutcome;
     use super::DEFAULT_CIMD_CLIENT_METADATA_URL;
+    use super::DEFAULT_CIMD_REDIRECT_URI_CALLBACK;
+    use super::DEFAULT_CIMD_REDIRECT_URI_ROOT;
     use super::OAuthCredentialsStoreMode;
     use super::append_query_param;
     use super::callback_path_from_redirect_uri;
+    use super::client_id_metadata_document_supported;
     use super::parse_oauth_callback;
     use super::perform_oauth_login_return_url;
+    use super::should_use_default_cimd_metadata;
+    use super::validate_redirect_uri_for_default_cimd_metadata;
+    use rmcp::transport::auth::AuthorizationMetadata;
 
     #[test]
     fn parse_oauth_callback_accepts_default_path() {
@@ -581,6 +618,41 @@ mod tests {
         assert_eq!(port, super::DEFAULT_CIMD_CALLBACK_PORT);
     }
 
+    #[test]
+    fn default_cimd_redirect_uri_validation_accepts_supported_uris() {
+        let result_root =
+            validate_redirect_uri_for_default_cimd_metadata(DEFAULT_CIMD_REDIRECT_URI_ROOT);
+        let result_callback =
+            validate_redirect_uri_for_default_cimd_metadata(DEFAULT_CIMD_REDIRECT_URI_CALLBACK);
+
+        assert_eq!(result_root.is_ok(), true);
+        assert_eq!(result_callback.is_ok(), true);
+    }
+
+    #[test]
+    fn default_cimd_redirect_uri_validation_rejects_other_uris() {
+        let err = validate_redirect_uri_for_default_cimd_metadata("http://127.0.0.1:43210/")
+            .expect_err("unexpected success for unsupported redirect URI");
+
+        assert!(
+            err.to_string()
+                .contains("incompatible with built-in Codex client metadata"),
+            "unexpected redirect validation error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn cimd_support_requires_metadata_flag_and_missing_registration_endpoint() {
+        let supported = authorization_metadata(None, true);
+        let missing_flag = authorization_metadata(None, false);
+        let with_registration = authorization_metadata(Some("https://example.com/register"), true);
+
+        assert_eq!(client_id_metadata_document_supported(&supported), true);
+        assert_eq!(should_use_default_cimd_metadata(&supported), true);
+        assert_eq!(should_use_default_cimd_metadata(&missing_flag), false);
+        assert_eq!(should_use_default_cimd_metadata(&with_registration), false);
+    }
+
     #[tokio::test]
     async fn oauth_login_uses_default_cimd_metadata_when_dynamic_registration_unsupported() {
         let (server_url, server_handle) = start_oauth_metadata_server(true).await;
@@ -621,6 +693,57 @@ mod tests {
         );
 
         server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn oauth_login_rejects_incompatible_callback_for_default_cimd_metadata() {
+        let (server_url, server_handle) = start_oauth_metadata_server(true).await;
+
+        let err = perform_oauth_login_return_url(
+            "rmcp-http",
+            &server_url,
+            OAuthCredentialsStoreMode::File,
+            None,
+            None,
+            &[],
+            None,
+            Some(1),
+            Some(super::DEFAULT_CIMD_CALLBACK_PORT + 1),
+            None,
+        )
+        .await
+        .err()
+        .expect("oauth login should fail when callback URI is incompatible with fallback metadata");
+
+        assert!(
+            err.to_string()
+                .contains("incompatible with built-in Codex client metadata"),
+            "unexpected oauth setup error: {err:#}"
+        );
+
+        server_handle.abort();
+    }
+
+    fn authorization_metadata(
+        registration_endpoint: Option<&str>,
+        client_metadata_document_supported: bool,
+    ) -> AuthorizationMetadata {
+        let mut additional_fields = serde_json::Map::new();
+        additional_fields.insert(
+            CLIENT_ID_METADATA_DOCUMENT_SUPPORTED_FIELD.to_string(),
+            serde_json::Value::Bool(client_metadata_document_supported),
+        );
+
+        AuthorizationMetadata {
+            authorization_endpoint: "https://example.com/authorize".to_string(),
+            token_endpoint: "https://example.com/token".to_string(),
+            registration_endpoint: registration_endpoint.map(str::to_string),
+            issuer: None,
+            jwks_uri: None,
+            scopes_supported: None,
+            response_types_supported: Some(vec!["code".to_string()]),
+            additional_fields: additional_fields.into_iter().collect(),
+        }
     }
 
     async fn start_oauth_metadata_server(
