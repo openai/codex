@@ -177,6 +177,50 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
 }
 
 #[tokio::test]
+async fn add_streamable_http_with_oauth_client_metadata_url() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add_cmd = codex_command(codex_home.path())?;
+    add_cmd
+        .args([
+            "mcp",
+            "add",
+            "chromatic",
+            "--url",
+            "https://example.com/mcp",
+            "--oauth-client-metadata-url",
+            "https://example.com/client/metadata.json",
+        ])
+        .assert()
+        .success();
+
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let chromatic = servers
+        .get("chromatic")
+        .expect("chromatic server should exist");
+    match &chromatic.transport {
+        McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+            http_headers,
+            env_http_headers,
+        } => {
+            assert_eq!(url, "https://example.com/mcp");
+            assert!(bearer_token_env_var.is_none());
+            assert!(http_headers.is_none());
+            assert!(env_http_headers.is_none());
+        }
+        other => panic!("unexpected transport: {other:?}"),
+    }
+    assert_eq!(
+        chromatic.oauth_client_metadata_url.as_deref(),
+        Some("https://example.com/client/metadata.json")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn add_streamable_http_rejects_removed_flag() -> Result<()> {
     let codex_home = TempDir::new()?;
 

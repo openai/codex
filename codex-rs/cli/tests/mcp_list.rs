@@ -108,6 +108,8 @@ async fn list_and_get_render_expected_output() -> Result<()> {
             },
             "startup_timeout_sec": null,
             "tool_timeout_sec": null,
+            "oauth_resource": null,
+            "oauth_client_metadata_url": null,
             "auth_status": "unsupported"
           }
         ]

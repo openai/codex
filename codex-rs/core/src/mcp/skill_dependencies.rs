@@ -244,6 +244,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             oauth_config.env_http_headers,
             &[],
             server_config.oauth_resource.as_deref(),
+            server_config.oauth_client_metadata_url.as_deref(),
             config.mcp_oauth_callback_port,
             config.mcp_oauth_callback_url.as_deref(),
         )
@@ -394,6 +395,7 @@ fn mcp_dependency_to_server_config(
             disabled_tools: None,
             scopes: None,
             oauth_resource: None,
+            oauth_client_metadata_url: None,
         });
     }
 
@@ -419,6 +421,7 @@ fn mcp_dependency_to_server_config(
             disabled_tools: None,
             scopes: None,
             oauth_resource: None,
+            oauth_client_metadata_url: None,
         });
     }
 
@@ -476,6 +479,7 @@ mod tests {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                oauth_client_metadata_url: None,
             },
         )]);
 
@@ -525,6 +529,7 @@ mod tests {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                oauth_client_metadata_url: None,
             },
         )]);
 

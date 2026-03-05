@@ -48,6 +48,7 @@ pub async fn perform_oauth_login(
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
     oauth_resource: Option<&str>,
+    oauth_client_metadata_url: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
 ) -> Result<()> {
@@ -62,6 +63,7 @@ pub async fn perform_oauth_login(
         headers,
         scopes,
         oauth_resource,
+        oauth_client_metadata_url,
         true,
         callback_port,
         callback_url,
@@ -81,6 +83,7 @@ pub async fn perform_oauth_login_return_url(
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
     oauth_resource: Option<&str>,
+    oauth_client_metadata_url: Option<&str>,
     timeout_secs: Option<i64>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
@@ -96,6 +99,7 @@ pub async fn perform_oauth_login_return_url(
         headers,
         scopes,
         oauth_resource,
+        oauth_client_metadata_url,
         false,
         callback_port,
         callback_url,
@@ -308,6 +312,7 @@ impl OauthLoginFlow {
         headers: OauthHeaders,
         scopes: &[String],
         oauth_resource: Option<&str>,
+        oauth_client_metadata_url: Option<&str>,
         launch_browser: bool,
         callback_port: Option<u16>,
         callback_url: Option<&str>,
@@ -342,9 +347,13 @@ impl OauthLoginFlow {
 
         let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-        oauth_state
-            .start_authorization(&scope_refs, &redirect_uri, Some("Codex"))
-            .await?;
+        start_oauth_authorization(
+            &mut oauth_state,
+            &scope_refs,
+            &redirect_uri,
+            oauth_client_metadata_url,
+        )
+        .await?;
         let auth_url = append_query_param(
             &oauth_state.get_authorization_url().await?,
             "resource",
@@ -440,6 +449,29 @@ impl OauthLoginFlow {
     }
 }
 
+async fn start_oauth_authorization(
+    oauth_state: &mut OAuthState,
+    scope_refs: &[&str],
+    redirect_uri: &str,
+    oauth_client_metadata_url: Option<&str>,
+) -> Result<()> {
+    match oauth_client_metadata_url {
+        Some(url) => oauth_state
+            .start_authorization_with_metadata_url(
+                scope_refs,
+                redirect_uri,
+                Some("Codex"),
+                Some(url),
+            )
+            .await
+            .context("failed to start OAuth authorization with client metadata URL"),
+        None => oauth_state
+            .start_authorization(scope_refs, redirect_uri, Some("Codex"))
+            .await
+            .context("failed to start OAuth authorization"),
+    }
+}
+
 fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
     let Some(value) = value else {
         return url.to_string();
@@ -459,12 +491,20 @@ fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use axum::Json;
+    use axum::Router;
+    use axum::routing::get;
     use pretty_assertions::assert_eq;
+    use reqwest::Url;
+    use serde_json::json;
+    use tokio::task::JoinHandle;
 
     use super::CallbackOutcome;
+    use super::OAuthCredentialsStoreMode;
     use super::append_query_param;
     use super::callback_path_from_redirect_uri;
     use super::parse_oauth_callback;
+    use super::perform_oauth_login_return_url;
 
     #[test]
     fn parse_oauth_callback_accepts_default_path() {
@@ -521,5 +561,126 @@ mod tests {
         let url = append_query_param("not a url", "resource", Some("api/resource"));
 
         assert_eq!(url, "not a url?resource=api%2Fresource");
+    }
+
+    #[tokio::test]
+    async fn oauth_login_supports_cimd_when_client_metadata_url_provided() {
+        let (server_url, server_handle) = start_oauth_metadata_server(true).await;
+
+        let login_handle = perform_oauth_login_return_url(
+            "rmcp-http",
+            &server_url,
+            OAuthCredentialsStoreMode::File,
+            None,
+            None,
+            &[],
+            None,
+            Some("https://example.com/client/metadata.json"),
+            Some(1),
+            None,
+            None,
+        )
+        .await
+        .expect("oauth login should start with CIMD metadata URL");
+        let (authorization_url, completion) = login_handle.into_parts();
+
+        let parsed = Url::parse(&authorization_url).expect("authorization URL should parse");
+        let params = parsed
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            params.get("client_id").map(std::convert::AsRef::as_ref),
+            Some("https://example.com/client/metadata.json")
+        );
+
+        let err = completion
+            .await
+            .expect("oauth completion receiver should resolve")
+            .expect_err("oauth should time out in test without callback");
+        assert!(
+            err.to_string()
+                .contains("timed out waiting for OAuth callback"),
+            "unexpected oauth completion error: {err}"
+        );
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn oauth_login_without_client_metadata_url_fails_if_dynamic_registration_unsupported() {
+        let (server_url, server_handle) = start_oauth_metadata_server(true).await;
+
+        let result = perform_oauth_login_return_url(
+            "rmcp-http",
+            &server_url,
+            OAuthCredentialsStoreMode::File,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            Some(1),
+            None,
+            None,
+        )
+        .await;
+        let err = match result {
+            Ok(_) => panic!("oauth login should fail without metadata url"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("failed to start OAuth authorization"),
+            "unexpected oauth login error: {err}"
+        );
+
+        server_handle.abort();
+    }
+
+    async fn start_oauth_metadata_server(
+        client_id_metadata_document_supported: bool,
+    ) -> (String, JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+        let base_url = format!("http://{addr}");
+        let metadata = json!({
+            "authorization_endpoint": format!("{base_url}/oauth/authorize"),
+            "token_endpoint": format!("{base_url}/oauth/token"),
+            "response_types_supported": ["code"],
+            "code_challenge_methods_supported": ["S256"],
+            "client_id_metadata_document_supported": client_id_metadata_document_supported,
+        });
+
+        let app = Router::new()
+            .route(
+                "/.well-known/oauth-authorization-server/mcp",
+                get({
+                    let metadata = metadata.clone();
+                    move || async move { Json(metadata.clone()) }
+                }),
+            )
+            .route(
+                "/mcp/.well-known/oauth-authorization-server",
+                get({
+                    let metadata = metadata.clone();
+                    move || async move { Json(metadata.clone()) }
+                }),
+            )
+            .route(
+                "/.well-known/oauth-authorization-server",
+                get(move || async move { Json(metadata.clone()) }),
+            );
+
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("oauth metadata server should run");
+        });
+
+        (format!("{base_url}/mcp"), handle)
     }
 }

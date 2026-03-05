@@ -127,6 +127,15 @@ pub struct AddMcpStreamableHttpArgs {
         requires = "url"
     )]
     pub bearer_token_env_var: Option<String>,
+
+    /// Optional OAuth client metadata URL to use for URL-based client IDs (SEP-991/CIMD).
+    /// Only valid with streamable HTTP servers.
+    #[arg(
+        long = "oauth-client-metadata-url",
+        value_name = "URL",
+        requires = "url"
+    )]
+    pub oauth_client_metadata_url: Option<String>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -204,7 +213,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
-    let transport = match transport_args {
+    let (transport, oauth_client_metadata_url) = match transport_args {
         AddMcpTransportArgs {
             stdio: Some(stdio), ..
         } => {
@@ -219,29 +228,39 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
             } else {
                 Some(stdio.env.into_iter().collect::<HashMap<_, _>>())
             };
-            McpServerTransportConfig::Stdio {
-                command: command_bin,
-                args: command_args,
-                env: env_map,
-                env_vars: Vec::new(),
-                cwd: None,
-            }
+            (
+                McpServerTransportConfig::Stdio {
+                    command: command_bin,
+                    args: command_args,
+                    env: env_map,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                None,
+            )
         }
         AddMcpTransportArgs {
             streamable_http:
                 Some(AddMcpStreamableHttpArgs {
                     url,
                     bearer_token_env_var,
+                    oauth_client_metadata_url,
                 }),
             ..
-        } => McpServerTransportConfig::StreamableHttp {
-            url,
-            bearer_token_env_var,
-            http_headers: None,
-            env_http_headers: None,
-        },
-        AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
+        } => (
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+                http_headers: None,
+                env_http_headers: None,
+            },
+            oauth_client_metadata_url,
+        ),
+        AddMcpTransportArgs { .. } => {
+            bail!("exactly one of --command or --url must be provided")
+        }
     };
+    let oauth_client_metadata_url_for_login = oauth_client_metadata_url.clone();
 
     let new_entry = McpServerConfig {
         transport: transport.clone(),
@@ -254,6 +273,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         disabled_tools: None,
         scopes: None,
         oauth_resource: None,
+        oauth_client_metadata_url,
     };
 
     servers.insert(name.clone(), new_entry);
@@ -277,6 +297,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 oauth_config.env_http_headers,
                 &Vec::new(),
                 None,
+                oauth_client_metadata_url_for_login.as_deref(),
                 config.mcp_oauth_callback_port,
                 config.mcp_oauth_callback_url.as_deref(),
             )
@@ -364,6 +385,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         env_http_headers,
         &scopes,
         server.oauth_resource.as_deref(),
+        server.oauth_client_metadata_url.as_deref(),
         config.mcp_oauth_callback_port,
         config.mcp_oauth_callback_url.as_deref(),
     )
@@ -467,6 +489,8 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     "tool_timeout_sec": cfg
                         .tool_timeout_sec
                         .map(|timeout| timeout.as_secs_f64()),
+                    "oauth_resource": cfg.oauth_resource.clone(),
+                    "oauth_client_metadata_url": cfg.oauth_client_metadata_url.clone(),
                     "auth_status": auth_status,
                 })
             })
@@ -707,6 +731,8 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             "tool_timeout_sec": server
                 .tool_timeout_sec
                 .map(|timeout| timeout.as_secs_f64()),
+            "oauth_resource": server.oauth_resource.clone(),
+            "oauth_client_metadata_url": server.oauth_client_metadata_url.clone(),
         }))?;
         println!("{output}");
         return Ok(());
@@ -806,6 +832,12 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
     }
     if let Some(timeout) = server.tool_timeout_sec {
         println!("  tool_timeout_sec: {}", timeout.as_secs_f64());
+    }
+    if let Some(resource) = server.oauth_resource.as_deref() {
+        println!("  oauth_resource: {resource}");
+    }
+    if let Some(url) = server.oauth_client_metadata_url.as_deref() {
+        println!("  oauth_client_metadata_url: {url}");
     }
     println!("  remove: codex mcp remove {}", get_args.name);
 

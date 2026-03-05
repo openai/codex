@@ -142,6 +142,7 @@ fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> Mc
         disabled_tools: None,
         scopes: None,
         oauth_resource: None,
+        oauth_client_metadata_url: None,
     }
 }
 
@@ -674,6 +675,7 @@ mod tests {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                oauth_client_metadata_url: None,
             },
         );
         config
