@@ -3340,6 +3340,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
+        widget
+            .bottom_pane
+            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
         widget
     }
@@ -3520,6 +3523,9 @@ impl ChatWidget {
                 ),
         );
         widget.update_collaboration_mode_indicator();
+        widget
+            .bottom_pane
+            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
         widget
     }
