@@ -167,7 +167,7 @@ pub(crate) trait ModelVisibleContextFragment {
 
 /// Implement this for fragments that are built from current/persisted turn
 /// state rather than one-off runtime events.
-pub(crate) trait TurnContextFragment: ModelVisibleContextFragment + Sized {
+pub(crate) trait TurnBackedContextFragment: ModelVisibleContextFragment + Sized {
     fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Option<Self>;
 
     fn diff_from_turn_context_item(

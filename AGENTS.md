@@ -27,7 +27,7 @@ In the codex-rs folder where the rust code lives:
 - Every new model-visible fragment should implement `ModelVisibleContextFragment` and declare a `ModelVisibleContextEnvelope`.
 - Use the developer envelope for developer guidance. `DeveloperInstructions` remains the standard string-backed developer fragment for most cases, but any new developer fragment must still use the shared fragment path rather than hand-built developer `ResponseItem`s.
 - Use the contextual-user envelope for user-role contextual state or runtime markers such as AGENTS instructions, plugin instructions, environment context, skills, and shell-command markers. Contextual-user fragments must provide stable markers so history parsing treats them as contextual state rather than user intent.
-- Fragments derived from `TurnContext` and diffed against persisted turn state should implement `TurnContextFragment` so current-state extraction, diffing, and rendering live together.
+- Fragments derived from `TurnContext` and diffed against persisted turn state should implement `TurnBackedContextFragment` so current-state extraction, diffing, and rendering live together.
 - Do not inject raw strings directly into the initial-context or settings-update builders, and do not call fragment wrapping helpers ad hoc from new code.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:

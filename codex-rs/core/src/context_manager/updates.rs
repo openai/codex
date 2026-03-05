@@ -6,7 +6,7 @@ use crate::model_visible_context::ContextualUserEnvelopeKind;
 use crate::model_visible_context::DeveloperEnvelopeKind;
 use crate::model_visible_context::ModelVisibleContextEnvelopeKind;
 use crate::model_visible_context::ModelVisibleContextFragment;
-use crate::model_visible_context::TurnContextFragment;
+use crate::model_visible_context::TurnBackedContextFragment;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_protocol::config_types::Personality;
