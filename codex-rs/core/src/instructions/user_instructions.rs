@@ -4,7 +4,7 @@ use serde::Serialize;
 use crate::codex::TurnContext;
 use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
-use crate::model_visible_context::TurnBackedContextFragment;
+use crate::model_visible_context::TurnContextDiffFragment;
 use codex_protocol::protocol::TurnContextItem;
 
 use crate::model_visible_context::AGENTS_MD_FRAGMENT_SPEC;
@@ -39,7 +39,7 @@ impl ModelVisibleContextFragment for UserInstructions {
     }
 }
 
-impl TurnBackedContextFragment for UserInstructions {
+impl TurnContextDiffFragment for UserInstructions {
     fn from_turn_context(turn_context: &TurnContext, _shell: &Shell) -> Option<Self> {
         let text = turn_context.user_instructions.as_ref()?.clone();
         Some(Self {

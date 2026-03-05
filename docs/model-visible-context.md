@@ -15,7 +15,7 @@ When adding new model-visible context:
 2. Implement `ModelVisibleContextFragment` for it.
 3. Set the fragment `type Role` to the correct developer or contextual-user role.
 4. Give it a `ModelVisibleContextFragmentSpec` with the right marker behavior.
-5. If the fragment is derived from `TurnContext` and participates in turn-to-turn diffing, also implement `TurnBackedContextFragment`.
+5. If the fragment is derived from `TurnContext` and participates in turn-to-turn diffing, also implement `TurnContextDiffFragment`.
 6. Push the fragment through the shared envelope builders in initial-context or settings-update assembly.
 
 Do not hand-build developer or contextual-user `ResponseItem`s in new code unless there is a strong reason to bypass the fragment path.
@@ -48,7 +48,7 @@ Contextual-user fragments must have stable markers because history parsing uses 
 
 ## Turn-backed fragments
 
-If a fragment is derived from durable turn/session state, keep its extraction, diffing, and rendering logic together by implementing `TurnBackedContextFragment`.
+If a fragment is derived from durable turn/session state, keep its extraction, diffing, and rendering logic together by implementing `TurnContextDiffFragment`.
 
 That trait is the blessed path for fragments that need to:
 

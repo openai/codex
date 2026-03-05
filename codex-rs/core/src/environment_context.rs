@@ -2,7 +2,7 @@ use crate::codex::TurnContext;
 use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ENVIRONMENT_CONTEXT_FRAGMENT_SPEC;
 use crate::model_visible_context::ModelVisibleContextFragment;
-use crate::model_visible_context::TurnBackedContextFragment;
+use crate::model_visible_context::TurnContextDiffFragment;
 use crate::shell::Shell;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
@@ -129,7 +129,7 @@ impl ModelVisibleContextFragment for EnvironmentContext {
     }
 }
 
-impl TurnBackedContextFragment for EnvironmentContext {
+impl TurnContextDiffFragment for EnvironmentContext {
     fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Option<Self> {
         Some(Self::new(
             Some(turn_context.cwd.clone()),

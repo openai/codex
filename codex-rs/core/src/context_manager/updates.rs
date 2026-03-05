@@ -6,7 +6,7 @@ use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::DeveloperContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::ModelVisibleContextRole;
-use crate::model_visible_context::TurnBackedContextFragment;
+use crate::model_visible_context::TurnContextDiffFragment;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_protocol::config_types::Personality;
