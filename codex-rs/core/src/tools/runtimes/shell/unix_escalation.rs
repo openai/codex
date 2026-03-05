@@ -839,6 +839,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 permission_profile,
             )) => {
                 // Merge additive permissions into the existing turn/request sandbox policy.
+                // On macOS, additional profile extensions are unioned with the turn defaults.
                 self.prepare_sandboxed_exec(PrepareSandboxedExecParams {
                     command,
                     workdir,
@@ -846,7 +847,9 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                     sandbox_policy: &self.sandbox_policy,
                     additional_permissions: Some(permission_profile),
                     #[cfg(target_os = "macos")]
-                    macos_seatbelt_profile_extensions: None,
+                    macos_seatbelt_profile_extensions: self
+                        .macos_seatbelt_profile_extensions
+                        .as_ref(),
                 })?
             }
             EscalationExecution::Permissions(EscalationPermissions::Permissions(permissions)) => {

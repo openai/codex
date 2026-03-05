@@ -2220,6 +2220,8 @@ pub struct TurnContextNetworkItem {
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
     pub cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_date: Option<String>,
@@ -3509,6 +3511,7 @@ mod tests {
             "summary": "auto",
         }))?;
 
+        assert_eq!(item.trace_id, None);
         assert_eq!(item.network, None);
         Ok(())
     }
@@ -3517,6 +3520,7 @@ mod tests {
     fn turn_context_item_serializes_network_when_present() -> Result<()> {
         let item = TurnContextItem {
             turn_id: None,
+            trace_id: None,
             cwd: PathBuf::from("/tmp"),
             current_date: None,
             timezone: None,

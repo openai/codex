@@ -579,3 +579,67 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
         prepared.command
     );
 }
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn prepare_escalated_exec_permission_profile_unions_turn_and_requested_macos_extensions() {
+    let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap();
+    let executor = CoreShellCommandExecutor {
+        command: vec!["echo".to_string(), "ok".to_string()],
+        cwd: cwd.to_path_buf(),
+        env: HashMap::new(),
+        network: None,
+        sandbox: SandboxType::None,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        justification: None,
+        arg0: None,
+        sandbox_policy_cwd: cwd.to_path_buf(),
+        macos_seatbelt_profile_extensions: Some(MacOsSeatbeltProfileExtensions {
+            macos_preferences: MacOsPreferencesPermission::ReadOnly,
+            ..Default::default()
+        }),
+        codex_linux_sandbox_exe: None,
+        use_linux_sandbox_bwrap: false,
+    };
+
+    let prepared = executor
+        .prepare_escalated_exec(
+            &AbsolutePathBuf::from_absolute_path("/bin/echo").unwrap(),
+            &["echo".to_string(), "ok".to_string()],
+            &cwd,
+            HashMap::new(),
+            EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
+                PermissionProfile {
+                    macos: Some(MacOsSeatbeltProfileExtensions {
+                        macos_calendar: true,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+        )
+        .await
+        .unwrap();
+
+    let policy = prepared
+        .command
+        .get(2)
+        .expect("seatbelt policy should be present");
+    assert_eq!(
+        prepared.command.first().map(String::as_str),
+        Some(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+    );
+    assert_eq!(prepared.command.get(1).map(String::as_str), Some("-p"));
+    assert!(
+        policy.contains("(allow user-preference-read)"),
+        "expected turn macOS seatbelt extensions to be preserved: {:?}",
+        prepared.command
+    );
+    assert!(
+        policy.contains("(allow mach-lookup (global-name \"com.apple.CalendarAgent\"))"),
+        "expected requested macOS seatbelt extensions to be included: {:?}",
+        prepared.command
+    );
+}

@@ -80,7 +80,7 @@ imported local file. They are not resolved relative to the imported file's locat
 - Imported local files run in the same VM context, so they can also access `codex.*`, the captured `console`, and Node-like `import.meta` helpers.
 - Each `codex.tool(...)` call emits a bounded summary at `info` level from the `codex_core::tools::js_repl` logger. At `trace` level, the same path also logs the exact raw response object or error string seen by JavaScript.
 - Nested `codex.tool(...)` outputs stay inside JavaScript unless you emit them explicitly.
-- `codex.emitImage(...)` accepts a direct image URL, a single `input_image` item, an object like `{ bytes, mimeType }`, or a raw tool response object that contains exactly one image and no text.
+- `codex.emitImage(...)` accepts a data URL, a single `input_image` item, an object like `{ bytes, mimeType }`, or a raw tool response object that contains exactly one image and no text.
 - `codex.emitImage(...)` rejects mixed text-and-image content.
 - Example of sharing an in-memory Playwright screenshot: `await codex.emitImage({ bytes: await page.screenshot({ type: "jpeg", quality: 85 }), mimeType: "image/jpeg" })`.
 - Example of sharing a local image tool result: `await codex.emitImage(codex.tool("view_image", { path: "/absolute/path" }))`.

@@ -315,9 +315,9 @@
     },
     "MacOsPreferencesPermission": {
       "enum": [
+        "none",
         "read_only",
-        "read_write",
-        "none"
+        "read_write"
       ],
       "type": "string"
     },
