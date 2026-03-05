@@ -124,6 +124,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::debug;
+use tracing::debug_span;
 use tracing::error;
 use tracing::field;
 use tracing::info;
@@ -353,7 +354,7 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        plugins_manager.plugins_for_config(&config);
+        let loaded_plugins = plugins_manager.plugins_for_config(&config);
         let loaded_skills = skills_manager.skills_for_config(&config);
 
         for err in &loaded_skills.errors {
@@ -390,8 +391,12 @@ impl Codex {
 
         let allowed_skills_for_implicit_invocation =
             loaded_skills.allowed_skills_for_implicit_invocation();
-        let user_instructions =
-            get_user_instructions(&config, Some(&allowed_skills_for_implicit_invocation)).await;
+        let user_instructions = get_user_instructions(
+            &config,
+            Some(&allowed_skills_for_implicit_invocation),
+            Some(loaded_plugins.capability_summaries()),
+        )
+        .await;
 
         let exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
             .await
@@ -3888,7 +3893,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
 }
 
 fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
-    let dispatch_span = info_span!("submission_dispatch", submission.id = sub.id.as_str());
+    let dispatch_span = match &sub.op {
+        Op::RealtimeConversationAudio(_) => {
+            debug_span!("submission_dispatch", submission.id = sub.id.as_str())
+        }
+        _ => info_span!("submission_dispatch", submission.id = sub.id.as_str()),
+    };
     if let Some(trace) = sub.trace.as_ref()
         && !set_parent_from_w3c_trace_context(&dispatch_span, trace)
     {
@@ -5938,6 +5948,8 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::PatchApplyBegin(_)
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::ViewImageToolCall(_)
+        | EventMsg::ImageGenerationBegin(_)
+        | EventMsg::ImageGenerationEnd(_)
         | EventMsg::ExecApprovalRequest(_)
         | EventMsg::RequestUserInput(_)
         | EventMsg::DynamicToolCallRequest(_)
@@ -6669,6 +6681,8 @@ mod tests {
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::openai_models::ModelsResponse;
+    use codex_protocol::protocol::ConversationAudioParams;
+    use codex_protocol::protocol::RealtimeAudioFrame;
     use codex_protocol::protocol::Submission;
     use codex_protocol::protocol::W3cTraceContext;
     use opentelemetry::trace::TraceContextExt;
@@ -8573,6 +8587,29 @@ mod tests {
         assert_eq!(
             trace_id,
             TraceId::from_hex("00000000000000000000000000000055").expect("trace id")
+        );
+    }
+
+    #[test]
+    fn submission_dispatch_span_uses_debug_for_realtime_audio() {
+        init_test_tracing();
+
+        let dispatch_span = submission_dispatch_span(&Submission {
+            id: "sub-1".into(),
+            op: Op::RealtimeConversationAudio(ConversationAudioParams {
+                frame: RealtimeAudioFrame {
+                    data: "ZmFrZQ==".into(),
+                    sample_rate: 16_000,
+                    num_channels: 1,
+                    samples_per_channel: Some(160),
+                },
+            }),
+            trace: None,
+        });
+
+        assert_eq!(
+            dispatch_span.metadata().expect("span metadata").level(),
+            &tracing::Level::DEBUG
         );
     }
 

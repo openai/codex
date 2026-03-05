@@ -16,6 +16,7 @@ use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
@@ -258,6 +259,51 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
             queries: None,
         }
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_image_generation_call("ig_123", "completed", "A tiny blue square", "Zm9v"),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, first_response).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "generate a tiny blue square".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let begin = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let end = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(begin.call_id, "ig_123");
+    assert_eq!(end.call_id, "ig_123");
+    assert_eq!(end.status, "completed");
+    assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
+    assert_eq!(end.result, "Zm9v");
 
     Ok(())
 }
