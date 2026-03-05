@@ -18,8 +18,8 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::COLLAB_INBOX_KIND;
-use codex_protocol::protocol::CollabInboxPayload;
+use codex_protocol::protocol::AGENT_INBOX_KIND;
+use codex_protocol::protocol::AgentInboxPayload;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -337,7 +337,7 @@ impl AgentControl {
         .await
     }
 
-    pub(crate) async fn send_collab_message(
+    pub(crate) async fn send_agent_message(
         &self,
         agent_id: ThreadId,
         sender_thread_id: ThreadId,
@@ -358,7 +358,7 @@ impl AgentControl {
             .send_op(
                 agent_id,
                 Op::InjectResponseItems {
-                    items: build_collab_inbox_items(
+                    items: build_agent_inbox_items(
                         sender_thread_id,
                         message,
                         prepend_turn_start_user_message,
@@ -373,7 +373,7 @@ impl AgentControl {
         result
     }
 
-    pub(crate) async fn send_collab_message_or_input(
+    pub(crate) async fn send_agent_message_or_input(
         &self,
         agent_id: ThreadId,
         sender_thread_id: ThreadId,
@@ -382,12 +382,12 @@ impl AgentControl {
     ) -> CodexResult<String> {
         match (message, items) {
             (Some(message), None) => {
-                self.send_collab_message(agent_id, sender_thread_id, message)
+                self.send_agent_message(agent_id, sender_thread_id, message)
                     .await
             }
             (None, Some(items)) => self.send_input(agent_id, items).await,
             _ => Err(CodexErr::UnsupportedOperation(
-                "invalid collab input".to_string(),
+                "invalid agent input".to_string(),
             )),
         }
     }
@@ -563,7 +563,7 @@ impl AgentControl {
     }
 }
 
-fn build_collab_inbox_items(
+fn build_agent_inbox_items(
     sender_thread_id: ThreadId,
     message: String,
     prepend_turn_start_user_message: bool,
@@ -578,17 +578,17 @@ fn build_collab_inbox_items(
         });
     }
 
-    let call_id = format!("collab_inbox_{}", Uuid::new_v4());
-    let output = serde_json::to_string(&CollabInboxPayload::new(sender_thread_id, message))
+    let call_id = format!("agent_inbox_{}", Uuid::new_v4());
+    let output = serde_json::to_string(&AgentInboxPayload::new(sender_thread_id, message))
         .map_err(|err| {
             CodexErr::UnsupportedOperation(format!(
-                "failed to serialize collab inbox payload: {err}"
+                "failed to serialize agent inbox payload: {err}"
             ))
         })?;
 
     items.extend([
         ResponseInputItem::FunctionCall {
-            name: COLLAB_INBOX_KIND.to_string(),
+            name: AGENT_INBOX_KIND.to_string(),
             arguments: "{}".to_string(),
             call_id: call_id.clone(),
         },
@@ -702,11 +702,10 @@ mod tests {
     }
 
     #[test]
-    fn build_collab_inbox_items_emits_function_call_and_output() {
+    fn build_agent_inbox_items_emits_function_call_and_output() {
         let sender_thread_id = ThreadId::new();
-        let items =
-            build_collab_inbox_items(sender_thread_id, "watchdog update".to_string(), false)
-                .expect("tool role should build inbox items");
+        let items = build_agent_inbox_items(sender_thread_id, "watchdog update".to_string(), false)
+            .expect("tool role should build inbox items");
 
         assert_eq!(items.len(), 2);
 
@@ -716,7 +715,7 @@ mod tests {
                 arguments,
                 call_id,
             } => {
-                assert_eq!(name, COLLAB_INBOX_KIND);
+                assert_eq!(name, AGENT_INBOX_KIND);
                 assert_eq!(arguments, "{}");
                 call_id.clone()
             }
@@ -733,10 +732,10 @@ mod tests {
                     .body
                     .to_text()
                     .expect("payload should convert to text");
-                let payload: CollabInboxPayload =
+                let payload: AgentInboxPayload =
                     serde_json::from_str(&output_text).expect("payload should be valid json");
                 assert!(payload.injected);
-                assert_eq!(payload.kind, COLLAB_INBOX_KIND);
+                assert_eq!(payload.kind, AGENT_INBOX_KIND);
                 assert_eq!(payload.sender_thread_id, sender_thread_id);
                 assert_eq!(payload.message, "watchdog update");
             }
@@ -745,9 +744,9 @@ mod tests {
     }
 
     #[test]
-    fn build_collab_inbox_items_prepends_empty_user_message_when_requested() {
+    fn build_agent_inbox_items_prepends_empty_user_message_when_requested() {
         let sender_thread_id = ThreadId::new();
-        let items = build_collab_inbox_items(sender_thread_id, "watchdog update".to_string(), true)
+        let items = build_agent_inbox_items(sender_thread_id, "watchdog update".to_string(), true)
             .expect("tool role should build inbox items");
 
         assert_eq!(items.len(), 3);
@@ -765,20 +764,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_collab_message_to_root_thread_injects_response_items() {
+    async fn send_agent_message_to_root_thread_injects_response_items() {
         let harness = AgentControlHarness::new().await;
         let (receiver_thread_id, _thread) = harness.start_thread().await;
         let sender_thread_id = ThreadId::new();
 
         let submission_id = harness
             .control
-            .send_collab_message(
+            .send_agent_message(
                 receiver_thread_id,
                 sender_thread_id,
                 "watchdog update".to_string(),
             )
             .await
-            .expect("send_collab_message should succeed");
+            .expect("send_agent_message should succeed");
         assert!(!submission_id.is_empty());
 
         let captured = harness
@@ -788,7 +787,7 @@ mod tests {
             .find(|(thread_id, op)| {
                 *thread_id == receiver_thread_id && matches!(op, Op::InjectResponseItems { .. })
             })
-            .expect("expected injected collab inbox op");
+            .expect("expected injected agent inbox op");
 
         let Op::InjectResponseItems { items } = captured.1 else {
             unreachable!("matched above");
@@ -810,7 +809,7 @@ mod tests {
             ResponseInputItem::FunctionCall {
                 name, arguments, ..
             } => {
-                assert_eq!(name, COLLAB_INBOX_KIND);
+                assert_eq!(name, AGENT_INBOX_KIND);
                 assert_eq!(arguments, "{}");
             }
             other => panic!("expected function call item, got {other:?}"),
@@ -821,7 +820,7 @@ mod tests {
                     .body
                     .to_text()
                     .expect("payload should convert to text");
-                let payload: CollabInboxPayload =
+                let payload: AgentInboxPayload =
                     serde_json::from_str(&output_text).expect("payload should be valid json");
                 assert_eq!(payload.sender_thread_id, sender_thread_id);
                 assert_eq!(payload.message, "watchdog update");
