@@ -185,13 +185,6 @@ pub(crate) const USER_SHELL_COMMAND_FRAGMENT: ModelVisibleFragmentSpec =
     );
 pub(crate) const TURN_ABORTED_FRAGMENT: ModelVisibleFragmentSpec =
     ModelVisibleFragmentSpec::contextual_user(TURN_ABORTED_OPEN_TAG, TURN_ABORTED_CLOSE_TAG);
-pub(crate) const SUBAGENTS_FRAGMENT: ModelVisibleFragmentSpec =
-    ModelVisibleFragmentSpec::contextual_user(SUBAGENTS_OPEN_TAG, SUBAGENTS_CLOSE_TAG);
-pub(crate) const SUBAGENT_NOTIFICATION_FRAGMENT: ModelVisibleFragmentSpec =
-    ModelVisibleFragmentSpec::contextual_user(
-        SUBAGENT_NOTIFICATION_OPEN_TAG,
-        SUBAGENT_NOTIFICATION_CLOSE_TAG,
-    );
 
 const CONTEXTUAL_USER_FRAGMENTS: &[ModelVisibleFragmentSpec] = &[
     AGENTS_MD_FRAGMENT,
@@ -199,8 +192,6 @@ const CONTEXTUAL_USER_FRAGMENTS: &[ModelVisibleFragmentSpec] = &[
     SKILL_FRAGMENT,
     USER_SHELL_COMMAND_FRAGMENT,
     TURN_ABORTED_FRAGMENT,
-    SUBAGENTS_FRAGMENT,
-    SUBAGENT_NOTIFICATION_FRAGMENT,
 ];
 
 pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
@@ -238,21 +229,6 @@ mod tests {
         assert!(is_contextual_user_fragment(&ContentItem::InputText {
             text: "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
                 .to_string(),
-        }));
-    }
-
-    #[test]
-    fn detects_subagent_notification_fragment_case_insensitively() {
-        assert!(
-            SUBAGENT_NOTIFICATION_FRAGMENT
-                .matches_text("<SUBAGENT_NOTIFICATION>{}</subagent_notification>")
-        );
-    }
-
-    #[test]
-    fn detects_subagents_fragment() {
-        assert!(is_contextual_user_fragment(&ContentItem::InputText {
-            text: "<subagents>\n  - agent-1: atlas\n</subagents>".to_string(),
         }));
     }
 

@@ -27,6 +27,7 @@ Use the developer envelope for developer-role guidance:
 - collaboration-mode developer guidance
 - model switch and realtime notices
 - personality guidance
+- subagent roster and subagent notifications
 - other developer-only instructions
 
 `DeveloperInstructions` remains the standard string-backed fragment for most developer text. It already participates in the shared fragment system.
@@ -36,10 +37,8 @@ Use the contextual-user envelope for contextual state or runtime markers that sh
 - AGENTS / user instructions
 - environment context
 - skill instructions
-- subagent roster
 - user shell command records
 - turn-aborted markers
-- subagent notifications
 
 Contextual-user fragments must have stable markers because history parsing uses those markers to distinguish contextual state from real user intent.
 

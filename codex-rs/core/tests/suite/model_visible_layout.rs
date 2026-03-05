@@ -54,26 +54,40 @@ fn agents_message_count(request: &ResponsesRequest) -> usize {
 }
 
 fn format_subagents_fragment_snapshot(subagents: &[&str]) -> String {
-    let mut content = vec![json!({
-        "type": "input_text",
-        "text": "<environment_context>\n  <cwd>/tmp/example</cwd>\n  <shell>bash</shell>\n</environment_context>",
-    })];
-    if !subagents.is_empty() {
+    let items = if subagents.is_empty() {
+        vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "<environment_context>\n  <cwd>/tmp/example</cwd>\n  <shell>bash</shell>\n</environment_context>",
+            }],
+        })]
+    } else {
         let lines = subagents
             .iter()
             .map(|line| format!("  {line}"))
             .collect::<Vec<_>>()
             .join("\n");
-        content.push(json!({
-            "type": "input_text",
-            "text": format!("<subagents>\n{lines}\n</subagents>"),
-        }));
-    }
-    let items = vec![json!({
-        "type": "message",
-        "role": "user",
-        "content": content,
-    })];
+        vec![
+            json!({
+                "type": "message",
+                "role": "developer",
+                "content": [{
+                    "type": "input_text",
+                    "text": format!("<subagents>\n{lines}\n</subagents>"),
+                }],
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<environment_context>\n  <cwd>/tmp/example</cwd>\n  <shell>bash</shell>\n</environment_context>",
+                }],
+            }),
+        ]
+    };
     context_snapshot::format_response_items_snapshot(items.as_slice(), &context_snapshot_options())
 }
 

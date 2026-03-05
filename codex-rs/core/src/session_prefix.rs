@@ -1,10 +1,13 @@
 use codex_protocol::protocol::AgentStatus;
 
-/// Helpers for model-visible session state markers that are stored in user-role
-/// messages but are not user intent.
+/// Helpers for model-visible subagent session state rendered in the developer
+/// envelope.
+use crate::contextual_user_message::DEVELOPER_FRAGMENT;
 use crate::contextual_user_message::ModelVisibleFragment;
-use crate::contextual_user_message::SUBAGENT_NOTIFICATION_FRAGMENT;
-use crate::contextual_user_message::SUBAGENTS_FRAGMENT;
+use crate::contextual_user_message::SUBAGENT_NOTIFICATION_CLOSE_TAG;
+use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
+use crate::contextual_user_message::SUBAGENTS_CLOSE_TAG;
+use crate::contextual_user_message::SUBAGENTS_OPEN_TAG;
 
 pub(crate) struct SubagentRosterContext {
     subagents: String,
@@ -22,7 +25,7 @@ impl SubagentRosterContext {
 
 impl ModelVisibleFragment for SubagentRosterContext {
     fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
-        SUBAGENTS_FRAGMENT
+        DEVELOPER_FRAGMENT
     }
 
     fn render_text(&self) -> String {
@@ -32,7 +35,7 @@ impl ModelVisibleFragment for SubagentRosterContext {
             .map(|line| format!("  {line}"))
             .collect::<Vec<_>>()
             .join("\n");
-        SUBAGENTS_FRAGMENT.wrap_body(lines)
+        format!("{SUBAGENTS_OPEN_TAG}\n{lines}\n{SUBAGENTS_CLOSE_TAG}")
     }
 }
 
@@ -43,7 +46,7 @@ struct SubagentNotification<'a> {
 
 impl ModelVisibleFragment for SubagentNotification<'_> {
     fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
-        SUBAGENT_NOTIFICATION_FRAGMENT
+        DEVELOPER_FRAGMENT
     }
 
     fn render_text(&self) -> String {
@@ -52,7 +55,9 @@ impl ModelVisibleFragment for SubagentNotification<'_> {
             "status": self.status,
         })
         .to_string();
-        SUBAGENT_NOTIFICATION_FRAGMENT.wrap_body(payload_json)
+        format!(
+            "{SUBAGENT_NOTIFICATION_OPEN_TAG}\n{payload_json}\n{SUBAGENT_NOTIFICATION_CLOSE_TAG}"
+        )
     }
 }
 

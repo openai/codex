@@ -456,7 +456,7 @@ impl AgentControl {
                 return;
             };
             parent_thread
-                .inject_user_message_without_turn(format_subagent_notification_message(
+                .inject_developer_message_without_turn(format_subagent_notification_message(
                     &child_thread_id.to_string(),
                     &status,
                 ))
@@ -587,7 +587,7 @@ mod tests {
             let ResponseItem::Message { role, content, .. } = item else {
                 return false;
             };
-            if role != "user" {
+            if role != "developer" {
                 return false;
             }
             content.iter().any(|content_item| match content_item {

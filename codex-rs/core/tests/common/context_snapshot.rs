@@ -345,7 +345,7 @@ mod tests {
     fn redacted_text_mode_normalizes_subagents_fragment() {
         let items = vec![json!({
             "type": "message",
-            "role": "user",
+            "role": "developer",
             "content": [{
                 "type": "input_text",
                 "text": "<subagents>\n  - agent-1: atlas\n  - agent-2\n</subagents>"
@@ -357,7 +357,7 @@ mod tests {
             &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::RedactedText),
         );
 
-        assert_eq!(rendered, "00:message/user:<SUBAGENTS:count=2>");
+        assert_eq!(rendered, "00:message/developer:<SUBAGENTS:count=2>");
     }
 
     #[test]
