@@ -2375,17 +2375,17 @@ pub struct SkillsListResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginListParams {
-    /// Additional roots to use when discovering repo-scoped marketplaces. Home-scoped
-    /// marketplaces are always considered.
+    /// Optional working directories used to discover repo marketplaces. When omitted,
+    /// only home-scoped marketplaces are considered.
     #[ts(optional = nullable)]
-    pub additional_roots: Option<Vec<AbsolutePathBuf>>,
+    pub cwds: Option<Vec<AbsolutePathBuf>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginListResponse {
-    pub data: Vec<PluginMarketplaceEntry>,
+    pub marketplaces: Vec<PluginMarketplaceEntry>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

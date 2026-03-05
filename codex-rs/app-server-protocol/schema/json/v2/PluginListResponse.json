@@ -68,7 +68,7 @@
     }
   },
   "properties": {
-    "data": {
+    "marketplaces": {
       "items": {
         "$ref": "#/definitions/PluginMarketplaceEntry"
       },
@@ -76,7 +76,7 @@
     }
   },
   "required": [
-    "data"
+    "marketplaces"
   ],
   "title": "PluginListResponse",
   "type": "object"

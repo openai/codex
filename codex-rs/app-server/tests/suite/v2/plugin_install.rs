@@ -39,7 +39,7 @@ async fn plugin_install_rejects_relative_marketplace_paths() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_install_returns_internal_error_for_missing_marketplace_file() -> Result<()> {
+async fn plugin_install_returns_invalid_request_for_missing_marketplace_file() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -59,7 +59,8 @@ async fn plugin_install_returns_internal_error_for_missing_marketplace_file() ->
     )
     .await??;
 
-    assert_eq!(err.error.code, -32603);
-    assert!(err.error.message.contains("failed to install plugin"));
+    assert_eq!(err.error.code, -32600);
+    assert!(err.error.message.contains("marketplace file"));
+    assert!(err.error.message.contains("does not exist"));
     Ok(())
 }

@@ -45,19 +45,14 @@ pub enum MarketplaceError {
         source: io::Error,
     },
 
+    #[error("marketplace file `{path}` does not exist")]
+    MarketplaceNotFound { path: PathBuf },
+
     #[error("invalid marketplace file `{path}`: {message}")]
     InvalidMarketplaceFile { path: PathBuf, message: String },
 
     #[error("plugin `{plugin_name}` was not found in marketplace `{marketplace_name}`")]
     PluginNotFound {
-        plugin_name: String,
-        marketplace_name: String,
-    },
-
-    #[error(
-        "multiple marketplace plugin entries matched `{plugin_name}` in marketplace `{marketplace_name}`"
-    )]
-    DuplicatePlugin {
         plugin_name: String,
         marketplace_name: String,
     },
@@ -80,37 +75,25 @@ pub fn resolve_marketplace_plugin(
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
     let marketplace = load_marketplace(marketplace_path.as_path())?;
     let marketplace_name = marketplace.name;
-    let mut matches = marketplace
+    let plugin = marketplace
         .plugins
         .into_iter()
-        .filter(|plugin| plugin.name == plugin_name)
-        .collect::<Vec<_>>();
+        .find(|plugin| plugin.name == plugin_name);
 
-    if matches.is_empty() {
+    let Some(plugin) = plugin else {
         return Err(MarketplaceError::PluginNotFound {
             plugin_name: plugin_name.to_string(),
             marketplace_name,
         });
-    }
+    };
 
-    if matches.len() > 1 {
-        return Err(MarketplaceError::DuplicatePlugin {
-            plugin_name: plugin_name.to_string(),
-            marketplace_name,
-        });
-    }
-
-    if let Some(plugin) = matches.pop() {
-        let plugin_id = PluginId::new(plugin.name, marketplace_name).map_err(|err| match err {
-            PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
-        })?;
-        return Ok(ResolvedMarketplacePlugin {
-            plugin_id,
-            source_path: resolve_plugin_source_path(marketplace_path.as_path(), plugin.source)?,
-        });
-    }
-
-    unreachable!("non-empty matches should have returned above")
+    let plugin_id = PluginId::new(plugin.name, marketplace_name).map_err(|err| match err {
+        PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
+    })?;
+    Ok(ResolvedMarketplacePlugin {
+        plugin_id,
+        source_path: resolve_plugin_source_path(marketplace_path.as_path(), plugin.source)?,
+    })
 }
 
 pub fn list_marketplaces(
@@ -182,8 +165,15 @@ fn discover_marketplace_paths_from_roots(
 }
 
 fn load_marketplace(path: &Path) -> Result<MarketplaceFile, MarketplaceError> {
-    let contents = fs::read_to_string(path)
-        .map_err(|err| MarketplaceError::io("failed to read marketplace file", err))?;
+    let contents = fs::read_to_string(path).map_err(|err| {
+        if err.kind() == io::ErrorKind::NotFound {
+            MarketplaceError::MarketplaceNotFound {
+                path: path.to_path_buf(),
+            }
+        } else {
+            MarketplaceError::io("failed to read marketplace file", err)
+        }
+    })?;
     serde_json::from_str(&contents).map_err(|err| MarketplaceError::InvalidMarketplaceFile {
         path: path.to_path_buf(),
         message: err.to_string(),
@@ -603,6 +593,48 @@ mod tests {
                 "invalid marketplace file `{}`: local plugin source path must start with `./`",
                 repo_root.join(".agents/plugins/marketplace.json").display()
             )
+        );
+    }
+
+    #[test]
+    fn resolve_marketplace_plugin_uses_first_duplicate_entry() {
+        let tmp = tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+        fs::write(
+            repo_root.join(".agents/plugins/marketplace.json"),
+            r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "local-plugin",
+      "source": {
+        "source": "local",
+        "path": "./first"
+      }
+    },
+    {
+      "name": "local-plugin",
+      "source": {
+        "source": "local",
+        "path": "./second"
+      }
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let resolved = resolve_marketplace_plugin(
+            &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+            "local-plugin",
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolved.source_path,
+            AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/first")).unwrap()
         );
     }
 }

@@ -8417,8 +8417,8 @@
     "PluginListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "additionalRoots": {
-          "description": "Additional roots to use when discovering repo-scoped marketplaces. Home-scoped marketplaces are always considered.",
+        "cwds": {
+          "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces are considered.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -8434,7 +8434,7 @@
     "PluginListResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "data": {
+        "marketplaces": {
           "items": {
             "$ref": "#/definitions/PluginMarketplaceEntry"
           },
@@ -8442,7 +8442,7 @@
         }
       },
       "required": [
-        "data"
+        "marketplaces"
       ],
       "title": "PluginListResponse",
       "type": "object"

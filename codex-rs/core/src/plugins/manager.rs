@@ -28,6 +28,7 @@ use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -279,31 +280,47 @@ impl PluginsManager {
         config: &Config,
         additional_roots: &[AbsolutePathBuf],
     ) -> Result<Vec<ConfiguredMarketplaceSummary>, MarketplaceError> {
-        let configured_plugins = configured_plugins_from_stack(&config.config_layer_stack);
+        let configured_plugins = self
+            .plugins_for_config(config)
+            .plugins()
+            .iter()
+            .map(|plugin| (plugin.config_name.clone(), plugin.enabled))
+            .collect::<HashMap<String, bool>>();
         let marketplaces = list_marketplaces(additional_roots)?;
+        let mut seen_plugin_keys = HashSet::new();
 
         Ok(marketplaces
             .into_iter()
-            .map(|marketplace| {
+            .filter_map(|marketplace| {
                 let marketplace_name = marketplace.name.clone();
-                ConfiguredMarketplaceSummary {
-                    name: marketplace.name,
-                    path: marketplace.path,
-                    plugins: marketplace
-                        .plugins
-                        .into_iter()
-                        .map(|plugin| ConfiguredMarketplacePluginSummary {
+                let plugins = marketplace
+                    .plugins
+                    .into_iter()
+                    .filter_map(|plugin| {
+                        let plugin_key = format!("{}@{marketplace_name}", plugin.name);
+                        if !seen_plugin_keys.insert(plugin_key.clone()) {
+                            return None;
+                        }
+
+                        Some(ConfiguredMarketplacePluginSummary {
                             // Enabled state is keyed by `<plugin>@<marketplace>`, so duplicate
-                            // marketplace files with the same declared name intentionally share
-                            // the same config toggle.
+                            // plugin entries from duplicate marketplace files intentionally
+                            // resolve to the first discovered source.
                             enabled: configured_plugins
-                                .get(&format!("{}@{marketplace_name}", plugin.name))
-                                .is_some_and(|config| config.enabled),
+                                .get(&plugin_key)
+                                .copied()
+                                .unwrap_or(false),
                             name: plugin.name,
                             source: plugin.source,
                         })
-                        .collect(),
-                }
+                    })
+                    .collect::<Vec<_>>();
+
+                (!plugins.is_empty()).then_some(ConfiguredMarketplaceSummary {
+                    name: marketplace.name,
+                    path: marketplace.path,
+                    plugins,
+                })
             })
             .collect())
     }
@@ -333,9 +350,9 @@ impl PluginInstallError {
         matches!(
             self,
             Self::Marketplace(
-                MarketplaceError::InvalidMarketplaceFile { .. }
+                MarketplaceError::MarketplaceNotFound { .. }
+                    | MarketplaceError::InvalidMarketplaceFile { .. }
                     | MarketplaceError::PluginNotFound { .. }
-                    | MarketplaceError::DuplicatePlugin { .. }
                     | MarketplaceError::InvalidPlugin(_)
             ) | Self::Store(PluginStoreError::Invalid(_))
         )
@@ -1236,5 +1253,124 @@ enabled = false
                 ],
             }
         );
+    }
+
+    #[tokio::test]
+    async fn list_marketplaces_for_config_uses_first_duplicate_plugin_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_a_root = tmp.path().join("repo-a");
+        let repo_b_root = tmp.path().join("repo-b");
+        fs::create_dir_all(repo_a_root.join(".git")).unwrap();
+        fs::create_dir_all(repo_b_root.join(".git")).unwrap();
+        fs::create_dir_all(repo_a_root.join(".agents/plugins")).unwrap();
+        fs::create_dir_all(repo_b_root.join(".agents/plugins")).unwrap();
+        fs::write(
+            repo_a_root.join(".agents/plugins/marketplace.json"),
+            r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "dup-plugin",
+      "source": {
+        "source": "local",
+        "path": "./from-a"
+      }
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            repo_b_root.join(".agents/plugins/marketplace.json"),
+            r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "dup-plugin",
+      "source": {
+        "source": "local",
+        "path": "./from-b"
+      }
+    },
+    {
+      "name": "b-only-plugin",
+      "source": {
+        "source": "local",
+        "path": "./from-b-only"
+      }
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+        write_file(
+            &tmp.path().join(CONFIG_TOML_FILE),
+            r#"[features]
+plugins = true
+
+[plugins."dup-plugin@debug"]
+enabled = true
+
+[plugins."b-only-plugin@debug"]
+enabled = false
+"#,
+        );
+
+        let config = ConfigBuilder::default()
+            .codex_home(tmp.path().to_path_buf())
+            .build()
+            .await
+            .expect("config should load");
+
+        let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+            .list_marketplaces_for_config(
+                &config,
+                &[
+                    AbsolutePathBuf::try_from(repo_a_root).unwrap(),
+                    AbsolutePathBuf::try_from(repo_b_root).unwrap(),
+                ],
+            )
+            .unwrap();
+
+        let repo_a_marketplace = marketplaces
+            .iter()
+            .find(|marketplace| {
+                marketplace.path == tmp.path().join("repo-a/.agents/plugins/marketplace.json")
+            })
+            .expect("repo-a marketplace should be listed");
+        assert_eq!(
+            repo_a_marketplace.plugins,
+            vec![ConfiguredMarketplacePluginSummary {
+                name: "dup-plugin".to_string(),
+                source: MarketplacePluginSourceSummary::Local {
+                    path: tmp.path().join("repo-a/.agents/plugins/from-a"),
+                },
+                enabled: true,
+            }]
+        );
+
+        let repo_b_marketplace = marketplaces
+            .iter()
+            .find(|marketplace| {
+                marketplace.path == tmp.path().join("repo-b/.agents/plugins/marketplace.json")
+            })
+            .expect("repo-b marketplace should be listed");
+        assert_eq!(
+            repo_b_marketplace.plugins,
+            vec![ConfiguredMarketplacePluginSummary {
+                name: "b-only-plugin".to_string(),
+                source: MarketplacePluginSourceSummary::Local {
+                    path: tmp.path().join("repo-b/.agents/plugins/from-b-only"),
+                },
+                enabled: false,
+            }]
+        );
+
+        let duplicate_plugin_count = marketplaces
+            .iter()
+            .flat_map(|marketplace| marketplace.plugins.iter())
+            .filter(|plugin| plugin.name == "dup-plugin")
+            .count();
+        assert_eq!(duplicate_plugin_count, 1);
     }
 }

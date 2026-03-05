@@ -5,7 +5,7 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 
 export type PluginListParams = { 
 /**
- * Additional roots to use when discovering repo-scoped marketplaces. Home-scoped
- * marketplaces are always considered.
+ * Optional working directories used to discover repo marketplaces. When omitted,
+ * only home-scoped marketplaces are considered.
  */
-additionalRoots?: Array<AbsolutePathBuf> | null, };
+cwds?: Array<AbsolutePathBuf> | null, };

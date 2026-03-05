@@ -4329,6 +4329,30 @@ impl CodexMessageProcessor {
         self.outgoing.send_error(request_id, error).await;
     }
 
+    async fn send_marketplace_error(
+        &self,
+        request_id: ConnectionRequestId,
+        err: MarketplaceError,
+        action: &str,
+    ) {
+        match err {
+            MarketplaceError::MarketplaceNotFound { .. } => {
+                self.send_invalid_request_error(request_id, err.to_string())
+                    .await;
+            }
+            MarketplaceError::Io { .. } => {
+                self.send_internal_error(request_id, format!("failed to {action}: {err}"))
+                    .await;
+            }
+            MarketplaceError::InvalidMarketplaceFile { .. }
+            | MarketplaceError::PluginNotFound { .. }
+            | MarketplaceError::InvalidPlugin(_) => {
+                self.send_invalid_request_error(request_id, err.to_string())
+                    .await;
+            }
+        }
+    }
+
     async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> ThreadShutdownResult {
         match thread.submit(Op::Shutdown).await {
             Ok(_) => {
@@ -4936,8 +4960,9 @@ impl CodexMessageProcessor {
     }
 
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
-        let additional_roots = params.additional_roots.unwrap_or_default();
         let plugins_manager = self.thread_manager.plugins_manager();
+        let roots = params.cwds.unwrap_or_default();
+
         let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(err) => {
@@ -4947,8 +4972,7 @@ impl CodexMessageProcessor {
         };
 
         let data = match tokio::task::spawn_blocking(move || {
-            let marketplaces =
-                plugins_manager.list_marketplaces_for_config(&config, &additional_roots)?;
+            let marketplaces = plugins_manager.list_marketplaces_for_config(&config, &roots)?;
             Ok::<Vec<PluginMarketplaceEntry>, MarketplaceError>(
                 marketplaces
                     .into_iter()
@@ -4976,22 +5000,8 @@ impl CodexMessageProcessor {
         {
             Ok(Ok(data)) => data,
             Ok(Err(err)) => {
-                match err {
-                    MarketplaceError::Io { .. } => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to list marketplace plugins: {err}"),
-                        )
-                        .await;
-                    }
-                    MarketplaceError::InvalidMarketplaceFile { .. }
-                    | MarketplaceError::PluginNotFound { .. }
-                    | MarketplaceError::DuplicatePlugin { .. }
-                    | MarketplaceError::InvalidPlugin(_) => {
-                        self.send_invalid_request_error(request_id, err.to_string())
-                            .await;
-                    }
-                }
+                self.send_marketplace_error(request_id, err, "list marketplace plugins")
+                    .await;
                 return;
             }
             Err(err) => {
@@ -5005,7 +5015,7 @@ impl CodexMessageProcessor {
         };
 
         self.outgoing
-            .send_response(request_id, PluginListResponse { data })
+            .send_response(request_id, PluginListResponse { marketplaces: data })
             .await;
     }
 
@@ -5145,6 +5155,10 @@ impl CodexMessageProcessor {
                 }
 
                 match err {
+                    CorePluginInstallError::Marketplace(err) => {
+                        self.send_marketplace_error(request_id, err, "install plugin")
+                            .await;
+                    }
                     CorePluginInstallError::Config(err) => {
                         self.send_internal_error(
                             request_id,
@@ -5159,8 +5173,7 @@ impl CodexMessageProcessor {
                         )
                         .await;
                     }
-                    err @ (CorePluginInstallError::Marketplace(_)
-                    | CorePluginInstallError::Store(_)) => {
+                    CorePluginInstallError::Store(err) => {
                         self.send_internal_error(
                             request_id,
                             format!("failed to install plugin: {err}"),
