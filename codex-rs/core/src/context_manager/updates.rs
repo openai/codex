@@ -19,7 +19,7 @@ use codex_protocol::protocol::TurnContextItem;
 use std::marker::PhantomData;
 
 struct PermissionsUpdateFragment {
-    instructions: DeveloperInstructions,
+    text: String,
 }
 
 impl ModelVisibleContextFragment for PermissionsUpdateFragment {
@@ -30,7 +30,7 @@ impl ModelVisibleContextFragment for PermissionsUpdateFragment {
     }
 
     fn render_text(&self) -> String {
-        self.instructions.clone().into_text()
+        self.text.clone()
     }
 }
 
@@ -47,19 +47,20 @@ impl TurnContextDiffFragment for PermissionsUpdateFragment {
         }
 
         Some(Self {
-            instructions: DeveloperInstructions::from_policy(
+            text: DeveloperInstructions::from_policy(
                 turn_context.sandbox_policy.get(),
                 turn_context.approval_policy.value(),
                 context.exec_policy,
                 &turn_context.cwd,
                 turn_context.features.enabled(Feature::RequestPermissions),
-            ),
+            )
+            .into_text(),
         })
     }
 }
 
 struct CollaborationModeUpdateFragment {
-    instructions: DeveloperInstructions,
+    text: String,
 }
 
 impl ModelVisibleContextFragment for CollaborationModeUpdateFragment {
@@ -70,7 +71,7 @@ impl ModelVisibleContextFragment for CollaborationModeUpdateFragment {
     }
 
     fn render_text(&self) -> String {
-        self.instructions.clone().into_text()
+        self.text.clone()
     }
 }
 
@@ -84,9 +85,10 @@ impl TurnContextDiffFragment for CollaborationModeUpdateFragment {
             // If the next mode has empty developer instructions, this returns None and we emit no
             // update, so prior collaboration instructions remain in the prompt history.
             Some(Self {
-                instructions: DeveloperInstructions::from_collaboration_mode(
+                text: DeveloperInstructions::from_collaboration_mode(
                     &turn_context.collaboration_mode,
-                )?,
+                )?
+                .into_text(),
             })
         } else {
             None
@@ -95,7 +97,7 @@ impl TurnContextDiffFragment for CollaborationModeUpdateFragment {
 }
 
 pub(crate) struct RealtimeUpdateFragment {
-    instructions: DeveloperInstructions,
+    text: String,
 }
 
 impl ModelVisibleContextFragment for RealtimeUpdateFragment {
@@ -106,7 +108,7 @@ impl ModelVisibleContextFragment for RealtimeUpdateFragment {
     }
 
     fn render_text(&self) -> String {
-        self.instructions.clone().into_text()
+        self.text.clone()
     }
 }
 
@@ -117,7 +119,7 @@ impl TurnContextDiffFragment for RealtimeUpdateFragment {
     ) -> Option<Self> {
         if turn_context.realtime_active {
             return Some(Self {
-                instructions: DeveloperInstructions::realtime_start_message(),
+                text: DeveloperInstructions::realtime_start_message().into_text(),
             });
         }
 
@@ -126,7 +128,7 @@ impl TurnContextDiffFragment for RealtimeUpdateFragment {
             .and_then(|settings| settings.realtime_active)
             .filter(|realtime_active| *realtime_active)
             .map(|_| Self {
-                instructions: DeveloperInstructions::realtime_end_message("inactive"),
+                text: DeveloperInstructions::realtime_end_message("inactive").into_text(),
             })
     }
 
@@ -137,10 +139,10 @@ impl TurnContextDiffFragment for RealtimeUpdateFragment {
     ) -> Option<Self> {
         match (previous.realtime_active, turn_context.realtime_active) {
             (Some(true), false) => Some(Self {
-                instructions: DeveloperInstructions::realtime_end_message("inactive"),
+                text: DeveloperInstructions::realtime_end_message("inactive").into_text(),
             }),
             (Some(false), true) => Some(Self {
-                instructions: DeveloperInstructions::realtime_start_message(),
+                text: DeveloperInstructions::realtime_start_message().into_text(),
             }),
             (Some(true), true) | (Some(false), false) | (None, false) | (None, true) => None,
         }
@@ -148,7 +150,7 @@ impl TurnContextDiffFragment for RealtimeUpdateFragment {
 }
 
 struct PersonalityUpdateFragment {
-    instructions: DeveloperInstructions,
+    text: String,
 }
 
 impl ModelVisibleContextFragment for PersonalityUpdateFragment {
@@ -159,7 +161,7 @@ impl ModelVisibleContextFragment for PersonalityUpdateFragment {
     }
 
     fn render_text(&self) -> String {
-        self.instructions.clone().into_text()
+        self.text.clone()
     }
 }
 
@@ -182,7 +184,8 @@ impl TurnContextDiffFragment for PersonalityUpdateFragment {
             let model_info = &turn_context.model_info;
             let personality_message = personality_message_for(model_info, personality)?;
             Some(Self {
-                instructions: DeveloperInstructions::personality_spec_message(personality_message),
+                text: DeveloperInstructions::personality_spec_message(personality_message)
+                    .into_text(),
             })
         } else {
             None
@@ -191,7 +194,7 @@ impl TurnContextDiffFragment for PersonalityUpdateFragment {
 }
 
 pub(crate) struct ModelInstructionsUpdateFragment {
-    instructions: DeveloperInstructions,
+    text: String,
 }
 
 impl ModelVisibleContextFragment for ModelInstructionsUpdateFragment {
@@ -202,7 +205,7 @@ impl ModelVisibleContextFragment for ModelInstructionsUpdateFragment {
     }
 
     fn render_text(&self) -> String {
-        self.instructions.clone().into_text()
+        self.text.clone()
     }
 }
 
@@ -224,7 +227,7 @@ impl TurnContextDiffFragment for ModelInstructionsUpdateFragment {
         }
 
         Some(Self {
-            instructions: DeveloperInstructions::model_switch_message(model_instructions),
+            text: DeveloperInstructions::model_switch_message(model_instructions).into_text(),
         })
     }
 
@@ -245,7 +248,7 @@ impl TurnContextDiffFragment for ModelInstructionsUpdateFragment {
         }
 
         Some(Self {
-            instructions: DeveloperInstructions::model_switch_message(model_instructions),
+            text: DeveloperInstructions::model_switch_message(model_instructions).into_text(),
         })
     }
 }
@@ -286,19 +289,19 @@ fn build_permissions_update_item(
     previous: Option<&TurnContextItem>,
     turn_context: &TurnContext,
     context: &TurnContextDiffParams<'_>,
-) -> Option<DeveloperInstructions> {
+) -> Option<String> {
     previous
         .and_then(|previous| {
             PermissionsUpdateFragment::diff_from_turn_context_item(previous, turn_context, context)
         })
-        .map(|fragment| fragment.instructions)
+        .map(|fragment| fragment.text)
 }
 
 fn build_collaboration_mode_update_item(
     previous: Option<&TurnContextItem>,
     turn_context: &TurnContext,
     context: &TurnContextDiffParams<'_>,
-) -> Option<DeveloperInstructions> {
+) -> Option<String> {
     previous
         .and_then(|previous| {
             CollaborationModeUpdateFragment::diff_from_turn_context_item(
@@ -307,7 +310,7 @@ fn build_collaboration_mode_update_item(
                 context,
             )
         })
-        .map(|fragment| fragment.instructions)
+        .map(|fragment| fragment.text)
 }
 
 pub(crate) fn build_realtime_update_item(
@@ -333,12 +336,12 @@ fn build_personality_update_item(
     previous: Option<&TurnContextItem>,
     turn_context: &TurnContext,
     context: &TurnContextDiffParams<'_>,
-) -> Option<DeveloperInstructions> {
+) -> Option<String> {
     previous
         .and_then(|previous| {
             PersonalityUpdateFragment::diff_from_turn_context_item(previous, turn_context, context)
         })
-        .map(|fragment| fragment.instructions)
+        .map(|fragment| fragment.text)
 }
 
 struct ModelVisibleContextEnvelopeBuilder<R: ModelVisibleContextRole> {
@@ -433,7 +436,7 @@ pub(crate) fn build_settings_update_items(
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
         ModelInstructionsUpdateFragment::from_turn_context(next, context)
-            .map(|fragment| fragment.instructions),
+            .map(|fragment| fragment.text),
         build_permissions_update_item(previous, next, context),
         build_collaboration_mode_update_item(previous, next, context),
         previous
@@ -441,13 +444,16 @@ pub(crate) fn build_settings_update_items(
                 RealtimeUpdateFragment::diff_from_turn_context_item(previous, next, context)
             })
             .or_else(|| RealtimeUpdateFragment::from_turn_context(next, context))
-            .map(|fragment| fragment.instructions),
+            .map(|fragment| fragment.text),
         build_personality_update_item(previous, next, context),
     ]
     .into_iter()
     .flatten()
     {
-        developer_envelope.push(fragment);
+        developer_envelope
+            .0
+            .content
+            .push(ContentItem::InputText { text: fragment });
     }
     let mut contextual_user_envelope = ContextualUserEnvelopeBuilder::default();
     for fragment in [
