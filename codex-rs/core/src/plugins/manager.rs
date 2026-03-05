@@ -30,6 +30,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::RwLock;
+use tracing::info;
 use tracing::warn;
 
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
@@ -198,20 +199,34 @@ impl PluginsManager {
         force_reload: bool,
     ) -> PluginLoadOutcome {
         if !plugins_feature_enabled_from_stack(config_layer_stack) {
-            let mut cache = match self.cache_by_cwd.write() {
-                Ok(cache) => cache,
-                Err(err) => err.into_inner(),
-            };
-            cache.insert(cwd.to_path_buf(), PluginLoadOutcome::default());
+            info!(cwd = ?cwd, "plugins disabled in config layer stack");
             return PluginLoadOutcome::default();
         }
 
         if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+            info!(
+                cwd = ?cwd,
+                plugin_display_names = ?outcome
+                    .capability_summaries()
+                    .iter()
+                    .map(|plugin| plugin.display_name.as_str())
+                    .collect::<Vec<_>>(),
+                "plugins cache hit"
+            );
             return outcome;
         }
 
         let outcome = load_plugins_from_layer_stack(config_layer_stack, &self.store);
         log_plugin_load_errors(&outcome);
+        info!(
+            cwd = ?cwd,
+            plugin_display_names = ?outcome
+                .capability_summaries()
+                .iter()
+                .map(|plugin| plugin.display_name.as_str())
+                .collect::<Vec<_>>(),
+            "plugins loaded from config layer stack"
+        );
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),

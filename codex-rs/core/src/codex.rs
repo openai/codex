@@ -2182,11 +2182,12 @@ impl Session {
                 &per_turn_config,
             )
             .await;
+        // Reuse the session's resolved config for turn-time skills so plugin-backed
+        // skill/plugin availability stays aligned with the session-start view.
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_cwd(&session_configuration.cwd, false)
-                .await,
+                .skills_for_config(&per_turn_config),
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -4938,6 +4939,25 @@ pub(crate) async fn run_turn(
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&input, loaded_plugins.capability_summaries());
+    info!(
+        plugin_input_texts = ?input
+            .iter()
+            .filter_map(|item| match item {
+                UserInput::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        available_plugins = ?loaded_plugins
+            .capability_summaries()
+            .iter()
+            .map(|plugin| plugin.display_name.as_str())
+            .collect::<Vec<_>>(),
+        mentioned_plugins = ?mentioned_plugins
+            .iter()
+            .map(|plugin| plugin.display_name.as_str())
+            .collect::<Vec<_>>(),
+        "resolved explicit plugin mentions for turn"
+    );
     let mcp_tools =
         if turn_context.config.features.enabled(Feature::Apps) || !mentioned_plugins.is_empty() {
             // Plugin mentions need raw MCP/app inventory even when app tools
