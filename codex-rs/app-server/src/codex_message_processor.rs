@@ -2729,7 +2729,8 @@ impl CodexMessageProcessor {
             read_summary_from_state_db_by_thread_id(&self.config, thread_uuid).await
         };
         let mut rollout_path = db_summary.as_ref().map(|summary| summary.path.clone());
-        if rollout_path.is_none() || include_turns {
+        let should_lookup_rollout = rollout_path.is_none() && loaded_thread.is_none();
+        if should_lookup_rollout {
             rollout_path =
                 match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
                     .await
