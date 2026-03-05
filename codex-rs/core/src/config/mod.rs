@@ -4831,7 +4831,9 @@ model = "gpt-5.1-codex"
                     "researcher".to_string(),
                     AgentRoleToml {
                         description: Some("Research role".to_string()),
+                        model: None,
                         config_file: Some(AbsolutePathBuf::from_absolute_path(missing_path)?),
+                        spawn_mode: None,
                         nickname_candidates: None,
                     },
                 )]),
@@ -4910,7 +4912,9 @@ nickname_candidates = ["Hypatia", "Noether"]
                     "researcher".to_string(),
                     AgentRoleToml {
                         description: Some("Research role".to_string()),
+                        model: None,
                         config_file: None,
+                        spawn_mode: None,
                         nickname_candidates: Some(vec![
                             "  Hypatia  ".to_string(),
                             "Noether".to_string(),
@@ -4951,7 +4955,9 @@ nickname_candidates = ["Hypatia", "Noether"]
                     "researcher".to_string(),
                     AgentRoleToml {
                         description: Some("Research role".to_string()),
+                        model: None,
                         config_file: None,
+                        spawn_mode: None,
                         nickname_candidates: Some(Vec::new()),
                     },
                 )]),
@@ -4986,7 +4992,9 @@ nickname_candidates = ["Hypatia", "Noether"]
                     "researcher".to_string(),
                     AgentRoleToml {
                         description: Some("Research role".to_string()),
+                        model: None,
                         config_file: None,
+                        spawn_mode: None,
                         nickname_candidates: Some(vec![
                             "Hypatia".to_string(),
                             " Hypatia ".to_string(),
@@ -5024,7 +5032,9 @@ nickname_candidates = ["Hypatia", "Noether"]
                     "researcher".to_string(),
                     AgentRoleToml {
                         description: Some("Research role".to_string()),
+                        model: None,
                         config_file: None,
+                        spawn_mode: None,
                         nickname_candidates: Some(vec!["Agent <One>".to_string()]),
                     },
                 )]),

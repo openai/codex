@@ -185,9 +185,22 @@ impl WatchdogManager {
             Ok(thread) => thread.agent_status().await,
             Err(_) => AgentStatus::NotFound,
         };
+        let control_for_spawn = AgentControl::from_parts(
+            self.manager.clone(),
+            Arc::clone(&self.guards),
+            Arc::clone(self),
+        );
         if is_watchdog_terminated(&owner_status) {
-            self.remove_if_generation(target_thread_id, generation)
-                .await;
+            match control_for_spawn.shutdown_agent(target_thread_id).await {
+                Ok(_) | Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) => {}
+                Err(err) => {
+                    warn!(
+                        owner_thread_id = %snapshot.owner_thread_id,
+                        target_thread_id = %target_thread_id,
+                        "watchdog owner termination cleanup failed: {err}"
+                    );
+                }
+            }
             return;
         }
         let force_due = self
@@ -217,12 +230,6 @@ impl WatchdogManager {
         if now.duration_since(owner_idle_since) < snapshot.interval {
             return;
         }
-
-        let control_for_spawn = AgentControl::from_parts(
-            self.manager.clone(),
-            Arc::clone(&self.guards),
-            Arc::clone(self),
-        );
 
         if let Some(helper_id) = snapshot.active_helper_id {
             let helper_status = get_status(manager_state, helper_id).await;
@@ -389,16 +396,6 @@ impl WatchdogManager {
         entry.active_helper_id = active_helper_id;
     }
 
-    async fn remove_if_generation(&self, target_thread_id: ThreadId, generation: i64) {
-        let mut registrations = self.registrations.lock().await;
-        let Some(entry) = registrations.get(&target_thread_id) else {
-            return;
-        };
-        if entry.generation == generation {
-            registrations.remove(&target_thread_id);
-        }
-    }
-
     pub(crate) async fn unregister(&self, target_thread_id: ThreadId) -> Option<RemovedWatchdog> {
         let mut registrations = self.registrations.lock().await;
         registrations
@@ -465,20 +462,6 @@ impl WatchdogManager {
         entry.owner_idle_since = Some(due_at);
         entry.owner_was_running = false;
         entry.active_helper_id = Some(helper_thread_id);
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) async fn force_due_for_tests(&self, target_thread_id: ThreadId) {
-        let mut registrations = self.registrations.lock().await;
-        let Some(entry) = registrations.get_mut(&target_thread_id) else {
-            return;
-        };
-        let due_at = Instant::now() - entry.interval;
-        entry.last_trigger = due_at;
-        entry.owner_idle_since = Some(due_at);
-        entry.owner_was_running = false;
-        entry.force_due_once = true;
     }
 }
 

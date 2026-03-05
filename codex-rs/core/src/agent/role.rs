@@ -834,7 +834,9 @@ writable_roots = ["./sandbox-root"]
             "custom".to_string(),
             AgentRoleConfig {
                 description: None,
+                model: None,
                 config_file: Some(role_path),
+                spawn_mode: None,
                 nickname_candidates: None,
             },
         );
@@ -875,7 +877,9 @@ enabled = false
             "custom".to_string(),
             AgentRoleConfig {
                 description: None,
+                model: None,
                 config_file: Some(role_path),
+                spawn_mode: None,
                 nickname_candidates: None,
             },
         );

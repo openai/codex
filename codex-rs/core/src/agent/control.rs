@@ -764,11 +764,6 @@ impl AgentControl {
     }
 
     #[cfg(test)]
-    pub(crate) async fn force_watchdog_due_for_tests(&self, target_thread_id: ThreadId) {
-        self.watchdogs.force_due_for_tests(target_thread_id).await;
-    }
-
-    #[cfg(test)]
     pub(crate) async fn set_watchdog_active_helper_for_tests(
         &self,
         target_thread_id: ThreadId,
@@ -1068,6 +1063,15 @@ mod tests {
             text: text.to_string(),
             text_elements: Vec::new(),
         }]
+    }
+
+    fn thread_spawn_source(parent_thread_id: ThreadId) -> SessionSource {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_nickname: None,
+            agent_role: None,
+        })
     }
 
     struct AgentControlHarness {
@@ -1934,7 +1938,9 @@ mod tests {
             "researcher".to_string(),
             AgentRoleConfig {
                 description: Some("Research role".to_string()),
+                model: None,
                 config_file: None,
+                spawn_mode: None,
                 nickname_candidates: Some(vec!["Atlas".to_string()]),
             },
         );
@@ -2101,5 +2107,222 @@ mod tests {
             .shutdown_agent(resumed_thread_id)
             .await
             .expect("resumed child shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn run_watchdogs_once_cleans_up_handle_and_helper_after_owner_shutdown() {
+        let (home, config) = test_config_with_cli_overrides(vec![(
+            "agents.max_threads".to_string(),
+            TomlValue::Integer(2),
+        )])
+        .await;
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        );
+        let control = manager.agent_control();
+        let harness = AgentControlHarness {
+            _home: home,
+            config,
+            manager,
+            control,
+        };
+        let (owner_thread_id, owner_thread) = harness.start_thread().await;
+        let watchdog_handle_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog handle should spawn");
+        let helper_thread_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog helper should spawn");
+        let removed = harness
+            .control
+            .register_watchdog(WatchdogRegistration {
+                owner_thread_id,
+                target_thread_id: watchdog_handle_id,
+                child_depth: 1,
+                interval_s: 1,
+                prompt: "check in".to_string(),
+                config: harness.config.clone(),
+            })
+            .await
+            .expect("watchdog registration should succeed");
+        assert_eq!(removed, Vec::<RemovedWatchdog>::new());
+        harness
+            .control
+            .set_watchdog_active_helper_for_tests(watchdog_handle_id, helper_thread_id)
+            .await;
+        assert_eq!(
+            harness
+                .control
+                .watchdog_owner_for_active_helper(helper_thread_id)
+                .await,
+            Some(owner_thread_id)
+        );
+        let tracked_before = harness.control.guards.tracked_thread_ids();
+        assert_eq!(tracked_before.contains(&watchdog_handle_id), true);
+        assert_eq!(tracked_before.contains(&helper_thread_id), true);
+
+        let mut owner_status_rx = harness
+            .control
+            .subscribe_status(owner_thread_id)
+            .await
+            .expect("owner status subscription should succeed");
+        let _ = owner_thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("owner shutdown should submit");
+        timeout(Duration::from_secs(2), async {
+            loop {
+                if matches!(owner_status_rx.borrow().clone(), AgentStatus::Shutdown) {
+                    break;
+                }
+                owner_status_rx
+                    .changed()
+                    .await
+                    .expect("owner status should reach shutdown");
+            }
+        })
+        .await
+        .expect("owner should reach shutdown");
+
+        harness.control.run_watchdogs_once_for_tests().await;
+
+        assert_eq!(
+            harness.control.get_status(watchdog_handle_id).await,
+            AgentStatus::NotFound
+        );
+        assert_eq!(
+            harness.control.get_status(helper_thread_id).await,
+            AgentStatus::NotFound
+        );
+        assert_eq!(
+            harness
+                .control
+                .watchdog_owner_for_active_helper(helper_thread_id)
+                .await,
+            None
+        );
+        let tracked_after = harness.control.guards.tracked_thread_ids();
+        assert_eq!(tracked_after.contains(&watchdog_handle_id), false);
+        assert_eq!(tracked_after.contains(&helper_thread_id), false);
+
+        let replacement_thread_id = harness
+            .control
+            .spawn_agent_handle(harness.config.clone(), None)
+            .await
+            .expect("cleanup should release watchdog helper slots");
+        let ops = harness.manager.captured_ops();
+        assert_eq!(
+            ops.iter()
+                .any(|(thread_id, op)| *thread_id == watchdog_handle_id
+                    && matches!(op, Op::Shutdown)),
+            true
+        );
+        assert_eq!(
+            ops.iter()
+                .any(|(thread_id, op)| *thread_id == helper_thread_id && matches!(op, Op::Shutdown)),
+            true
+        );
+
+        let _ = harness
+            .control
+            .shutdown_agent(replacement_thread_id)
+            .await
+            .expect("replacement thread shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn compact_parent_for_watchdog_helper_submits_when_only_stale_marker_remains() {
+        let harness = AgentControlHarness::new().await;
+        let (owner_thread_id, _owner_thread) = harness.start_thread().await;
+        let watchdog_handle_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog handle should spawn");
+        let helper_thread_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog helper should spawn");
+        let removed = harness
+            .control
+            .register_watchdog(WatchdogRegistration {
+                owner_thread_id,
+                target_thread_id: watchdog_handle_id,
+                child_depth: 1,
+                interval_s: 1,
+                prompt: "compact if needed".to_string(),
+                config: harness.config.clone(),
+            })
+            .await
+            .expect("watchdog registration should succeed");
+        assert_eq!(removed, Vec::<RemovedWatchdog>::new());
+        harness
+            .control
+            .set_watchdog_active_helper_for_tests(watchdog_handle_id, helper_thread_id)
+            .await;
+        {
+            let mut compacting = harness
+                .control
+                .watchdog_compactions_in_progress
+                .lock()
+                .await;
+            compacting.insert(owner_thread_id);
+        }
+
+        let result = harness
+            .control
+            .compact_parent_for_watchdog_helper(helper_thread_id)
+            .await
+            .expect("stale compact marker should not block submission");
+        let submission_id = match result {
+            WatchdogParentCompactionResult::Submitted {
+                parent_thread_id,
+                submission_id,
+            } => {
+                assert_eq!(parent_thread_id, owner_thread_id);
+                submission_id
+            }
+            other => panic!("expected submitted compaction result, got {other:?}"),
+        };
+        assert_eq!(submission_id.is_empty(), false);
+        assert_eq!(
+            harness
+                .manager
+                .captured_ops()
+                .iter()
+                .filter(|(thread_id, op)| *thread_id == owner_thread_id && matches!(op, Op::Compact))
+                .count(),
+            1
+        );
+
+        let _ = harness
+            .control
+            .shutdown_agent(watchdog_handle_id)
+            .await
+            .expect("watchdog handle shutdown should submit");
+        let _ = harness
+            .control
+            .shutdown_agent(owner_thread_id)
+            .await
+            .expect("owner shutdown should submit");
     }
 }
