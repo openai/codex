@@ -1,6 +1,6 @@
 {
   "models": [
-    {
+    { 
       "prefer_websockets": false,
       "support_verbosity": true,
       "default_verbosity": "low",
