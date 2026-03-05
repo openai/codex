@@ -23,6 +23,8 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -32,19 +34,27 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource as RolloutSessionSource;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
+use codex_state::StateRuntime;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::fs::FileTimes;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
@@ -166,6 +176,198 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
         }
         other => panic!("expected user message item, got {other:?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let config_toml = codex_home.path().join("config.toml");
+    std::fs::write(
+        &config_toml,
+        format!(
+            r#"
+model = "gpt-5.2-codex"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[features]
+personality = true
+sqlite = true
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#,
+            server.uri()
+        ),
+    )?;
+
+    let repo_path = codex_home.path().join("repo");
+    std::fs::create_dir_all(&repo_path)?;
+    assert!(
+        Command::new("git")
+            .args(["init"])
+            .arg(&repo_path)
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["checkout", "-B", "master"])
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["config", "user.name", "Test User"])
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["config", "user.email", "test@example.com"])
+            .status()?
+            .success()
+    );
+    std::fs::write(repo_path.join("README.md"), "test\n")?;
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["add", "README.md"])
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["commit", "-m", "initial"])
+            .status()?
+            .success()
+    );
+    let head_branch = Command::new("git")
+        .current_dir(&repo_path)
+        .args(["branch", "--show-current"])
+        .output()?;
+    assert_eq!(
+        String::from_utf8(head_branch.stdout)?.trim(),
+        "master",
+        "test repo should stay on master to verify resume ignores live HEAD"
+    );
+
+    let thread_id = Uuid::new_v4().to_string();
+    let conversation_id = ThreadId::from_string(&thread_id)?;
+    let rollout_path = rollout_path(codex_home.path(), "2025-01-05T12-00-00", &thread_id);
+    let rollout_dir = rollout_path.parent().expect("rollout parent directory");
+    std::fs::create_dir_all(rollout_dir)?;
+    let session_meta = SessionMeta {
+        id: conversation_id,
+        forked_from_id: None,
+        timestamp: "2025-01-05T12:00:00Z".to_string(),
+        cwd: repo_path.clone(),
+        originator: "codex".to_string(),
+        cli_version: "0.0.0".to_string(),
+        source: RolloutSessionSource::Cli,
+        agent_nickname: None,
+        agent_role: None,
+        model_provider: Some("mock_provider".to_string()),
+        base_instructions: None,
+        dynamic_tools: None,
+        memory_mode: None,
+    };
+    std::fs::write(
+        &rollout_path,
+        [
+            json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "session_meta",
+                "payload": serde_json::to_value(SessionMetaLine {
+                    meta: session_meta,
+                    git: None,
+                })?,
+            })
+            .to_string(),
+            json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Saved user message"}]
+                }
+            })
+            .to_string(),
+            json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "Saved user message",
+                    "kind": "plain"
+                }
+            })
+            .to_string(),
+        ]
+        .join("\n")
+            + "\n",
+    )?;
+    let state_db = StateRuntime::init(
+        codex_home.path().to_path_buf(),
+        "mock_provider".into(),
+        None,
+    )
+    .await?;
+    state_db.mark_backfill_complete(None).await?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread_id.clone(),
+            git_info: Some(ThreadMetadataGitInfoUpdateParams {
+                sha: None,
+                branch: Some(Some("feature/pr-branch".to_string())),
+                origin_url: None,
+            }),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(
+        thread
+            .git_info
+            .as_ref()
+            .and_then(|git| git.branch.as_deref()),
+        Some("feature/pr-branch")
+    );
 
     Ok(())
 }
