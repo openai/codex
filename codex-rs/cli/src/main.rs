@@ -578,7 +578,11 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
             handle_app_exit(exit_info)?;
         }
-        Some(Subcommand::Exec(mut exec_cli)) => {
+        Some(Subcommand::Exec(exec_cli)) => {
+            let mut exec_cli = match exec_cli.validate() {
+                Ok(exec_cli) => exec_cli,
+                Err(err) => err.exit(),
+            };
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -1224,9 +1228,16 @@ mod tests {
 
     #[test]
     fn exec_fork_conflicts_with_resume_subcommand() {
-        let parse_result =
-            MultitoolCli::try_parse_from(["codex", "exec", "--fork", "session-123", "resume"]);
-        assert!(parse_result.is_err());
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "exec", "--fork", "session-123", "resume"])
+                .expect("parse should succeed");
+
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+
+        let validate_result = exec.validate();
+        assert!(validate_result.is_err());
     }
 
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {
