@@ -9784,7 +9784,7 @@ mod tests {
         let injected_item = ResponseInputItem::Message {
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
-                text: "submission-loop collab inbox".to_string(),
+                text: "submission-loop agent inbox".to_string(),
             }],
         };
         tx_sub

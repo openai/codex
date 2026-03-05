@@ -92,6 +92,8 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol::AGENT_INBOX_KIND;
+use codex_protocol::protocol::AgentInboxPayload;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AgentReasoningDeltaEvent;
@@ -100,9 +102,7 @@ use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
-use codex_protocol::protocol::COLLAB_INBOX_KIND;
 use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::CollabInboxPayload;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::ErrorEvent;
@@ -366,13 +366,13 @@ fn is_unified_exec_source(source: ExecCommandSource) -> bool {
     )
 }
 
-fn collab_inbox_message_from_item(item: &ResponseItem) -> Option<(String, String)> {
+fn agent_inbox_message_from_item(item: &ResponseItem) -> Option<(String, String)> {
     let ResponseItem::FunctionCallOutput { output, .. } = item else {
         return None;
     };
     let text = output.body.to_text()?;
-    let payload: CollabInboxPayload = serde_json::from_str(&text).ok()?;
-    if !payload.injected || payload.kind != COLLAB_INBOX_KIND {
+    let payload: AgentInboxPayload = serde_json::from_str(&text).ok()?;
+    if !payload.injected || payload.kind != AGENT_INBOX_KIND {
         return None;
     }
     Some((payload.sender_thread_id.to_string(), payload.message))
@@ -2475,7 +2475,7 @@ impl ChatWidget {
     }
 
     fn on_raw_response_item(&mut self, event: RawResponseItemEvent) {
-        if let Some((sender, message)) = collab_inbox_message_from_item(&event.item) {
+        if let Some((sender, message)) = agent_inbox_message_from_item(&event.item) {
             self.add_to_history(history_cell::new_info_event(
                 format!("Agent message: {message}"),
                 Some(format!("from {sender}")),

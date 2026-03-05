@@ -289,7 +289,7 @@ mod send_input {
         let result = session
             .services
             .agent_control
-            .send_collab_message_or_input(
+            .send_agent_message_or_input(
                 receiver_thread_id,
                 session.conversation_id,
                 args.message,

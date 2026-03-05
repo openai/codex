@@ -57,6 +57,7 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AgentInboxPayload;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AgentReasoningDeltaEvent;
@@ -64,7 +65,6 @@ use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::CollabInboxPayload;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -1554,16 +1554,16 @@ async fn thread_snapshot_replay_preserves_agent_message_during_review_mode() {
 }
 
 #[tokio::test]
-async fn raw_collab_inbox_response_item_renders_info_cell() {
+async fn raw_agent_inbox_response_item_renders_info_cell() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
     let sender_thread_id = ThreadId::new();
-    let payload = CollabInboxPayload::new(sender_thread_id, "watchdog update".to_string());
+    let payload = AgentInboxPayload::new(sender_thread_id, "watchdog update".to_string());
 
     chat.handle_codex_event(Event {
-        id: "collab-inbox".into(),
+        id: "agent-inbox".into(),
         msg: EventMsg::RawResponseItem(RawResponseItemEvent {
             item: ResponseItem::FunctionCallOutput {
-                call_id: "collab-call".to_string(),
+                call_id: "agent-call".to_string(),
                 output: FunctionCallOutputPayload {
                     body: FunctionCallOutputBody::Text(
                         serde_json::to_string(&payload).expect("payload json"),
