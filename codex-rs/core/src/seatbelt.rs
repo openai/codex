@@ -129,7 +129,7 @@ impl Default for UnixDomainSocketPolicy {
 
 #[derive(Debug, Clone)]
 struct UnixSocketPathParam {
-    key: String,
+    index: usize,
     path: AbsolutePathBuf,
 }
 
@@ -200,17 +200,23 @@ fn unix_socket_path_params(proxy: &ProxyPolicyInputs) -> Vec<UnixSocketPathParam
     deduped_paths
         .into_values()
         .enumerate()
-        .map(|(index, path)| UnixSocketPathParam {
-            key: format!("UNIX_SOCKET_PATH_{index}"),
-            path,
-        })
+        .map(|(index, path)| UnixSocketPathParam { index, path })
         .collect()
+}
+
+fn unix_socket_path_param_key(index: usize) -> String {
+    format!("UNIX_SOCKET_PATH_{index}")
 }
 
 fn unix_socket_dir_params(proxy: &ProxyPolicyInputs) -> Vec<(String, PathBuf)> {
     unix_socket_path_params(proxy)
         .into_iter()
-        .map(|param| (param.key, param.path.into_path_buf()))
+        .map(|param| {
+            (
+                unix_socket_path_param_key(param.index),
+                param.path.into_path_buf(),
+            )
+        })
         .collect()
 }
 
@@ -241,14 +247,13 @@ fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
     }
 
     for param in socket_params {
+        let key = unix_socket_path_param_key(param.index);
         // Use subpath so allowlists cover sockets created beneath approved directories.
         policy.push_str(&format!(
-            "(allow network-bind (local unix-socket (subpath (param \"{}\"))))\n",
-            param.key
+            "(allow network-bind (local unix-socket (subpath (param \"{key}\"))))\n"
         ));
         policy.push_str(&format!(
-            "(allow network-outbound (remote unix-socket (subpath (param \"{}\"))))\n",
-            param.key
+            "(allow network-outbound (remote unix-socket (subpath (param \"{key}\"))))\n"
         ));
     }
     policy
@@ -262,11 +267,7 @@ fn dynamic_network_policy(
     let should_use_restricted_network_policy =
         !proxy.ports.is_empty() || proxy.has_proxy_config || enforce_managed_network;
     if should_use_restricted_network_policy {
-        let mut policy = if proxy.ports.is_empty() {
-            String::from("; restrict network access without inferred proxy endpoints\n")
-        } else {
-            String::from("; allow outbound access only to configured loopback proxy endpoints\n")
-        };
+        let mut policy = String::new();
         if proxy.allow_local_binding {
             policy.push_str("; allow loopback local binding and loopback traffic\n");
             policy.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
