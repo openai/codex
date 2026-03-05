@@ -1,3 +1,4 @@
+use crate::AppsMcpCookieStore;
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::ModelProviderInfo;
@@ -131,6 +132,7 @@ pub struct ThreadManager {
 pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
     thread_created_tx: broadcast::Sender<ThreadId>,
+    apps_mcp_cookie_store: Arc<AppsMcpCookieStore>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
@@ -163,6 +165,7 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
+                apps_mcp_cookie_store: Arc::new(AppsMcpCookieStore::default()),
                 models_manager: Arc::new(ModelsManager::new(
                     codex_home,
                     auth_manager.clone(),
@@ -223,6 +226,7 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
+                apps_mcp_cookie_store: Arc::new(AppsMcpCookieStore::default()),
                 models_manager: Arc::new(ModelsManager::with_provider_for_tests(
                     codex_home,
                     auth_manager.clone(),
@@ -263,6 +267,10 @@ impl ThreadManager {
 
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {
         self.state.models_manager.clone()
+    }
+
+    pub fn apps_mcp_cookie_store(&self) -> Arc<AppsMcpCookieStore> {
+        Arc::clone(&self.state.apps_mcp_cookie_store)
     }
 
     pub async fn list_models(
@@ -600,6 +608,7 @@ impl ThreadManagerState {
         } = Codex::spawn(
             config,
             auth_manager,
+            Arc::clone(&self.apps_mcp_cookie_store),
             Arc::clone(&self.models_manager),
             Arc::clone(&self.skills_manager),
             Arc::clone(&self.plugins_manager),

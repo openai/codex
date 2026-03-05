@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -12,11 +14,19 @@ use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Json;
 use axum::Router;
+use axum::body::Body;
 use axum::extract::State;
 use axum::http::HeaderMap;
+use axum::http::HeaderValue;
+use axum::http::Request;
 use axum::http::StatusCode;
 use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
+use axum::http::header::COOKIE;
+use axum::http::header::SET_COOKIE;
+use axum::middleware;
+use axum::middleware::Next;
+use axum::response::Response;
 use axum::routing::get;
 use codex_app_server_protocol::AppBranding;
 use codex_app_server_protocol::AppInfo;
@@ -1016,7 +1026,6 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
     let warm_request = mcp
         .send_apps_list_request(AppsListParams {
             limit: None,
@@ -1201,6 +1210,70 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
     Ok(())
 }
 
+#[tokio::test]
+async fn list_apps_force_refetch_reuses_affinity_cookie_across_temp_mcp_clients() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta App".to_string(),
+        description: Some("Beta connector".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+    }];
+    let tools = vec![connector_tool("beta", "Beta App")?];
+    let (server_url, affinity_cookie_state, server_handle) =
+        start_apps_server_with_affinity_cookie(connectors, tools).await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    for _ in 0..2 {
+        let request = mcp
+            .send_apps_list_request(AppsListParams {
+                limit: None,
+                cursor: None,
+                thread_id: None,
+                force_refetch: true,
+            })
+            .await?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request)),
+        )
+        .await??;
+        let AppsListResponse { data, next_cursor } = to_response(response)?;
+        assert_eq!(data.len(), 1);
+        assert!(data.iter().all(|app| app.is_accessible));
+        assert!(next_cursor.is_none());
+    }
+
+    assert!(
+        affinity_cookie_state.request_count.load(Ordering::SeqCst) >= 5,
+        "expected the initial refresh plus a later cookie-gated second-manager request",
+    );
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
 async fn read_app_list_updated_notification(
     mcp: &mut McpProcess,
 ) -> Result<AppListUpdatedNotification> {
@@ -1222,6 +1295,12 @@ struct AppsServerState {
     expected_account_id: String,
     response: Arc<StdMutex<serde_json::Value>>,
     directory_delay: Duration,
+    affinity_cookie_state: Option<Arc<AffinityCookieState>>,
+}
+
+#[derive(Default)]
+struct AffinityCookieState {
+    request_count: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -1311,6 +1390,32 @@ async fn start_apps_server_with_delays_and_control(
     directory_delay: Duration,
     tools_delay: Duration,
 ) -> Result<(String, JoinHandle<()>, AppsServerControl)> {
+    start_apps_server(connectors, tools, directory_delay, tools_delay, None).await
+}
+
+async fn start_apps_server_with_affinity_cookie(
+    connectors: Vec<AppInfo>,
+    tools: Vec<Tool>,
+) -> Result<(String, Arc<AffinityCookieState>, JoinHandle<()>)> {
+    let affinity_cookie_state = Arc::new(AffinityCookieState::default());
+    let (server_url, handle, _server_control) = start_apps_server(
+        connectors,
+        tools,
+        Duration::ZERO,
+        Duration::ZERO,
+        Some(Arc::clone(&affinity_cookie_state)),
+    )
+    .await?;
+    Ok((server_url, affinity_cookie_state, handle))
+}
+
+async fn start_apps_server(
+    connectors: Vec<AppInfo>,
+    tools: Vec<Tool>,
+    directory_delay: Duration,
+    tools_delay: Duration,
+    affinity_cookie_state: Option<Arc<AffinityCookieState>>,
+) -> Result<(String, JoinHandle<()>, AppsServerControl)> {
     let response = Arc::new(StdMutex::new(
         json!({ "apps": connectors, "next_token": null }),
     ));
@@ -1320,6 +1425,7 @@ async fn start_apps_server_with_delays_and_control(
         expected_account_id: "account-123".to_string(),
         response: response.clone(),
         directory_delay,
+        affinity_cookie_state,
     };
     let state = Arc::new(state);
     let server_control = AppsServerControl {
@@ -1345,14 +1451,55 @@ async fn start_apps_server_with_delays_and_control(
             "/connectors/directory/list_workspace",
             get(list_directory_connectors),
         )
-        .with_state(state)
-        .nest_service("/api/codex/apps", mcp_service);
+        .nest_service("/api/codex/apps", mcp_service)
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_affinity_cookie,
+        ))
+        .with_state(state);
 
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });
 
     Ok((format!("http://{addr}"), handle, server_control))
+}
+
+async fn require_affinity_cookie(
+    State(state): State<Arc<AppsServerState>>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if !request.uri().path().starts_with("/api/codex/apps") {
+        return Ok(next.run(request).await);
+    }
+
+    let Some(affinity_cookie_state) = state.affinity_cookie_state.as_ref() else {
+        return Ok(next.run(request).await);
+    };
+
+    let request_number = affinity_cookie_state
+        .request_count
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+    if request_number > 4
+        && !request
+            .headers()
+            .get(COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("__cflb=sticky"))
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let mut response = next.run(request).await;
+    if request_number <= 4 {
+        response.headers_mut().insert(
+            SET_COOKIE,
+            HeaderValue::from_static("__cflb=sticky; Path=/"),
+        );
+    }
+    Ok(response)
 }
 
 async fn list_directory_connectors(

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::AppsMcpCookieStore;
 use crate::AuthManager;
 use crate::RolloutRecorder;
 use crate::agent::AgentControl;
@@ -54,6 +55,7 @@ impl CodeModeStoreService {
 pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
+    pub(crate) apps_mcp_cookie_store: Arc<AppsMcpCookieStore>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) shell_zsh_path: Option<PathBuf>,

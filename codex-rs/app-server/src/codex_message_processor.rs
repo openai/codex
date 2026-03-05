@@ -4993,8 +4993,9 @@ impl CodexMessageProcessor {
 
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
+        let apps_mcp_cookie_store = self.thread_manager.apps_mcp_cookie_store();
         tokio::spawn(async move {
-            Self::apps_list_task(outgoing, request, params, config).await;
+            Self::apps_list_task(outgoing, request, params, config, apps_mcp_cookie_store).await;
         });
     }
 
@@ -5003,6 +5004,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: AppsListParams,
         config: Config,
+        apps_mcp_cookie_store: Arc<codex_core::AppsMcpCookieStore>,
     ) {
         let AppsListParams {
             cursor,
@@ -5037,12 +5039,14 @@ impl CodexMessageProcessor {
         let accessible_config = config.clone();
         let accessible_tx = tx.clone();
         tokio::spawn(async move {
-            let result = connectors::list_accessible_connectors_from_mcp_tools_with_options(
-                &accessible_config,
-                force_refetch,
-            )
-            .await
-            .map_err(|err| format!("failed to load accessible apps: {err}"));
+            let result =
+                connectors::list_accessible_connectors_from_mcp_tools_with_options_and_cookie_store(
+                    &accessible_config,
+                    force_refetch,
+                    Some(apps_mcp_cookie_store),
+                )
+                .await
+                .map_err(|err| format!("failed to load accessible apps: {err}"));
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
         });
 

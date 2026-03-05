@@ -15,6 +15,7 @@ use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use oauth2::TokenResponse;
 use reqwest::header::ACCEPT;
+use reqwest::cookie::Jar;
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
@@ -395,6 +396,7 @@ enum TransportRecipe {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+        cookie_jar: Option<Arc<Jar>>,
     },
 }
 
@@ -504,6 +506,7 @@ impl RmcpClient {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+        cookie_jar: Option<Arc<Jar>>,
     ) -> Result<Self> {
         let transport_recipe = TransportRecipe::StreamableHttp {
             server_name: server_name.to_string(),
@@ -512,6 +515,7 @@ impl RmcpClient {
             http_headers,
             env_http_headers,
             store_mode,
+            cookie_jar,
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
@@ -868,6 +872,7 @@ impl RmcpClient {
                 http_headers,
                 env_http_headers,
                 store_mode,
+                cookie_jar,
             } => {
                 let default_headers =
                     build_default_headers(http_headers.clone(), env_http_headers.clone())?;
@@ -892,6 +897,7 @@ impl RmcpClient {
                         initial_tokens.clone(),
                         *store_mode,
                         default_headers.clone(),
+                        cookie_jar.clone(),
                     )
                     .await
                     {
@@ -919,8 +925,7 @@ impl RmcpClient {
                                 StreamableHttpClientTransportConfig::with_uri(url.clone())
                                     .auth_header(access_token);
                             let http_client =
-                                apply_default_headers(reqwest::Client::builder(), &default_headers)
-                                    .build()?;
+                                build_http_client(default_headers.clone(), cookie_jar.clone())?;
                             let transport = StreamableHttpClientTransport::with_client(
                                 StreamableHttpResponseClient::new(http_client),
                                 http_config,
@@ -936,9 +941,7 @@ impl RmcpClient {
                         http_config = http_config.auth_header(bearer_token);
                     }
 
-                    let http_client =
-                        apply_default_headers(reqwest::Client::builder(), &default_headers)
-                            .build()?;
+                    let http_client = build_http_client(default_headers, cookie_jar.clone())?;
 
                     let transport = StreamableHttpClientTransport::with_client(
                         StreamableHttpResponseClient::new(http_client),
@@ -1122,12 +1125,12 @@ async fn create_oauth_transport_and_runtime(
     initial_tokens: StoredOAuthTokens,
     credentials_store: OAuthCredentialsStoreMode,
     default_headers: HeaderMap,
+    cookie_jar: Option<Arc<Jar>>,
 ) -> Result<(
     StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
     OAuthPersistor,
 )> {
-    let http_client =
-        apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
+    let http_client = build_http_client(default_headers, cookie_jar)?;
     let mut oauth_state = OAuthState::new(url.to_string(), Some(http_client.clone())).await?;
 
     oauth_state
@@ -1162,4 +1165,16 @@ async fn create_oauth_transport_and_runtime(
     );
 
     Ok((transport, runtime))
+}
+
+fn build_http_client(
+    default_headers: HeaderMap,
+    cookie_jar: Option<Arc<Jar>>,
+) -> Result<reqwest::Client> {
+    let builder = apply_default_headers(reqwest::Client::builder(), &default_headers);
+    let builder = match cookie_jar {
+        Some(cookie_jar) => builder.cookie_provider(cookie_jar),
+        None => builder,
+    };
+    Ok(builder.build()?)
 }
