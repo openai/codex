@@ -28,6 +28,8 @@ const DEFAULT_CIMD_CLIENT_METADATA_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/codex-rs/client-metadata.json";
 const DYNAMIC_CLIENT_REGISTRATION_UNSUPPORTED_ERROR: &str =
     "dynamic client registration not supported";
+const DEFAULT_CIMD_CALLBACK_PORT_START: u16 = 33418;
+const DEFAULT_CIMD_CALLBACK_PORT_END: u16 = 33428;
 
 struct OauthHeaders {
     http_headers: Option<HashMap<String, String>>,
@@ -304,6 +306,35 @@ fn callback_bind_host(callback_url: Option<&str>) -> &'static str {
     }
 }
 
+fn bind_callback_server(
+    bind_host: &str,
+    callback_port: Option<u16>,
+    callback_url: Option<&str>,
+) -> Result<Arc<Server>> {
+    fn bind_server(bind_addr: &str) -> Result<Server> {
+        Server::http(bind_addr).map_err(|err| anyhow!(err))
+    }
+
+    if let Some(port) = callback_port {
+        let bind_addr = format!("{bind_host}:{port}");
+        let server = bind_server(&bind_addr)?;
+        return Ok(Arc::new(server));
+    }
+
+    if callback_url.is_none() {
+        for port in DEFAULT_CIMD_CALLBACK_PORT_START..=DEFAULT_CIMD_CALLBACK_PORT_END {
+            let bind_addr = format!("{bind_host}:{port}");
+            if let Ok(server) = bind_server(&bind_addr) {
+                return Ok(Arc::new(server));
+            }
+        }
+    }
+
+    let bind_addr = format!("{bind_host}:0");
+    let server = bind_server(&bind_addr)?;
+    Ok(Arc::new(server))
+}
+
 impl OauthLoginFlow {
     #[allow(clippy::too_many_arguments)]
     async fn new(
@@ -322,12 +353,7 @@ impl OauthLoginFlow {
 
         let bind_host = callback_bind_host(callback_url);
         let callback_port = resolve_callback_port(callback_port)?;
-        let bind_addr = match callback_port {
-            Some(port) => format!("{bind_host}:{port}"),
-            None => format!("{bind_host}:0"),
-        };
-
-        let server = Arc::new(Server::http(&bind_addr).map_err(|err| anyhow!(err))?);
+        let server = bind_callback_server(bind_host, callback_port, callback_url)?;
         let guard = CallbackServerGuard {
             server: Arc::clone(&server),
         };
@@ -508,6 +534,8 @@ fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
+
     use axum::Json;
     use axum::Router;
     use axum::routing::get;
@@ -520,6 +548,7 @@ mod tests {
     use super::DEFAULT_CIMD_CLIENT_METADATA_URL;
     use super::OAuthCredentialsStoreMode;
     use super::append_query_param;
+    use super::bind_callback_server;
     use super::callback_path_from_redirect_uri;
     use super::parse_oauth_callback;
     use super::perform_oauth_login_return_url;
@@ -579,6 +608,52 @@ mod tests {
         let url = append_query_param("not a url", "resource", Some("api/resource"));
 
         assert_eq!(url, "not a url?resource=api%2Fresource");
+    }
+
+    #[test]
+    fn callback_server_prefers_cimd_default_port_range_without_custom_callback_url() {
+        let server = bind_callback_server("127.0.0.1", None, None)
+            .expect("callback server should bind to a CIMD default port");
+        let port = server_port(&server);
+        assert!(
+            (super::DEFAULT_CIMD_CALLBACK_PORT_START..=super::DEFAULT_CIMD_CALLBACK_PORT_END)
+                .contains(&port),
+            "expected callback port in CIMD range, got {port}"
+        );
+    }
+
+    #[test]
+    fn callback_server_skips_occupied_ports_in_cimd_default_range() {
+        let mut occupied = None;
+        for port in super::DEFAULT_CIMD_CALLBACK_PORT_START..=super::DEFAULT_CIMD_CALLBACK_PORT_END
+        {
+            if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
+                occupied = Some((port, listener));
+                break;
+            }
+        }
+        let Some((occupied_port, listener)) = occupied else {
+            // If all ports are occupied by the host environment, skip.
+            return;
+        };
+        let _keep_occupied = listener;
+
+        let server = bind_callback_server("127.0.0.1", None, None)
+            .expect("callback server should bind even when a CIMD port is occupied");
+        let port = server_port(&server);
+        assert_ne!(
+            port, occupied_port,
+            "callback server should not bind occupied port"
+        );
+    }
+
+    fn server_port(server: &super::Server) -> u16 {
+        match server.server_addr() {
+            tiny_http::ListenAddr::IP(std::net::SocketAddr::V4(addr)) => addr.port(),
+            tiny_http::ListenAddr::IP(std::net::SocketAddr::V6(addr)) => addr.port(),
+            #[cfg(not(target_os = "windows"))]
+            _ => panic!("unexpected callback server address"),
+        }
     }
 
     #[tokio::test]
