@@ -942,6 +942,105 @@ where
     })
 }
 
+/// Waits for the authoritative bootstrap `SessionConfigured` event.
+///
+/// `thread/start` and `thread/resume` provide enough data to synthesize a
+/// session configuration, but exec prefers the streamed event when it arrives
+/// in time because that payload is the closest match to main's startup data.
+/// Non-bootstrap events are buffered so the main event loop can process them in
+/// order once startup finishes.
+async fn await_session_configured_event(
+    client: &mut InProcessAppServerClient,
+    config: &Config,
+    thread_id: &str,
+    error_seen: &mut bool,
+    buffered_events: &mut VecDeque<InProcessServerEvent>,
+) -> Result<SessionConfiguredEvent, String> {
+    const SESSION_CONFIGURED_TIMEOUT: Duration = Duration::from_secs(10);
+    let wait_result = timeout(SESSION_CONFIGURED_TIMEOUT, async {
+        loop {
+            let server_event = client.next_event().await;
+            let Some(server_event) = server_event else {
+                return Err("event stream ended before session configured".to_string());
+            };
+
+            match classify_bootstrap_event(server_event, thread_id, buffered_events) {
+                Ok(BootstrapEventAction::HandleServerRequest(request)) => {
+                    handle_server_request(client, request, config, thread_id, error_seen).await;
+                }
+                Ok(BootstrapEventAction::SessionConfigured(session_configured)) => {
+                    return Ok(session_configured);
+                }
+                Ok(BootstrapEventAction::Continue) => {}
+                Err(err) => {
+                    warn!("{err}");
+                }
+            }
+        }
+    })
+    .await;
+
+    match wait_result {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "timed out waiting for session configured event after {}s",
+            SESSION_CONFIGURED_TIMEOUT.as_secs()
+        )),
+    }
+}
+
+enum BootstrapEventAction {
+    Continue,
+    HandleServerRequest(ServerRequest),
+    SessionConfigured(SessionConfiguredEvent),
+}
+
+/// Classifies early events seen before exec has finished bootstrap.
+///
+/// The bootstrap phase has two jobs:
+/// - answer server requests that would otherwise stall startup
+/// - capture the matching `SessionConfigured` event for the primary thread
+///
+/// Everything else is buffered and replayed by the main loop so startup does
+/// not reorder or discard early notifications.
+fn classify_bootstrap_event(
+    server_event: InProcessServerEvent,
+    thread_id: &str,
+    buffered_events: &mut VecDeque<InProcessServerEvent>,
+) -> Result<BootstrapEventAction, String> {
+    match &server_event {
+        InProcessServerEvent::ServerRequest(_) => {
+            if let InProcessServerEvent::ServerRequest(request) = server_event {
+                Ok(BootstrapEventAction::HandleServerRequest(request))
+            } else {
+                unreachable!("matched server request variant")
+            }
+        }
+        InProcessServerEvent::ServerNotification(_) | InProcessServerEvent::Lagged { .. } => {
+            buffered_events.push_back(server_event);
+            Ok(BootstrapEventAction::Continue)
+        }
+        InProcessServerEvent::LegacyNotification(notification) => {
+            let event = legacy_notification_to_event(notification.clone());
+            match event {
+                Ok(event) => {
+                    if let EventMsg::SessionConfigured(session_configured) = event.msg
+                        && session_configured.session_id.to_string() == thread_id
+                    {
+                        return Ok(BootstrapEventAction::SessionConfigured(session_configured));
+                    }
+                    buffered_events.push_back(server_event);
+                    Ok(BootstrapEventAction::Continue)
+                }
+                Err(err) => {
+                    buffered_events.push_back(server_event);
+                    Err(err)
+                }
+            }
+        }
+    }
+}
+
 fn session_configured_from_thread_start_response(
     response: &ThreadStartResponse,
 ) -> Result<SessionConfiguredEvent, String> {

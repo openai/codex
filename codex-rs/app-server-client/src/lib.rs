@@ -123,6 +123,34 @@ impl Error for TypedRequestError {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClientSurface {
+    /// Non-interactive execution surface.
+    Exec,
+    /// Interactive terminal UI surface.
+    Tui,
+}
+
+/// Maps facade surface identity to app-server `SessionSource`.
+///
+/// `ClientSurface::Tui` intentionally maps to `SessionSource::Cli` because the
+/// TUI is the interactive CLI surface from the server's perspective.
+pub fn session_source_for_surface(surface: ClientSurface) -> SessionSource {
+    match surface {
+        ClientSurface::Exec => SessionSource::Exec,
+        ClientSurface::Tui => SessionSource::Cli,
+    }
+}
+
+impl ClientSurface {
+    fn default_client_name(self) -> &'static str {
+        match self {
+            ClientSurface::Exec => "codex-exec",
+            ClientSurface::Tui => "codex-tui",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct InProcessClientStartArgs {
     /// Resolved argv0 dispatch paths used by command execution internals.
@@ -157,6 +185,10 @@ pub struct InProcessClientStartArgs {
 
 impl InProcessClientStartArgs {
     /// Builds initialize params from caller-provided metadata.
+    ///
+    /// This keeps the initialize handshake policy in one place so TUI and exec
+    /// do not drift on client naming, experimental opt-in, or notification
+    /// suppression.
     pub fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
             experimental_api: self.experimental_api,
