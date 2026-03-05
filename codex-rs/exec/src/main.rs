@@ -79,4 +79,24 @@ mod tests {
             "reasoning_level=xhigh"
         );
     }
+    #[test]
+    fn top_cli_parses_fork_option_with_root_config() {
+        let cli = TopCli::parse_from([
+            "codex-exec",
+            "--config",
+            "reasoning_level=xhigh",
+            "--fork",
+            "session-123",
+            "echo fork",
+        ]);
+
+        assert_eq!(cli.inner.fork_session_id.as_deref(), Some("session-123"));
+        assert!(cli.inner.command.is_none());
+        assert_eq!(cli.inner.prompt.as_deref(), Some("echo fork"));
+        assert_eq!(cli.config_overrides.raw_overrides.len(), 1);
+        assert_eq!(
+            cli.config_overrides.raw_overrides[0],
+            "reasoning_level=xhigh"
+        );
+    }
 }
