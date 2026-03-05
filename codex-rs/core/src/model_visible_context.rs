@@ -7,8 +7,10 @@
 //! distinguish them from real user intent. Developer fragments do not need
 //! markers because they are already separable by role.
 
+use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::shell::Shell;
+use codex_execpolicy::Policy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -162,15 +164,44 @@ pub(crate) trait ModelVisibleContextFragment {
     }
 }
 
+pub(crate) struct TurnContextDiffContext<'a> {
+    pub(crate) shell: &'a Shell,
+    pub(crate) previous_turn_settings: Option<&'a PreviousTurnSettings>,
+    pub(crate) exec_policy: &'a Policy,
+    pub(crate) personality_feature_enabled: bool,
+}
+
+impl<'a> TurnContextDiffContext<'a> {
+    pub(crate) fn new(
+        shell: &'a Shell,
+        previous_turn_settings: Option<&'a PreviousTurnSettings>,
+        exec_policy: &'a Policy,
+        personality_feature_enabled: bool,
+    ) -> Self {
+        Self {
+            shell,
+            previous_turn_settings,
+            exec_policy,
+            personality_feature_enabled,
+        }
+    }
+}
+
 /// Implement this for fragments that are built from current/persisted turn
 /// state rather than one-off runtime events.
 pub(crate) trait TurnContextDiffFragment: ModelVisibleContextFragment + Sized {
-    fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Option<Self>;
+    fn from_turn_context(
+        turn_context: &TurnContext,
+        context: &TurnContextDiffContext<'_>,
+    ) -> Option<Self> {
+        let _ = (turn_context, context);
+        None
+    }
 
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        shell: &Shell,
+        context: &TurnContextDiffContext<'_>,
     ) -> Option<Self>;
 }
 

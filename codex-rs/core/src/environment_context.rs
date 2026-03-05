@@ -2,6 +2,7 @@ use crate::codex::TurnContext;
 use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ENVIRONMENT_CONTEXT_FRAGMENT_SPEC;
 use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::TurnContextDiffContext;
 use crate::model_visible_context::TurnContextDiffFragment;
 use crate::shell::Shell;
 use codex_protocol::protocol::TurnContextItem;
@@ -130,10 +131,13 @@ impl ModelVisibleContextFragment for EnvironmentContext {
 }
 
 impl TurnContextDiffFragment for EnvironmentContext {
-    fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Option<Self> {
+    fn from_turn_context(
+        turn_context: &TurnContext,
+        context: &TurnContextDiffContext<'_>,
+    ) -> Option<Self> {
         Some(Self::new(
             Some(turn_context.cwd.clone()),
-            shell.clone(),
+            context.shell.clone(),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
@@ -143,16 +147,16 @@ impl TurnContextDiffFragment for EnvironmentContext {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        shell: &Shell,
+        context: &TurnContextDiffContext<'_>,
     ) -> Option<Self> {
         let previous_context = Self::new(
             Some(previous.cwd.clone()),
-            shell.clone(),
+            context.shell.clone(),
             previous.current_date.clone(),
             previous.timezone.clone(),
             Self::network_from_turn_context_item(previous),
         );
-        let next_context = Self::from_turn_context(turn_context, shell)?;
+        let next_context = Self::from_turn_context(turn_context, context)?;
         if previous_context.equals_except_shell(&next_context) {
             return None;
         }
@@ -172,7 +176,7 @@ impl TurnContextDiffFragment for EnvironmentContext {
 
         Some(Self::new(
             cwd,
-            shell.clone(),
+            context.shell.clone(),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             network,

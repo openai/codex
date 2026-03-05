@@ -4,13 +4,13 @@ use serde::Serialize;
 use crate::codex::TurnContext;
 use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::TurnContextDiffContext;
 use crate::model_visible_context::TurnContextDiffFragment;
 use codex_protocol::protocol::TurnContextItem;
 
 use crate::model_visible_context::AGENTS_MD_FRAGMENT_SPEC;
 use crate::model_visible_context::PLUGINS_FRAGMENT_SPEC;
 use crate::model_visible_context::SKILL_FRAGMENT_SPEC;
-use crate::shell::Shell;
 
 pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
 
@@ -40,7 +40,10 @@ impl ModelVisibleContextFragment for UserInstructions {
 }
 
 impl TurnContextDiffFragment for UserInstructions {
-    fn from_turn_context(turn_context: &TurnContext, _shell: &Shell) -> Option<Self> {
+    fn from_turn_context(
+        turn_context: &TurnContext,
+        _context: &TurnContextDiffContext<'_>,
+    ) -> Option<Self> {
         let text = turn_context.user_instructions.as_ref()?.clone();
         Some(Self {
             directory: turn_context.cwd.to_string_lossy().into_owned(),
@@ -51,9 +54,9 @@ impl TurnContextDiffFragment for UserInstructions {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        shell: &Shell,
+        context: &TurnContextDiffContext<'_>,
     ) -> Option<Self> {
-        let current = Self::from_turn_context(turn_context, shell)?;
+        let current = Self::from_turn_context(turn_context, context)?;
         let previous_directory = previous.cwd.to_string_lossy().into_owned();
         if previous.user_instructions.as_deref() == Some(current.text.as_str())
             && previous_directory == current.directory
