@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "@jest/globals";
+import { createTestEnv } from "./testCodex";
 
 jest.mock("node:child_process", () => {
   const actual = jest.requireActual<typeof import("node:child_process")>("node:child_process");
@@ -45,26 +46,33 @@ describe("CodexExec", () => {
     const { CodexExec } = await import("../src/exec");
     const child = createEarlyExitChild();
     spawnMock.mockReturnValue(child as unknown as child_process.ChildProcess);
+    const { cleanup, codexHome, env } = createTestEnv();
 
-    const exec = new CodexExec("codex");
-    const runPromise = (async () => {
-      for await (const _ of exec.run({ input: "hi" })) {
-        // no-op
+    try {
+      const exec = new CodexExec("codex", env);
+      const runPromise = (async () => {
+        for await (const _ of exec.run({ input: "hi" })) {
+          // no-op
+        }
+      })().then(
+        () => ({ status: "resolved" as const }),
+        (error) => ({ status: "rejected" as const, error }),
+      );
+
+      const result = await Promise.race([
+        runPromise,
+        delay(500).then(() => ({ status: "timeout" as const })),
+      ]);
+
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") {
+        expect(result.error).toBeInstanceOf(Error);
+        expect(result.error.message).toMatch(/Codex Exec exited/);
       }
-    })().then(
-      () => ({ status: "resolved" as const }),
-      (error) => ({ status: "rejected" as const, error }),
-    );
-
-    const result = await Promise.race([
-      runPromise,
-      delay(500).then(() => ({ status: "timeout" as const })),
-    ]);
-
-    expect(result.status).toBe("rejected");
-    if (result.status === "rejected") {
-      expect(result.error).toBeInstanceOf(Error);
-      expect(result.error.message).toMatch(/Codex Exec exited/);
+      const spawnEnv = spawnMock.mock.calls[0]?.[2]?.env as Record<string, string> | undefined;
+      expect(spawnEnv?.CODEX_HOME).toBe(codexHome);
+    } finally {
+      cleanup();
     }
   });
 
@@ -73,24 +81,35 @@ describe("CodexExec", () => {
     spawnMock.mockClear();
     const child = new FakeChildProcess();
     spawnMock.mockReturnValue(child as unknown as child_process.ChildProcess);
+    const { cleanup, codexHome, env } = createTestEnv();
 
-    setImmediate(() => {
-      child.stdout.end();
-      child.stderr.end();
-      child.emit("exit", 0, null);
-    });
+    try {
+      setImmediate(() => {
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("exit", 0, null);
+      });
 
-    const exec = new CodexExec("codex");
-    for await (const _ of exec.run({ input: "hi", images: ["img.png"], threadId: "thread-id" })) {
-      // no-op
+      const exec = new CodexExec("codex", env);
+      for await (const _ of exec.run({
+        input: "hi",
+        images: ["img.png"],
+        threadId: "thread-id",
+      })) {
+        // no-op
+      }
+
+      const commandArgs = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+      expect(commandArgs).toBeDefined();
+      const resumeIndex = commandArgs!.indexOf("resume");
+      const imageIndex = commandArgs!.indexOf("--image");
+      expect(resumeIndex).toBeGreaterThan(-1);
+      expect(imageIndex).toBeGreaterThan(-1);
+      expect(resumeIndex).toBeLessThan(imageIndex);
+      const spawnEnv = spawnMock.mock.calls[0]?.[2]?.env as Record<string, string> | undefined;
+      expect(spawnEnv?.CODEX_HOME).toBe(codexHome);
+    } finally {
+      cleanup();
     }
-
-    const commandArgs = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
-    expect(commandArgs).toBeDefined();
-    const resumeIndex = commandArgs!.indexOf("resume");
-    const imageIndex = commandArgs!.indexOf("--image");
-    expect(resumeIndex).toBeGreaterThan(-1);
-    expect(imageIndex).toBeGreaterThan(-1);
-    expect(resumeIndex).toBeLessThan(imageIndex);
   });
 });
