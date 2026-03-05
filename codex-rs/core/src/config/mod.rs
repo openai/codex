@@ -2117,6 +2117,9 @@ impl Config {
         let has_network_requirements = network_requirements.is_some();
         let network = NetworkProxySpec::from_config_and_constraints(
             configured_network_proxy_config,
+            cfg.permissions
+                .as_ref()
+                .and_then(|permissions| permissions.network.as_ref()),
             network_requirements,
         )
         .map_err(|err| {
