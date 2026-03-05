@@ -233,12 +233,16 @@ pub(crate) fn build_settings_update_items(
         developer_envelope.push(fragment);
     }
     let mut contextual_user_envelope = ContextualUserEnvelopeBuilder::default();
-    // Add new contextual-user diff fragments here.
-    if let Some(previous) = previous
-        && let Some(environment_update) =
+    for fragment in [
+        // Add new contextual-user diff fragments here.
+        previous.and_then(|previous| {
             EnvironmentContext::diff_from_turn_context_item(previous, next, shell)
+        }),
+    ]
+    .into_iter()
+    .flatten()
     {
-        contextual_user_envelope.push_fragment(environment_update);
+        contextual_user_envelope.push_fragment(fragment);
     }
 
     let mut items = Vec::with_capacity(2);
