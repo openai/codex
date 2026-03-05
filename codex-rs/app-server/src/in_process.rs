@@ -11,6 +11,12 @@
 //! - interact through [`InProcessClientHandle`] request/notify/event methods
 //! - terminate with [`InProcessClientHandle::shutdown`]
 //!
+//! The runtime is transport-local but not protocol-free. Incoming requests are
+//! typed `ClientRequest` values, yet responses still come back through the same
+//! JSON-RPC result envelope that `MessageProcessor` uses for stdio/websocket
+//! transports. This keeps in-process behavior aligned with app-server rather
+//! than creating a second execution contract.
+//!
 //! Backpressure is explicit: command submission uses `try_send` and can return
 //! `WouldBlock`, while event fanout may drop notifications under saturation.
 //! Server requests are never silently abandoned: if they cannot be queued they
@@ -73,6 +79,9 @@ pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
 
 /// Input needed to start an in-process app-server runtime.
+///
+/// These fields mirror the pieces of ambient process state that stdio and
+/// websocket transports normally assemble before `MessageProcessor` starts.
 #[derive(Clone)]
 pub struct InProcessStartArgs {
     /// Resolved argv0 dispatch paths used by command execution internals.
@@ -98,6 +107,11 @@ pub struct InProcessStartArgs {
 }
 
 /// Event emitted from the app-server to the in-process client.
+///
+/// The stream intentionally carries both typed app-server events and legacy
+/// bridge notifications because some CLI surfaces still consume
+/// `codex_protocol::Event` values today. `Lagged` is a transport health marker,
+/// not an application event.
 #[derive(Debug, Clone)]
 pub enum InProcessServerEvent {
     /// Server request that requires client response/rejection.
@@ -132,6 +146,10 @@ enum InProcessClientMessage {
 }
 
 /// Handle used by an in-process client to call app-server and consume events.
+///
+/// This is the low-level runtime handle. Higher-level callers should usually go
+/// through `codex-app-server-client`, which adds worker-task buffering,
+/// request/response helpers, and surface-specific startup policy.
 pub struct InProcessClientHandle {
     client_tx: mpsc::Sender<InProcessClientMessage>,
     event_rx: mpsc::Receiver<InProcessServerEvent>,

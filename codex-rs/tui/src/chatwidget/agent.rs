@@ -1020,6 +1020,13 @@ fn session_configured_from_thread_start_response(
     })
 }
 
+/// Enriches an early synthetic `SessionConfigured` with later authoritative
+/// data from the event stream.
+///
+/// The TUI emits startup session state immediately so first paint does not wait
+/// on the event stream. When app-server later sends a richer
+/// `SessionConfigured` for the same session, this merges fields that were
+/// unknown during bootstrap and suppresses no-op updates.
 fn merge_session_configured_update(
     current: &SessionConfiguredEvent,
     update: SessionConfiguredEvent,
@@ -1849,6 +1856,13 @@ async fn process_in_process_command(
     clippy::too_many_arguments,
     reason = "agent loop keeps runtime state explicit"
 )]
+/// Runs the in-process TUI agent loop for a single active thread.
+///
+/// This loop is responsible for keeping the TUI's existing `Op`-driven model
+/// working on top of app-server. It forwards supported ops as typed
+/// `ClientRequest`/`ClientNotification` messages, translates server requests
+/// back into UI events, and preserves thread-local bookkeeping such as current
+/// turn id and pending approval state.
 async fn run_in_process_agent_loop(
     mut codex_op_rx: tokio::sync::mpsc::UnboundedReceiver<Op>,
     mut client: InProcessAppServerClient,

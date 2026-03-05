@@ -46,6 +46,11 @@ use tracing::warn;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Raw app-server request result for typed in-process requests.
+///
+/// Even on the in-process path, successful responses still travel back through
+/// the same JSON-RPC result envelope used by socket/stdio transports because
+/// `MessageProcessor` continues to produce that shape internally.
 pub type RequestResult = std::result::Result<JsonRpcResult, JSONRPCErrorError>;
 
 /// Layered error for [`InProcessAppServerClient::request_typed`].
@@ -104,6 +109,9 @@ pub enum ClientSurface {
 }
 
 /// Maps facade surface identity to app-server `SessionSource`.
+///
+/// `ClientSurface::Tui` intentionally maps to `SessionSource::Cli` because the
+/// TUI is the interactive CLI surface from the server's perspective.
 pub fn session_source_for_surface(surface: ClientSurface) -> SessionSource {
     match surface {
         ClientSurface::Exec => SessionSource::Exec,
@@ -152,6 +160,10 @@ pub struct InProcessClientStartArgs {
 
 impl InProcessClientStartArgs {
     /// Builds initialize params from surface and caller-provided metadata.
+    ///
+    /// This keeps the initialize handshake policy in one place so TUI and exec
+    /// do not drift on client naming, experimental opt-in, or notification
+    /// suppression.
     pub fn initialize_params(&self) -> InitializeParams {
         let client_name = self
             .client_name
@@ -217,6 +229,17 @@ enum ClientCommand {
     },
 }
 
+/// Async facade over the in-process app-server runtime.
+///
+/// This type owns a worker task that bridges between:
+/// - caller-facing async `mpsc` channels used by TUI/exec
+/// - [`codex_app_server::in_process::InProcessClientHandle`], which speaks to
+///   the embedded `MessageProcessor`
+///
+/// The facade intentionally preserves the server's request/notification/event
+/// model instead of exposing direct core runtime handles. That keeps in-process
+/// callers aligned with app-server behavior while still avoiding a process
+/// boundary.
 pub struct InProcessAppServerClient {
     command_tx: mpsc::Sender<ClientCommand>,
     event_rx: mpsc::Receiver<InProcessServerEvent>,
@@ -377,6 +400,9 @@ impl InProcessAppServerClient {
 
     /// Sends a typed client request and decodes the successful response body.
     ///
+    /// This still deserializes from a JSON value produced by app-server's
+    /// JSON-RPC result envelope. Callers should treat `Deserialize` failures as
+    /// a protocol-shape mismatch rather than a transport problem.
     pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
     where
         T: DeserializeOwned,
@@ -480,6 +506,10 @@ impl InProcessAppServerClient {
     }
 
     /// Returns the next in-process event, or `None` when worker exits.
+    ///
+    /// Callers are expected to drain this stream promptly. If they fall behind,
+    /// the worker emits [`InProcessServerEvent::Lagged`] markers and may reject
+    /// pending server requests rather than letting approval flows hang.
     pub async fn next_event(&mut self) -> Option<InProcessServerEvent> {
         self.event_rx.recv().await
     }
@@ -514,6 +544,8 @@ impl InProcessAppServerClient {
     }
 }
 
+/// Extracts the JSON-RPC method name for diagnostics without extending the
+/// protocol crate with in-process-only helpers.
 fn request_method_name(request: &ClientRequest) -> String {
     serde_json::to_value(request)
         .ok()
