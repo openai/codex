@@ -50,7 +50,7 @@ Contextual-user fragments must have stable markers because history parsing uses 
 
 If a fragment is derived from durable turn/session state, keep its extraction, diffing, and rendering logic together by implementing `TurnContextDiffFragment`.
 
-`TurnContextDiffFragment` receives `TurnContextDiffContext`, which carries shared runtime inputs used during diffing (for example shell, previous-turn bridge state, exec-policy rendering context, and feature gating flags).
+`TurnContextDiffFragment` receives `TurnContextDiffParams`, which carries shared runtime inputs used during diffing (for example shell, previous-turn bridge state, exec-policy rendering context, and feature gating flags).
 
 This is envelope-agnostic: both contextual-user state fragments and developer state-diff fragments use the same trait.
 

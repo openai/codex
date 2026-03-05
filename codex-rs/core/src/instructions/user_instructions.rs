@@ -4,8 +4,8 @@ use serde::Serialize;
 use crate::codex::TurnContext;
 use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
-use crate::model_visible_context::TurnContextDiffContext;
 use crate::model_visible_context::TurnContextDiffFragment;
+use crate::model_visible_context::TurnContextDiffParams;
 use codex_protocol::protocol::TurnContextItem;
 
 use crate::model_visible_context::AGENTS_MD_FRAGMENT_SPEC;
@@ -42,7 +42,7 @@ impl ModelVisibleContextFragment for UserInstructions {
 impl TurnContextDiffFragment for UserInstructions {
     fn from_turn_context(
         turn_context: &TurnContext,
-        _context: &TurnContextDiffContext<'_>,
+        _context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         let text = turn_context.user_instructions.as_ref()?.clone();
         Some(Self {
@@ -54,7 +54,7 @@ impl TurnContextDiffFragment for UserInstructions {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        context: &TurnContextDiffContext<'_>,
+        context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         let current = Self::from_turn_context(turn_context, context)?;
         let previous_directory = previous.cwd.to_string_lossy().into_owned();

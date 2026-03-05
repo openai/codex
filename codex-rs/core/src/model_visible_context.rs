@@ -164,14 +164,14 @@ pub(crate) trait ModelVisibleContextFragment {
     }
 }
 
-pub(crate) struct TurnContextDiffContext<'a> {
+pub(crate) struct TurnContextDiffParams<'a> {
     pub(crate) shell: &'a Shell,
     pub(crate) previous_turn_settings: Option<&'a PreviousTurnSettings>,
     pub(crate) exec_policy: &'a Policy,
     pub(crate) personality_feature_enabled: bool,
 }
 
-impl<'a> TurnContextDiffContext<'a> {
+impl<'a> TurnContextDiffParams<'a> {
     pub(crate) fn new(
         shell: &'a Shell,
         previous_turn_settings: Option<&'a PreviousTurnSettings>,
@@ -192,7 +192,7 @@ impl<'a> TurnContextDiffContext<'a> {
 pub(crate) trait TurnContextDiffFragment: ModelVisibleContextFragment + Sized {
     fn from_turn_context(
         turn_context: &TurnContext,
-        context: &TurnContextDiffContext<'_>,
+        context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         let _ = (turn_context, context);
         None
@@ -201,7 +201,7 @@ pub(crate) trait TurnContextDiffFragment: ModelVisibleContextFragment + Sized {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        context: &TurnContextDiffContext<'_>,
+        context: &TurnContextDiffParams<'_>,
     ) -> Option<Self>;
 }
 

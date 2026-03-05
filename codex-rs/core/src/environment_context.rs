@@ -2,8 +2,8 @@ use crate::codex::TurnContext;
 use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ENVIRONMENT_CONTEXT_FRAGMENT_SPEC;
 use crate::model_visible_context::ModelVisibleContextFragment;
-use crate::model_visible_context::TurnContextDiffContext;
 use crate::model_visible_context::TurnContextDiffFragment;
+use crate::model_visible_context::TurnContextDiffParams;
 use crate::shell::Shell;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
@@ -133,7 +133,7 @@ impl ModelVisibleContextFragment for EnvironmentContext {
 impl TurnContextDiffFragment for EnvironmentContext {
     fn from_turn_context(
         turn_context: &TurnContext,
-        context: &TurnContextDiffContext<'_>,
+        context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         Some(Self::new(
             Some(turn_context.cwd.clone()),
@@ -147,7 +147,7 @@ impl TurnContextDiffFragment for EnvironmentContext {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        context: &TurnContextDiffContext<'_>,
+        context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         let previous_context = Self::new(
             Some(previous.cwd.clone()),

@@ -8,8 +8,8 @@ use crate::model_visible_context::DeveloperContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::ModelVisibleContextFragmentSpec;
 use crate::model_visible_context::ModelVisibleContextRole;
-use crate::model_visible_context::TurnContextDiffContext;
 use crate::model_visible_context::TurnContextDiffFragment;
+use crate::model_visible_context::TurnContextDiffParams;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
@@ -38,7 +38,7 @@ impl TurnContextDiffFragment for PermissionsUpdateFragment {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        context: &TurnContextDiffContext<'_>,
+        context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         if previous.sandbox_policy == *turn_context.sandbox_policy.get()
             && previous.approval_policy == turn_context.approval_policy.value()
@@ -78,7 +78,7 @@ impl TurnContextDiffFragment for CollaborationModeUpdateFragment {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        _context: &TurnContextDiffContext<'_>,
+        _context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         if previous.collaboration_mode.as_ref() != Some(&turn_context.collaboration_mode) {
             // If the next mode has empty developer instructions, this returns None and we emit no
@@ -113,7 +113,7 @@ impl ModelVisibleContextFragment for RealtimeUpdateFragment {
 impl TurnContextDiffFragment for RealtimeUpdateFragment {
     fn from_turn_context(
         turn_context: &TurnContext,
-        context: &TurnContextDiffContext<'_>,
+        context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         if turn_context.realtime_active {
             return Some(Self {
@@ -133,7 +133,7 @@ impl TurnContextDiffFragment for RealtimeUpdateFragment {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        _context: &TurnContextDiffContext<'_>,
+        _context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         match (previous.realtime_active, turn_context.realtime_active) {
             (Some(true), false) => Some(Self {
@@ -167,7 +167,7 @@ impl TurnContextDiffFragment for PersonalityUpdateFragment {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        context: &TurnContextDiffContext<'_>,
+        context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         if !context.personality_feature_enabled {
             return None;
@@ -209,7 +209,7 @@ impl ModelVisibleContextFragment for ModelInstructionsUpdateFragment {
 impl TurnContextDiffFragment for ModelInstructionsUpdateFragment {
     fn from_turn_context(
         turn_context: &TurnContext,
-        context: &TurnContextDiffContext<'_>,
+        context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         let previous_turn_settings = context.previous_turn_settings?;
         if previous_turn_settings.model == turn_context.model_info.slug {
@@ -231,7 +231,7 @@ impl TurnContextDiffFragment for ModelInstructionsUpdateFragment {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        _context: &TurnContextDiffContext<'_>,
+        _context: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         if previous.model == turn_context.model_info.slug {
             return None;
@@ -285,7 +285,7 @@ pub(crate) fn build_model_instructions_update_item(
 fn build_permissions_update_item(
     previous: Option<&TurnContextItem>,
     turn_context: &TurnContext,
-    context: &TurnContextDiffContext<'_>,
+    context: &TurnContextDiffParams<'_>,
 ) -> Option<DeveloperInstructions> {
     previous
         .and_then(|previous| {
@@ -297,7 +297,7 @@ fn build_permissions_update_item(
 fn build_collaboration_mode_update_item(
     previous: Option<&TurnContextItem>,
     turn_context: &TurnContext,
-    context: &TurnContextDiffContext<'_>,
+    context: &TurnContextDiffParams<'_>,
 ) -> Option<DeveloperInstructions> {
     previous
         .and_then(|previous| {
@@ -332,7 +332,7 @@ pub(crate) fn build_realtime_update_item(
 fn build_personality_update_item(
     previous: Option<&TurnContextItem>,
     turn_context: &TurnContext,
-    context: &TurnContextDiffContext<'_>,
+    context: &TurnContextDiffParams<'_>,
 ) -> Option<DeveloperInstructions> {
     previous
         .and_then(|previous| {
@@ -426,7 +426,7 @@ fn build_message<R: ModelVisibleContextRole>(content: Vec<ContentItem>) -> Optio
 pub(crate) fn build_settings_update_items(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
-    context: &TurnContextDiffContext<'_>,
+    context: &TurnContextDiffParams<'_>,
 ) -> Vec<ResponseItem> {
     let mut developer_envelope = DeveloperEnvelopeBuilder::default();
     for fragment in [

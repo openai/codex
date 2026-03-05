@@ -157,8 +157,8 @@ use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use crate::model_visible_context::ModelVisibleContextFragment;
-use crate::model_visible_context::TurnContextDiffContext;
 use crate::model_visible_context::TurnContextDiffFragment;
+use crate::model_visible_context::TurnContextDiffParams;
 use codex_config::CONFIG_TOML_FILE;
 
 mod rollout_reconstruction;
@@ -2375,7 +2375,7 @@ impl Session {
         };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
-        let diff_context = TurnContextDiffContext::new(
+        let diff_context = TurnContextDiffParams::new(
             shell.as_ref(),
             previous_turn_settings.as_ref(),
             exec_policy.as_ref(),
@@ -3041,7 +3041,7 @@ impl Session {
         };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
-        let diff_context = TurnContextDiffContext::new(
+        let diff_context = TurnContextDiffParams::new(
             shell.as_ref(),
             previous_turn_settings.as_ref(),
             exec_policy.as_ref(),
