@@ -17,14 +17,6 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
 use std::marker::PhantomData;
 
-fn build_environment_update_fragment(
-    previous: Option<&TurnContextItem>,
-    next: &TurnContext,
-    shell: &Shell,
-) -> Option<EnvironmentContext> {
-    EnvironmentContext::diff_from_turn_context_item(previous?, next, shell)
-}
-
 fn build_permissions_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
@@ -79,14 +71,6 @@ pub(crate) fn build_realtime_update_item(
             .filter(|realtime_active| *realtime_active)
             .map(|_| DeveloperInstructions::realtime_end_message("inactive")),
     }
-}
-
-pub(crate) fn build_initial_realtime_item(
-    previous: Option<&TurnContextItem>,
-    previous_turn_settings: Option<&PreviousTurnSettings>,
-    next: &TurnContext,
-) -> Option<DeveloperInstructions> {
-    build_realtime_update_item(previous, previous_turn_settings, next)
 }
 
 fn build_personality_update_item(
@@ -251,7 +235,10 @@ pub(crate) fn build_settings_update_items(
         developer_envelope.push(fragment);
     }
     let mut contextual_user_envelope = ContextualUserEnvelopeBuilder::default();
-    if let Some(environment_update) = build_environment_update_fragment(previous, next, shell) {
+    if let Some(previous) = previous
+        && let Some(environment_update) =
+            EnvironmentContext::diff_from_turn_context_item(previous, next, shell)
+    {
         contextual_user_envelope.push_fragment(environment_update);
     }
 

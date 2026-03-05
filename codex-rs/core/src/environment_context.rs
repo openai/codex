@@ -156,22 +156,18 @@ impl TurnContextFragment for EnvironmentContext {
         ))
     }
 
-    fn from_turn_context_item(turn_context_item: &TurnContextItem, shell: &Shell) -> Option<Self> {
-        Some(Self::new(
-            Some(turn_context_item.cwd.clone()),
-            shell.clone(),
-            turn_context_item.current_date.clone(),
-            turn_context_item.timezone.clone(),
-            Self::network_from_turn_context_item(turn_context_item),
-        ))
-    }
-
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
         shell: &Shell,
     ) -> Option<Self> {
-        let previous_context = Self::from_turn_context_item(previous, shell)?;
+        let previous_context = Self::new(
+            Some(previous.cwd.clone()),
+            shell.clone(),
+            previous.current_date.clone(),
+            previous.timezone.clone(),
+            Self::network_from_turn_context_item(previous),
+        );
         let next_context = Self::from_turn_context(turn_context, shell)?;
         if previous_context.equals_except_shell(&next_context) {
             return None;

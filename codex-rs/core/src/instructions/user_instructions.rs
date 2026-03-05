@@ -54,14 +54,6 @@ impl TurnContextFragment for UserInstructions {
         })
     }
 
-    fn from_turn_context_item(turn_context_item: &TurnContextItem, _shell: &Shell) -> Option<Self> {
-        let text = turn_context_item.user_instructions.as_ref()?.clone();
-        Some(Self {
-            directory: turn_context_item.cwd.to_string_lossy().into_owned(),
-            text,
-        })
-    }
-
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,

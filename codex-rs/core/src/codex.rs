@@ -3066,7 +3066,7 @@ impl Session {
         {
             developer_envelope.push(collab_instructions);
         }
-        if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
+        if let Some(realtime_update) = crate::context_manager::updates::build_realtime_update_item(
             reference_context_item.as_ref(),
             previous_turn_settings.as_ref(),
             turn_context,

@@ -14,7 +14,7 @@ When adding new model-visible context:
 1. Define a typed fragment type.
 2. Implement `ModelVisibleContextFragment` for it.
 3. Give it a `ModelVisibleContextEnvelope` with the correct envelope role.
-4. If the fragment is derived from `TurnContext` / `TurnContextItem`, also implement `TurnContextFragment`.
+4. If the fragment is derived from `TurnContext` and participates in turn-to-turn diffing, also implement `TurnContextFragment`.
 5. Push the fragment through the shared envelope builders in initial-context or settings-update assembly.
 
 Do not hand-build developer or contextual-user `ResponseItem`s in new code unless there is a strong reason to bypass the fragment path.
@@ -50,7 +50,6 @@ If a fragment is derived from durable turn/session state, keep its extraction, d
 That trait is the blessed path for fragments that need to:
 
 - build full initial context from the current turn state
-- rebuild from persisted `TurnContextItem` state
 - compute settings-update diffs from persisted previous state to current turn state
 
 `EnvironmentContext` is the canonical example. Future turn-backed contextual fragments should follow the same pattern instead of introducing one-off extraction or diff helpers.

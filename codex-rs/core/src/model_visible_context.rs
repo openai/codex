@@ -170,8 +170,6 @@ pub(crate) trait ModelVisibleContextFragment {
 pub(crate) trait TurnContextFragment: ModelVisibleContextFragment + Sized {
     fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Option<Self>;
 
-    fn from_turn_context_item(turn_context_item: &TurnContextItem, shell: &Shell) -> Option<Self>;
-
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
