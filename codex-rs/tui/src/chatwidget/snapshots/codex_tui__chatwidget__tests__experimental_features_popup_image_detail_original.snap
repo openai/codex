@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Experimental features
+  Toggle experimental features. Changes are saved to config.toml.
+
+› [ ] Original image detail  Send tool-emitted images with `detail: "original"` on supported models so the model sees
+                             the full-resolution image instead of a resized approximation. This affects tools like
+                             `view_image` and `js_repl`, not images attached directly in the UI. It is particularly
+                             important for CUA or localization tasks that depend on small text, precise layout, or
+                             exact UI targets.
+
+  Press space to select or enter to save for next conversation
