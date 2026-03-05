@@ -1,9 +1,11 @@
+mod injection;
 mod manager;
 mod manifest;
 mod marketplace;
 mod render;
 mod store;
 
+pub(crate) use injection::build_plugin_injections;
 pub use manager::AppConnectorId;
 pub use manager::LoadedPlugin;
 pub use manager::PluginCapabilitySummary;
