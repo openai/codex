@@ -5605,6 +5605,14 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
+            // Subagent status is a transient panel, not transcript history. If we
+            // flush it into history every time another cell is inserted, the
+            // transcript gets spammed with repeated identical "Subagents ..." blocks.
+            // Keep the panel mounted so later transcript cells do not make it disappear.
+            if active.as_any().is::<SubagentStatusCell>() {
+                self.active_cell = Some(active);
+                return;
+            }
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
