@@ -2,12 +2,12 @@ use codex_protocol::protocol::AgentStatus;
 
 /// Helpers for model-visible subagent session state rendered in the developer
 /// envelope.
-use crate::contextual_user_message::DEVELOPER_FRAGMENT;
-use crate::contextual_user_message::ModelVisibleFragment;
-use crate::contextual_user_message::SUBAGENT_NOTIFICATION_CLOSE_TAG;
-use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
-use crate::contextual_user_message::SUBAGENTS_CLOSE_TAG;
-use crate::contextual_user_message::SUBAGENTS_OPEN_TAG;
+use crate::model_visible_context::DEVELOPER_FRAGMENT;
+use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::SUBAGENT_NOTIFICATION_CLOSE_TAG;
+use crate::model_visible_context::SUBAGENT_NOTIFICATION_OPEN_TAG;
+use crate::model_visible_context::SUBAGENTS_CLOSE_TAG;
+use crate::model_visible_context::SUBAGENTS_OPEN_TAG;
 
 pub(crate) struct SubagentRosterContext {
     subagents: String,
@@ -23,8 +23,8 @@ impl SubagentRosterContext {
     }
 }
 
-impl ModelVisibleFragment for SubagentRosterContext {
-    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
+impl ModelVisibleContextFragment for SubagentRosterContext {
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         DEVELOPER_FRAGMENT
     }
 
@@ -44,8 +44,8 @@ struct SubagentNotification<'a> {
     status: &'a AgentStatus,
 }
 
-impl ModelVisibleFragment for SubagentNotification<'_> {
-    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
+impl ModelVisibleContextFragment for SubagentNotification<'_> {
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         DEVELOPER_FRAGMENT
     }
 

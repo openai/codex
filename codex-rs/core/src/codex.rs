@@ -151,13 +151,13 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
-use crate::contextual_user_message::ModelVisibleFragment;
-use crate::contextual_user_message::TurnContextFragment;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
+use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::TurnContextFragment;
 use codex_config::CONFIG_TOML_FILE;
 
 mod rollout_reconstruction;
@@ -206,6 +206,7 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
+use crate::plugins::render_plugin_instructions;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -355,7 +356,6 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_plugins = plugins_manager.plugins_for_config(&config);
         let loaded_skills = skills_manager.skills_for_config(&config);
 
         for err in &loaded_skills.errors {
@@ -392,12 +392,8 @@ impl Codex {
 
         let allowed_skills_for_implicit_invocation =
             loaded_skills.allowed_skills_for_implicit_invocation();
-        let user_instructions = get_user_instructions(
-            &config,
-            Some(&allowed_skills_for_implicit_invocation),
-            Some(loaded_plugins.capability_summaries()),
-        )
-        .await;
+        let user_instructions =
+            get_user_instructions(&config, Some(&allowed_skills_for_implicit_invocation)).await;
 
         let exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
             .await
@@ -3113,6 +3109,15 @@ impl Session {
         {
             contextual_user_envelope.push_fragment(user_instructions);
         }
+        let loaded_plugins = self
+            .services
+            .plugins_manager
+            .plugins_for_config(&turn_context.config);
+        if let Some(plugin_instructions) =
+            render_plugin_instructions(loaded_plugins.capability_summaries())
+        {
+            contextual_user_envelope.push_fragment(plugin_instructions);
+        }
         let subagents = self
             .services
             .agent_control
@@ -3135,8 +3140,8 @@ impl Session {
         if let Some(developer_message) = developer_envelope.build() {
             items.push(developer_message);
         }
-        if let Some(contextual_user_message) = contextual_user_envelope.build() {
-            items.push(contextual_user_message);
+        if let Some(model_visible_context) = contextual_user_envelope.build() {
+            items.push(model_visible_context);
         }
         items
     }
@@ -9830,7 +9835,7 @@ mod tests {
                     let ContentItem::InputText { text } = content_item else {
                         return false;
                     };
-                    text.contains(crate::contextual_user_message::TURN_ABORTED_OPEN_TAG)
+                    text.contains(crate::model_visible_context::TURN_ABORTED_OPEN_TAG)
                 })
             }),
             "expected a model-visible turn aborted marker in history after interrupt"

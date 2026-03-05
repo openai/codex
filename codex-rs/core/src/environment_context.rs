@@ -1,7 +1,7 @@
 use crate::codex::TurnContext;
-use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
-use crate::contextual_user_message::ModelVisibleFragment;
-use crate::contextual_user_message::TurnContextFragment;
+use crate::model_visible_context::ENVIRONMENT_CONTEXT_FRAGMENT;
+use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::TurnContextFragment;
 use crate::shell::Shell;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
@@ -132,8 +132,8 @@ impl EnvironmentContext {
     }
 }
 
-impl ModelVisibleFragment for EnvironmentContext {
-    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
+impl ModelVisibleContextFragment for EnvironmentContext {
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         ENVIRONMENT_CONTEXT_FRAGMENT
     }
 

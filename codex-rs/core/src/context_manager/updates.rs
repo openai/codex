@@ -1,10 +1,10 @@
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
-use crate::contextual_user_message::ModelVisibleEnvelope;
-use crate::contextual_user_message::ModelVisibleFragment;
-use crate::contextual_user_message::TurnContextFragment;
 use crate::environment_context::EnvironmentContext;
 use crate::features::Feature;
+use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::ModelVisibleEnvelopeKind;
+use crate::model_visible_context::TurnContextFragment;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_protocol::config_types::Personality;
@@ -140,48 +140,48 @@ pub(crate) fn build_model_instructions_update_item(
     ))
 }
 
-struct ModelVisibleEnvelopeBuilder {
-    envelope: ModelVisibleEnvelope,
+struct ModelVisibleContextEnvelopeBuilder {
+    kind: ModelVisibleEnvelopeKind,
     content: Vec<ContentItem>,
 }
 
-impl ModelVisibleEnvelopeBuilder {
-    fn new(envelope: ModelVisibleEnvelope) -> Self {
+impl ModelVisibleContextEnvelopeBuilder {
+    fn new(kind: ModelVisibleEnvelopeKind) -> Self {
         Self {
-            envelope,
+            kind,
             content: Vec::new(),
         }
     }
 
-    fn push_fragment(&mut self, fragment: impl ModelVisibleFragment) {
+    fn push_fragment(&mut self, fragment: impl ModelVisibleContextFragment) {
         let spec = fragment.spec();
         assert_eq!(
-            spec.envelope(),
-            self.envelope,
+            spec.kind(),
+            self.kind,
             "fragment role mismatch: expected {:?}, got {:?}",
-            self.envelope,
-            spec.envelope()
+            self.kind,
+            spec.kind()
         );
         self.content.push(fragment.into_content_item());
     }
 
     fn build(self) -> Option<ResponseItem> {
-        build_message(self.envelope.response_role(), self.content)
+        build_message(self.kind.response_role(), self.content)
     }
 }
 
-pub(crate) struct DeveloperEnvelopeBuilder(ModelVisibleEnvelopeBuilder);
+pub(crate) struct DeveloperEnvelopeBuilder(ModelVisibleContextEnvelopeBuilder);
 
 impl Default for DeveloperEnvelopeBuilder {
     fn default() -> Self {
-        Self(ModelVisibleEnvelopeBuilder::new(
-            ModelVisibleEnvelope::Developer,
+        Self(ModelVisibleContextEnvelopeBuilder::new(
+            ModelVisibleEnvelopeKind::Developer,
         ))
     }
 }
 
 impl DeveloperEnvelopeBuilder {
-    pub(crate) fn push(&mut self, fragment: impl ModelVisibleFragment) {
+    pub(crate) fn push(&mut self, fragment: impl ModelVisibleContextFragment) {
         self.0.push_fragment(fragment);
     }
 
@@ -190,18 +190,18 @@ impl DeveloperEnvelopeBuilder {
     }
 }
 
-pub(crate) struct ContextualUserEnvelopeBuilder(ModelVisibleEnvelopeBuilder);
+pub(crate) struct ContextualUserEnvelopeBuilder(ModelVisibleContextEnvelopeBuilder);
 
 impl Default for ContextualUserEnvelopeBuilder {
     fn default() -> Self {
-        Self(ModelVisibleEnvelopeBuilder::new(
-            ModelVisibleEnvelope::ContextualUser,
+        Self(ModelVisibleContextEnvelopeBuilder::new(
+            ModelVisibleEnvelopeKind::ContextualUser,
         ))
     }
 }
 
 impl ContextualUserEnvelopeBuilder {
-    pub(crate) fn push_fragment(&mut self, fragment: impl ModelVisibleFragment) {
+    pub(crate) fn push_fragment(&mut self, fragment: impl ModelVisibleContextFragment) {
         self.0.push_fragment(fragment);
     }
 
@@ -256,8 +256,8 @@ pub(crate) fn build_settings_update_items(
     if let Some(developer_message) = developer_envelope.build() {
         items.push(developer_message);
     }
-    if let Some(contextual_user_message) = contextual_user_envelope.build() {
-        items.push(contextual_user_message);
+    if let Some(model_visible_context) = contextual_user_envelope.build() {
+        items.push(model_visible_context);
     }
     items
 }
@@ -265,7 +265,7 @@ pub(crate) fn build_settings_update_items(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contextual_user_message::ModelVisibleFragmentSpec;
+    use crate::model_visible_context::ModelVisibleContextEnvelope;
     use codex_protocol::models::ContentItem;
     use pretty_assertions::assert_eq;
 
@@ -296,16 +296,16 @@ mod tests {
 
     #[derive(Clone, Copy)]
     struct FakeFragment {
-        role: ModelVisibleEnvelope,
+        role: ModelVisibleEnvelopeKind,
         text: &'static str,
     }
 
-    impl ModelVisibleFragment for FakeFragment {
-        fn spec(&self) -> ModelVisibleFragmentSpec {
+    impl ModelVisibleContextFragment for FakeFragment {
+        fn spec(&self) -> ModelVisibleContextEnvelope {
             match self.role {
-                ModelVisibleEnvelope::Developer => ModelVisibleFragmentSpec::developer(),
-                ModelVisibleEnvelope::ContextualUser => {
-                    ModelVisibleFragmentSpec::contextual_user("<fake>", "</fake>")
+                ModelVisibleEnvelopeKind::Developer => ModelVisibleContextEnvelope::developer(),
+                ModelVisibleEnvelopeKind::ContextualUser => {
+                    ModelVisibleContextEnvelope::contextual_user("<fake>", "</fake>")
                 }
             }
         }
@@ -319,11 +319,11 @@ mod tests {
     fn contextual_user_envelope_builder_emits_one_message_in_order() {
         let mut builder = ContextualUserEnvelopeBuilder::default();
         builder.push_fragment(FakeFragment {
-            role: ModelVisibleEnvelope::ContextualUser,
+            role: ModelVisibleEnvelopeKind::ContextualUser,
             text: "first",
         });
         builder.push_fragment(FakeFragment {
-            role: ModelVisibleEnvelope::ContextualUser,
+            role: ModelVisibleEnvelopeKind::ContextualUser,
             text: "second",
         });
 
@@ -351,7 +351,7 @@ mod tests {
     fn developer_envelope_builder_rejects_contextual_user_fragment() {
         let mut builder = DeveloperEnvelopeBuilder::default();
         builder.push(FakeFragment {
-            role: ModelVisibleEnvelope::ContextualUser,
+            role: ModelVisibleEnvelopeKind::ContextualUser,
             text: "wrong",
         });
     }

@@ -2,12 +2,13 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::codex::TurnContext;
-use crate::contextual_user_message::ModelVisibleFragment;
-use crate::contextual_user_message::TurnContextFragment;
+use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::TurnContextFragment;
 use codex_protocol::protocol::TurnContextItem;
 
-use crate::contextual_user_message::AGENTS_MD_FRAGMENT;
-use crate::contextual_user_message::SKILL_FRAGMENT;
+use crate::model_visible_context::AGENTS_MD_FRAGMENT;
+use crate::model_visible_context::PLUGINS_FRAGMENT;
+use crate::model_visible_context::SKILL_FRAGMENT;
 use crate::shell::Shell;
 
 pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
@@ -31,8 +32,8 @@ impl UserInstructions {
     }
 }
 
-impl ModelVisibleFragment for UserInstructions {
-    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
+impl ModelVisibleContextFragment for UserInstructions {
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         AGENTS_MD_FRAGMENT
     }
 
@@ -92,9 +93,31 @@ impl SkillInstructions {
     }
 }
 
-impl ModelVisibleFragment for SkillInstructions {
-    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
+impl ModelVisibleContextFragment for SkillInstructions {
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         SKILL_FRAGMENT
+    }
+
+    fn render_text(&self) -> String {
+        Self::serialize_to_text(self)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename = "plugin_instructions", rename_all = "snake_case")]
+pub(crate) struct PluginInstructions {
+    pub text: String,
+}
+
+impl PluginInstructions {
+    pub(crate) fn serialize_to_text(&self) -> String {
+        PLUGINS_FRAGMENT.wrap_body(self.text.clone())
+    }
+}
+
+impl ModelVisibleContextFragment for PluginInstructions {
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
+        PLUGINS_FRAGMENT
     }
 
     fn render_text(&self) -> String {
@@ -176,5 +199,27 @@ mod tests {
             "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
         ));
         assert!(!SKILL_FRAGMENT.matches_text("regular text"));
+    }
+
+    #[test]
+    fn test_plugin_instructions() {
+        let plugin_instructions = PluginInstructions {
+            text: "## Plugins\n- `sample`".to_string(),
+        };
+        let response_item = plugin_instructions
+            .spec()
+            .into_message(plugin_instructions.render_text());
+
+        let ResponseItem::Message { role, content, .. } = response_item else {
+            panic!("expected ResponseItem::Message");
+        };
+
+        assert_eq!(role, "user");
+
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected one InputText content item");
+        };
+
+        assert_eq!(text, "<plugins>\n## Plugins\n- `sample`\n</plugins>");
     }
 }

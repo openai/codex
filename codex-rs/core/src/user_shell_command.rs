@@ -3,9 +3,9 @@ use std::time::Duration;
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::TurnContext;
-use crate::contextual_user_message::ModelVisibleFragment;
-use crate::contextual_user_message::USER_SHELL_COMMAND_FRAGMENT;
 use crate::exec::ExecToolCallOutput;
+use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::USER_SHELL_COMMAND_FRAGMENT;
 use crate::tools::format_exec_output_str;
 
 fn format_duration_line(duration: Duration) -> String {
@@ -19,8 +19,8 @@ struct UserShellCommandRecord<'a> {
     turn_context: &'a TurnContext,
 }
 
-impl ModelVisibleFragment for UserShellCommandRecord<'_> {
-    fn spec(&self) -> crate::contextual_user_message::ModelVisibleFragmentSpec {
+impl ModelVisibleContextFragment for UserShellCommandRecord<'_> {
+    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextEnvelope {
         USER_SHELL_COMMAND_FRAGMENT
     }
 

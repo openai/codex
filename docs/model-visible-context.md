@@ -12,8 +12,8 @@ Both envelopes use the same internal fragment contract in `codex-rs/core`.
 When adding new model-visible context:
 
 1. Define a typed fragment type.
-2. Implement `ModelVisibleFragment` for it.
-3. Give it a `ModelVisibleFragmentSpec` with the correct envelope role.
+2. Implement `ModelVisibleContextFragment` for it.
+3. Give it a `ModelVisibleContextEnvelope` with the correct envelope role.
 4. If the fragment is derived from `TurnContext` / `TurnContextItem`, also implement `TurnContextFragment`.
 5. Push the fragment through the shared envelope builders in initial-context or settings-update assembly.
 
@@ -35,6 +35,7 @@ Use the developer envelope for developer-role guidance:
 Use the contextual-user envelope for contextual state or runtime markers that should not count as real user turns:
 
 - AGENTS / user instructions
+- plugin instructions
 - environment context
 - skill instructions
 - user shell command records
