@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
 pub const FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME: &str = "codex-connectivity-diagnostics.txt";
 const PROXY_ENV_VARS: &[&str] = &[
@@ -47,11 +46,7 @@ impl FeedbackDiagnostics {
         let proxy_details = PROXY_ENV_VARS
             .iter()
             .filter_map(|key| {
-                let value = env.get(*key)?.trim();
-                if value.is_empty() {
-                    return None;
-                }
-
+                let value = env.get(*key)?;
                 Some(format!("{key} = {value}"))
             })
             .collect::<Vec<_>>();
@@ -64,13 +59,10 @@ impl FeedbackDiagnostics {
         }
 
         if let Some(value) = env.get(OPENAI_BASE_URL_ENV_VAR).map(String::as_str) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() && trimmed.trim_end_matches('/') != DEFAULT_OPENAI_BASE_URL {
-                diagnostics.push(FeedbackDiagnostic {
-                    headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
-                    details: vec![format!("{OPENAI_BASE_URL_ENV_VAR} = {trimmed}")],
-                });
-            }
+            diagnostics.push(FeedbackDiagnostic {
+                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                details: vec![format!("{OPENAI_BASE_URL_ENV_VAR} = {value}")],
+            });
         }
 
         Self { diagnostics }
@@ -157,17 +149,54 @@ mod tests {
     }
 
     #[test]
-    fn collect_from_pairs_ignores_absent_and_default_values() {
-        for diagnostics in [
-            FeedbackDiagnostics::collect_from_pairs(Vec::<(String, String)>::new()),
-            FeedbackDiagnostics::collect_from_pairs([(
-                "OPENAI_BASE_URL",
-                "https://api.openai.com/v1/",
-            )]),
-        ] {
-            assert_eq!(diagnostics, FeedbackDiagnostics::default());
-            assert_eq!(diagnostics.attachment_text(), None);
-        }
+    fn collect_from_pairs_ignores_absent_values() {
+        let diagnostics = FeedbackDiagnostics::collect_from_pairs(Vec::<(String, String)>::new());
+        assert_eq!(diagnostics, FeedbackDiagnostics::default());
+        assert_eq!(diagnostics.attachment_text(), None);
+    }
+
+    #[test]
+    fn collect_from_pairs_preserves_openai_base_url_literal_value() {
+        let diagnostics = FeedbackDiagnostics::collect_from_pairs([(
+            "OPENAI_BASE_URL",
+            "https://api.openai.com/v1/",
+        )]);
+
+        assert_eq!(
+            diagnostics,
+            FeedbackDiagnostics {
+                diagnostics: vec![FeedbackDiagnostic {
+                    headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                    details: vec!["OPENAI_BASE_URL = https://api.openai.com/v1/".to_string()],
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn collect_from_pairs_preserves_whitespace_and_empty_values() {
+        let diagnostics = FeedbackDiagnostics::collect_from_pairs([
+            ("HTTP_PROXY", "  proxy with spaces  "),
+            ("OPENAI_BASE_URL", ""),
+        ]);
+
+        assert_eq!(
+            diagnostics,
+            FeedbackDiagnostics {
+                diagnostics: vec![
+                    FeedbackDiagnostic {
+                        headline:
+                            "Proxy environment variables are set and may affect connectivity."
+                                .to_string(),
+                        details: vec!["HTTP_PROXY =   proxy with spaces  ".to_string()],
+                    },
+                    FeedbackDiagnostic {
+                        headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                        details: vec!["OPENAI_BASE_URL = ".to_string()],
+                    },
+                ],
+            }
+        );
     }
 
     #[test]
