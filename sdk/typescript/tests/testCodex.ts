@@ -3,7 +3,7 @@ import path from "node:path";
 import { Codex } from "../src/codex";
 import type { CodexConfigObject } from "../src/codexOptions";
 
-const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
+export const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
 
 type CreateTestClientOptions = {
   apiKey?: string;

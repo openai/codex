@@ -15,7 +15,7 @@ import {
   startResponsesTestProxy,
   SseResponseBody,
 } from "./responsesProxy";
-import { createMockClient, createTestClient } from "./testCodex";
+import { codexExecPath, createMockClient, createTestClient } from "./testCodex";
 
 describe("Codex", () => {
   it("returns thread events", async () => {
@@ -499,26 +499,17 @@ describe("Codex", () => {
     });
 
     const { envs: spawnEnvs, restore } = codexExecSpy();
-    const codexHome = process.env.CODEX_HOME;
-    if (!codexHome) {
-      throw new Error("CODEX_HOME must be set when running SDK tests");
-    }
     process.env.CODEX_ENV_SHOULD_NOT_LEAK = "leak";
 
     try {
       const client = new Codex({
-        codexPathOverride: path.join(
-          process.cwd(),
-          "..",
-          "..",
-          "codex-rs",
-          "target",
-          "debug",
-          "codex",
-        ),
+        codexPathOverride: codexExecPath,
         baseUrl: url,
         apiKey: "test",
-        env: { CODEX_HOME: codexHome, CUSTOM_ENV: "custom" },
+        env: {
+          CODEX_HOME: process.env.CODEX_HOME!,
+          CUSTOM_ENV: "custom",
+        },
       });
 
       const thread = client.startThread();
@@ -529,9 +520,9 @@ describe("Codex", () => {
       if (!spawnEnv) {
         throw new Error("Spawn env missing");
       }
+      expect(spawnEnv.CODEX_HOME).toBe(process.env.CODEX_HOME);
       expect(spawnEnv.CUSTOM_ENV).toBe("custom");
       expect(spawnEnv.CODEX_ENV_SHOULD_NOT_LEAK).toBeUndefined();
-      expect(spawnEnv.CODEX_HOME).toBe(codexHome);
       expect(spawnEnv.OPENAI_BASE_URL).toBe(url);
       expect(spawnEnv.CODEX_API_KEY).toBe("test");
       expect(spawnEnv.CODEX_INTERNAL_ORIGINATOR_OVERRIDE).toBeDefined();

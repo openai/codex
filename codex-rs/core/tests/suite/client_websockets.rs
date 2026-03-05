@@ -101,7 +101,7 @@ async fn responses_websocket_streams_without_feature_flag_when_provider_supports
     ]]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, false).await;
+    let harness = websocket_harness_with_options(&server, false).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
@@ -148,7 +148,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
@@ -267,7 +267,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
@@ -332,7 +332,7 @@ async fn responses_websocket_prewarm_uses_v2_when_provider_supports_websockets()
     ]]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, false).await;
+    let harness = websocket_harness_with_options(&server, false).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
@@ -389,7 +389,7 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
     ]]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     client_session
         .preconnect_websocket(&harness.otel_manager, &harness.model_info)
@@ -432,7 +432,7 @@ async fn responses_websocket_v2_requests_use_v2_when_provider_supports_websocket
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
@@ -481,7 +481,7 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true).await;
+    let harness = websocket_harness_with_options(&server, false).await;
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
         message_item("hello"),
@@ -525,7 +525,7 @@ async fn responses_websocket_v2_wins_when_both_features_enabled() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, true, true).await;
+    let harness = websocket_harness_with_options(&server, false).await;
     let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
@@ -1480,21 +1480,12 @@ async fn websocket_harness_with_runtime_metrics(
     server: &WebSocketTestServer,
     runtime_metrics_enabled: bool,
 ) -> WebsocketTestHarness {
-    websocket_harness_with_options(server, runtime_metrics_enabled, true, false).await
-}
-
-async fn websocket_harness_with_v2(
-    server: &WebSocketTestServer,
-    websocket_v2_enabled: bool,
-) -> WebsocketTestHarness {
-    websocket_harness_with_options(server, false, true, websocket_v2_enabled).await
+    websocket_harness_with_options(server, runtime_metrics_enabled).await
 }
 
 async fn websocket_harness_with_options(
     server: &WebSocketTestServer,
     runtime_metrics_enabled: bool,
-    websocket_enabled: bool,
-    websocket_v2_enabled: bool,
 ) -> WebsocketTestHarness {
     let provider = websocket_provider(server);
     let codex_home = TempDir::new().unwrap();
