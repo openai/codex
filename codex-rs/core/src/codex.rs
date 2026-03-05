@@ -6678,6 +6678,8 @@ mod tests {
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::openai_models::ModelsResponse;
+    use codex_protocol::protocol::ConversationAudioParams;
+    use codex_protocol::protocol::RealtimeAudioFrame;
     use codex_protocol::protocol::Submission;
     use codex_protocol::protocol::W3cTraceContext;
     use opentelemetry::trace::TraceContextExt;
