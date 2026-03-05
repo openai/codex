@@ -198,11 +198,6 @@ impl PluginsManager {
         force_reload: bool,
     ) -> PluginLoadOutcome {
         if !plugins_feature_enabled_from_stack(config_layer_stack) {
-            let mut cache = match self.cache_by_cwd.write() {
-                Ok(cache) => cache,
-                Err(err) => err.into_inner(),
-            };
-            cache.insert(cwd.to_path_buf(), PluginLoadOutcome::default());
             return PluginLoadOutcome::default();
         }
 
