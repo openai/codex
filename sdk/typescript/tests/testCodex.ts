@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { Codex } from "../src/codex";
@@ -15,21 +13,9 @@ type CreateTestClientOptions = {
   inheritEnv?: boolean;
 };
 
-type CreateTestEnvOptions = {
-  env?: Record<string, string>;
-  inheritEnv?: boolean;
-};
-
 export type TestClient = {
   cleanup: () => void;
   client: Codex;
-  codexHome: string;
-};
-
-export type TestEnv = {
-  cleanup: () => void;
-  codexHome: string;
-  env: Record<string, string>;
 };
 
 export function createMockClient(url: string): TestClient {
@@ -40,7 +26,6 @@ export function createMockClient(url: string): TestClient {
         mock: {
           name: "Mock provider for test",
           base_url: url,
-          env_key: "PATH",
           wire_api: "responses",
           supports_websockets: false,
         },
@@ -49,40 +34,48 @@ export function createMockClient(url: string): TestClient {
   });
 }
 
-export function createTestEnv(options: CreateTestEnvOptions = {}): TestEnv {
-  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-home-"));
-  const baseEnv = options.inheritEnv === false ? {} : getCurrentEnv();
-
-  return {
-    codexHome,
-    env: {
-      ...baseEnv,
-      ...options.env,
-      CODEX_HOME: codexHome,
-    },
-    cleanup: () => {
-      fs.rmSync(codexHome, { recursive: true, force: true });
-    },
-  };
-}
-
 export function createTestClient(options: CreateTestClientOptions = {}): TestClient {
-  const { cleanup, codexHome, env } = createTestEnv({
-    env: options.env,
-    inheritEnv: options.inheritEnv,
-  });
+  const env =
+    options.inheritEnv === false ? { ...options.env } : { ...getCurrentEnv(), ...options.env };
 
   return {
-    cleanup,
-    codexHome,
+    cleanup: () => {},
     client: new Codex({
       codexPathOverride: codexExecPath,
       baseUrl: options.baseUrl,
       apiKey: options.apiKey,
-      config: options.config,
+      config: mergeTestProviderConfig(options.baseUrl, options.config),
       env,
     }),
   };
+}
+
+function mergeTestProviderConfig(
+  baseUrl: string | undefined,
+  config: CodexConfigObject | undefined,
+): CodexConfigObject | undefined {
+  if (!baseUrl || hasExplicitProviderConfig(config)) {
+    return config;
+  }
+
+  // Built-in providers are merged before user config, so tests need a custom
+  // provider entry to force SSE against the local mock server.
+  return {
+    ...config,
+    model_provider: "mock",
+    model_providers: {
+      mock: {
+        name: "Mock provider for test",
+        base_url: baseUrl,
+        wire_api: "responses",
+        supports_websockets: false,
+      },
+    },
+  };
+}
+
+function hasExplicitProviderConfig(config: CodexConfigObject | undefined): boolean {
+  return config?.model_provider !== undefined || config?.model_providers !== undefined;
 }
 
 function getCurrentEnv(): Record<string, string> {

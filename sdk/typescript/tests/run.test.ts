@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { codexExecSpy } from "./codexExecSpy";
 import { describe, expect, it } from "@jest/globals";
+import { Codex } from "../src/codex";
 
 import {
   assistantMessage,
@@ -498,15 +499,28 @@ describe("Codex", () => {
     });
 
     const { envs: spawnEnvs, restore } = codexExecSpy();
+    const codexHome = process.env.CODEX_HOME;
+    if (!codexHome) {
+      throw new Error("CODEX_HOME must be set when running SDK tests");
+    }
     process.env.CODEX_ENV_SHOULD_NOT_LEAK = "leak";
-    const { client, cleanup, codexHome } = createTestClient({
-      baseUrl: url,
-      apiKey: "test",
-      env: { CUSTOM_ENV: "custom" },
-      inheritEnv: false,
-    });
 
     try {
+      const client = new Codex({
+        codexPathOverride: path.join(
+          process.cwd(),
+          "..",
+          "..",
+          "codex-rs",
+          "target",
+          "debug",
+          "codex",
+        ),
+        baseUrl: url,
+        apiKey: "test",
+        env: { CODEX_HOME: codexHome, CUSTOM_ENV: "custom" },
+      });
+
       const thread = client.startThread();
       await thread.run("custom env");
 
@@ -523,7 +537,6 @@ describe("Codex", () => {
       expect(spawnEnv.CODEX_INTERNAL_ORIGINATOR_OVERRIDE).toBeDefined();
     } finally {
       delete process.env.CODEX_ENV_SHOULD_NOT_LEAK;
-      cleanup();
       restore();
       await close();
     }
