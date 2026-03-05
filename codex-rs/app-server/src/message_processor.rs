@@ -177,9 +177,10 @@ impl MessageProcessor {
             config_warnings,
             session_source,
         } = args;
+        let enable_codex_api_key_env = matches!(session_source, SessionSource::Exec);
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
-            false,
+            enable_codex_api_key_env,
             config.cli_auth_credentials_store_mode,
         );
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
