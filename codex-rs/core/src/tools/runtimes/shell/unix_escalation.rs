@@ -114,7 +114,6 @@ pub(super) async fn try_run_zsh_fork(
         justification,
         arg0,
         sandbox_policy_cwd: ctx.turn.cwd.clone(),
-        #[cfg(target_os = "macos")]
         macos_seatbelt_profile_extensions: ctx
             .turn
             .config
@@ -633,7 +632,7 @@ struct CoreShellCommandExecutor {
     justification: Option<String>,
     arg0: Option<String>,
     sandbox_policy_cwd: PathBuf,
-    #[cfg(target_os = "macos")]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     use_linux_sandbox_bwrap: bool,
