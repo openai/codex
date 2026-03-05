@@ -926,8 +926,7 @@ enum ReplayKind {
 
 impl ChatWidget {
     fn realtime_conversation_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::RealtimeConversation)
-            && cfg!(not(target_os = "linux"))
+        self.config.features.realtime_voice_enabled() && cfg!(not(target_os = "linux"))
     }
 
     fn realtime_audio_device_selection_enabled(&self) -> bool {
@@ -7074,7 +7073,7 @@ impl ChatWidget {
         if feature == Feature::VoiceTranscription {
             self.bottom_pane.set_voice_transcription_enabled(enabled);
         }
-        if feature == Feature::RealtimeConversation {
+        if matches!(feature, Feature::RealtimeConversation | Feature::RealtimeV2) {
             let realtime_conversation_enabled = self.realtime_conversation_enabled();
             self.bottom_pane
                 .set_realtime_conversation_enabled(realtime_conversation_enabled);

@@ -37,6 +37,13 @@ use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RealtimeFeatureGate {
+    RealtimeV2,
+    RealtimeConversation,
+    Disabled,
+}
+
 #[tokio::test]
 async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -77,7 +84,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
-        true,
+        RealtimeFeatureGate::RealtimeV2,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -178,6 +185,11 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let connections = realtime_server.connections();
     assert_eq!(connections.len(), 1);
     let connection = &connections[0];
+    assert_eq!(connection[0].body_json()["type"], json!("session.update"));
+    assert_eq!(
+        connection[0].body_json()["session"]["type"],
+        json!("realtime")
+    );
     assert_eq!(connection.len(), 3);
     assert_eq!(
         connection[0].body_json()["type"].as_str(),
@@ -225,7 +237,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
-        true,
+        RealtimeFeatureGate::RealtimeV2,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -297,7 +309,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
-        false,
+        RealtimeFeatureGate::Disabled,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -337,6 +349,74 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn realtime_conversation_accepts_legacy_feature_flag() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_backend", "instructions": "backend prompt" }
+    })]]])
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        realtime_server.uri(),
+        RealtimeFeatureGate::RealtimeConversation,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    mcp.initialize().await?;
+    login_with_api_key(&mut mcp, "sk-test-key").await?;
+
+    let thread_start_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
+    )
+    .await??;
+    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+
+    let start_request_id = mcp
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            thread_id: thread_start.thread.id.clone(),
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        })
+        .await?;
+    let start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
+    )
+    .await??;
+    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+    let started =
+        read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
+            .await?;
+    assert_eq!(started.thread_id, thread_start.thread.id);
+
+    let connections = realtime_server.connections();
+    assert_eq!(connections.len(), 1);
+    let connection = &connections[0];
+    assert_eq!(connection[0].body_json()["type"], json!("session.update"));
+    assert_eq!(
+        connection[0].body_json()["session"]["type"],
+        json!("quicksilver")
+    );
+    assert_eq!(
+        realtime_server.handshakes()[0].uri(),
+        "/v1/realtime?intent=quicksilver"
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
 async fn read_notification<T: DeserializeOwned>(mcp: &mut McpProcess, method: &str) -> Result<T> {
     let notification = timeout(
         DEFAULT_TIMEOUT,
@@ -366,13 +446,31 @@ fn create_config_toml(
     codex_home: &Path,
     responses_server_uri: &str,
     realtime_server_uri: &str,
-    realtime_enabled: bool,
+    realtime_feature_gate: RealtimeFeatureGate,
 ) -> std::io::Result<()> {
-    let realtime_feature_key = FEATURES
+    let realtime_v2_feature_key = FEATURES
+        .iter()
+        .find(|spec| spec.id == Feature::RealtimeV2)
+        .map(|spec| spec.key)
+        .unwrap_or("realtime_v2");
+    let realtime_conversation_feature_key = FEATURES
         .iter()
         .find(|spec| spec.id == Feature::RealtimeConversation)
         .map(|spec| spec.key)
         .unwrap_or("realtime_conversation");
+    let feature_toggles = match realtime_feature_gate {
+        RealtimeFeatureGate::RealtimeV2 => {
+            format!("{realtime_v2_feature_key} = true\n{realtime_conversation_feature_key} = false")
+        }
+        RealtimeFeatureGate::RealtimeConversation => {
+            format!("{realtime_v2_feature_key} = false\n{realtime_conversation_feature_key} = true")
+        }
+        RealtimeFeatureGate::Disabled => {
+            format!(
+                "{realtime_v2_feature_key} = false\n{realtime_conversation_feature_key} = false"
+            )
+        }
+    };
 
     std::fs::write(
         codex_home.join("config.toml"),
@@ -385,7 +483,7 @@ model_provider = "mock_provider"
 experimental_realtime_ws_base_url = "{realtime_server_uri}"
 
 [features]
-{realtime_feature_key} = {realtime_enabled}
+{feature_toggles}
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

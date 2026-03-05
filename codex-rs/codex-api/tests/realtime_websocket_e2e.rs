@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::time::Duration;
 
+use codex_api::RealtimeApiMode;
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
 use codex_api::RealtimeSessionConfig;
@@ -163,6 +164,7 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
                 instructions: "backend prompt".to_string(),
                 model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
+                mode: RealtimeApiMode::V2,
             },
             HeaderMap::new(),
             HeaderMap::new(),
@@ -255,6 +257,7 @@ async fn realtime_ws_e2e_send_while_next_event_waits() {
                 instructions: "backend prompt".to_string(),
                 model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
+                mode: RealtimeApiMode::V2,
             },
             HeaderMap::new(),
             HeaderMap::new(),
@@ -318,6 +321,7 @@ async fn realtime_ws_e2e_disconnected_emitted_once() {
                 instructions: "backend prompt".to_string(),
                 model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
+                mode: RealtimeApiMode::V2,
             },
             HeaderMap::new(),
             HeaderMap::new(),
@@ -378,6 +382,7 @@ async fn realtime_ws_e2e_forwards_unknown_text_events() {
                 instructions: "backend prompt".to_string(),
                 model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
+                mode: RealtimeApiMode::V2,
             },
             HeaderMap::new(),
             HeaderMap::new(),

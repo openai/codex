@@ -155,6 +155,8 @@ pub enum Feature {
     FastMode,
     /// Enable voice transcription in the TUI composer.
     VoiceTranscription,
+    /// Enable realtime voice conversation mode in the TUI.
+    RealtimeV2,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
@@ -163,6 +165,12 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
     ResponsesWebsocketsV2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RealtimeVoiceMode {
+    V1,
+    V2,
 }
 
 impl Feature {
@@ -235,6 +243,18 @@ impl Features {
 
     pub fn enabled(&self, f: Feature) -> bool {
         self.enabled.contains(&f)
+    }
+
+    pub fn realtime_voice_mode(&self) -> Option<RealtimeVoiceMode> {
+        if self.enabled(Feature::RealtimeV2) {
+            return Some(RealtimeVoiceMode::V2);
+        }
+        self.enabled(Feature::RealtimeConversation)
+            .then_some(RealtimeVoiceMode::V1)
+    }
+
+    pub fn realtime_voice_enabled(&self) -> bool {
+        self.realtime_voice_mode().is_some()
     }
 
     pub fn enable(&mut self, f: Feature) -> &mut Self {
@@ -718,6 +738,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::RealtimeV2,
+        key: "realtime_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::RealtimeConversation,
         key: "realtime_conversation",
         stage: Stage::UnderDevelopment,
@@ -886,5 +912,61 @@ mod tests {
     fn collab_is_legacy_alias_for_multi_agent() {
         assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
         assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+    }
+
+    #[test]
+    fn realtime_voice_enabled_is_false_when_no_realtime_flags_are_enabled() {
+        let features = Features::with_defaults();
+        assert_eq!(features.realtime_voice_enabled(), false);
+    }
+
+    #[test]
+    fn realtime_voice_enabled_is_true_when_realtime_v2_is_enabled() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RealtimeV2);
+        assert_eq!(features.realtime_voice_enabled(), true);
+    }
+
+    #[test]
+    fn realtime_voice_enabled_is_true_when_legacy_realtime_conversation_is_enabled() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RealtimeConversation);
+        assert_eq!(features.realtime_voice_enabled(), true);
+    }
+
+    #[test]
+    fn realtime_voice_enabled_is_true_when_both_realtime_flags_are_enabled() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RealtimeV2);
+        features.enable(Feature::RealtimeConversation);
+        assert_eq!(features.realtime_voice_enabled(), true);
+    }
+
+    #[test]
+    fn realtime_voice_mode_is_none_when_no_realtime_flags_are_enabled() {
+        let features = Features::with_defaults();
+        assert_eq!(features.realtime_voice_mode(), None);
+    }
+
+    #[test]
+    fn realtime_voice_mode_is_v2_when_realtime_v2_is_enabled() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RealtimeV2);
+        assert_eq!(features.realtime_voice_mode(), Some(RealtimeVoiceMode::V2));
+    }
+
+    #[test]
+    fn realtime_voice_mode_is_v1_when_only_legacy_realtime_flag_is_enabled() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RealtimeConversation);
+        assert_eq!(features.realtime_voice_mode(), Some(RealtimeVoiceMode::V1));
+    }
+
+    #[test]
+    fn realtime_voice_mode_prefers_v2_when_both_flags_are_enabled() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RealtimeV2);
+        features.enable(Feature::RealtimeConversation);
+        assert_eq!(features.realtime_voice_mode(), Some(RealtimeVoiceMode::V2));
     }
 }

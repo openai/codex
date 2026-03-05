@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::auth::OPENAI_API_KEY_ENV_VAR;
+use codex_core::features::Feature;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -172,6 +173,95 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         closed.reason.as_deref(),
         Some("requested" | "transport_closed")
     ));
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_legacy_feature_uses_v1_realtime_protocol() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![],
+        vec![
+            vec![json!({
+                "type": "session.updated",
+                "session": { "id": "sess_legacy", "instructions": "backend prompt" }
+            })],
+            vec![json!({
+                "type": "conversation.output_audio.delta",
+                "delta": "AQID",
+                "sample_rate": 24000,
+                "channels": 1
+            })],
+            vec![],
+        ],
+    ])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::RealtimeConversation)
+            .expect("enable legacy realtime feature");
+        config
+            .features
+            .disable(Feature::RealtimeV2)
+            .expect("disable realtime_v2 feature");
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+    let _started = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationStarted(started) => Some(Ok(started.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+
+    test.codex
+        .submit(Op::RealtimeConversationText(ConversationTextParams {
+            text: "hello legacy".to_string(),
+        }))
+        .await?;
+
+    let audio_out = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::AudioOut(frame),
+        }) => Some(frame.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(audio_out.data, "AQID");
+
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    let connection = &connections[1];
+    assert_eq!(connection[0].body_json()["type"], json!("session.update"));
+    assert_eq!(
+        connection[0].body_json()["session"]["type"],
+        json!("quicksilver")
+    );
+    assert_eq!(
+        server.handshakes()[1].uri(),
+        "/v1/realtime?intent=quicksilver&model=realtime-test-model"
+    );
+    assert_eq!(
+        connection[1].body_json()["type"],
+        json!("conversation.item.create")
+    );
+    assert_eq!(
+        connection[1].body_json()["item"]["content"][0]["type"],
+        json!("text")
+    );
 
     server.shutdown().await;
     Ok(())

@@ -1883,6 +1883,64 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
 }
 
 #[tokio::test]
+async fn realtime_feature_gate_uses_dual_read_feature_flags() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let platform_realtime_supported = cfg!(not(target_os = "linux"));
+
+    assert_eq!(chat.realtime_conversation_enabled(), false);
+
+    chat.set_feature_enabled(Feature::RealtimeV2, true);
+    assert_eq!(
+        chat.realtime_conversation_enabled(),
+        platform_realtime_supported
+    );
+
+    chat.set_feature_enabled(Feature::RealtimeV2, false);
+    assert_eq!(chat.realtime_conversation_enabled(), false);
+
+    chat.set_feature_enabled(Feature::RealtimeConversation, true);
+    assert_eq!(
+        chat.realtime_conversation_enabled(),
+        platform_realtime_supported
+    );
+}
+
+#[tokio::test]
+async fn disabling_realtime_v2_resets_live_realtime_session() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::RealtimeV2, true);
+    chat.start_realtime_conversation();
+
+    assert!(matches!(
+        op_rx.try_recv(),
+        Ok(Op::RealtimeConversationStart(_))
+    ));
+
+    chat.set_feature_enabled(Feature::RealtimeV2, false);
+
+    assert!(!chat.realtime_conversation.is_live());
+    assert!(matches!(
+        op_rx.try_recv(),
+        Ok(Op::RealtimeConversationClose)
+    ));
+}
+
+#[tokio::test]
+async fn legacy_realtime_feature_keeps_realtime_enabled_when_realtime_v2_is_off() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let platform_realtime_supported = cfg!(not(target_os = "linux"));
+
+    chat.set_feature_enabled(Feature::RealtimeConversation, true);
+    chat.set_feature_enabled(Feature::RealtimeV2, true);
+    chat.set_feature_enabled(Feature::RealtimeV2, false);
+
+    assert_eq!(
+        chat.realtime_conversation_enabled(),
+        platform_realtime_supported
+    );
+}
+
+#[tokio::test]
 async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

@@ -4,6 +4,7 @@ use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
+use crate::features::RealtimeVoiceMode;
 use crate::file_watcher::WatchRegistration;
 use crate::protocol::Event;
 use crate::protocol::Op;
@@ -142,5 +143,13 @@ impl CodexThread {
 
     pub fn enabled(&self, feature: Feature) -> bool {
         self.codex.enabled(feature)
+    }
+
+    pub fn realtime_voice_mode(&self) -> Option<RealtimeVoiceMode> {
+        self.codex.session.features().realtime_voice_mode()
+    }
+
+    pub fn realtime_voice_enabled(&self) -> bool {
+        self.realtime_voice_mode().is_some()
     }
 }

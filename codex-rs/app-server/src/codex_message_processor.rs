@@ -5188,7 +5188,7 @@ impl CodexMessageProcessor {
             }
         }
 
-        if !thread.enabled(Feature::RealtimeConversation) {
+        if !thread.realtime_voice_enabled() {
             self.send_invalid_request_error(
                 request_id,
                 format!("thread {thread_id} does not support realtime conversation"),
