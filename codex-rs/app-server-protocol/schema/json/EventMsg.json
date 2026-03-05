@@ -1421,6 +1421,12 @@
                 "null"
               ]
             },
+            "saved_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "status": {
               "type": "string"
             },
@@ -6069,6 +6075,12 @@
                 "null"
               ]
             },
+            "saved_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "status": {
               "type": "string"
             },
@@ -7209,6 +7221,12 @@
           "type": "string"
         },
         "revised_prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "saved_path": {
           "type": [
             "string",
             "null"

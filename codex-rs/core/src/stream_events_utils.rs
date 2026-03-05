@@ -192,13 +192,24 @@ pub(crate) async fn handle_output_item_done(
             if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode) {
                 let turn_item = match turn_item {
                     TurnItem::ImageGeneration(mut image_item) => {
-                        let path = save_image_generation_result_to_cwd(
+                        match save_image_generation_result_to_cwd(
                             &ctx.turn_context.cwd,
                             &image_item.id,
                             &image_item.result,
                         )
-                        .await?;
-                        image_item.saved_path = Some(path.to_string_lossy().into_owned());
+                        .await
+                        {
+                            Ok(path) => {
+                                image_item.saved_path = Some(path.to_string_lossy().into_owned());
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    call_id = %image_item.id,
+                                    cwd = %ctx.turn_context.cwd.display(),
+                                    "failed to save generated image: {err}"
+                                );
+                            }
+                        }
                         TurnItem::ImageGeneration(image_item)
                     }
                     other => other,
