@@ -29,6 +29,9 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
+use codex_app_server_protocol::McpServerElicitationAction;
+use codex_app_server_protocol::McpServerElicitationRequest;
+use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
@@ -72,6 +75,7 @@ use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::approvals::ApplyPatchApprovalRequestEvent;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecApprovalRequestEvent;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::models::FileSystemPermissions;
@@ -175,6 +179,7 @@ enum PendingPatchApprovalRequest {
 struct PendingServerRequests {
     exec_approvals: HashMap<String, PendingExecApprovalRequest>,
     patch_approvals: HashMap<String, PendingPatchApprovalRequest>,
+    mcp_elicitations: HashMap<RequestId, (String, codex_protocol::mcp::RequestId)>,
     request_user_input: HashMap<String, VecDeque<RequestId>>,
     dynamic_tool_calls: HashMap<String, RequestId>,
     pending_file_changes: HashMap<String, HashMap<PathBuf, FileChange>>,
@@ -184,6 +189,8 @@ impl PendingServerRequests {
     fn clear_turn_scoped(&mut self) {
         self.exec_approvals.clear();
         self.patch_approvals.clear();
+        // MCP elicitation requests can outlive turn boundaries (turn_id is best-effort),
+        // so clear them only via resolve path or serverRequest/resolved notifications.
         self.request_user_input.clear();
         self.dynamic_tool_calls.clear();
         self.pending_file_changes.clear();
@@ -209,6 +216,38 @@ impl PendingServerRequests {
             self.request_user_input.remove(turn_id);
         }
         request_id
+    }
+
+    fn register_mcp_elicitation(
+        &mut self,
+        pending_request_id: RequestId,
+        server_name: String,
+        request_id: codex_protocol::mcp::RequestId,
+    ) {
+        self.mcp_elicitations
+            .insert(pending_request_id, (server_name, request_id));
+    }
+
+    fn pop_mcp_elicitation_request_id(
+        &mut self,
+        server_name: &str,
+        request_id: &codex_protocol::mcp::RequestId,
+    ) -> Option<RequestId> {
+        let pending_request_id = self.mcp_elicitations.iter().find_map(
+            |(pending_request_id, (pending_server_name, pending_request_id_value))| {
+                if pending_server_name == server_name && pending_request_id_value == request_id {
+                    Some(pending_request_id.clone())
+                } else {
+                    None
+                }
+            },
+        )?;
+        self.mcp_elicitations.remove(&pending_request_id);
+        Some(pending_request_id)
+    }
+
+    fn clear_mcp_elicitation_by_request_id(&mut self, request_id: &RequestId) {
+        self.mcp_elicitations.remove(request_id);
     }
 }
 
@@ -548,12 +587,52 @@ async fn reject_server_request(
     }
 }
 
-fn resolve_elicitation_deferred_message() -> String {
-    "ResolveElicitation is temporarily unavailable in in-process local-only mode".to_string()
-}
-
 fn local_only_deferred_message(action_name: &str) -> String {
     format!("{action_name} is temporarily unavailable in in-process local-only mode")
+}
+
+fn app_server_request_id_to_mcp(request_id: RequestId) -> codex_protocol::mcp::RequestId {
+    // In this path the app-server request id is used as the TUI correlation id.
+    // App-server translates the resolved server request back to the original MCP request.
+    match request_id {
+        RequestId::String(id) => codex_protocol::mcp::RequestId::String(id),
+        RequestId::Integer(id) => codex_protocol::mcp::RequestId::Integer(id),
+    }
+}
+
+fn mcp_elicitation_request_to_core(
+    request: McpServerElicitationRequest,
+) -> codex_protocol::approvals::ElicitationRequest {
+    match request {
+        McpServerElicitationRequest::Form {
+            message,
+            requested_schema,
+        } => codex_protocol::approvals::ElicitationRequest::Form {
+            message,
+            requested_schema,
+        },
+        McpServerElicitationRequest::Url {
+            message,
+            url,
+            elicitation_id,
+        } => codex_protocol::approvals::ElicitationRequest::Url {
+            message,
+            url,
+            elicitation_id,
+        },
+    }
+}
+
+fn mcp_elicitation_action_to_protocol(
+    action: codex_protocol::approvals::ElicitationAction,
+) -> McpServerElicitationAction {
+    match action {
+        codex_protocol::approvals::ElicitationAction::Accept => McpServerElicitationAction::Accept,
+        codex_protocol::approvals::ElicitationAction::Decline => {
+            McpServerElicitationAction::Decline
+        }
+        codex_protocol::approvals::ElicitationAction::Cancel => McpServerElicitationAction::Cancel,
+    }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -893,6 +972,10 @@ fn send_error_event(app_event_tx: &AppEventSender, message: String) {
             codex_error_info: None,
         }),
     );
+}
+
+fn lagged_event_warning_message(skipped: usize) -> String {
+    format!("in-process app-server event stream lagged; dropped {skipped} events")
 }
 
 async fn send_request_with_response<T>(
@@ -1630,11 +1713,46 @@ async fn process_in_process_command(
         Op::ListMcpTools => {
             send_warning_event(app_event_tx, local_only_deferred_message("ListMcpTools"));
         }
-        Op::ResolveElicitation { .. } => {
-            // TODO(fcoury): support this once app-server protocol has a server-request
-            // variant for MCP elicitation and a corresponding typed response payload.
-            // This branch intentionally avoids protocol expansion.
-            send_warning_event(app_event_tx, resolve_elicitation_deferred_message());
+        Op::ResolveElicitation {
+            server_name,
+            request_id,
+            decision,
+            content,
+        } => {
+            let Some(pending_request_id) =
+                pending_server_requests.pop_mcp_elicitation_request_id(&server_name, &request_id)
+            else {
+                send_warning_event(
+                    app_event_tx,
+                    format!(
+                        "mcp elicitation response ignored because `{server_name}` request `{request_id}` was not pending"
+                    ),
+                );
+                return false;
+            };
+
+            let response = McpServerElicitationRequestResponse {
+                action: mcp_elicitation_action_to_protocol(decision),
+                content,
+            };
+            let result = match serde_json::to_value(response) {
+                Ok(value) => value,
+                Err(err) => {
+                    send_error_event(
+                        app_event_tx,
+                        format!("failed to encode mcp elicitation response: {err}"),
+                    );
+                    return false;
+                }
+            };
+            resolve_server_request(
+                client,
+                pending_request_id,
+                result,
+                "mcpServer/elicitation/request",
+                app_event_tx,
+            )
+            .await;
         }
         Op::Shutdown => {
             let request = ClientRequest::ThreadUnsubscribe {
@@ -1927,6 +2045,37 @@ async fn run_in_process_agent_loop(
                                     }),
                                 );
                             }
+                            ServerRequest::McpServerElicitationRequest { request_id, params } => {
+                                if params.thread_id != thread_id {
+                                    reject_server_request(
+                                        &client,
+                                        request_id,
+                                        &method,
+                                        format!(
+                                            "request targets thread `{}`, but active thread is `{thread_id}`",
+                                            params.thread_id
+                                        ),
+                                        &app_event_tx,
+                                    )
+                                    .await;
+                                    continue;
+                                }
+
+                                let elicitation_id = app_server_request_id_to_mcp(request_id.clone());
+                                pending_server_requests.register_mcp_elicitation(
+                                    request_id,
+                                    params.server_name.clone(),
+                                    elicitation_id.clone(),
+                                );
+                                send_codex_event(
+                                    &app_event_tx,
+                                    EventMsg::ElicitationRequest(ElicitationRequestEvent {
+                                        server_name: params.server_name,
+                                        id: elicitation_id,
+                                        request: mcp_elicitation_request_to_core(params.request),
+                                    }),
+                                );
+                            }
                             ServerRequest::DynamicToolCall { request_id, params } => {
                                 if params.thread_id != thread_id {
                                     reject_server_request(
@@ -2036,13 +2185,24 @@ async fn run_in_process_agent_loop(
                         }
                     }
                     InProcessServerEvent::ServerNotification(notification) => {
-                        if let ServerNotification::ItemStarted(notification) = notification
-                            && notification.thread_id == thread_id
-                            && let ThreadItem::FileChange { id, changes, .. } = notification.item
-                        {
-                            pending_server_requests
-                                .pending_file_changes
-                                .insert(id, file_update_changes_to_core(changes));
+                        match notification {
+                            ServerNotification::ItemStarted(notification)
+                                if notification.thread_id == thread_id =>
+                            {
+                                if let ThreadItem::FileChange { id, changes, .. } = notification.item
+                                {
+                                    pending_server_requests
+                                        .pending_file_changes
+                                        .insert(id, file_update_changes_to_core(changes));
+                                }
+                            }
+                            ServerNotification::ServerRequestResolved(notification)
+                                if notification.thread_id == thread_id =>
+                            {
+                                pending_server_requests
+                                    .clear_mcp_elicitation_by_request_id(&notification.request_id);
+                            }
+                            _ => {}
                         }
                     }
                     InProcessServerEvent::LegacyNotification(notification) => {
@@ -2076,10 +2236,7 @@ async fn run_in_process_agent_loop(
                         app_event_tx.send(AppEvent::CodexEvent(event));
                     }
                     InProcessServerEvent::Lagged { skipped } => {
-                        send_warning_event(
-                            &app_event_tx,
-                            format!("in-process app-server event stream lagged; dropped {skipped} events"),
-                        );
+                        send_warning_event(&app_event_tx, lagged_event_warning_message(skipped));
                     }
                 }
             }
@@ -2455,6 +2612,54 @@ mod tests {
     }
 
     #[test]
+    fn clear_turn_scoped_preserves_pending_mcp_elicitation_requests() {
+        let mut pending = PendingServerRequests::default();
+        let pending_request_id = RequestId::Integer(42);
+        let server_name = "test-server".to_string();
+        let elicitation_id = codex_protocol::mcp::RequestId::Integer(7);
+        pending.register_mcp_elicitation(
+            pending_request_id.clone(),
+            server_name.clone(),
+            elicitation_id.clone(),
+        );
+
+        pending.clear_turn_scoped();
+
+        assert_eq!(
+            pending.pop_mcp_elicitation_request_id(&server_name, &elicitation_id),
+            Some(pending_request_id)
+        );
+    }
+
+    #[test]
+    fn server_request_resolved_clears_pending_mcp_elicitation_request() {
+        let mut pending = PendingServerRequests::default();
+        let pending_request_id = RequestId::Integer(5);
+        let server_name = "test-server".to_string();
+        let elicitation_id = codex_protocol::mcp::RequestId::String("abc".to_string());
+        pending.register_mcp_elicitation(
+            pending_request_id.clone(),
+            server_name.clone(),
+            elicitation_id.clone(),
+        );
+
+        pending.clear_mcp_elicitation_by_request_id(&pending_request_id);
+
+        assert_eq!(
+            pending.pop_mcp_elicitation_request_id(&server_name, &elicitation_id),
+            None
+        );
+    }
+
+    #[test]
+    fn lagged_event_warning_message_is_explicit() {
+        assert_eq!(
+            lagged_event_warning_message(7),
+            "in-process app-server event stream lagged; dropped 7 events".to_string()
+        );
+    }
+
+    #[test]
     fn legacy_notification_decodes_prefixed_warning_with_direct_payload() {
         let notification = JSONRPCNotification {
             method: "codex/event/warning".to_string(),
@@ -2654,17 +2859,86 @@ mod tests {
         client.shutdown().await.expect("shutdown in-process client");
     }
 
+    async fn assert_local_only_warning_for_op(config: &Config, op: Op, expected_message: &str) {
+        let (should_shutdown, mut rx, client) = process_single_op(config, op).await;
+        assert_eq!(should_shutdown, false);
+
+        let event = next_codex_event(&mut rx).await;
+        let warning = warning_from_event(event);
+        assert_eq!(warning.message, expected_message.to_string());
+
+        client.shutdown().await.expect("shutdown in-process client");
+    }
+
     #[tokio::test]
     async fn deferred_op_emits_explicit_local_only_warning() {
         let config = test_config().await;
-        let (should_shutdown, mut rx, client) = process_single_op(&config, Op::Undo).await;
+        let deferred_ops = vec![
+            (
+                Op::Undo,
+                "Undo is temporarily unavailable in in-process local-only mode",
+            ),
+            (
+                Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    windows_sandbox_level: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    service_tier: None,
+                    collaboration_mode: None,
+                    personality: None,
+                },
+                "OverrideTurnContext is temporarily unavailable in in-process local-only mode",
+            ),
+            (
+                Op::DropMemories,
+                "DropMemories is temporarily unavailable in in-process local-only mode",
+            ),
+            (
+                Op::UpdateMemories,
+                "UpdateMemories is temporarily unavailable in in-process local-only mode",
+            ),
+            (
+                Op::RunUserShellCommand {
+                    command: "echo hello".to_string(),
+                },
+                "RunUserShellCommand is temporarily unavailable in in-process local-only mode",
+            ),
+            (
+                Op::ListMcpTools,
+                "ListMcpTools is temporarily unavailable in in-process local-only mode",
+            ),
+        ];
+
+        for (op, expected_warning) in deferred_ops {
+            assert_local_only_warning_for_op(&config, op, expected_warning).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_elicitation_without_pending_request_warns() {
+        let config = test_config().await;
+        let (should_shutdown, mut rx, client) = process_single_op(
+            &config,
+            Op::ResolveElicitation {
+                server_name: "test-server".to_string(),
+                request_id: codex_protocol::mcp::RequestId::Integer(1),
+                decision: codex_protocol::approvals::ElicitationAction::Cancel,
+                content: None,
+            },
+        )
+        .await;
         assert_eq!(should_shutdown, false);
 
         let event = next_codex_event(&mut rx).await;
         let warning = warning_from_event(event);
         assert_eq!(
             warning.message,
-            "Undo is temporarily unavailable in in-process local-only mode"
+            "mcp elicitation response ignored because `test-server` request `1` was not pending"
+                .to_string()
         );
 
         client.shutdown().await.expect("shutdown in-process client");
