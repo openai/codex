@@ -7,17 +7,17 @@
     }
   },
   "properties": {
-    "marketplacePath": {
-      "$ref": "#/definitions/AbsolutePathBuf"
-    },
-    "pluginName": {
-      "type": "string"
+    "additionalRoots": {
+      "description": "Additional roots to use when discovering repo-scoped marketplaces. Home-scoped marketplaces are always considered.",
+      "items": {
+        "$ref": "#/definitions/AbsolutePathBuf"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
     }
   },
-  "required": [
-    "marketplacePath",
-    "pluginName"
-  ],
-  "title": "PluginInstallParams",
+  "title": "PluginListParams",
   "type": "object"
 }

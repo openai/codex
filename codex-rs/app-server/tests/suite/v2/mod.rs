@@ -15,6 +15,8 @@ mod mcp_server_elicitation;
 mod model_list;
 mod output_schema;
 mod plan_item;
+mod plugin_install;
+mod plugin_list;
 mod rate_limits;
 mod realtime_conversation;
 mod request_user_input;

@@ -79,6 +79,11 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::PluginListParams;
+use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginMarketplaceEntry;
+use codex_app_server_protocol::PluginSource;
+use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::ProductSurface as ApiProductSurface;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
@@ -198,6 +203,8 @@ use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
+use codex_core::plugins::MarketplaceError;
+use codex_core::plugins::MarketplacePluginSourceSummary;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::read_head_for_summary;
@@ -644,6 +651,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PluginList { request_id, params } => {
+                self.plugin_list(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsRemoteList { request_id, params } => {
@@ -4924,6 +4935,80 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
+        let additional_roots = params.additional_roots.unwrap_or_default();
+        let plugins_manager = self.thread_manager.plugins_manager();
+        let config = match self.load_latest_config().await {
+            Ok(config) => config,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+
+        let data = match tokio::task::spawn_blocking(move || {
+            let marketplaces =
+                plugins_manager.list_marketplaces_for_config(&config, &additional_roots)?;
+            Ok::<Vec<PluginMarketplaceEntry>, MarketplaceError>(
+                marketplaces
+                    .into_iter()
+                    .map(|marketplace| PluginMarketplaceEntry {
+                        name: marketplace.name,
+                        path: marketplace.path,
+                        plugins: marketplace
+                            .plugins
+                            .into_iter()
+                            .map(|plugin| PluginSummary {
+                                enabled: plugin.enabled,
+                                name: plugin.name,
+                                source: match plugin.source {
+                                    MarketplacePluginSourceSummary::Local { path } => {
+                                        PluginSource::Local { path }
+                                    }
+                                },
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            )
+        })
+        .await
+        {
+            Ok(Ok(data)) => data,
+            Ok(Err(err)) => {
+                match err {
+                    MarketplaceError::Io { .. } => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to list marketplace plugins: {err}"),
+                        )
+                        .await;
+                    }
+                    MarketplaceError::InvalidMarketplaceFile { .. }
+                    | MarketplaceError::PluginNotFound { .. }
+                    | MarketplaceError::DuplicatePlugin { .. }
+                    | MarketplaceError::InvalidPlugin(_) => {
+                        self.send_invalid_request_error(request_id, err.to_string())
+                            .await;
+                    }
+                }
+                return;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to list marketplace plugins: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        self.outgoing
+            .send_response(request_id, PluginListResponse { data })
+            .await;
+    }
+
     async fn skills_remote_list(
         &self,
         request_id: ConnectionRequestId,
@@ -5034,16 +5119,14 @@ impl CodexMessageProcessor {
 
     async fn plugin_install(&self, request_id: ConnectionRequestId, params: PluginInstallParams) {
         let PluginInstallParams {
-            marketplace_name,
+            marketplace_path,
             plugin_name,
-            cwd,
         } = params;
 
         let plugins_manager = self.thread_manager.plugins_manager();
         let request = PluginInstallRequest {
             plugin_name,
-            marketplace_name,
-            cwd: cwd.unwrap_or_else(|| self.config.cwd.clone()),
+            marketplace_path,
         };
 
         match plugins_manager.install_plugin(request).await {
@@ -5076,7 +5159,14 @@ impl CodexMessageProcessor {
                         )
                         .await;
                     }
-                    CorePluginInstallError::Marketplace(_) | CorePluginInstallError::Store(_) => {}
+                    err @ (CorePluginInstallError::Marketplace(_)
+                    | CorePluginInstallError::Store(_)) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to install plugin: {err}"),
+                        )
+                        .await;
+                    }
                 }
             }
         }
