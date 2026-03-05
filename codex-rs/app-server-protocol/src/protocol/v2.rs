@@ -28,9 +28,9 @@ use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
-use codex_protocol::models::MacOsAutomationValue as CoreMacOsAutomationValue;
-use codex_protocol::models::MacOsPermissions as CoreMacOsPermissions;
-use codex_protocol::models::MacOsPreferencesValue as CoreMacOsPreferencesValue;
+use codex_protocol::models::MacOsAutomationPermission as CoreMacOsAutomationPermission;
+use codex_protocol::models::MacOsPreferencesPermission as CoreMacOsPreferencesPermission;
+use codex_protocol::models::MacOsSeatbeltProfileExtensions as CoreMacOsSeatbeltProfileExtensions;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
@@ -837,19 +837,19 @@ impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalMacOsPermissions {
-    pub preferences: Option<CoreMacOsPreferencesValue>,
-    pub automations: Option<CoreMacOsAutomationValue>,
-    pub accessibility: Option<bool>,
-    pub calendar: Option<bool>,
+    pub preferences: CoreMacOsPreferencesPermission,
+    pub automations: CoreMacOsAutomationPermission,
+    pub accessibility: bool,
+    pub calendar: bool,
 }
 
-impl From<CoreMacOsPermissions> for AdditionalMacOsPermissions {
-    fn from(value: CoreMacOsPermissions) -> Self {
+impl From<CoreMacOsSeatbeltProfileExtensions> for AdditionalMacOsPermissions {
+    fn from(value: CoreMacOsSeatbeltProfileExtensions) -> Self {
         Self {
-            preferences: value.preferences,
-            automations: value.automations,
-            accessibility: value.accessibility,
-            calendar: value.calendar,
+            preferences: value.macos_preferences,
+            automations: value.macos_automation,
+            accessibility: value.macos_accessibility,
+            calendar: value.macos_calendar,
         }
     }
 }

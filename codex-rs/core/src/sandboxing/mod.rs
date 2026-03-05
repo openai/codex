@@ -106,6 +106,32 @@ pub(crate) struct EffectiveSandboxPermissions {
     pub(crate) macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
 }
 
+impl EffectiveSandboxPermissions {
+    pub(crate) fn new(
+        sandbox_policy: &SandboxPolicy,
+        macos_seatbelt_profile_extensions: Option<&MacOsSeatbeltProfileExtensions>,
+        additional_permissions: Option<&PermissionProfile>,
+    ) -> Self {
+        let Some(additional_permissions) = additional_permissions else {
+            return Self {
+                sandbox_policy: sandbox_policy.clone(),
+                macos_seatbelt_profile_extensions: macos_seatbelt_profile_extensions.cloned(),
+            };
+        };
+
+        Self {
+            sandbox_policy: sandbox_policy_with_additional_permissions(
+                sandbox_policy,
+                additional_permissions,
+            ),
+            macos_seatbelt_profile_extensions: merge_macos_seatbelt_profile_extensions(
+                macos_seatbelt_profile_extensions,
+                additional_permissions.macos.as_ref(),
+            ),
+        }
+    }
+}
+
 pub(crate) fn normalize_additional_permissions(
     additional_permissions: PermissionProfile,
 ) -> Result<PermissionProfile, String> {
@@ -271,30 +297,6 @@ fn sandbox_policy_with_additional_permissions(
     }
 }
 
-pub(crate) fn effective_sandbox_permissions(
-    sandbox_policy: &SandboxPolicy,
-    macos_seatbelt_profile_extensions: Option<&MacOsSeatbeltProfileExtensions>,
-    additional_permissions: Option<&PermissionProfile>,
-) -> EffectiveSandboxPermissions {
-    let Some(additional_permissions) = additional_permissions else {
-        return EffectiveSandboxPermissions {
-            sandbox_policy: sandbox_policy.clone(),
-            macos_seatbelt_profile_extensions: macos_seatbelt_profile_extensions.cloned(),
-        };
-    };
-
-    EffectiveSandboxPermissions {
-        sandbox_policy: sandbox_policy_with_additional_permissions(
-            sandbox_policy,
-            additional_permissions,
-        ),
-        macos_seatbelt_profile_extensions: merge_macos_seatbelt_profile_extensions(
-            macos_seatbelt_profile_extensions,
-            additional_permissions.macos.as_ref(),
-        ),
-    }
-}
-
 #[derive(Default)]
 pub struct SandboxManager;
 
@@ -358,7 +360,7 @@ impl SandboxManager {
         } = request;
         #[cfg(not(target_os = "macos"))]
         let macos_seatbelt_profile_extensions = None;
-        let effective_permissions = effective_sandbox_permissions(
+        let effective_permissions = EffectiveSandboxPermissions::new(
             policy,
             macos_seatbelt_profile_extensions,
             spec.additional_permissions.as_ref(),
@@ -472,9 +474,9 @@ pub async fn execute_exec_request_with_after_spawn(
 
 #[cfg(test)]
 mod tests {
-    use super::SandboxManager;
     #[cfg(target_os = "macos")]
-    use super::effective_sandbox_permissions;
+    use super::EffectiveSandboxPermissions;
+    use super::SandboxManager;
     use super::normalize_additional_permissions;
     use super::sandbox_policy_with_additional_permissions;
     use crate::exec::SandboxType;
@@ -486,13 +488,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use codex_protocol::models::MacOsAutomationPermission;
     #[cfg(target_os = "macos")]
-    use codex_protocol::models::MacOsAutomationValue;
-    #[cfg(target_os = "macos")]
-    use codex_protocol::models::MacOsPermissions;
-    #[cfg(target_os = "macos")]
     use codex_protocol::models::MacOsPreferencesPermission;
-    #[cfg(target_os = "macos")]
-    use codex_protocol::models::MacOsPreferencesValue;
     #[cfg(target_os = "macos")]
     use codex_protocol::models::MacOsSeatbeltProfileExtensions;
     use codex_protocol::models::NetworkPermissions;
@@ -565,13 +561,13 @@ mod tests {
     #[test]
     fn normalize_additional_permissions_preserves_macos_permissions() {
         let permissions = normalize_additional_permissions(PermissionProfile {
-            macos: Some(MacOsPermissions {
-                preferences: Some(MacOsPreferencesValue::Mode("readwrite".to_string())),
-                automations: Some(MacOsAutomationValue::BundleIds(vec![
+            macos: Some(MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadWrite,
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
-                ])),
-                accessibility: Some(true),
-                calendar: Some(true),
+                ]),
+                macos_accessibility: true,
+                macos_calendar: true,
             }),
             ..Default::default()
         })
@@ -579,13 +575,13 @@ mod tests {
 
         assert_eq!(
             permissions.macos,
-            Some(MacOsPermissions {
-                preferences: Some(MacOsPreferencesValue::Mode("readwrite".to_string())),
-                automations: Some(MacOsAutomationValue::BundleIds(vec![
+            Some(MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadWrite,
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
-                ])),
-                accessibility: Some(true),
-                calendar: Some(true),
+                ]),
+                macos_accessibility: true,
+                macos_calendar: true,
             })
         );
     }
@@ -637,7 +633,7 @@ mod tests {
             canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
         )
         .expect("absolute temp dir");
-        let effective_permissions = effective_sandbox_permissions(
+        let effective_permissions = EffectiveSandboxPermissions::new(
             &SandboxPolicy::ReadOnly {
                 access: ReadOnlyAccess::Restricted {
                     include_platform_defaults: true,
@@ -658,13 +654,13 @@ mod tests {
                     read: Some(vec![path]),
                     write: Some(Vec::new()),
                 }),
-                macos: Some(MacOsPermissions {
-                    preferences: Some(MacOsPreferencesValue::Mode("readwrite".to_string())),
-                    automations: Some(MacOsAutomationValue::BundleIds(vec![
+                macos: Some(MacOsSeatbeltProfileExtensions {
+                    macos_preferences: MacOsPreferencesPermission::ReadWrite,
+                    macos_automation: MacOsAutomationPermission::BundleIds(vec![
                         "com.apple.Notes".to_string(),
-                    ])),
-                    accessibility: Some(true),
-                    calendar: Some(true),
+                    ]),
+                    macos_accessibility: true,
+                    macos_calendar: true,
                 }),
                 ..Default::default()
             }),
