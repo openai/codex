@@ -42,6 +42,36 @@ pub(crate) struct SkillInvocation {
     pub(crate) invocation_type: InvocationType,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ApprovalKind {
+    ExecCommand,
+    ApplyPatch,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ApprovalLifecycleStage {
+    Requested,
+    Resolved,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ApprovalEscalationStatus {
+    Approved,
+    Rejected,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ApprovalItemInvocation {
+    pub(crate) call_id: String,
+    pub(crate) approval_id: String,
+    pub(crate) approval_kind: ApprovalKind,
+    pub(crate) lifecycle_stage: ApprovalLifecycleStage,
+    pub(crate) escalation_status: Option<ApprovalEscalationStatus>,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum InvocationType {
@@ -80,6 +110,9 @@ impl AnalyticsEventsQueue {
                     }
                     TrackEventsJob::AppUsed(job) => {
                         send_track_app_used(&auth_manager, job).await;
+                    }
+                    TrackEventsJob::ApprovalItem(job) => {
+                        send_track_approval_item(&auth_manager, job).await;
                     }
                 }
             }
@@ -149,12 +182,26 @@ impl AnalyticsEventsClient {
     pub(crate) fn track_app_used(&self, tracking: TrackEventsContext, app: AppInvocation) {
         track_app_used(&self.queue, Arc::clone(&self.config), Some(tracking), app);
     }
+
+    pub(crate) fn track_approval_item(
+        &self,
+        tracking: TrackEventsContext,
+        approval: ApprovalItemInvocation,
+    ) {
+        track_approval_item(
+            &self.queue,
+            Arc::clone(&self.config),
+            Some(tracking),
+            approval,
+        );
+    }
 }
 
 enum TrackEventsJob {
     SkillInvocations(TrackSkillInvocationsJob),
     AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
+    ApprovalItem(TrackApprovalItemJob),
 }
 
 struct TrackSkillInvocationsJob {
@@ -175,6 +222,12 @@ struct TrackAppUsedJob {
     app: AppInvocation,
 }
 
+struct TrackApprovalItemJob {
+    config: Arc<Config>,
+    tracking: TrackEventsContext,
+    approval: ApprovalItemInvocation,
+}
+
 const ANALYTICS_EVENTS_QUEUE_SIZE: usize = 256;
 const ANALYTICS_EVENTS_TIMEOUT: Duration = Duration::from_secs(10);
 const ANALYTICS_APP_USED_DEDUPE_MAX_KEYS: usize = 4096;
@@ -190,6 +243,7 @@ enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
+    ApprovalItem(CodexApprovalItemEventRequest),
 }
 
 #[derive(Serialize)]
@@ -231,6 +285,27 @@ struct CodexAppMentionedEventRequest {
 struct CodexAppUsedEventRequest {
     event_type: &'static str,
     event_params: CodexAppMetadata,
+}
+
+#[derive(Serialize)]
+struct CodexApprovalItemMetadata {
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    approval_id: String,
+    call_id: String,
+    approval_kind: ApprovalKind,
+    lifecycle_stage: ApprovalLifecycleStage,
+    is_tool_call_escalated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    escalation_status: Option<ApprovalEscalationStatus>,
+    product_client_id: Option<String>,
+    model_slug: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CodexApprovalItemEventRequest {
+    event_type: &'static str,
+    event_params: CodexApprovalItemMetadata,
 }
 
 pub(crate) fn track_skill_invocations(
@@ -298,6 +373,26 @@ pub(crate) fn track_app_used(
         config,
         tracking,
         app,
+    });
+    queue.try_send(job);
+}
+
+pub(crate) fn track_approval_item(
+    queue: &AnalyticsEventsQueue,
+    config: Arc<Config>,
+    tracking: Option<TrackEventsContext>,
+    approval: ApprovalItemInvocation,
+) {
+    if config.analytics_enabled == Some(false) {
+        return;
+    }
+    let Some(tracking) = tracking else {
+        return;
+    };
+    let job = TrackEventsJob::ApprovalItem(TrackApprovalItemJob {
+        config,
+        tracking,
+        approval,
     });
     queue.try_send(job);
 }
@@ -385,6 +480,22 @@ async fn send_track_app_used(auth_manager: &AuthManager, job: TrackAppUsedJob) {
     send_track_events(auth_manager, config, events).await;
 }
 
+async fn send_track_approval_item(auth_manager: &AuthManager, job: TrackApprovalItemJob) {
+    let TrackApprovalItemJob {
+        config,
+        tracking,
+        approval,
+    } = job;
+    let event_params = codex_approval_item_metadata(&tracking, approval);
+    let events = vec![TrackEventRequest::ApprovalItem(
+        CodexApprovalItemEventRequest {
+            event_type: "codex_approval_item",
+            event_params,
+        },
+    )];
+    send_track_events(auth_manager, config, events).await;
+}
+
 fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> CodexAppMetadata {
     CodexAppMetadata {
         connector_id: app.connector_id,
@@ -393,6 +504,24 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
         app_name: app.app_name,
         product_client_id: Some(crate::default_client::originator().value),
         invoke_type: app.invocation_type,
+        model_slug: Some(tracking.model_slug.clone()),
+    }
+}
+
+fn codex_approval_item_metadata(
+    tracking: &TrackEventsContext,
+    approval: ApprovalItemInvocation,
+) -> CodexApprovalItemMetadata {
+    CodexApprovalItemMetadata {
+        thread_id: Some(tracking.thread_id.clone()),
+        turn_id: Some(tracking.turn_id.clone()),
+        approval_id: approval.approval_id,
+        call_id: approval.call_id,
+        approval_kind: approval.approval_kind,
+        lifecycle_stage: approval.lifecycle_stage,
+        is_tool_call_escalated: true,
+        escalation_status: approval.escalation_status,
+        product_client_id: Some(crate::default_client::originator().value),
         model_slug: Some(tracking.model_slug.clone()),
     }
 }
@@ -492,12 +621,18 @@ fn normalize_path_for_skill_id(
 mod tests {
     use super::AnalyticsEventsQueue;
     use super::AppInvocation;
+    use super::ApprovalEscalationStatus;
+    use super::ApprovalItemInvocation;
+    use super::ApprovalKind;
+    use super::ApprovalLifecycleStage;
     use super::CodexAppMentionedEventRequest;
     use super::CodexAppUsedEventRequest;
+    use super::CodexApprovalItemEventRequest;
     use super::InvocationType;
     use super::TrackEventRequest;
     use super::TrackEventsContext;
     use super::codex_app_metadata;
+    use super::codex_approval_item_metadata;
     use super::normalize_path_for_skill_id;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -666,5 +801,91 @@ mod tests {
         assert_eq!(queue.should_enqueue_app_used(&turn_1, &app), true);
         assert_eq!(queue.should_enqueue_app_used(&turn_1, &app), false);
         assert_eq!(queue.should_enqueue_app_used(&turn_2, &app), true);
+    }
+
+    #[test]
+    fn approval_item_requested_event_serializes_expected_shape() {
+        let tracking = TrackEventsContext {
+            model_slug: "gpt-5".to_string(),
+            thread_id: "thread-9".to_string(),
+            turn_id: "turn-9".to_string(),
+        };
+        let event = TrackEventRequest::ApprovalItem(CodexApprovalItemEventRequest {
+            event_type: "codex_approval_item",
+            event_params: codex_approval_item_metadata(
+                &tracking,
+                ApprovalItemInvocation {
+                    call_id: "call-1".to_string(),
+                    approval_id: "approval-1".to_string(),
+                    approval_kind: ApprovalKind::ExecCommand,
+                    lifecycle_stage: ApprovalLifecycleStage::Requested,
+                    escalation_status: None,
+                },
+            ),
+        });
+
+        let payload =
+            serde_json::to_value(&event).expect("serialize approval item requested event");
+
+        assert_eq!(
+            payload,
+            json!({
+                "event_type": "codex_approval_item",
+                "event_params": {
+                    "thread_id": "thread-9",
+                    "turn_id": "turn-9",
+                    "approval_id": "approval-1",
+                    "call_id": "call-1",
+                    "approval_kind": "exec_command",
+                    "lifecycle_stage": "requested",
+                    "is_tool_call_escalated": true,
+                    "product_client_id": crate::default_client::originator().value,
+                    "model_slug": "gpt-5"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn approval_item_resolved_event_serializes_expected_shape() {
+        let tracking = TrackEventsContext {
+            model_slug: "gpt-5".to_string(),
+            thread_id: "thread-10".to_string(),
+            turn_id: "turn-10".to_string(),
+        };
+        let event = TrackEventRequest::ApprovalItem(CodexApprovalItemEventRequest {
+            event_type: "codex_approval_item",
+            event_params: codex_approval_item_metadata(
+                &tracking,
+                ApprovalItemInvocation {
+                    call_id: "call-2".to_string(),
+                    approval_id: "approval-2".to_string(),
+                    approval_kind: ApprovalKind::ApplyPatch,
+                    lifecycle_stage: ApprovalLifecycleStage::Resolved,
+                    escalation_status: Some(ApprovalEscalationStatus::Rejected),
+                },
+            ),
+        });
+
+        let payload = serde_json::to_value(&event).expect("serialize approval item resolved event");
+
+        assert_eq!(
+            payload,
+            json!({
+                "event_type": "codex_approval_item",
+                "event_params": {
+                    "thread_id": "thread-10",
+                    "turn_id": "turn-10",
+                    "approval_id": "approval-2",
+                    "call_id": "call-2",
+                    "approval_kind": "apply_patch",
+                    "lifecycle_stage": "resolved",
+                    "is_tool_call_escalated": true,
+                    "escalation_status": "rejected",
+                    "product_client_id": crate::default_client::originator().value,
+                    "model_slug": "gpt-5"
+                }
+            })
+        );
     }
 }

@@ -14,6 +14,10 @@ use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
+use crate::analytics_client::ApprovalEscalationStatus;
+use crate::analytics_client::ApprovalItemInvocation;
+use crate::analytics_client::ApprovalKind;
+use crate::analytics_client::ApprovalLifecycleStage;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
@@ -284,6 +288,28 @@ fn build_user_message_metadata(
     }
 }
 
+fn approval_kind_for_telemetry(kind: PendingApprovalKind) -> ApprovalKind {
+    match kind {
+        PendingApprovalKind::ExecCommand => ApprovalKind::ExecCommand,
+        PendingApprovalKind::ApplyPatch => ApprovalKind::ApplyPatch,
+    }
+}
+
+fn escalation_status_for_review_decision(decision: &ReviewDecision) -> ApprovalEscalationStatus {
+    match decision {
+        ReviewDecision::Approved
+        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+        | ReviewDecision::ApprovedForSession => ApprovalEscalationStatus::Approved,
+        ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment,
+        } => match network_policy_amendment.action {
+            NetworkPolicyRuleAction::Allow => ApprovalEscalationStatus::Approved,
+            NetworkPolicyRuleAction::Deny => ApprovalEscalationStatus::Rejected,
+        },
+        ReviewDecision::Denied | ReviewDecision::Abort => ApprovalEscalationStatus::Rejected,
+    }
+}
+
 /// Notes from the previous real user turn.
 ///
 /// Conceptually this is the same role that `previous_model` used to fill, but
@@ -377,6 +403,9 @@ use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
+use crate::state::PendingApproval;
+use crate::state::PendingApprovalKind;
+use crate::state::PendingApprovalTelemetry;
 use crate::state::PendingInputItem;
 use crate::state::PendingInputSource;
 use crate::state::SessionServices;
@@ -2774,6 +2803,29 @@ impl Session {
         }
     }
 
+    fn track_pending_approval_item(
+        &self,
+        telemetry: &PendingApprovalTelemetry,
+        lifecycle_stage: ApprovalLifecycleStage,
+        escalation_status: Option<ApprovalEscalationStatus>,
+    ) {
+        let tracking = build_track_events_context(
+            telemetry.model_slug.clone(),
+            self.conversation_id.to_string(),
+            telemetry.turn_id.clone(),
+        );
+        self.services.analytics_events_client.track_approval_item(
+            tracking,
+            ApprovalItemInvocation {
+                call_id: telemetry.call_id.clone(),
+                approval_id: telemetry.approval_id.clone(),
+                approval_kind: approval_kind_for_telemetry(telemetry.kind),
+                lifecycle_stage,
+                escalation_status,
+            },
+        );
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `call_id` + `approval_id` so matching responses
@@ -2800,6 +2852,13 @@ impl Session {
         //  command-level approvals use `call_id`.
         // `approval_id` is only present for subcommand callbacks (execve intercept)
         let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
+        let pending_telemetry = PendingApprovalTelemetry {
+            turn_id: turn_context.sub_id.clone(),
+            call_id: call_id.clone(),
+            approval_id: effective_approval_id.clone(),
+            model_slug: turn_context.model_info.slug.clone(),
+            kind: PendingApprovalKind::ExecCommand,
+        };
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let prev_entry = {
@@ -2807,7 +2866,13 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
+                    ts.insert_pending_approval(
+                        effective_approval_id.clone(),
+                        PendingApproval {
+                            tx: tx_approve,
+                            telemetry: pending_telemetry.clone(),
+                        },
+                    )
                 }
                 None => None,
             }
@@ -2815,6 +2880,11 @@ impl Session {
         if prev_entry.is_some() {
             warn!("Overwriting existing pending approval for call_id: {effective_approval_id}");
         }
+        self.track_pending_approval_item(
+            &pending_telemetry,
+            ApprovalLifecycleStage::Requested,
+            None,
+        );
 
         let parsed_cmd = parse_command(&command);
         let proposed_network_policy_amendments = network_approval_context.as_ref().map(|context| {
@@ -2866,12 +2936,25 @@ impl Session {
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let approval_id = call_id.clone();
+        let pending_telemetry = PendingApprovalTelemetry {
+            turn_id: turn_context.sub_id.clone(),
+            call_id: call_id.clone(),
+            approval_id: approval_id.clone(),
+            model_slug: turn_context.model_info.slug.clone(),
+            kind: PendingApprovalKind::ApplyPatch,
+        };
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
+                    ts.insert_pending_approval(
+                        approval_id.clone(),
+                        PendingApproval {
+                            tx: tx_approve,
+                            telemetry: pending_telemetry.clone(),
+                        },
+                    )
                 }
                 None => None,
             }
@@ -2879,6 +2962,11 @@ impl Session {
         if prev_entry.is_some() {
             warn!("Overwriting existing pending approval for call_id: {approval_id}");
         }
+        self.track_pending_approval_item(
+            &pending_telemetry,
+            ApprovalLifecycleStage::Requested,
+            None,
+        );
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
@@ -2981,8 +3069,40 @@ impl Session {
             }
         };
         match entry {
-            Some(tx_approve) => {
-                tx_approve.send(decision).ok();
+            Some(pending_approval) => {
+                let escalation_status = escalation_status_for_review_decision(&decision);
+                self.track_pending_approval_item(
+                    &pending_approval.telemetry,
+                    ApprovalLifecycleStage::Resolved,
+                    Some(escalation_status),
+                );
+                pending_approval.tx.send(decision).ok();
+            }
+            None => {
+                warn!("No pending approval found for call_id: {approval_id}");
+            }
+        }
+    }
+
+    pub async fn discard_pending_approval(&self, approval_id: &str, decision: ReviewDecision) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_approval(approval_id)
+                }
+                None => None,
+            }
+        };
+        match entry {
+            Some(pending_approval) => {
+                let escalation_status = escalation_status_for_review_decision(&decision);
+                self.track_pending_approval_item(
+                    &pending_approval.telemetry,
+                    ApprovalLifecycleStage::Resolved,
+                    Some(escalation_status),
+                );
             }
             None => {
                 warn!("No pending approval found for call_id: {approval_id}");
@@ -4288,6 +4408,8 @@ mod handlers {
         }
         match decision {
             ReviewDecision::Abort => {
+                sess.discard_pending_approval(&approval_id, ReviewDecision::Abort)
+                    .await;
                 sess.interrupt_task().await;
             }
             other => sess.notify_approval(&approval_id, other).await,
@@ -4297,6 +4419,8 @@ mod handlers {
     pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
         match decision {
             ReviewDecision::Abort => {
+                sess.discard_pending_approval(&id, ReviewDecision::Abort)
+                    .await;
                 sess.interrupt_task().await;
             }
             other => sess.notify_approval(&id, other).await,

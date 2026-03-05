@@ -18,6 +18,26 @@ use crate::protocol::ReviewDecision;
 use crate::protocol::TokenUsage;
 use crate::tasks::SessionTask;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PendingApprovalKind {
+    ExecCommand,
+    ApplyPatch,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PendingApprovalTelemetry {
+    pub(crate) turn_id: String,
+    pub(crate) call_id: String,
+    pub(crate) approval_id: String,
+    pub(crate) model_slug: String,
+    pub(crate) kind: PendingApprovalKind,
+}
+
+pub(crate) struct PendingApproval {
+    pub(crate) tx: oneshot::Sender<ReviewDecision>,
+    pub(crate) telemetry: PendingApprovalTelemetry,
+}
+
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
     pub(crate) tasks: IndexMap<String, RunningTask>,
@@ -82,7 +102,7 @@ impl ActiveTurn {
 /// Mutable state for a single turn.
 #[derive(Default)]
 pub(crate) struct TurnState {
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_approvals: HashMap<String, PendingApproval>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<PendingInputItem>,
@@ -94,15 +114,12 @@ impl TurnState {
     pub(crate) fn insert_pending_approval(
         &mut self,
         key: String,
-        tx: oneshot::Sender<ReviewDecision>,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
-        self.pending_approvals.insert(key, tx)
+        pending: PendingApproval,
+    ) -> Option<PendingApproval> {
+        self.pending_approvals.insert(key, pending)
     }
 
-    pub(crate) fn remove_pending_approval(
-        &mut self,
-        key: &str,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
+    pub(crate) fn remove_pending_approval(&mut self, key: &str) -> Option<PendingApproval> {
         self.pending_approvals.remove(key)
     }
 
