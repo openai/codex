@@ -83,6 +83,14 @@ mod tests {
     }
 
     #[test]
+    fn title_command_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("title", all_enabled_flags()),
+            Some(SlashCommand::Title)
+        );
+    }
+
+    #[test]
     fn fast_command_is_hidden_when_disabled() {
         let mut flags = all_enabled_flags();
         flags.fast_command_enabled = false;

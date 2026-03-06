@@ -116,11 +116,13 @@ use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+const TITLE_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
 /// Smooth-mode streaming drains one line per tick, so this interval controls
 /// perceived typing speed for non-backlogged output.
 const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
+const TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -721,6 +723,46 @@ fn normalize_harness_overrides_for_cwd(
     }
     overrides.additional_writable_roots = normalized;
     Ok(overrides)
+}
+
+fn decorate_title_context(
+    context: Option<String>,
+    task_running: bool,
+    tick: u128,
+) -> Option<String> {
+    if !task_running {
+        return context;
+    }
+
+    let frame = TITLE_SPINNER_FRAMES[tick as usize % TITLE_SPINNER_FRAMES.len()];
+    match context {
+        Some(context) => Some(format!("{frame} - {context}")),
+        None => Some(frame.to_string()),
+    }
+}
+
+fn compute_title_context(
+    title_override: Option<String>,
+    thread_name: Option<String>,
+    task_running: bool,
+    tick: u128,
+) -> Option<String> {
+    let context = title_override
+        .or(thread_name)
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string);
+
+    decorate_title_context(context, task_running, tick)
+}
+
+fn title_animation_tick() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        / TITLE_SPINNER_INTERVAL.as_millis()
 }
 
 impl App {
@@ -1767,6 +1809,18 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         };
+        let task_running = app.chat_widget.is_task_running();
+        let title_context = compute_title_context(
+            app.chat_widget.title_override(),
+            app.chat_widget.thread_name(),
+            task_running,
+            title_animation_tick(),
+        );
+        tui.set_title_context(title_context.as_deref())?;
+        if task_running {
+            tui.frame_requester()
+                .schedule_frame_in(TITLE_SPINNER_INTERVAL);
+        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -1805,6 +1859,7 @@ impl App {
                 )
                 .await?;
             if let AppRunControl::Exit(exit_reason) = control {
+                tui.set_title_context(None)?;
                 return Ok(AppExitInfo {
                     token_usage: app.token_usage(),
                     thread_id: app.chat_widget.thread_id(),
@@ -1865,6 +1920,18 @@ impl App {
                     AppRunControl::Continue
                 }
             };
+            let task_running = app.chat_widget.is_task_running();
+            let title_context = compute_title_context(
+                app.chat_widget.title_override(),
+                app.chat_widget.thread_name(),
+                task_running,
+                title_animation_tick(),
+            );
+            tui.set_title_context(title_context.as_deref())?;
+            if task_running {
+                tui.frame_requester()
+                    .schedule_frame_in(TITLE_SPINNER_INTERVAL);
+            }
             if App::should_stop_waiting_for_initial_session(
                 waiting_for_initial_session_configured,
                 app.primary_thread_id,
@@ -1876,6 +1943,7 @@ impl App {
                 AppRunControl::Exit(reason) => break reason,
             }
         };
+        tui.set_title_context(None)?;
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
@@ -2143,6 +2211,10 @@ impl App {
                         tui.insert_history_lines(display);
                     }
                 }
+            }
+            AppEvent::SetTitle(title) => {
+                self.chat_widget.set_title_override(title);
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -3763,6 +3835,48 @@ mod tests {
                 }
             )),
             false
+        );
+    }
+
+    #[test]
+    fn decorate_title_context_leaves_idle_titles_plain() {
+        assert_eq!(
+            decorate_title_context(Some("Named thread".to_string()), false, 3),
+            Some("Named thread".to_string())
+        );
+    }
+
+    #[test]
+    fn decorate_title_context_adds_spinner_while_running() {
+        assert_eq!(
+            decorate_title_context(Some("Working".to_string()), true, 0),
+            Some("⠋ - Working".to_string())
+        );
+        assert_eq!(
+            decorate_title_context(Some("Working".to_string()), true, 9),
+            Some("⠏ - Working".to_string())
+        );
+        assert_eq!(decorate_title_context(None, true, 0), Some("⠋".to_string()));
+    }
+
+    #[test]
+    fn title_context_uses_thread_name_when_idle() {
+        assert_eq!(
+            compute_title_context(None, Some("named thread".to_string()), false, 0),
+            Some("named thread".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_prefers_manual_title_when_idle() {
+        assert_eq!(
+            compute_title_context(
+                Some("manual title".to_string()),
+                Some("named thread".to_string()),
+                false,
+                0,
+            ),
+            Some("manual title".to_string())
         );
     }
 
