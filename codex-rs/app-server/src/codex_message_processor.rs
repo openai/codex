@@ -2007,7 +2007,7 @@ impl CodexMessageProcessor {
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         if state_db_ctx.is_none() {
-            state_db_ctx = get_state_db(&self.config, None).await;
+            state_db_ctx = get_state_db(&self.config).await;
         }
         let Some(state_db_ctx) = state_db_ctx else {
             self.send_internal_error(
@@ -2308,7 +2308,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
-        let state_db_ctx = get_state_db(&self.config, None).await;
+        let state_db_ctx = get_state_db(&self.config).await;
         let archived_folder = self
             .config
             .codex_home
@@ -3740,7 +3740,7 @@ impl CodexMessageProcessor {
         let fallback_provider = self.config.model_provider_id.clone();
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
-        let state_db_ctx = get_state_db(&self.config, None).await;
+        let state_db_ctx = get_state_db(&self.config).await;
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
@@ -4596,7 +4596,7 @@ impl CodexMessageProcessor {
         self.finalize_thread_teardown(thread_id).await;
 
         if state_db_ctx.is_none() {
-            state_db_ctx = get_state_db(&self.config, None).await;
+            state_db_ctx = get_state_db(&self.config).await;
         }
 
         // Move the rollout file to archived.
@@ -6339,7 +6339,7 @@ impl CodexMessageProcessor {
             if let Some(log_db) = self.log_db.as_ref() {
                 log_db.flush().await;
             }
-            let state_db_ctx = get_state_db(&self.config, None).await;
+            let state_db_ctx = get_state_db(&self.config).await;
             match (state_db_ctx.as_ref(), conversation_id) {
                 (Some(state_db_ctx), Some(conversation_id)) => {
                     let thread_id_text = conversation_id.to_string();
@@ -6980,7 +6980,7 @@ async fn read_history_cwd_from_state_db(
     thread_id: Option<ThreadId>,
     rollout_path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(state_db_ctx) = get_state_db(config, None).await
+    if let Some(state_db_ctx) = get_state_db(config).await
         && let Some(thread_id) = thread_id
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
@@ -7001,7 +7001,7 @@ async fn read_summary_from_state_db_by_thread_id(
     config: &Config,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let state_db_ctx = get_state_db(config, None).await;
+    let state_db_ctx = get_state_db(config).await;
     read_summary_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
 }
 

@@ -324,7 +324,6 @@ stream_max_retries = 0
     let state_db = StateRuntime::init(
         codex_home.path().to_path_buf(),
         "mock_provider".into(),
-        None,
     )
     .await?;
     state_db.mark_backfill_complete(None).await?;

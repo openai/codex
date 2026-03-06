@@ -504,7 +504,7 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = codex_core::state_db::get_state_db(&config, None)
+    let log_db_layer = codex_core::state_db::get_state_db(&config)
         .await
         .map(|db| log_db::start(db).with_filter(env_filter()));
 
@@ -961,7 +961,7 @@ pub(crate) async fn read_session_cwd(
     thread_id: ThreadId,
     path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(state_db_ctx) = get_state_db(config, None).await
+    if let Some(state_db_ctx) = get_state_db(config).await
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
         return Some(metadata.cwd);
@@ -1519,7 +1519,6 @@ trust_level = "untrusted"
         let runtime = codex_state::StateRuntime::init(
             config.codex_home.clone(),
             config.model_provider_id.clone(),
-            None,
         )
         .await
         .map_err(std::io::Error::other)?;
