@@ -132,3 +132,16 @@
 ## 14. 后续里程碑（已建 issue）
 - `#11` 本地会话治理 Hook MVP（生成后/写入前/命令前）。
 - `#12` CI Block 模式与 Waiver 机制。
+
+## 15. M5/M6 落地快照（2026-03-06）
+- `#11` 本地会话治理 Hook MVP
+  - `codex-rs/hooks/src/types.rs` 新增 `before_tool_use` 事件模型。
+  - `codex-rs/core/src/tools/registry.rs` 在工具执行前接入 `before_tool_use` 分发。
+  - `codex-rs/hooks/src/norm_governance.rs` 提供治理规则判定与统一 evidence 输出。
+  - `docs/exomind-governance-runtime-mvp.md` 记录启用方式与决策模型。
+
+- `#12` CI Block + Waiver
+  - `scripts/exomind_norm_governance_warn.py` 支持 `--mode warn|block` 与 `--waivers`。
+  - `.github/workflows/exomind-norm-governance-warn.yml` 接入可配置模式与 waiver 文件。
+  - `docs/exomind-norm-waivers.json` 初始化 waiver 存储。
+  - `docs/exomind-norm-waiver-spec.md` 定义 waiver 结构与失效语义。

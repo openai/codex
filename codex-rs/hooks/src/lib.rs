@@ -1,3 +1,4 @@
+mod norm_governance;
 mod registry;
 mod types;
 mod user_notification;
@@ -9,6 +10,7 @@ pub use types::Hook;
 pub use types::HookEvent;
 pub use types::HookEventAfterAgent;
 pub use types::HookEventAfterToolUse;
+pub use types::HookEventBeforeToolUse;
 pub use types::HookPayload;
 pub use types::HookResponse;
 pub use types::HookResult;
