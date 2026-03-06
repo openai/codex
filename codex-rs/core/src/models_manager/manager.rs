@@ -422,6 +422,7 @@ impl ModelsManager {
         let mut presets: Vec<ModelPreset> = remote_models.iter().cloned().map(Into::into).collect();
         let mut existing_models: HashSet<String> =
             presets.iter().map(|preset| preset.model.clone()).collect();
+        let mut custom_presets = Vec::new();
 
         let mut custom_models = self.custom_models.iter().collect::<Vec<_>>();
         custom_models.sort_by(|(left, _), (right, _)| left.cmp(right));
@@ -434,15 +435,21 @@ impl ModelsManager {
                 Self::construct_model_info_for_custom_alias(alias, custom, &remote_models);
             let mut preset = ModelPreset::from(model_info);
             preset.show_in_picker = true;
-            presets.push(preset);
+            custom_presets.push(preset);
             existing_models.insert(alias.to_string());
         }
 
         let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
         presets = ModelPreset::filter_by_auth(presets, chatgpt_mode);
+        custom_presets = ModelPreset::filter_by_auth(custom_presets, chatgpt_mode);
 
         ModelPreset::mark_default_by_picker_visibility(&mut presets);
+        if !presets.iter().any(|preset| preset.is_default) {
+            ModelPreset::mark_default_by_picker_visibility(&mut custom_presets);
+        }
 
+        custom_presets.extend(presets);
+        presets = custom_presets;
         presets
     }
 
@@ -1193,6 +1200,47 @@ mod tests {
 
         assert!(alias.show_in_picker);
         assert_eq!(alias.display_name, "gpt-5.4 1m");
+    }
+
+    #[test]
+    fn build_available_models_lists_custom_aliases_before_remote_models() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let provider = provider_for("http://example.test".to_string());
+        let mut manager = ModelsManager::with_provider_for_tests(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider,
+        );
+        manager.custom_models = HashMap::from([(
+            "gpt-5.4 1m".to_string(),
+            CustomModelConfig {
+                model: "gpt-5.4".to_string(),
+                model_context_window: Some(1_000_000),
+                model_auto_compact_token_limit: Some(800_000),
+            },
+        )]);
+
+        let available = manager.build_available_models(vec![
+            remote_model("gpt-5.4", "GPT 5.4", 0),
+            remote_model("gpt-5.3", "GPT 5.3", 1),
+        ]);
+
+        assert_eq!(
+            available
+                .iter()
+                .map(|preset| preset.model.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-5.4 1m", "gpt-5.4", "gpt-5.3"]
+        );
+        assert_eq!(
+            available
+                .iter()
+                .find(|preset| preset.is_default)
+                .map(|preset| preset.model.as_str()),
+            Some("gpt-5.4")
+        );
     }
 
     #[test]
