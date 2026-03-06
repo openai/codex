@@ -48,14 +48,14 @@ impl ApplyPatchRuntime {
 
     fn build_command_spec(
         req: &ApplyPatchRequest,
-        codex_home: &std::path::Path,
+        _codex_home: &std::path::Path,
     ) -> Result<CommandSpec, ToolError> {
         let exe = if let Some(path) = &req.codex_exe {
             path.clone()
         } else {
             #[cfg(target_os = "windows")]
             {
-                codex_windows_sandbox::resolve_current_exe_for_launch(codex_home, "codex.exe")
+                codex_windows_sandbox::resolve_current_exe_for_launch(_codex_home, "codex.exe")
             }
             #[cfg(not(target_os = "windows"))]
             {
