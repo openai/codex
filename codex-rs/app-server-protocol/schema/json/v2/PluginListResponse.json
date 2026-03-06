@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "PluginMarketplaceEntry": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "plugins": {
+          "items": {
+            "$ref": "#/definitions/PluginSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "plugins"
+      ],
+      "type": "object"
+    },
+    "PluginSource": {
+      "oneOf": [
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "local"
+              ],
+              "title": "LocalPluginSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalPluginSource",
+          "type": "object"
+        }
+      ]
+    },
+    "PluginSummary": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/PluginSource"
+        }
+      },
+      "required": [
+        "enabled",
+        "name",
+        "source"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "marketplaces": {
+      "items": {
+        "$ref": "#/definitions/PluginMarketplaceEntry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "marketplaces"
+  ],
+  "title": "PluginListResponse",
+  "type": "object"
+}

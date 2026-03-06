@@ -1134,22 +1134,31 @@ impl JsReplManager {
                     let emit_id = req.id.clone();
                     let response =
                         if let Some(ctx) = exec_contexts.lock().await.get(&exec_id).cloned() {
-                            let content_item = emitted_image_content_item(
-                                ctx.turn.as_ref(),
-                                req.image_url,
-                                req.detail,
-                            );
-                            JsReplManager::record_exec_content_item(
-                                &exec_tool_calls,
-                                &exec_id,
-                                content_item,
-                            )
-                            .await;
-                            HostToKernel::EmitImageResult(EmitImageResult {
-                                id: emit_id,
-                                ok: true,
-                                error: None,
-                            })
+                            match validate_emitted_image_url(&req.image_url) {
+                                Ok(()) => {
+                                    let content_item = emitted_image_content_item(
+                                        ctx.turn.as_ref(),
+                                        req.image_url,
+                                        req.detail,
+                                    );
+                                    JsReplManager::record_exec_content_item(
+                                        &exec_tool_calls,
+                                        &exec_id,
+                                        content_item,
+                                    )
+                                    .await;
+                                    HostToKernel::EmitImageResult(EmitImageResult {
+                                        id: emit_id,
+                                        ok: true,
+                                        error: None,
+                                    })
+                                }
+                                Err(error) => HostToKernel::EmitImageResult(EmitImageResult {
+                                    id: emit_id,
+                                    ok: false,
+                                    error: Some(error),
+                                }),
+                            }
                         } else {
                             HostToKernel::EmitImageResult(EmitImageResult {
                                 id: emit_id,
@@ -1464,6 +1473,17 @@ fn emitted_image_content_item(
     FunctionCallOutputContentItem::InputImage {
         image_url,
         detail: detail.or_else(|| default_output_image_detail_for_turn(turn)),
+    }
+}
+
+fn validate_emitted_image_url(image_url: &str) -> Result<(), String> {
+    if image_url
+        .get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+    {
+        Ok(())
+    } else {
+        Err("codex.emitImage only accepts data URLs".to_string())
     }
 }
 
@@ -2006,6 +2026,22 @@ mod tests {
     }
 
     #[test]
+    fn validate_emitted_image_url_accepts_case_insensitive_data_scheme() {
+        assert_eq!(
+            validate_emitted_image_url("DATA:image/png;base64,AAA"),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validate_emitted_image_url_rejects_non_data_scheme() {
+        assert_eq!(
+            validate_emitted_image_url("https://example.com/image.png"),
+            Err("codex.emitImage only accepts data URLs".to_string())
+        );
+    }
+
+    #[test]
     fn summarize_tool_call_response_for_multimodal_custom_output() {
         let response = ResponseInputItem::CustomToolCallOutput {
             call_id: "call-1".to_string(),
@@ -2124,7 +2160,11 @@ mod tests {
         // integration tests instead.
         cfg!(target_os = "macos")
     }
-    fn write_js_repl_test_package(base: &Path, name: &str, value: &str) -> anyhow::Result<()> {
+    fn write_js_repl_test_package_source(
+        base: &Path,
+        name: &str,
+        source: &str,
+    ) -> anyhow::Result<()> {
         let pkg_dir = base.join("node_modules").join(name);
         fs::create_dir_all(&pkg_dir)?;
         fs::write(
@@ -2133,9 +2173,15 @@ mod tests {
                 "{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"exports\": {{\n    \"import\": \"./index.js\"\n  }}\n}}\n"
             ),
         )?;
-        fs::write(
-            pkg_dir.join("index.js"),
-            format!("export const value = \"{value}\";\n"),
+        fs::write(pkg_dir.join("index.js"), source)?;
+        Ok(())
+    }
+
+    fn write_js_repl_test_package(base: &Path, name: &str, value: &str) -> anyhow::Result<()> {
+        write_js_repl_test_package_source(
+            base,
+            name,
+            &format!("export const value = \"{value}\";\n"),
         )?;
         Ok(())
     }
@@ -2890,6 +2936,98 @@ await codex.emitImage({ bytes: png });
             .await
             .expect_err("missing mimeType should fail");
         assert!(err.to_string().contains("expected a non-empty mimeType"));
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_emit_image_rejects_non_data_url() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+await codex.emitImage("https://example.com/image.png");
+"#;
+
+        let err = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await
+            .expect_err("non-data URLs should fail");
+        assert!(err.to_string().contains("only accepts data URLs"));
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_emit_image_accepts_case_insensitive_data_url() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+await codex.emitImage("DATA:image/png;base64,AAA");
+"#;
+
+        let result = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await?;
+        assert_eq!(
+            result.content_items.as_slice(),
+            [FunctionCallOutputContentItem::InputImage {
+                image_url: "DATA:image/png;base64,AAA".to_string(),
+                detail: None,
+            }]
+            .as_slice()
+        );
         assert!(session.get_pending_input().await.is_empty());
 
         Ok(())

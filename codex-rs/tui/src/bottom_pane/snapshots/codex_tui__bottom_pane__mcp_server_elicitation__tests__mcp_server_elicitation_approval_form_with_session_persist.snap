@@ -1,0 +1,19 @@
+---
+source: tui/src/bottom_pane/mcp_server_elicitation.rs
+expression: "render_snapshot(&overlay, Rect::new(0, 0, 120, 16))"
+---
+                                                                                                                        
+  Field 1/1                                                                                                             
+  Allow this request?                                                                                                   
+  › 1. Approve Once          Run the tool and continue.                                                                 
+    2. Approve this Session  Run the tool and remember this choice for this session.                                    
+    3. Deny                  Decline this tool call and continue.                                                       
+    4. Cancel                Cancel this tool call                                                                      
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+  enter to submit | esc to cancel

@@ -1252,42 +1252,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_policy_against_constraints_disallows_non_loopback_admin_without_managed_opt_in() {
-        let constraints = NetworkProxyConstraints {
-            dangerously_allow_non_loopback_admin: Some(false),
-            ..NetworkProxyConstraints::default()
-        };
-
-        let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                dangerously_allow_non_loopback_admin: true,
-                ..NetworkProxySettings::default()
-            },
-        };
-
-        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
-    }
-
-    #[test]
-    fn validate_policy_against_constraints_allows_non_loopback_admin_with_managed_opt_in() {
-        let constraints = NetworkProxyConstraints {
-            dangerously_allow_non_loopback_admin: Some(true),
-            ..NetworkProxyConstraints::default()
-        };
-
-        let config = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                enabled: true,
-                dangerously_allow_non_loopback_admin: true,
-                ..NetworkProxySettings::default()
-            },
-        };
-
-        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
-    }
-
-    #[test]
     fn validate_policy_against_constraints_disallows_allow_all_unix_sockets_without_managed_opt_in()
     {
         let constraints = NetworkProxyConstraints {

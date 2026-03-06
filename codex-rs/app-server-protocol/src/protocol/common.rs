@@ -248,6 +248,10 @@ client_request_definitions! {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
+    PluginList => "plugin/list" {
+        params: v2::PluginListParams,
+        response: v2::PluginListResponse,
+    },
     SkillsRemoteList => "skills/remote/list" {
         params: v2::SkillsRemoteReadParams,
         response: v2::SkillsRemoteReadResponse,
@@ -650,6 +654,12 @@ server_request_definitions! {
         response: v2::ToolRequestUserInputResponse,
     },
 
+    /// Request input for an MCP server elicitation.
+    McpServerElicitationRequest => "mcpServer/elicitation/request" {
+        params: v2::McpServerElicitationRequestParams,
+        response: v2::McpServerElicitationRequestResponse,
+    },
+
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,
@@ -1043,6 +1053,63 @@ mod tests {
             }),
             serde_json::to_value(&request)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_mcp_server_elicitation_request() -> Result<()> {
+        let requested_schema: v2::McpElicitationSchema = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "confirmed": {
+                    "type": "boolean"
+                }
+            },
+            "required": ["confirmed"]
+        }))?;
+        let params = v2::McpServerElicitationRequestParams {
+            thread_id: "thr_123".to_string(),
+            turn_id: Some("turn_123".to_string()),
+            server_name: "codex_apps".to_string(),
+            request: v2::McpServerElicitationRequest::Form {
+                meta: None,
+                message: "Allow this request?".to_string(),
+                requested_schema,
+            },
+        };
+        let request = ServerRequest::McpServerElicitationRequest {
+            request_id: RequestId::Integer(9),
+            params: params.clone(),
+        };
+
+        assert_eq!(
+            json!({
+                "method": "mcpServer/elicitation/request",
+                "id": 9,
+                "params": {
+                    "threadId": "thr_123",
+                    "turnId": "turn_123",
+                    "serverName": "codex_apps",
+                    "mode": "form",
+                    "_meta": null,
+                    "message": "Allow this request?",
+                    "requestedSchema": {
+                        "type": "object",
+                        "properties": {
+                            "confirmed": {
+                                "type": "boolean"
+                            }
+                        },
+                        "required": ["confirmed"]
+                    }
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+
+        let payload = ServerRequestPayload::McpServerElicitationRequest(params);
+        assert_eq!(request.id(), &RequestId::Integer(9));
+        assert_eq!(payload.request_with_id(RequestId::Integer(9)), request);
         Ok(())
     }
 

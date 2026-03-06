@@ -404,6 +404,13 @@
         },
         "name": {
           "type": "string"
+        },
+        "pluginDisplayNames": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -550,6 +557,34 @@
       },
       "required": [
         "userPrompt"
+      ],
+      "type": "object"
+    },
+    "AppSummary": {
+      "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "installUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
       ],
       "type": "object"
     },
@@ -1202,6 +1237,30 @@
             "params"
           ],
           "title": "Skills/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/list"
+              ],
+              "title": "Plugin/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PluginListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/listRequest",
           "type": "object"
         },
         {
@@ -3286,6 +3345,58 @@
       ],
       "type": "object"
     },
+    "ElicitationRequest": {
+      "oneOf": [
+        {
+          "properties": {
+            "_meta": true,
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "form"
+              ],
+              "type": "string"
+            },
+            "requested_schema": true
+          },
+          "required": [
+            "message",
+            "mode",
+            "requested_schema"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "_meta": true,
+            "elicitation_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "url"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "elicitation_id",
+            "message",
+            "mode",
+            "url"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ErrorNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -4189,6 +4300,12 @@
                 "null"
               ]
             },
+            "saved_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "status": {
               "type": "string"
             },
@@ -4731,11 +4848,18 @@
             "id": {
               "$ref": "#/definitions/RequestId"
             },
-            "message": {
-              "type": "string"
+            "request": {
+              "$ref": "#/definitions/ElicitationRequest"
             },
             "server_name": {
               "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this elicitation belongs to, when known.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -4747,7 +4871,7 @@
           },
           "required": [
             "id",
-            "message",
+            "request",
             "server_name",
             "type"
           ],
@@ -7293,65 +7417,69 @@
       "title": "LogoutAccountResponse",
       "type": "object"
     },
-    "MacOsAutomationValue": {
-      "anyOf": [
+    "MacOsAutomationPermission": {
+      "oneOf": [
         {
-          "type": "boolean"
+          "enum": [
+            "none",
+            "all"
+          ],
+          "type": "string"
         },
         {
-          "items": {
-            "type": "string"
+          "additionalProperties": false,
+          "properties": {
+            "bundle_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
           },
-          "type": "array"
+          "required": [
+            "bundle_ids"
+          ],
+          "title": "BundleIdsMacOsAutomationPermission",
+          "type": "object"
         }
       ]
     },
-    "MacOsPermissions": {
+    "MacOsPreferencesPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
+    "MacOsSeatbeltProfileExtensions": {
       "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_accessibility": {
+          "default": false,
+          "type": "boolean"
         },
-        "automations": {
-          "anyOf": [
+        "macos_automation": {
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsAutomationPermission"
             }
-          ]
+          ],
+          "default": "none"
         },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_calendar": {
+          "default": false,
+          "type": "boolean"
         },
-        "preferences": {
-          "anyOf": [
+        "macos_preferences": {
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsPreferencesPermission"
             }
-          ]
+          ],
+          "default": "read_only"
         }
       },
       "type": "object"
-    },
-    "MacOsPreferencesValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "string"
-        }
-      ]
     },
     "McpAuthStatus": {
       "enum": [
@@ -7973,12 +8101,6 @@
             "null"
           ]
         },
-        "dangerouslyAllowNonLoopbackAdmin": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "dangerouslyAllowNonLoopbackProxy": {
           "type": [
             "boolean",
@@ -8229,7 +8351,7 @@
         "macos": {
           "anyOf": [
             {
-              "$ref": "#/definitions/MacOsPermissions"
+              "$ref": "#/definitions/MacOsSeatbeltProfileExtensions"
             },
             {
               "type": "null"
@@ -8316,21 +8438,15 @@
     "PluginInstallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "cwd": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "marketplaceName": {
-          "type": "string"
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
         },
         "pluginName": {
           "type": "string"
         }
       },
       "required": [
-        "marketplaceName",
+        "marketplacePath",
         "pluginName"
       ],
       "title": "PluginInstallParams",
@@ -8338,7 +8454,116 @@
     },
     "PluginInstallResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "appsNeedingAuth": {
+          "items": {
+            "$ref": "#/definitions/AppSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "appsNeedingAuth"
+      ],
       "title": "PluginInstallResponse",
+      "type": "object"
+    },
+    "PluginListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cwds": {
+          "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces are considered.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "title": "PluginListParams",
+      "type": "object"
+    },
+    "PluginListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplaces": {
+          "items": {
+            "$ref": "#/definitions/PluginMarketplaceEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "marketplaces"
+      ],
+      "title": "PluginListResponse",
+      "type": "object"
+    },
+    "PluginMarketplaceEntry": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "plugins": {
+          "items": {
+            "$ref": "#/definitions/PluginSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "plugins"
+      ],
+      "type": "object"
+    },
+    "PluginSource": {
+      "oneOf": [
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "local"
+              ],
+              "title": "LocalPluginSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalPluginSource",
+          "type": "object"
+        }
+      ]
+    },
+    "PluginSummary": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/PluginSource"
+        }
+      },
+      "required": [
+        "enabled",
+        "name",
+        "source"
+      ],
       "type": "object"
     },
     "ProductSurface": {
@@ -10917,9 +11142,6 @@
     },
     "SessionNetworkProxyRuntime": {
       "properties": {
-        "admin_addr": {
-          "type": "string"
-        },
         "http_addr": {
           "type": "string"
         },
@@ -10928,7 +11150,6 @@
         }
       },
       "required": [
-        "admin_addr",
         "http_addr",
         "socks_addr"
       ],
@@ -13842,6 +14063,12 @@
               "type": "string"
             },
             "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
               "type": [
                 "string",
                 "null"

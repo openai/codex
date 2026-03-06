@@ -544,6 +544,58 @@
         }
       ]
     },
+    "ElicitationRequest": {
+      "oneOf": [
+        {
+          "properties": {
+            "_meta": true,
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "form"
+              ],
+              "type": "string"
+            },
+            "requested_schema": true
+          },
+          "required": [
+            "message",
+            "mode",
+            "requested_schema"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "_meta": true,
+            "elicitation_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "url"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "elicitation_id",
+            "message",
+            "mode",
+            "url"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "EventMsg": {
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
       "oneOf": [
@@ -1421,6 +1473,12 @@
                 "null"
               ]
             },
+            "saved_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "status": {
               "type": "string"
             },
@@ -1963,11 +2021,18 @@
             "id": {
               "$ref": "#/definitions/RequestId"
             },
-            "message": {
-              "type": "string"
+            "request": {
+              "$ref": "#/definitions/ElicitationRequest"
             },
             "server_name": {
               "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this elicitation belongs to, when known.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -1979,7 +2044,7 @@
           },
           "required": [
             "id",
-            "message",
+            "request",
             "server_name",
             "type"
           ],
@@ -3706,65 +3771,69 @@
       ],
       "type": "string"
     },
-    "MacOsAutomationValue": {
-      "anyOf": [
+    "MacOsAutomationPermission": {
+      "oneOf": [
         {
-          "type": "boolean"
+          "enum": [
+            "none",
+            "all"
+          ],
+          "type": "string"
         },
         {
-          "items": {
-            "type": "string"
+          "additionalProperties": false,
+          "properties": {
+            "bundle_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
           },
-          "type": "array"
+          "required": [
+            "bundle_ids"
+          ],
+          "title": "BundleIdsMacOsAutomationPermission",
+          "type": "object"
         }
       ]
     },
-    "MacOsPermissions": {
+    "MacOsPreferencesPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
+    "MacOsSeatbeltProfileExtensions": {
       "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_accessibility": {
+          "default": false,
+          "type": "boolean"
         },
-        "automations": {
-          "anyOf": [
+        "macos_automation": {
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsAutomationPermission"
             }
-          ]
+          ],
+          "default": "none"
         },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_calendar": {
+          "default": false,
+          "type": "boolean"
         },
-        "preferences": {
-          "anyOf": [
+        "macos_preferences": {
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsPreferencesPermission"
             }
-          ]
+          ],
+          "default": "read_only"
         }
       },
       "type": "object"
-    },
-    "MacOsPreferencesValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "string"
-        }
-      ]
     },
     "McpAuthStatus": {
       "enum": [
@@ -4109,7 +4178,7 @@
         "macos": {
           "anyOf": [
             {
-              "$ref": "#/definitions/MacOsPermissions"
+              "$ref": "#/definitions/MacOsSeatbeltProfileExtensions"
             },
             {
               "type": "null"
@@ -5555,9 +5624,6 @@
     },
     "SessionNetworkProxyRuntime": {
       "properties": {
-        "admin_addr": {
-          "type": "string"
-        },
         "http_addr": {
           "type": "string"
         },
@@ -5566,7 +5632,6 @@
         }
       },
       "required": [
-        "admin_addr",
         "http_addr",
         "socks_addr"
       ],
@@ -6064,6 +6129,12 @@
               "type": "string"
             },
             "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
               "type": [
                 "string",
                 "null"
@@ -7214,6 +7285,12 @@
             "null"
           ]
         },
+        "saved_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "status": {
           "type": "string"
         },
@@ -7756,11 +7833,18 @@
         "id": {
           "$ref": "#/definitions/RequestId"
         },
-        "message": {
-          "type": "string"
+        "request": {
+          "$ref": "#/definitions/ElicitationRequest"
         },
         "server_name": {
           "type": "string"
+        },
+        "turn_id": {
+          "description": "Turn ID that this elicitation belongs to, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "type": {
           "enum": [
@@ -7772,7 +7856,7 @@
       },
       "required": [
         "id",
-        "message",
+        "request",
         "server_name",
         "type"
       ],

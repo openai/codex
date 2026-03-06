@@ -1,3 +1,5 @@
+use crate::OTEL_LOG_ONLY_TARGET;
+use crate::OTEL_TRACE_SAFE_TARGET;
 use crate::TelemetryAuthMode;
 use crate::metrics::names::API_CALL_COUNT_METRIC;
 use crate::metrics::names::API_CALL_DURATION_METRIC;
@@ -55,6 +57,84 @@ const RESPONSES_API_ENGINE_IAPI_TTFT_FIELD: &str = "engine_iapi_ttft_total_ms";
 const RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD: &str = "engine_service_ttft_total_ms";
 const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine_calls_ms";
 const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
+
+macro_rules! log_event {
+    ($self:expr, $($fields:tt)*) => {{
+        tracing::event!(
+            target: OTEL_LOG_ONLY_TARGET,
+            tracing::Level::INFO,
+            $($fields)*
+            event.timestamp = %timestamp(),
+            conversation.id = %$self.metadata.conversation_id,
+            app.version = %$self.metadata.app_version,
+            auth_mode = $self.metadata.auth_mode,
+            originator = %$self.metadata.originator,
+            user.account_id = $self.metadata.account_id,
+            user.email = $self.metadata.account_email,
+            terminal.type = %$self.metadata.terminal_type,
+            model = %$self.metadata.model,
+            slug = %$self.metadata.slug,
+        );
+    }};
+}
+
+macro_rules! trace_event {
+    ($self:expr, $($fields:tt)*) => {{
+        tracing::event!(
+            target: OTEL_TRACE_SAFE_TARGET,
+            tracing::Level::INFO,
+            $($fields)*
+            event.timestamp = %timestamp(),
+            conversation.id = %$self.metadata.conversation_id,
+            app.version = %$self.metadata.app_version,
+            auth_mode = $self.metadata.auth_mode,
+            originator = %$self.metadata.originator,
+            terminal.type = %$self.metadata.terminal_type,
+            model = %$self.metadata.model,
+            slug = %$self.metadata.slug,
+        );
+    }};
+}
+
+macro_rules! log_and_trace_event {
+    (
+        $self:expr,
+        common: { $($common:tt)* },
+        log: { $($log:tt)* },
+        trace: { $($trace:tt)* },
+    ) => {{
+        tracing::event!(
+            target: OTEL_LOG_ONLY_TARGET,
+            tracing::Level::INFO,
+            $($common)*
+            $($log)*
+            event.timestamp = %timestamp(),
+            conversation.id = %$self.metadata.conversation_id,
+            app.version = %$self.metadata.app_version,
+            auth_mode = $self.metadata.auth_mode,
+            originator = %$self.metadata.originator,
+            user.account_id = $self.metadata.account_id,
+            user.email = $self.metadata.account_email,
+            terminal.type = %$self.metadata.terminal_type,
+            model = %$self.metadata.model,
+            slug = %$self.metadata.slug,
+        );
+        tracing::event!(
+            target: OTEL_TRACE_SAFE_TARGET,
+            tracing::Level::INFO,
+            $($common)*
+            $($trace)*
+            event.timestamp = %timestamp(),
+            conversation.id = %$self.metadata.conversation_id,
+            app.version = %$self.metadata.app_version,
+            auth_mode = $self.metadata.auth_mode,
+            originator = %$self.metadata.originator,
+            terminal.type = %$self.metadata.terminal_type,
+            model = %$self.metadata.model,
+            slug = %$self.metadata.slug,
+        );
+    }};
+}
 
 impl OtelManager {
     #[allow(clippy::too_many_arguments)]
@@ -123,29 +203,27 @@ impl OtelManager {
         mcp_servers: Vec<&str>,
         active_profile: Option<String>,
     ) {
-        tracing::event!(
-            tracing::Level::INFO,
-            event.name = "codex.conversation_starts",
-            event.timestamp = %timestamp(),
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
-            provider_name = %provider_name,
-            reasoning_effort = reasoning_effort.map(|e| e.to_string()),
-            reasoning_summary = %reasoning_summary,
-            context_window = context_window,
-            auto_compact_token_limit = auto_compact_token_limit,
-            approval_policy = %approval_policy,
-            sandbox_policy = %sandbox_policy,
-            mcp_servers = mcp_servers.join(", "),
-            active_profile = active_profile,
-        )
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.conversation_starts",
+                provider_name = %provider_name,
+                reasoning_effort = reasoning_effort.map(|e| e.to_string()),
+                reasoning_summary = %reasoning_summary,
+                context_window = context_window,
+                auto_compact_token_limit = auto_compact_token_limit,
+                approval_policy = %approval_policy,
+                sandbox_policy = %sandbox_policy,
+            },
+            log: {
+                mcp_servers = mcp_servers.join(", "),
+                active_profile = active_profile,
+            },
+            trace: {
+                mcp_server_count = mcp_servers.len() as i64,
+                active_profile_present = active_profile.is_some(),
+            },
+        );
     }
 
     pub async fn log_request<F, Fut>(&self, attempt: u64, f: F) -> Result<Response, Error>
@@ -188,23 +266,17 @@ impl OtelManager {
             duration,
             &[("status", status_str.as_str()), ("success", success_str)],
         );
-        tracing::event!(
-            tracing::Level::INFO,
-            event.name = "codex.api_request",
-            event.timestamp = %timestamp(),
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
-            duration_ms = %duration.as_millis(),
-            http.response.status_code = status,
-            error.message = error,
-            attempt = attempt,
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.api_request",
+                duration_ms = %duration.as_millis(),
+                http.response.status_code = status,
+                error.message = error,
+                attempt = attempt,
+            },
+            log: {},
+            trace: {},
         );
     }
 
@@ -220,22 +292,16 @@ impl OtelManager {
             duration,
             &[("success", success_str)],
         );
-        tracing::event!(
-            tracing::Level::INFO,
-            event.name = "codex.websocket_request",
-            event.timestamp = %timestamp(),
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
-            duration_ms = %duration.as_millis(),
-            success = success_str,
-            error.message = error,
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.websocket_request",
+                duration_ms = %duration.as_millis(),
+                success = success_str,
+                error.message = error,
+            },
+            log: {},
+            trace: {},
         );
     }
 
@@ -321,23 +387,17 @@ impl OtelManager {
         let tags = [("kind", kind_str), ("success", success_str)];
         self.counter(WEBSOCKET_EVENT_COUNT_METRIC, 1, &tags);
         self.record_duration(WEBSOCKET_EVENT_DURATION_METRIC, duration, &tags);
-        tracing::event!(
-            tracing::Level::INFO,
-            event.name = "codex.websocket_event",
-            event.timestamp = %timestamp(),
-            event.kind = %kind_str,
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
-            duration_ms = %duration.as_millis(),
-            success = success_str,
-            error.message = error_message.as_deref(),
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.websocket_event",
+                event.kind = %kind_str,
+                duration_ms = %duration.as_millis(),
+                success = success_str,
+                error.message = error_message.as_deref(),
+            },
+            log: {},
+            trace: {},
         );
     }
 
@@ -399,20 +459,10 @@ impl OtelManager {
             duration,
             &[("kind", kind), ("success", "true")],
         );
-        tracing::event!(
-            tracing::Level::INFO,
+        log_event!(
+            self,
             event.name = "codex.sse_event",
-            event.timestamp = %timestamp(),
             event.kind = %kind,
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
             duration_ms = %duration.as_millis(),
         );
     }
@@ -433,62 +483,43 @@ impl OtelManager {
             &[("kind", kind_str), ("success", "false")],
         );
         match kind {
-            Some(kind) => tracing::event!(
-                tracing::Level::INFO,
+            Some(kind) => log_event!(
+                self,
                 event.name = "codex.sse_event",
-                event.timestamp = %timestamp(),
                 event.kind = %kind,
-                conversation.id = %self.metadata.conversation_id,
-                app.version = %self.metadata.app_version,
-                auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-                user.account_id = self.metadata.account_id,
-                user.email = self.metadata.account_email,
-                terminal.type = %self.metadata.terminal_type,
-                model = %self.metadata.model,
-                slug = %self.metadata.slug,
                 duration_ms = %duration.as_millis(),
                 error.message = %error,
             ),
-            None => tracing::event!(
-                tracing::Level::INFO,
+            None => log_event!(
+                self,
                 event.name = "codex.sse_event",
-                event.timestamp = %timestamp(),
-                conversation.id = %self.metadata.conversation_id,
-                app.version = %self.metadata.app_version,
-                auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-                user.account_id = self.metadata.account_id,
-                user.email = self.metadata.account_email,
-                terminal.type = %self.metadata.terminal_type,
-                model = %self.metadata.model,
-                slug = %self.metadata.slug,
                 duration_ms = %duration.as_millis(),
                 error.message = %error,
             ),
         }
+        trace_event!(
+            self,
+            event.name = "codex.sse_event",
+            event.kind = %kind_str,
+            duration_ms = %duration.as_millis(),
+            error.message = %error,
+        );
     }
 
     pub fn see_event_completed_failed<T>(&self, error: &T)
     where
         T: Display,
     {
-        tracing::event!(
-            tracing::Level::INFO,
-            event.name = "codex.sse_event",
-            event.kind = %"response.completed",
-            event.timestamp = %timestamp(),
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
-            error.message = %error,
-        )
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.sse_event",
+                event.kind = %"response.completed",
+                error.message = %error,
+            },
+            log: {},
+            trace: {},
+        );
     }
 
     pub fn sse_event_completed(
@@ -499,25 +530,19 @@ impl OtelManager {
         reasoning_token_count: Option<i64>,
         tool_token_count: i64,
     ) {
-        tracing::event!(
-            tracing::Level::INFO,
-            event.name = "codex.sse_event",
-            event.timestamp = %timestamp(),
-            event.kind = %"response.completed",
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
-            input_token_count = %input_token_count,
-            output_token_count = %output_token_count,
-            cached_token_count = cached_token_count,
-            reasoning_token_count = reasoning_token_count,
-            tool_token_count = %tool_token_count,
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.sse_event",
+                event.kind = %"response.completed",
+                input_token_count = %input_token_count,
+                output_token_count = %output_token_count,
+                cached_token_count = cached_token_count,
+                reasoning_token_count = reasoning_token_count,
+                tool_token_count = %tool_token_count,
+            },
+            log: {},
+            trace: {},
         );
     }
 
@@ -529,6 +554,18 @@ impl OtelManager {
                 _ => None,
             })
             .collect::<String>();
+        let text_input_count = items
+            .iter()
+            .filter(|item| matches!(item, UserInput::Text { .. }))
+            .count();
+        let image_input_count = items
+            .iter()
+            .filter(|item| matches!(item, UserInput::Image { .. }))
+            .count();
+        let local_image_input_count = items
+            .iter()
+            .filter(|item| matches!(item, UserInput::LocalImage { .. }))
+            .count();
 
         let prompt_to_log = if self.metadata.log_user_prompts {
             prompt.as_str()
@@ -536,21 +573,19 @@ impl OtelManager {
             "[REDACTED]"
         };
 
-        tracing::event!(
-            tracing::Level::INFO,
+        log_event!(
+            self,
             event.name = "codex.user_prompt",
-            event.timestamp = %timestamp(),
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
             prompt_length = %prompt.chars().count(),
             prompt = %prompt_to_log,
+        );
+        trace_event!(
+            self,
+            event.name = "codex.user_prompt",
+            prompt_length = %prompt.chars().count(),
+            text_input_count = text_input_count as i64,
+            image_input_count = image_input_count as i64,
+            local_image_input_count = local_image_input_count as i64,
         );
     }
 
@@ -561,19 +596,9 @@ impl OtelManager {
         decision: &ReviewDecision,
         source: ToolDecisionSource,
     ) {
-        tracing::event!(
-            tracing::Level::INFO,
+        log_event!(
+            self,
             event.name = "codex.tool_decision",
-            event.timestamp = %timestamp(),
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
             tool_name = %tool_name,
             call_id = %call_id,
             decision = %decision.clone().to_string().to_lowercase(),
@@ -622,25 +647,26 @@ impl OtelManager {
     }
 
     pub fn log_tool_failed(&self, tool_name: &str, error: &str) {
-        tracing::event!(
-            tracing::Level::INFO,
+        log_event!(
+            self,
             event.name = "codex.tool_result",
-            event.timestamp = %timestamp(),
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
             tool_name = %tool_name,
             duration_ms = %Duration::ZERO.as_millis(),
             success = %false,
             output = %error,
             mcp_server = "",
             mcp_server_origin = "",
+        );
+        trace_event!(
+            self,
+            event.name = "codex.tool_result",
+            tool_name = %tool_name,
+            duration_ms = %Duration::ZERO.as_millis(),
+            success = %false,
+            output_length = error.len() as i64,
+            output_line_count = error.lines().count() as i64,
+            tool_origin = %"builtin",
+            error.message = %error,
         );
     }
 
@@ -666,19 +692,9 @@ impl OtelManager {
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
         let mcp_server = mcp_server.unwrap_or("");
         let mcp_server_origin = mcp_server_origin.unwrap_or("");
-        tracing::event!(
-            tracing::Level::INFO,
+        log_event!(
+            self,
             event.name = "codex.tool_result",
-            event.timestamp = %timestamp(),
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            originator = %self.metadata.originator,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
             tool_name = %tool_name,
             call_id = %call_id,
             arguments = %arguments,
@@ -687,6 +703,19 @@ impl OtelManager {
             output = %output,
             mcp_server = %mcp_server,
             mcp_server_origin = %mcp_server_origin,
+        );
+        trace_event!(
+            self,
+            event.name = "codex.tool_result",
+            tool_name = %tool_name,
+            call_id = %call_id,
+            duration_ms = %duration.as_millis(),
+            success = %success_str,
+            arguments_length = arguments.len() as i64,
+            output_length = output.len() as i64,
+            output_line_count = output.lines().count() as i64,
+            tool_origin = if mcp_server.is_empty() { "builtin" } else { "mcp" },
+            mcp_tool = !mcp_server.is_empty(),
         );
     }
 

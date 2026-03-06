@@ -10,7 +10,6 @@ use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
-use crate::skills::permissions::compile_permission_profile;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -332,18 +331,14 @@ impl CoreShellActionProvider {
     }
 
     fn skill_escalation_execution(skill: &SkillMetadata) -> EscalationExecution {
-        compile_permission_profile(skill.permission_profile.clone())
-            .map(|permissions| {
-                EscalationExecution::Permissions(EscalationPermissions::Permissions(
-                    EscalatedPermissions {
-                        sandbox_policy: permissions.sandbox_policy.get().clone(),
-                        macos_seatbelt_profile_extensions: permissions
-                            .macos_seatbelt_profile_extensions
-                            .clone(),
-                    },
-                ))
-            })
-            .unwrap_or(EscalationExecution::TurnDefault)
+        let permission_profile = skill.permission_profile.clone().unwrap_or_default();
+        if permission_profile.is_empty() {
+            EscalationExecution::TurnDefault
+        } else {
+            EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
+                permission_profile,
+            ))
+        }
     }
 
     async fn prompt(
@@ -741,9 +736,20 @@ struct CoreShellCommandExecutor {
     justification: Option<String>,
     arg0: Option<String>,
     sandbox_policy_cwd: PathBuf,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     use_linux_sandbox_bwrap: bool,
+}
+
+struct PrepareSandboxedExecParams<'a> {
+    command: Vec<String>,
+    workdir: &'a AbsolutePathBuf,
+    env: HashMap<String, String>,
+    sandbox_policy: &'a SandboxPolicy,
+    additional_permissions: Option<PermissionProfile>,
+    #[cfg(target_os = "macos")]
+    macos_seatbelt_profile_extensions: Option<&'a MacOsSeatbeltProfileExtensions>,
 }
 
 #[async_trait::async_trait]
@@ -816,33 +822,49 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 env,
                 arg0: Some(first_arg.clone()),
             },
-            EscalationExecution::TurnDefault => self.prepare_sandboxed_exec(
-                command,
-                workdir,
-                env,
-                &self.sandbox_policy,
-                None,
-                self.macos_seatbelt_profile_extensions.as_ref(),
-            )?,
-            EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
-                permission_profile,
-            )) => self.prepare_sandboxed_exec(
-                command,
-                workdir,
-                env,
-                &self.sandbox_policy,
-                Some(permission_profile),
-                None,
-            )?,
-            EscalationExecution::Permissions(EscalationPermissions::Permissions(permissions)) => {
-                self.prepare_sandboxed_exec(
+            EscalationExecution::TurnDefault => {
+                self.prepare_sandboxed_exec(PrepareSandboxedExecParams {
                     command,
                     workdir,
                     env,
-                    &permissions.sandbox_policy,
-                    None,
-                    permissions.macos_seatbelt_profile_extensions.as_ref(),
-                )?
+                    sandbox_policy: &self.sandbox_policy,
+                    additional_permissions: None,
+                    #[cfg(target_os = "macos")]
+                    macos_seatbelt_profile_extensions: self
+                        .macos_seatbelt_profile_extensions
+                        .as_ref(),
+                })?
+            }
+            EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
+                permission_profile,
+            )) => {
+                // Merge additive permissions into the existing turn/request sandbox policy.
+                // On macOS, additional profile extensions are unioned with the turn defaults.
+                self.prepare_sandboxed_exec(PrepareSandboxedExecParams {
+                    command,
+                    workdir,
+                    env,
+                    sandbox_policy: &self.sandbox_policy,
+                    additional_permissions: Some(permission_profile),
+                    #[cfg(target_os = "macos")]
+                    macos_seatbelt_profile_extensions: self
+                        .macos_seatbelt_profile_extensions
+                        .as_ref(),
+                })?
+            }
+            EscalationExecution::Permissions(EscalationPermissions::Permissions(permissions)) => {
+                // Use a fully specified sandbox policy instead of merging into the turn policy.
+                self.prepare_sandboxed_exec(PrepareSandboxedExecParams {
+                    command,
+                    workdir,
+                    env,
+                    sandbox_policy: &permissions.sandbox_policy,
+                    additional_permissions: None,
+                    #[cfg(target_os = "macos")]
+                    macos_seatbelt_profile_extensions: permissions
+                        .macos_seatbelt_profile_extensions
+                        .as_ref(),
+                })?
             }
         };
 
@@ -853,18 +875,17 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
 impl CoreShellCommandExecutor {
     fn prepare_sandboxed_exec(
         &self,
-        command: Vec<String>,
-        workdir: &AbsolutePathBuf,
-        env: HashMap<String, String>,
-        sandbox_policy: &SandboxPolicy,
-        additional_permissions: Option<PermissionProfile>,
-        #[cfg(target_os = "macos")] macos_seatbelt_profile_extensions: Option<
-            &MacOsSeatbeltProfileExtensions,
-        >,
-        #[cfg(not(target_os = "macos"))] _macos_seatbelt_profile_extensions: Option<
-            &MacOsSeatbeltProfileExtensions,
-        >,
+        params: PrepareSandboxedExecParams<'_>,
     ) -> anyhow::Result<PreparedExec> {
+        let PrepareSandboxedExecParams {
+            command,
+            workdir,
+            env,
+            sandbox_policy,
+            additional_permissions,
+            #[cfg(target_os = "macos")]
+            macos_seatbelt_profile_extensions,
+        } = params;
         let (program, args) = command
             .split_first()
             .ok_or_else(|| anyhow::anyhow!("prepared command must not be empty"))?;

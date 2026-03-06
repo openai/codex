@@ -20,6 +20,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use strum::IntoEnumIterator;
 use strum_macros::Display;
@@ -44,7 +45,7 @@ use crate::render::renderable::Renderable;
 /// - Git-related items only show when in a git repository
 /// - Context/limit items only show when data is available from the API
 /// - Session ID only shows after a session has started
-#[derive(EnumIter, EnumString, Display, Debug, Clone, Eq, PartialEq)]
+#[derive(EnumIter, EnumString, Display, Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StatusLineItem {
     /// The current model name.
@@ -126,28 +127,36 @@ impl StatusLineItem {
             }
         }
     }
+}
 
-    /// Returns an example rendering of this item for the preview.
-    ///
-    /// These are placeholder values used to show users what each item looks
-    /// like in the status line before they confirm their selection.
-    pub(crate) fn render(&self) -> &'static str {
-        match self {
-            StatusLineItem::ModelName => "gpt-5.2-codex",
-            StatusLineItem::ModelWithReasoning => "gpt-5.2-codex medium",
-            StatusLineItem::CurrentDir => "~/project/path",
-            StatusLineItem::ProjectRoot => "~/project",
-            StatusLineItem::GitBranch => "feat/awesome-feature",
-            StatusLineItem::ContextRemaining => "18% left",
-            StatusLineItem::ContextUsed => "82% used",
-            StatusLineItem::FiveHourLimit => "5h 100%",
-            StatusLineItem::WeeklyLimit => "weekly 98%",
-            StatusLineItem::CodexVersion => "v0.93.0",
-            StatusLineItem::ContextWindowSize => "258K window",
-            StatusLineItem::UsedTokens => "27.3K used",
-            StatusLineItem::TotalInputTokens => "17,588 in",
-            StatusLineItem::TotalOutputTokens => "265 out",
-            StatusLineItem::SessionId => "019c19bd-ceb6-73b0-adc8-8ec0397b85cf",
+/// Runtime values used to preview the current status-line selection.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct StatusLinePreviewData {
+    values: BTreeMap<StatusLineItem, String>,
+}
+
+impl StatusLinePreviewData {
+    pub(crate) fn from_iter<I>(values: I) -> Self
+    where
+        I: IntoIterator<Item = (StatusLineItem, String)>,
+    {
+        Self {
+            values: values.into_iter().collect(),
+        }
+    }
+
+    fn line_for_items(&self, items: &[MultiSelectItem]) -> Option<Line<'static>> {
+        let preview = items
+            .iter()
+            .filter(|item| item.enabled)
+            .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+            .filter_map(|item| self.values.get(&item).cloned())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        if preview.is_empty() {
+            None
+        } else {
+            Some(Line::from(preview))
         }
     }
 }
@@ -175,7 +184,11 @@ impl StatusLineSetupView {
     ///
     /// Items from `status_line_items` are shown first (in order) and marked as
     /// enabled. Remaining items are appended and marked as disabled.
-    pub(crate) fn new(status_line_items: Option<&[String]>, app_event_tx: AppEventSender) -> Self {
+    pub(crate) fn new(
+        status_line_items: Option<&[String]>,
+        preview_data: StatusLinePreviewData,
+        app_event_tx: AppEventSender,
+    ) -> Self {
         let mut used_ids = HashSet::new();
         let mut items = Vec::new();
 
@@ -212,20 +225,7 @@ impl StatusLineSetupView {
             ])
             .items(items)
             .enable_ordering()
-            .on_preview(|items| {
-                let preview = items
-                    .iter()
-                    .filter(|item| item.enabled)
-                    .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
-                    .map(|item| item.render())
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                if preview.is_empty() {
-                    None
-                } else {
-                    Some(Line::from(preview))
-                }
-            })
+            .on_preview(move |items| preview_data.line_for_items(items))
             .on_confirm(|ids, app_event| {
                 let items = ids
                     .iter()
@@ -274,5 +274,117 @@ impl Renderable for StatusLineSetupView {
 
     fn desired_height(&self, width: u16) -> u16 {
         self.picker.desired_height(width)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event_sender::AppEventSender;
+    use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use crate::app_event::AppEvent;
+
+    #[test]
+    fn preview_uses_runtime_values() {
+        let preview_data = StatusLinePreviewData::from_iter([
+            (StatusLineItem::ModelName, "gpt-5".to_string()),
+            (StatusLineItem::CurrentDir, "/repo".to_string()),
+        ]);
+        let items = vec![
+            MultiSelectItem {
+                id: StatusLineItem::ModelName.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+            MultiSelectItem {
+                id: StatusLineItem::CurrentDir.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+        ];
+
+        assert_eq!(
+            preview_data.line_for_items(&items),
+            Some(Line::from("gpt-5 · /repo"))
+        );
+    }
+
+    #[test]
+    fn preview_omits_items_without_runtime_values() {
+        let preview_data =
+            StatusLinePreviewData::from_iter([(StatusLineItem::ModelName, "gpt-5".to_string())]);
+        let items = vec![
+            MultiSelectItem {
+                id: StatusLineItem::ModelName.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+            MultiSelectItem {
+                id: StatusLineItem::GitBranch.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+        ];
+
+        assert_eq!(
+            preview_data.line_for_items(&items),
+            Some(Line::from("gpt-5"))
+        );
+    }
+
+    #[test]
+    fn setup_view_snapshot_uses_runtime_preview_values() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let view = StatusLineSetupView::new(
+            Some(&[
+                StatusLineItem::ModelName.to_string(),
+                StatusLineItem::CurrentDir.to_string(),
+                StatusLineItem::GitBranch.to_string(),
+            ]),
+            StatusLinePreviewData::from_iter([
+                (StatusLineItem::ModelName, "gpt-5-codex".to_string()),
+                (StatusLineItem::CurrentDir, "~/codex-rs".to_string()),
+                (
+                    StatusLineItem::GitBranch,
+                    "jif/statusline-preview".to_string(),
+                ),
+                (StatusLineItem::WeeklyLimit, "weekly 82%".to_string()),
+            ]),
+            AppEventSender::new(tx_raw),
+        );
+
+        assert_snapshot!(render_lines(&view, 72));
+    }
+
+    fn render_lines(view: &StatusLineSetupView, width: u16) -> String {
+        let height = view.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        (0..area.height)
+            .map(|row| {
+                let mut line = String::new();
+                for col in 0..area.width {
+                    let symbol = buf[(area.x + col, area.y + row)].symbol();
+                    if symbol.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(symbol);
+                    }
+                }
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }

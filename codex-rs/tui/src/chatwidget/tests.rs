@@ -6053,6 +6053,7 @@ async fn image_generation_call_adds_history_cell() {
             status: "completed".into(),
             revised_prompt: Some("A tiny blue square".into()),
             result: "Zm9v".into(),
+            saved_path: None,
         }),
     });
 
@@ -6276,6 +6277,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         false,
@@ -6312,6 +6314,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                     install_url: Some("https://example.test/notion".to_string()),
                     is_accessible: true,
                     is_enabled: true,
+                    plugin_display_names: Vec::new(),
                 },
                 codex_chatgpt::connectors::AppInfo {
                     id: linear_id.to_string(),
@@ -6326,6 +6329,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                     install_url: Some("https://example.test/linear".to_string()),
                     is_accessible: true,
                     is_enabled: true,
+                    plugin_display_names: Vec::new(),
                 },
             ],
         }),
@@ -6368,6 +6372,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             install_url: Some("https://example.test/notion".to_string()),
             is_accessible: true,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
         codex_chatgpt::connectors::AppInfo {
             id: linear_id.to_string(),
@@ -6382,6 +6387,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             install_url: Some("https://example.test/linear".to_string()),
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
     ];
     chat.on_connectors_loaded(
@@ -6406,6 +6412,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         false,
@@ -6449,6 +6456,7 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
         install_url: Some("https://example.test/notion".to_string()),
         is_accessible: true,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }];
     chat.connectors_cache = ConnectorsCacheState::Ready(ConnectorsSnapshot {
         connectors: full_connectors.clone(),
@@ -6487,6 +6495,7 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
             install_url: Some("https://example.test/notion".to_string()),
             is_accessible: true,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
         codex_chatgpt::connectors::AppInfo {
             id: "unit_test_connector_2".to_string(),
@@ -6501,6 +6510,7 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
             install_url: Some("https://example.test/linear".to_string()),
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
     ];
     chat.on_connectors_loaded(
@@ -6527,6 +6537,7 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
                     install_url: Some("https://example.test/notion".to_string()),
                     is_accessible: true,
                     is_enabled: true,
+                    plugin_display_names: Vec::new(),
                 },
                 codex_chatgpt::connectors::AppInfo {
                     id: "connector_openai_hidden".to_string(),
@@ -6541,6 +6552,7 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
                     install_url: Some("https://example.test/hidden-openai".to_string()),
                     is_accessible: true,
                     is_enabled: true,
+                    plugin_display_names: Vec::new(),
                 },
             ],
         }),
@@ -6587,6 +6599,7 @@ async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: false,
+                plugin_display_names: Vec::new(),
             }],
         }),
         true,
@@ -6640,6 +6653,7 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         true,
@@ -6680,6 +6694,7 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         true,
@@ -6701,6 +6716,7 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         true,
@@ -6748,6 +6764,7 @@ async fn apps_popup_for_not_installed_app_uses_install_only_selected_description
                 install_url: Some("https://example.test/linear".to_string()),
                 is_accessible: false,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         true,
@@ -7290,7 +7307,12 @@ async fn feedback_upload_consent_popup_snapshot() {
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::Bug,
         chat.current_rollout_path.clone(),
-        true,
+        &codex_feedback::feedback_diagnostics::FeedbackDiagnostics::new(vec![
+            codex_feedback::feedback_diagnostics::FeedbackDiagnostic {
+                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                details: vec!["OPENAI_BASE_URL = hello".to_string()],
+            },
+        ]),
     ));
 
     let popup = render_bottom_popup(&chat, 80);
@@ -7305,7 +7327,12 @@ async fn feedback_good_result_consent_popup_includes_connectivity_diagnostics_fi
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::GoodResult,
         chat.current_rollout_path.clone(),
-        true,
+        &codex_feedback::feedback_diagnostics::FeedbackDiagnostics::new(vec![
+            codex_feedback::feedback_diagnostics::FeedbackDiagnostic {
+                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                details: vec!["OPENAI_BASE_URL = hello".to_string()],
+            },
+        ]),
     ));
 
     let popup = render_bottom_popup(&chat, 80);

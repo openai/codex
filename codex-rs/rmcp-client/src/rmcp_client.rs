@@ -21,6 +21,7 @@ use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
 use rmcp::model::CustomNotification;
 use rmcp::model::CustomRequest;
+use rmcp::model::ElicitationAction;
 use rmcp::model::Extensions;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::InitializeResult;
@@ -42,6 +43,8 @@ use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::OAuthState;
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -147,7 +150,34 @@ impl Drop for ProcessGroupGuard {
 }
 
 pub type Elicitation = CreateElicitationRequestParams;
-pub type ElicitationResponse = CreateElicitationResult;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationResponse {
+    pub action: ElicitationAction,
+    pub content: Option<serde_json::Value>,
+    #[serde(rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
+}
+
+impl From<CreateElicitationResult> for ElicitationResponse {
+    fn from(value: CreateElicitationResult) -> Self {
+        Self {
+            action: value.action,
+            content: value.content,
+            meta: None,
+        }
+    }
+}
+
+impl From<ElicitationResponse> for CreateElicitationResult {
+    fn from(value: ElicitationResponse) -> Self {
+        Self {
+            action: value.action,
+            content: value.content,
+        }
+    }
+}
 
 /// Interface for sending elicitation requests to the UI and awaiting a response.
 pub type SendElicitation = Box<

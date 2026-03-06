@@ -1469,6 +1469,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "inventory",
  "pretty_assertions",
+ "rmcp",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -1986,7 +1987,6 @@ dependencies = [
  "sentry",
  "tracing",
  "tracing-subscriber",
- "url",
 ]
 
 [[package]]

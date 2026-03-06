@@ -1,3 +1,5 @@
+use crate::OTEL_TARGET_PREFIX;
+use crate::OTEL_TRACE_SAFE_TARGET;
 use crate::config::OtelExporter;
 use crate::config::OtelHttpProtocol;
 use crate::config::OtelSettings;
@@ -31,7 +33,6 @@ use std::env;
 use std::error::Error;
 use std::sync::OnceLock;
 use tracing::debug;
-use tracing::level_filters::LevelFilter;
 use tracing::warn;
 use tracing_subscriber::Layer;
 use tracing_subscriber::registry::LookupSpan;
@@ -41,6 +42,13 @@ const HOST_NAME_ATTRIBUTE: &str = "host.name";
 const TRACEPARENT_ENV_VAR: &str = "TRACEPARENT";
 const TRACESTATE_ENV_VAR: &str = "TRACESTATE";
 static TRACEPARENT_CONTEXT: OnceLock<Option<Context>> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResourceKind {
+    Logs,
+    Traces,
+}
+
 pub struct OtelProvider {
     pub logger: Option<SdkLoggerProvider>,
     pub tracer_provider: Option<SdkTracerProvider>,
@@ -90,13 +98,14 @@ impl OtelProvider {
             return Ok(None);
         }
 
-        let resource = make_resource(settings);
+        let log_resource = make_resource(settings, ResourceKind::Logs);
+        let trace_resource = make_resource(settings, ResourceKind::Traces);
         let logger = log_enabled
-            .then(|| build_logger(&resource, &settings.exporter))
+            .then(|| build_logger(&log_resource, &settings.exporter))
             .transpose()?;
 
         let tracer_provider = trace_enabled
-            .then(|| build_tracer_provider(&resource, &settings.trace_exporter))
+            .then(|| build_tracer_provider(&trace_resource, &settings.trace_exporter))
             .transpose()?;
 
         let tracer = tracer_provider
@@ -121,7 +130,7 @@ impl OtelProvider {
     {
         self.logger.as_ref().map(|logger| {
             OpenTelemetryTracingBridge::new(logger).with_filter(
-                tracing_subscriber::filter::filter_fn(OtelProvider::codex_export_filter),
+                tracing_subscriber::filter::filter_fn(OtelProvider::log_export_filter),
             )
         })
     }
@@ -133,12 +142,22 @@ impl OtelProvider {
         self.tracer.as_ref().map(|tracer| {
             tracing_opentelemetry::layer()
                 .with_tracer(tracer.clone())
-                .with_filter(LevelFilter::TRACE)
+                .with_filter(tracing_subscriber::filter::filter_fn(
+                    OtelProvider::trace_export_filter,
+                ))
         })
     }
 
     pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
-        meta.target().starts_with("codex_otel")
+        Self::log_export_filter(meta)
+    }
+
+    pub fn log_export_filter(meta: &tracing::Metadata<'_>) -> bool {
+        is_log_export_target(meta.target())
+    }
+
+    pub fn trace_export_filter(meta: &tracing::Metadata<'_>) -> bool {
+        meta.is_span() || is_trace_safe_target(meta.target())
     }
 
     pub fn metrics(&self) -> Option<&MetricsClient> {
@@ -182,17 +201,22 @@ fn load_traceparent_context() -> Option<Context> {
     }
 }
 
-fn make_resource(settings: &OtelSettings) -> Resource {
+fn make_resource(settings: &OtelSettings, kind: ResourceKind) -> Resource {
     Resource::builder()
         .with_service_name(settings.service_name.clone())
         .with_attributes(resource_attributes(
             settings,
             detected_host_name().as_deref(),
+            kind,
         ))
         .build()
 }
 
-fn resource_attributes(settings: &OtelSettings, host_name: Option<&str>) -> Vec<KeyValue> {
+fn resource_attributes(
+    settings: &OtelSettings,
+    host_name: Option<&str>,
+    kind: ResourceKind,
+) -> Vec<KeyValue> {
     let mut attributes = vec![
         KeyValue::new(
             semconv::attribute::SERVICE_VERSION,
@@ -200,7 +224,9 @@ fn resource_attributes(settings: &OtelSettings, host_name: Option<&str>) -> Vec<
         ),
         KeyValue::new(ENV_ATTRIBUTE, settings.environment.clone()),
     ];
-    if let Some(host_name) = host_name.and_then(normalize_host_name) {
+    if kind == ResourceKind::Logs
+        && let Some(host_name) = host_name.and_then(normalize_host_name)
+    {
         attributes.push(KeyValue::new(HOST_NAME_ATTRIBUTE, host_name));
     }
     attributes
@@ -214,6 +240,14 @@ fn detected_host_name() -> Option<String> {
 fn normalize_host_name(host_name: &str) -> Option<String> {
     let host_name = host_name.trim();
     (!host_name.is_empty()).then(|| host_name.to_owned())
+}
+
+fn is_log_export_target(target: &str) -> bool {
+    target.starts_with(OTEL_TARGET_PREFIX) && !is_trace_safe_target(target)
+}
+
+fn is_trace_safe_target(target: &str) -> bool {
+    target.starts_with(OTEL_TRACE_SAFE_TARGET)
 }
 
 fn build_logger(
@@ -387,7 +421,11 @@ mod tests {
 
     #[test]
     fn resource_attributes_include_host_name_when_present() {
-        let attrs = resource_attributes(&test_otel_settings(), Some("opentelemetry-test"));
+        let attrs = resource_attributes(
+            &test_otel_settings(),
+            Some("opentelemetry-test"),
+            ResourceKind::Logs,
+        );
 
         let host_name = attrs
             .iter()
@@ -399,8 +437,13 @@ mod tests {
 
     #[test]
     fn resource_attributes_omit_host_name_when_missing_or_empty() {
-        let missing = resource_attributes(&test_otel_settings(), None);
-        let empty = resource_attributes(&test_otel_settings(), Some("   "));
+        let missing = resource_attributes(&test_otel_settings(), None, ResourceKind::Logs);
+        let empty = resource_attributes(&test_otel_settings(), Some("   "), ResourceKind::Logs);
+        let trace_attrs = resource_attributes(
+            &test_otel_settings(),
+            Some("opentelemetry-test"),
+            ResourceKind::Traces,
+        );
 
         assert!(
             !missing
@@ -412,6 +455,27 @@ mod tests {
                 .iter()
                 .any(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
         );
+        assert!(
+            !trace_attrs
+                .iter()
+                .any(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
+        );
+    }
+
+    #[test]
+    fn log_export_target_excludes_trace_safe_events() {
+        assert!(is_log_export_target("codex_otel.log_only"));
+        assert!(is_log_export_target("codex_otel.network_proxy"));
+        assert!(!is_log_export_target("codex_otel.trace_safe"));
+        assert!(!is_log_export_target("codex_otel.trace_safe.debug"));
+    }
+
+    #[test]
+    fn trace_export_target_only_includes_trace_safe_prefix() {
+        assert!(is_trace_safe_target("codex_otel.trace_safe"));
+        assert!(is_trace_safe_target("codex_otel.trace_safe.summary"));
+        assert!(!is_trace_safe_target("codex_otel.log_only"));
+        assert!(!is_trace_safe_target("codex_otel.network_proxy"));
     }
 
     fn test_otel_settings() -> OtelSettings {

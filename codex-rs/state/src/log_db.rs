@@ -420,11 +420,23 @@ mod tests {
 
         drop(guard);
 
-        // TODO(ccunningham): Store enough span metadata in SQLite to reproduce span
-        // prefixes like `feedback-thread{thread_id="thread-1"}:` in feedback exports.
+        // SQLite exports now include timestamps, while this test writer has
+        // `.without_time()`. Compare bodies after stripping the SQLite prefix.
         let feedback_logs = writer
             .snapshot()
             .replace("feedback-thread{thread_id=\"thread-1\"}: ", "");
+        let strip_sqlite_timestamp = |logs: &str| {
+            logs.lines()
+                .map(|line| {
+                    line.split_once(' ')
+                        .map_or_else(|| line.to_string(), |(_, rest)| rest.to_string())
+                })
+                .collect::<Vec<_>>()
+        };
+        let feedback_lines = feedback_logs
+            .lines()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let sqlite_logs = String::from_utf8(
@@ -434,7 +446,7 @@ mod tests {
                     .expect("query feedback logs"),
             )
             .expect("valid utf-8");
-            if sqlite_logs == feedback_logs {
+            if strip_sqlite_timestamp(&sqlite_logs) == feedback_lines {
                 break;
             }
             assert!(
