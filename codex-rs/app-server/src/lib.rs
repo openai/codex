@@ -38,7 +38,6 @@ use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
-use codex_core::features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_state::log_db;
 use tokio::sync::mpsc;
@@ -499,18 +498,14 @@ pub async fn run_main_with_transport(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let log_db = if config.features.enabled(Feature::Sqlite) {
-        codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await
-        .ok()
-        .map(log_db::start)
-    } else {
-        None
-    };
+    let log_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+        None,
+    )
+    .await
+    .ok()
+    .map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));

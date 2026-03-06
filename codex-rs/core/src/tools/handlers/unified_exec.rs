@@ -171,7 +171,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let request_permission_enabled =
                     session.features().enabled(Feature::RequestPermissions);
 
-                if sandbox_permissions.requires_additional_permissions()
+                if sandbox_permissions.requests_sandbox_override()
                     && !matches!(
                         context.turn.approval_policy.value(),
                         codex_protocol::protocol::AskForApproval::OnRequest

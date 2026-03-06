@@ -290,7 +290,7 @@ impl RolloutRecorder {
         }
         // If SQLite listing still fails, return the filesystem page rather than failing the list.
         tracing::error!("Falling back on rollout system");
-        state_db::record_discrepancy("list_threads_with_db_fallback", "falling_back");
+        tracing::warn!("state db discrepancy during list_threads_with_db_fallback: falling_back");
         Ok(truncate_fs_page(fs_page, page_size, sort_key))
     }
 
