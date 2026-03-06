@@ -2773,7 +2773,6 @@ pub struct SkillsListEntry {
 pub struct SessionNetworkProxyRuntime {
     pub http_addr: String,
     pub socks_addr: String,
-    pub admin_addr: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

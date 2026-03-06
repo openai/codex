@@ -7895,12 +7895,6 @@
             "null"
           ]
         },
-        "dangerouslyAllowNonLoopbackAdmin": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "dangerouslyAllowNonLoopbackProxy": {
           "type": [
             "boolean",
@@ -10811,9 +10805,6 @@
     },
     "SessionNetworkProxyRuntime": {
       "properties": {
-        "admin_addr": {
-          "type": "string"
-        },
         "http_addr": {
           "type": "string"
         },
@@ -10822,7 +10813,6 @@
         }
       },
       "required": [
-        "admin_addr",
         "http_addr",
         "socks_addr"
       ],
