@@ -585,7 +585,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_metadata_from_rollout_rejects_unparseable_rollout_with_no_items() {
+    async fn extract_metadata_from_rollout_rejects_unparsable_rollout_with_no_items() {
         let dir = tempdir().expect("tempdir");
         let uuid = Uuid::new_v4();
         let path = dir
@@ -597,7 +597,7 @@ mod tests {
 
         let err = extract_metadata_from_rollout(&path, "openai", None)
             .await
-            .expect_err("unparseable rollout should fail metadata extraction");
+            .expect_err("unparsable rollout should fail metadata extraction");
         assert_eq!(
             err.to_string(),
             format!(

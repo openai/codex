@@ -53,6 +53,6 @@ initial_messages: Array<EventMsg> | null,
  */
 network_proxy?: SessionNetworkProxyRuntime, 
 /**
- * Path in which the rollout is stored. Can be `None` for ephemeral threads
+ * Path in which the rollout is stored. Can be `None` for ephemeral threads.
  */
 rollout_path: string | null, };

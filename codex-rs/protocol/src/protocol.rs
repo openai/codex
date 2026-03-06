@@ -2874,10 +2874,7 @@ pub struct SessionConfiguredEvent {
     #[ts(optional)]
     pub network_proxy: Option<SessionNetworkProxyRuntime>,
 
-    /// Path reserved for this rollout. Can be `None` for ephemeral threads.
-    ///
-    /// Fresh non-ephemeral sessions may advertise this path before the rollout file has been
-    /// materialized on disk.
+    /// Path in which the rollout is stored. Can be `None` for ephemeral threads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rollout_path: Option<PathBuf>,
 }
