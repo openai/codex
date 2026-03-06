@@ -116,6 +116,7 @@ pub enum MacOsAutomationPermission {
 enum MacOsAutomationPermissionDe {
     Mode(String),
     BundleIds(Vec<String>),
+    BundleIdsObject { bundle_ids: Vec<String> },
 }
 
 impl TryFrom<MacOsAutomationPermissionDe> for MacOsAutomationPermission {
@@ -124,6 +125,7 @@ impl TryFrom<MacOsAutomationPermissionDe> for MacOsAutomationPermission {
     /// Accepts one of:
     /// - `"none"` or `"all"`
     /// - a plain list of bundle IDs, e.g. `["com.apple.Notes"]`
+    /// - an object with bundle IDs, e.g. `{"bundle_ids": ["com.apple.Notes"]}`
     fn try_from(value: MacOsAutomationPermissionDe) -> Result<Self, Self::Error> {
         let permission = match value {
             MacOsAutomationPermissionDe::Mode(value) => {
@@ -138,7 +140,8 @@ impl TryFrom<MacOsAutomationPermissionDe> for MacOsAutomationPermission {
                     ));
                 }
             }
-            MacOsAutomationPermissionDe::BundleIds(bundle_ids) => {
+            MacOsAutomationPermissionDe::BundleIds(bundle_ids)
+            | MacOsAutomationPermissionDe::BundleIdsObject { bundle_ids } => {
                 let bundle_ids = bundle_ids
                     .into_iter()
                     .map(|bundle_id| bundle_id.trim().to_string())
@@ -157,6 +160,7 @@ impl TryFrom<MacOsAutomationPermissionDe> for MacOsAutomationPermission {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(default)]
 pub struct MacOsSeatbeltProfileExtensions {
     pub macos_preferences: MacOsPreferencesPermission,
     pub macos_automation: MacOsAutomationPermission,
@@ -1422,6 +1426,27 @@ mod tests {
     }
 
     #[test]
+    fn macos_seatbelt_profile_extensions_deserializes_missing_fields_to_defaults() {
+        let permissions =
+            serde_json::from_value::<MacOsSeatbeltProfileExtensions>(serde_json::json!({
+                "macos_automation": ["com.apple.Notes"]
+            }))
+            .expect("deserialize macos permissions");
+
+        assert_eq!(
+            permissions,
+            MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadOnly,
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                    "com.apple.Notes".to_string(),
+                ]),
+                macos_accessibility: false,
+                macos_calendar: false,
+            }
+        );
+    }
+
+    #[test]
     fn macos_automation_permission_deserializes_all_and_none() {
         let all = serde_json::from_str::<MacOsAutomationPermission>("\"all\"")
             .expect("deserialize all automation permission");
@@ -1430,6 +1455,19 @@ mod tests {
 
         assert_eq!(all, MacOsAutomationPermission::All);
         assert_eq!(none, MacOsAutomationPermission::None);
+    }
+
+    #[test]
+    fn macos_automation_permission_deserializes_bundle_ids_object() {
+        let permission = serde_json::from_value::<MacOsAutomationPermission>(serde_json::json!({
+            "bundle_ids": ["com.apple.Notes"]
+        }))
+        .expect("deserialize bundle_ids object automation permission");
+
+        assert_eq!(
+            permission,
+            MacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string(),])
+        );
     }
 
     #[test]
