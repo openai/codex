@@ -570,9 +570,22 @@ impl EscalationPolicy for CoreShellActionProvider {
         // In the usual case, the execve wrapper reports the command being
         // executed in `program`, so a direct skill lookup is sufficient.
         if let Some(skill) = self.find_skill(program).await {
-            // For now, we always prompt for scripts that look like they belong
-            // to skills, which means we ignore exec policy rules for those
-            // scripts.
+            // For now, scripts that look like they belong to skills bypass
+            // general exec policy evaluation. Permissionless skills inherit the
+            // turn sandbox directly; skills with declared permissions still
+            // prompt here before applying their permission profile.
+            let prompt_permissions = skill.permission_profile.clone();
+            if prompt_permissions
+                .as_ref()
+                .is_none_or(PermissionProfile::is_empty)
+            {
+                tracing::debug!(
+                    "Matched {program:?} to permissionless skill {skill:?}, inheriting turn sandbox"
+                );
+                return Ok(EscalationDecision::escalate(
+                    EscalationExecution::TurnDefault,
+                ));
+            }
             tracing::debug!("Matched {program:?} to skill {skill:?}, prompting for approval");
             let needs_escalation = true;
             let decision_source = DecisionSource::SkillScript {
@@ -585,7 +598,7 @@ impl EscalationPolicy for CoreShellActionProvider {
                     program,
                     argv,
                     workdir,
-                    skill.permission_profile.clone(),
+                    prompt_permissions,
                     Self::skill_escalation_execution(&skill),
                     decision_source,
                 )
