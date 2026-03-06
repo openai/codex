@@ -232,8 +232,6 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         }
 
-        self.start_curated_repo_sync();
-
         if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
             return outcome;
         }
@@ -299,6 +297,11 @@ impl PluginsManager {
     ) -> Result<Vec<ConfiguredMarketplaceSummary>, MarketplaceError> {
         let installed_plugins = configured_plugins_from_stack(&config.config_layer_stack)
             .into_keys()
+            .filter(|plugin_key| {
+                PluginId::parse(plugin_key)
+                    .ok()
+                    .is_some_and(|plugin_id| self.store.is_installed(&plugin_id))
+            })
             .collect::<HashSet<_>>();
         let configured_plugins = self
             .plugins_for_config(config)
@@ -346,6 +349,12 @@ impl PluginsManager {
                 })
             })
             .collect())
+    }
+
+    pub fn maybe_start_curated_repo_sync_for_config(&self, config: &Config) {
+        if plugins_feature_enabled_from_stack(&config.config_layer_stack) {
+            self.start_curated_repo_sync();
+        }
     }
 
     pub fn start_curated_repo_sync(&self) {
@@ -1550,6 +1559,16 @@ mod tests {
         let repo_root = tmp.path().join("repo");
         fs::create_dir_all(repo_root.join(".git")).unwrap();
         fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+        write_plugin(
+            &tmp.path().join("plugins/cache/debug"),
+            "enabled-plugin/local",
+            "enabled-plugin",
+        );
+        write_plugin(
+            &tmp.path().join("plugins/cache/debug"),
+            "disabled-plugin/local",
+            "disabled-plugin",
+        );
         fs::write(
             repo_root.join(".agents/plugins/marketplace.json"),
             r#"{
@@ -1795,7 +1814,7 @@ enabled = false
                     path: AbsolutePathBuf::try_from(tmp.path().join("repo-a/from-a")).unwrap(),
                 },
                 interface: None,
-                installed: true,
+                installed: false,
                 enabled: true,
             }]
         );
@@ -1819,7 +1838,7 @@ enabled = false
                     path: AbsolutePathBuf::try_from(tmp.path().join("repo-b/from-b-only")).unwrap(),
                 },
                 interface: None,
-                installed: true,
+                installed: false,
                 enabled: false,
             }]
         );
@@ -1830,6 +1849,77 @@ enabled = false
             .filter(|plugin| plugin.name == "dup-plugin")
             .count();
         assert_eq!(duplicate_plugin_count, 1);
+    }
+
+    #[tokio::test]
+    async fn list_marketplaces_marks_configured_plugin_uninstalled_when_cache_is_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+        fs::write(
+            repo_root.join(".agents/plugins/marketplace.json"),
+            r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": {
+        "source": "local",
+        "path": "./sample-plugin"
+      }
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+        write_file(
+            &tmp.path().join(CONFIG_TOML_FILE),
+            r#"[features]
+plugins = true
+
+[plugins."sample-plugin@debug"]
+enabled = true
+"#,
+        );
+
+        let config = load_config(tmp.path(), &repo_root).await;
+        let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+            .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+            .unwrap();
+
+        let marketplace = marketplaces
+            .into_iter()
+            .find(|marketplace| {
+                marketplace.path
+                    == AbsolutePathBuf::try_from(
+                        tmp.path().join("repo/.agents/plugins/marketplace.json"),
+                    )
+                    .unwrap()
+            })
+            .expect("expected repo marketplace entry");
+
+        assert_eq!(
+            marketplace,
+            ConfiguredMarketplaceSummary {
+                name: "debug".to_string(),
+                path: AbsolutePathBuf::try_from(
+                    tmp.path().join("repo/.agents/plugins/marketplace.json"),
+                )
+                .unwrap(),
+                plugins: vec![ConfiguredMarketplacePluginSummary {
+                    id: "sample-plugin@debug".to_string(),
+                    name: "sample-plugin".to_string(),
+                    source: MarketplacePluginSourceSummary::Local {
+                        path: AbsolutePathBuf::try_from(tmp.path().join("repo/sample-plugin"))
+                            .unwrap(),
+                    },
+                    interface: None,
+                    installed: false,
+                    enabled: true,
+                }],
+            }
+        );
     }
 
     #[test]

@@ -130,6 +130,8 @@ async fn plugin_list_includes_install_and_enabled_state_from_config() -> Result<
     let repo_root = TempDir::new()?;
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
     std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    write_installed_plugin(&codex_home, "codex-curated", "enabled-plugin")?;
+    write_installed_plugin(&codex_home, "codex-curated", "disabled-plugin")?;
     std::fs::write(
         repo_root.path().join(".agents/plugins/marketplace.json"),
         r#"{
@@ -224,6 +226,7 @@ enabled = false
 async fn plugin_list_uses_home_config_for_enabled_state() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::create_dir_all(codex_home.path().join(".agents/plugins"))?;
+    write_installed_plugin(&codex_home, "codex-curated", "shared-plugin")?;
     std::fs::write(
         codex_home.path().join(".agents/plugins/marketplace.json"),
         r#"{
@@ -433,5 +436,24 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
             AbsolutePathBuf::try_from(plugin_root.join("assets/screenshot2.png"))?,
         ]
     );
+    Ok(())
+}
+
+fn write_installed_plugin(
+    codex_home: &TempDir,
+    marketplace_name: &str,
+    plugin_name: &str,
+) -> Result<()> {
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join(marketplace_name)
+        .join(plugin_name)
+        .join("local/.codex-plugin");
+    std::fs::create_dir_all(&plugin_root)?;
+    std::fs::write(
+        plugin_root.join("plugin.json"),
+        format!(r#"{{"name":"{plugin_name}"}}"#),
+    )?;
     Ok(())
 }

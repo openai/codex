@@ -92,6 +92,12 @@ impl PluginStore {
         .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
     }
 
+    pub fn is_installed(&self, plugin_id: &PluginId) -> bool {
+        self.plugin_root(plugin_id, DEFAULT_PLUGIN_VERSION)
+            .as_path()
+            .is_dir()
+    }
+
     pub fn install(
         &self,
         source_path: AbsolutePathBuf,

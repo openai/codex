@@ -417,6 +417,16 @@ impl CodexMessageProcessor {
         self.thread_manager.skills_manager().clear_cache();
     }
 
+    pub(crate) async fn maybe_start_curated_repo_sync_for_latest_config(&self) {
+        match self.load_latest_config(None).await {
+            Ok(config) => self
+                .thread_manager
+                .plugins_manager()
+                .maybe_start_curated_repo_sync_for_config(&config),
+            Err(err) => warn!("failed to load latest config for curated plugin sync: {err:?}"),
+        }
+    }
+
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         AccountUpdatedNotification {

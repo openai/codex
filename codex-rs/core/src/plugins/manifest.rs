@@ -18,8 +18,6 @@ pub(crate) struct PluginManifest {
     #[serde(default)]
     skills: Option<String>,
     #[serde(default)]
-    hooks: Option<String>,
-    #[serde(default)]
     mcp_servers: Option<String>,
     #[serde(default)]
     apps: Option<String>,
@@ -30,7 +28,6 @@ pub(crate) struct PluginManifest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginManifestPaths {
     pub skills: Option<AbsolutePathBuf>,
-    pub hooks: Option<AbsolutePathBuf>,
     pub mcp_servers: Option<AbsolutePathBuf>,
     pub apps: Option<AbsolutePathBuf>,
 }
@@ -176,7 +173,6 @@ pub(crate) fn plugin_manifest_paths(
 ) -> PluginManifestPaths {
     PluginManifestPaths {
         skills: resolve_manifest_path(plugin_root, "skills", manifest.skills.as_deref()),
-        hooks: resolve_manifest_path(plugin_root, "hooks", manifest.hooks.as_deref()),
         mcp_servers: resolve_manifest_path(
             plugin_root,
             "mcpServers",
