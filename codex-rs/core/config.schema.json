@@ -574,10 +574,15 @@
           "description": "Optional context window override applied when this alias is selected.",
           "format": "int64",
           "type": "integer"
+        },
+        "name": {
+          "description": "User-facing alias shown in the model picker.",
+          "type": "string"
         }
       },
       "required": [
-        "model"
+        "model",
+        "name"
       ],
       "type": "object"
     },
@@ -1688,12 +1693,12 @@
       "type": "string"
     },
     "custom_models": {
-      "additionalProperties": {
+      "default": [],
+      "description": "User-defined model aliases that can override model context settings.",
+      "items": {
         "$ref": "#/definitions/CustomModelToml"
       },
-      "default": {},
-      "description": "User-defined model aliases that can override model context settings.",
-      "type": "object"
+      "type": "array"
     },
     "developer_instructions": {
       "default": null,
