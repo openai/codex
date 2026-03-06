@@ -22,6 +22,9 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
 use std::marker::PhantomData;
 
+// Adjacent ContentItems in a single message are effectively concatenated in
+// the model-visible token stream, so we inject an explicit separator between
+// text fragments to preserve boundaries.
 const MODEL_VISIBLE_FRAGMENT_SEPARATOR: &str = "\n\n";
 
 struct PermissionsUpdateFragment {
