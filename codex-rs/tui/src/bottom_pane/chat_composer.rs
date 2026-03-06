@@ -253,9 +253,20 @@ pub enum InputResult {
         text: String,
         text_elements: Vec<TextElement>,
     },
+    BufferedQueued {
+        text: String,
+        text_elements: Vec<TextElement>,
+        priority: BufferedQueuePriority,
+    },
     Command(SlashCommand),
     CommandWithArgs(SlashCommand, String, Vec<TextElement>),
     None,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BufferedQueuePriority {
+    High,
+    Normal,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2482,6 +2493,24 @@ impl ChatComposer {
         }
     }
 
+    fn handle_buffered_submission(
+        &mut self,
+        priority: BufferedQueuePriority,
+    ) -> (InputResult, bool) {
+        if let Some((text, text_elements)) = self.prepare_submission_text(true) {
+            (
+                InputResult::BufferedQueued {
+                    text,
+                    text_elements,
+                    priority,
+                },
+                true,
+            )
+        } else {
+            (InputResult::None, true)
+        }
+    }
+
     /// Check if the first line is a bare slash command (no args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_bare_slash_command(&mut self) -> Option<InputResult> {
@@ -2746,6 +2775,21 @@ impl ChatComposer {
                     }
                 }
                 self.handle_input_basic(key_event)
+            }
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } if !self.is_bang_shell_command() => {
+                self.handle_buffered_submission(BufferedQueuePriority::High)
+            }
+            KeyEvent {
+                code: KeyCode::BackTab,
+                kind: KeyEventKind::Press,
+                ..
+            } if !self.is_bang_shell_command() => {
+                self.handle_buffered_submission(BufferedQueuePriority::Normal)
             }
             KeyEvent {
                 code: KeyCode::Tab,
@@ -6373,6 +6417,9 @@ mod tests {
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
             }
+            InputResult::BufferedQueued { .. } => {
+                panic!("expected command dispatch, but composer buffered-queued literal text")
+            }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
@@ -6778,6 +6825,9 @@ mod tests {
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch after Tab completion, got literal queue")
             }
+            InputResult::BufferedQueued { .. } => {
+                panic!("expected command dispatch after Tab completion, got buffered queue")
+            }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.textarea.is_empty());
@@ -6883,6 +6933,68 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_tab_buffers_message_with_high_priority() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(&mut composer, &['h', 'i']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::CONTROL));
+
+        assert!(matches!(
+            result,
+            InputResult::BufferedQueued {
+                ref text,
+                priority: BufferedQueuePriority::High,
+                ..
+            } if text == "hi"
+        ));
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn shift_tab_buffers_message_with_normal_priority() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(&mut composer, &['h', 'i']);
+
+        let (result, _needs_redraw) = composer.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+
+        assert!(matches!(
+            result,
+            InputResult::BufferedQueued {
+                ref text,
+                priority: BufferedQueuePriority::Normal,
+                ..
+            } if text == "hi"
+        ));
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
     fn tab_does_not_submit_for_bang_shell_command() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -6944,6 +7056,9 @@ mod tests {
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::BufferedQueued { .. } => {
+                panic!("expected command dispatch, but composer buffered-queued literal text")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }

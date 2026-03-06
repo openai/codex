@@ -10,6 +10,13 @@ use crate::render::renderable::Renderable;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingPreviewMessage {
+    pub(crate) text: String,
+    pub(crate) repeating: bool,
+    pub(crate) steer: bool,
+}
+
 /// Widget that displays pending steers plus user messages queued while a turn is in progress.
 ///
 /// The widget shows pending steers first, then queued user messages. It only
@@ -18,8 +25,8 @@ use crate::wrapping::adaptive_wrap_lines;
 /// intercept certain modifier-key combinations, the displayed binding is
 /// configurable via [`set_edit_binding`](Self::set_edit_binding).
 pub(crate) struct PendingInputPreview {
-    pub pending_steers: Vec<String>,
-    pub queued_messages: Vec<String>,
+    pub pending_steers: Vec<PendingPreviewMessage>,
+    pub queued_messages: Vec<PendingPreviewMessage>,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
     edit_binding: key_hint::KeyBinding,
@@ -63,27 +70,81 @@ impl PendingInputPreview {
         let mut lines = vec![];
 
         for steer in &self.pending_steers {
-            let wrapped = adaptive_wrap_lines(
-                steer.lines().map(|line| Line::from(line.dim())),
-                RtOptions::new(width as usize)
-                    .initial_indent(Line::from("  ! pending steer: ".dim()))
-                    .subsequent_indent(Line::from("    ")),
-            );
-            Self::push_truncated_preview_lines(&mut lines, wrapped, Line::from("    …".dim()));
+            let wrapped = if steer.repeating {
+                adaptive_wrap_lines(
+                    steer.text.lines().map(|line| Line::from(line.cyan())),
+                    RtOptions::new(width as usize)
+                        .initial_indent(Line::from("  ! repeat steer: ".cyan()))
+                        .subsequent_indent(Line::from("    ")),
+                )
+            } else {
+                adaptive_wrap_lines(
+                    steer.text.lines().map(|line| Line::from(line.blue())),
+                    RtOptions::new(width as usize)
+                        .initial_indent(Line::from("  ! pending steer: ".blue()))
+                        .subsequent_indent(Line::from("    ")),
+                )
+            };
+            let overflow_line = if steer.repeating {
+                Line::from("    …".cyan())
+            } else {
+                Line::from("    …".blue())
+            };
+            Self::push_truncated_preview_lines(&mut lines, wrapped, overflow_line);
         }
 
         for message in &self.queued_messages {
-            let wrapped = adaptive_wrap_lines(
-                message.lines().map(|line| Line::from(line.dim().italic())),
-                RtOptions::new(width as usize)
-                    .initial_indent(Line::from("  ↳ ".dim()))
-                    .subsequent_indent(Line::from("    ")),
-            );
-            Self::push_truncated_preview_lines(
-                &mut lines,
-                wrapped,
-                Line::from("    …".dim().italic()),
-            );
+            let (wrapped, overflow_line) = match (message.steer, message.repeating) {
+                (true, true) => (
+                    adaptive_wrap_lines(
+                        message
+                            .text
+                            .lines()
+                            .map(|line| Line::from(line.cyan().italic())),
+                        RtOptions::new(width as usize)
+                            .initial_indent(Line::from("  ↻ ! ".cyan()))
+                            .subsequent_indent(Line::from("    ")),
+                    ),
+                    Line::from("    …".cyan().italic()),
+                ),
+                (true, false) => (
+                    adaptive_wrap_lines(
+                        message
+                            .text
+                            .lines()
+                            .map(|line| Line::from(line.blue().italic())),
+                        RtOptions::new(width as usize)
+                            .initial_indent(Line::from("  ↳ ! ".blue()))
+                            .subsequent_indent(Line::from("    ")),
+                    ),
+                    Line::from("    …".blue().italic()),
+                ),
+                (false, true) => (
+                    adaptive_wrap_lines(
+                        message
+                            .text
+                            .lines()
+                            .map(|line| Line::from(line.yellow().italic())),
+                        RtOptions::new(width as usize)
+                            .initial_indent(Line::from("  ↻ ".yellow()))
+                            .subsequent_indent(Line::from("    ")),
+                    ),
+                    Line::from("    …".yellow().italic()),
+                ),
+                (false, false) => (
+                    adaptive_wrap_lines(
+                        message
+                            .text
+                            .lines()
+                            .map(|line| Line::from(line.green().italic())),
+                        RtOptions::new(width as usize)
+                            .initial_indent(Line::from("  ↳ ".green()))
+                            .subsequent_indent(Line::from("    ")),
+                    ),
+                    Line::from("    …".green().italic()),
+                ),
+            };
+            Self::push_truncated_preview_lines(&mut lines, wrapped, overflow_line);
         }
 
         if !self.queued_messages.is_empty() {
@@ -121,6 +182,38 @@ mod tests {
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
 
+    fn normal(text: &str) -> PendingPreviewMessage {
+        PendingPreviewMessage {
+            text: text.to_string(),
+            repeating: false,
+            steer: false,
+        }
+    }
+
+    fn repeating(text: &str) -> PendingPreviewMessage {
+        PendingPreviewMessage {
+            text: text.to_string(),
+            repeating: true,
+            steer: false,
+        }
+    }
+
+    fn steer_normal(text: &str) -> PendingPreviewMessage {
+        PendingPreviewMessage {
+            text: text.to_string(),
+            repeating: false,
+            steer: true,
+        }
+    }
+
+    fn steer_repeating(text: &str) -> PendingPreviewMessage {
+        PendingPreviewMessage {
+            text: text.to_string(),
+            repeating: true,
+            steer: true,
+        }
+    }
+
     #[test]
     fn desired_height_empty() {
         let queue = PendingInputPreview::new();
@@ -130,14 +223,14 @@ mod tests {
     #[test]
     fn desired_height_one_message() {
         let mut queue = PendingInputPreview::new();
-        queue.queued_messages.push("Hello, world!".to_string());
+        queue.queued_messages.push(normal("Hello, world!"));
         assert_eq!(queue.desired_height(40), 2);
     }
 
     #[test]
     fn render_one_message() {
         let mut queue = PendingInputPreview::new();
-        queue.queued_messages.push("Hello, world!".to_string());
+        queue.queued_messages.push(normal("Hello, world!"));
         let width = 40;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -148,10 +241,10 @@ mod tests {
     #[test]
     fn render_two_messages() {
         let mut queue = PendingInputPreview::new();
-        queue.queued_messages.push("Hello, world!".to_string());
+        queue.queued_messages.push(normal("Hello, world!"));
         queue
             .queued_messages
-            .push("This is another message".to_string());
+            .push(normal("This is another message"));
         let width = 40;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -162,16 +255,16 @@ mod tests {
     #[test]
     fn render_more_than_three_messages() {
         let mut queue = PendingInputPreview::new();
-        queue.queued_messages.push("Hello, world!".to_string());
+        queue.queued_messages.push(normal("Hello, world!"));
         queue
             .queued_messages
-            .push("This is another message".to_string());
+            .push(normal("This is another message"));
         queue
             .queued_messages
-            .push("This is a third message".to_string());
+            .push(normal("This is a third message"));
         queue
             .queued_messages
-            .push("This is a fourth message".to_string());
+            .push(normal("This is a fourth message"));
         let width = 40;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -184,10 +277,10 @@ mod tests {
         let mut queue = PendingInputPreview::new();
         queue
             .queued_messages
-            .push("This is a longer message that should be wrapped".to_string());
+            .push(normal("This is a longer message that should be wrapped"));
         queue
             .queued_messages
-            .push("This is another message".to_string());
+            .push(normal("This is another message"));
         let width = 40;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -200,7 +293,7 @@ mod tests {
         let mut queue = PendingInputPreview::new();
         queue
             .queued_messages
-            .push("This is\na message\nwith many\nlines".to_string());
+            .push(normal("This is\na message\nwith many\nlines"));
         let width = 40;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -212,8 +305,9 @@ mod tests {
     fn long_url_like_message_does_not_expand_into_wrapped_ellipsis_rows() {
         let mut queue = PendingInputPreview::new();
         queue.queued_messages.push(
-            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/session_id=abc123def456ghi789"
-                .to_string(),
+            normal(
+                "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/session_id=abc123def456ghi789",
+            ),
         );
 
         let width = 36;
@@ -243,7 +337,7 @@ mod tests {
     #[test]
     fn render_one_pending_steer() {
         let mut queue = PendingInputPreview::new();
-        queue.pending_steers.push("Please continue.".to_string());
+        queue.pending_steers.push(steer_normal("Please continue."));
         let width = 48;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -254,13 +348,13 @@ mod tests {
     #[test]
     fn render_pending_steers_above_queued_messages() {
         let mut queue = PendingInputPreview::new();
-        queue.pending_steers.push("Please continue.".to_string());
+        queue.pending_steers.push(steer_normal("Please continue."));
         queue
             .pending_steers
-            .push("Check the last command output.".to_string());
+            .push(steer_repeating("Check the last command output."));
         queue
             .queued_messages
-            .push("Queued follow-up question".to_string());
+            .push(repeating("Queued follow-up question"));
         let width = 52;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -274,9 +368,9 @@ mod tests {
     #[test]
     fn render_multiline_pending_steer_uses_single_prefix_and_truncates() {
         let mut queue = PendingInputPreview::new();
-        queue
-            .pending_steers
-            .push("First line\nSecond line\nThird line\nFourth line".to_string());
+        queue.pending_steers.push(steer_repeating(
+            "First line\nSecond line\nThird line\nFourth line",
+        ));
         let width = 48;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
