@@ -64,7 +64,7 @@ pub fn assess_patch_safety(
     // possible that paths in the patch are hard links to files outside the
     // writable roots, so we should still run `apply_patch` in a sandbox in that case.
     if is_write_patch_constrained_to_writable_paths(action, file_system_sandbox_policy, cwd)
-        || matches!(policy, AskForApproval::OnFailure | AskForApproval::Guardian)
+        || matches!(policy, AskForApproval::OnFailure)
     {
         if matches!(
             sandbox_policy,
@@ -403,6 +403,41 @@ mod tests {
                 WindowsSandboxLevel::Disabled,
             ),
             SafetyCheck::AskUser,
+        );
+    }
+
+    #[test]
+    fn guardian_matches_on_request_for_out_of_root_patch() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_path_buf();
+        let parent = cwd.parent().unwrap().to_path_buf();
+        let add_outside =
+            ApplyPatchAction::new_add_for_test(&parent.join("outside.txt"), "".to_string());
+        let policy_workspace_only = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: Default::default(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        assert_eq!(
+            assess_patch_safety(
+                &add_outside,
+                AskForApproval::Guardian,
+                &policy_workspace_only,
+                &FileSystemSandboxPolicy::from(&policy_workspace_only),
+                &cwd,
+                WindowsSandboxLevel::Disabled,
+            ),
+            assess_patch_safety(
+                &add_outside,
+                AskForApproval::OnRequest,
+                &policy_workspace_only,
+                &FileSystemSandboxPolicy::from(&policy_workspace_only),
+                &cwd,
+                WindowsSandboxLevel::Disabled,
+            ),
         );
     }
 }

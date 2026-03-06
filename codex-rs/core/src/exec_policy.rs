@@ -503,7 +503,7 @@ pub fn render_decision_for_unmatched_command(
         cfg!(windows) && matches!(sandbox_policy, SandboxPolicy::ReadOnly { .. });
 
     // If the command is flagged as dangerous or we have no sandbox protection,
-    // we should never allow it to run without user approval.
+    // we should never allow it to run without approval.
     //
     // We prefer to prompt the user rather than outright forbid the command,
     // but if the user has explicitly disabled prompts, we must
@@ -511,20 +511,6 @@ pub fn render_decision_for_unmatched_command(
     if command_might_be_dangerous(command) || runtime_sandbox_provides_safety {
         return match approval_policy {
             AskForApproval::Never => Decision::Forbidden,
-            // Under guardian, allow the first attempt to run inside the real
-            // restricted sandbox. Guardian review is only needed if execution
-            // later has to leave ReadOnly/WorkspaceWrite, and explicit
-            // `require_escalated` requests are handled elsewhere.
-            AskForApproval::Guardian
-                if !runtime_sandbox_provides_safety
-                    && !sandbox_permissions.requires_escalated_permissions()
-                    && matches!(
-                        sandbox_policy,
-                        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
-                    ) =>
-            {
-                Decision::Allow
-            }
             AskForApproval::OnFailure
             | AskForApproval::OnRequest
             | AskForApproval::Guardian
@@ -534,7 +520,7 @@ pub fn render_decision_for_unmatched_command(
     }
 
     match approval_policy {
-        AskForApproval::Never | AskForApproval::OnFailure | AskForApproval::Guardian => {
+        AskForApproval::Never | AskForApproval::OnFailure => {
             // We allow the command to run, relying on the sandbox for
             // protection.
             Decision::Allow
@@ -544,7 +530,7 @@ pub fn render_decision_for_unmatched_command(
             // returned false, so we must prompt.
             Decision::Prompt
         }
-        AskForApproval::OnRequest => {
+        AskForApproval::OnRequest | AskForApproval::Guardian => {
             match sandbox_policy {
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                     // The user has indicated we should "just run" commands
@@ -1592,6 +1578,47 @@ prefix_rule(pattern=["git"], decision="prompt")
                 SandboxPermissions::RequireEscalated,
                 false,
             )
+        );
+    }
+
+    #[test]
+    fn guardian_matches_on_request_for_unmatched_restricted_commands() {
+        let dangerous_command = vec!["rm".to_string(), "-rf".to_string(), "/tmp/demo".to_string()];
+        let restricted_sandbox = SandboxPolicy::new_read_only_policy();
+
+        assert_eq!(
+            render_decision_for_unmatched_command(
+                AskForApproval::Guardian,
+                &restricted_sandbox,
+                &dangerous_command,
+                SandboxPermissions::UseDefault,
+                false,
+            ),
+            render_decision_for_unmatched_command(
+                AskForApproval::OnRequest,
+                &restricted_sandbox,
+                &dangerous_command,
+                SandboxPermissions::UseDefault,
+                false,
+            ),
+        );
+
+        let escalated_command = vec!["madeup-cmd".to_string()];
+        assert_eq!(
+            render_decision_for_unmatched_command(
+                AskForApproval::Guardian,
+                &restricted_sandbox,
+                &escalated_command,
+                SandboxPermissions::RequireEscalated,
+                false,
+            ),
+            render_decision_for_unmatched_command(
+                AskForApproval::OnRequest,
+                &restricted_sandbox,
+                &escalated_command,
+                SandboxPermissions::RequireEscalated,
+                false,
+            ),
         );
     }
 

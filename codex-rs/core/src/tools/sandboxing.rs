@@ -158,7 +158,7 @@ impl ExecApprovalRequirement {
 }
 
 /// - Never, OnFailure: do not ask
-/// - OnRequest: ask unless sandbox policy is DangerFullAccess
+/// - OnRequest, Guardian: ask unless sandbox policy is DangerFullAccess
 /// - Reject: ask unless sandbox policy is DangerFullAccess, but auto-reject
 ///   when `sandbox_approval` rejection is enabled.
 /// - UnlessTrusted: always ask
@@ -167,11 +167,13 @@ pub(crate) fn default_exec_approval_requirement(
     sandbox_policy: &SandboxPolicy,
 ) -> ExecApprovalRequirement {
     let needs_approval = match policy {
-        AskForApproval::Never | AskForApproval::OnFailure | AskForApproval::Guardian => false,
-        AskForApproval::OnRequest | AskForApproval::Reject(_) => !matches!(
-            sandbox_policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        ),
+        AskForApproval::Never | AskForApproval::OnFailure => false,
+        AskForApproval::OnRequest | AskForApproval::Guardian | AskForApproval::Reject(_) => {
+            !matches!(
+                sandbox_policy,
+                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+            )
+        }
         AskForApproval::UnlessTrusted => true,
     };
 
@@ -204,14 +206,13 @@ pub(crate) enum SandboxOverride {
 }
 
 pub(crate) fn sandbox_override_for_first_attempt(
-    approval_policy: AskForApproval,
+    _approval_policy: AskForApproval,
     sandbox_permissions: SandboxPermissions,
     exec_approval_requirement: &ExecApprovalRequirement,
 ) -> SandboxOverride {
     // ExecPolicy `Allow` can intentionally imply full trust (Skip + bypass_sandbox=true),
     // which supersedes `with_additional_permissions` sandboxed execution hints.
-    if (sandbox_permissions.requires_escalated_permissions()
-        && !matches!(approval_policy, AskForApproval::Guardian))
+    if sandbox_permissions.requires_escalated_permissions()
         || matches!(
             exec_approval_requirement,
             ExecApprovalRequirement::Skip {
@@ -263,10 +264,9 @@ pub(crate) trait Approvable<Req> {
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         match policy {
             AskForApproval::OnFailure => true,
-            AskForApproval::Guardian => true,
             AskForApproval::UnlessTrusted => true,
             AskForApproval::Never => false,
-            AskForApproval::OnRequest => false,
+            AskForApproval::OnRequest | AskForApproval::Guardian => false,
             AskForApproval::Reject(reject_config) => !reject_config.sandbox_approval,
         }
     }
@@ -397,6 +397,20 @@ mod tests {
     }
 
     #[test]
+    fn restricted_sandbox_requires_exec_approval_in_guardian() {
+        assert_eq!(
+            default_exec_approval_requirement(
+                AskForApproval::Guardian,
+                &SandboxPolicy::new_read_only_policy()
+            ),
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[test]
     fn default_exec_approval_requirement_rejects_sandbox_prompt_when_configured() {
         let policy = AskForApproval::Reject(RejectConfig {
             sandbox_approval: true,
@@ -451,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn guardian_keeps_explicit_escalation_in_sandbox_on_first_attempt() {
+    fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
         assert_eq!(
             sandbox_override_for_first_attempt(
                 AskForApproval::Guardian,
@@ -461,7 +475,7 @@ mod tests {
                     proposed_execpolicy_amendment: None,
                 },
             ),
-            SandboxOverride::NoOverride
+            SandboxOverride::BypassSandboxFirstAttempt
         );
     }
 }

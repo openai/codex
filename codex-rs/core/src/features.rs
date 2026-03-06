@@ -698,7 +698,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianApproval,
         key: "guardian_approval",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Guardian approvals",
+            menu_description: "Let a guardian subagent review approval prompts instead of asking you directly. Try `codex -a guardian -s workspace-write`.",
+            announcement: "NEW: Guardian approvals can now be enabled from /experimental.",
+        },
         default_enabled: false,
     },
     FeatureSpec {
