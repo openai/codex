@@ -62,6 +62,7 @@ impl Stage {
 
     pub fn experimental_announcement(self) -> Option<&'static str> {
         match self {
+            Stage::Experimental { announcement, .. } if announcement.is_empty() => None,
             Stage::Experimental { announcement, .. } => Some(announcement),
             _ => None,
         }
@@ -701,7 +702,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Experimental {
             name: "Guardian approvals",
             menu_description: "Let a guardian subagent review approval prompts for sandbox escapes and blocked network access instead of asking you directly. Try `codex -a guardian -s workspace-write`.",
-            announcement: "NEW: Guardian approvals can now be enabled from /experimental.",
+            announcement: "",
         },
         default_enabled: false,
     },
@@ -913,6 +914,7 @@ mod tests {
                 "Let a guardian subagent review approval prompts for sandbox escapes and blocked network access instead of asking you directly. Try `codex -a guardian -s workspace-write`.".to_string()
             )
         );
+        assert_eq!(stage.experimental_announcement(), None);
         assert_eq!(Feature::GuardianApproval.default_enabled(), false);
     }
 
