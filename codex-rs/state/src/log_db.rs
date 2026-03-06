@@ -41,8 +41,8 @@ use crate::LogEntry;
 use crate::StateRuntime;
 
 const LOG_QUEUE_CAPACITY: usize = 512;
-const LOG_BATCH_SIZE: usize = 64;
-const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
+const LOG_BATCH_SIZE: usize = 128;
+const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 const LOG_RETENTION_DAYS: i64 = 90;
 
 pub struct LogDbLayer {

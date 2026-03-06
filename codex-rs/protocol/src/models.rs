@@ -28,18 +28,19 @@ use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;
 
-/// Controls whether a command should use the session sandbox or bypass it.
+/// Controls the per-command sandbox override requested by a shell-like tool call.
 #[derive(
     Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxPermissions {
-    /// Run with the configured sandbox
+    /// Run with the turn's configured sandbox policy unchanged.
     #[default]
     UseDefault,
-    /// Request to run outside the sandbox
+    /// Request to run outside the sandbox.
     RequireEscalated,
-    /// Request to run in the sandbox with additional per-command permissions.
+    /// Request to stay in the sandbox while widening permissions for this
+    /// command only.
     WithAdditionalPermissions,
 }
 
@@ -49,9 +50,16 @@ impl SandboxPermissions {
         matches!(self, SandboxPermissions::RequireEscalated)
     }
 
-    /// True if SandboxPermissions requires permissions beyond UseDefault
-    pub fn requires_additional_permissions(self) -> bool {
+    /// True if SandboxPermissions requests any explicit per-command override
+    /// beyond `UseDefault`.
+    pub fn requests_sandbox_override(self) -> bool {
         !matches!(self, SandboxPermissions::UseDefault)
+    }
+
+    /// True if SandboxPermissions uses the sandboxed per-command permission
+    /// widening flow.
+    pub fn uses_additional_permissions(self) -> bool {
+        matches!(self, SandboxPermissions::WithAdditionalPermissions)
     }
 }
 
@@ -1304,6 +1312,41 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    #[test]
+    fn sandbox_permissions_helpers_match_documented_semantics() {
+        let cases = [
+            (SandboxPermissions::UseDefault, false, false, false),
+            (SandboxPermissions::RequireEscalated, true, true, false),
+            (
+                SandboxPermissions::WithAdditionalPermissions,
+                false,
+                true,
+                true,
+            ),
+        ];
+
+        for (
+            sandbox_permissions,
+            requires_escalated_permissions,
+            requests_sandbox_override,
+            uses_additional_permissions,
+        ) in cases
+        {
+            assert_eq!(
+                sandbox_permissions.requires_escalated_permissions(),
+                requires_escalated_permissions
+            );
+            assert_eq!(
+                sandbox_permissions.requests_sandbox_override(),
+                requests_sandbox_override
+            );
+            assert_eq!(
+                sandbox_permissions.uses_additional_permissions(),
+                uses_additional_permissions
+            );
+        }
+    }
 
     #[test]
     fn convert_mcp_content_to_items_preserves_data_urls() {
