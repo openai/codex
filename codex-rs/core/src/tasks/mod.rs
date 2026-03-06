@@ -24,7 +24,7 @@ use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
 use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ModelVisibleContextFragment;
-use crate::model_visible_context::TURN_ABORTED_FRAGMENT_SPEC;
+use crate::model_visible_context::TURN_ABORTED_FRAGMENT_MARKERS;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
@@ -59,12 +59,8 @@ struct TurnAbortedMarker {
 impl ModelVisibleContextFragment for TurnAbortedMarker {
     type Role = ContextualUserContextRole;
 
-    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
-        TURN_ABORTED_FRAGMENT_SPEC
-    }
-
     fn render_text(&self) -> String {
-        TURN_ABORTED_FRAGMENT_SPEC.wrap_body(self.guidance.to_string())
+        TURN_ABORTED_FRAGMENT_MARKERS.wrap_body(self.guidance.to_string())
     }
 }
 

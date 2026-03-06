@@ -52,84 +52,56 @@ impl ModelVisibleContextRole for ContextualUserContextRole {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ModelVisibleContextFragmentSpec {
-    start_marker: Option<&'static str>,
-    end_marker: Option<&'static str>,
+pub(crate) struct ContextualUserFragmentMarkers {
+    start_marker: &'static str,
+    end_marker: &'static str,
 }
 
-impl ModelVisibleContextFragmentSpec {
-    pub(crate) const fn markerless() -> Self {
+impl ContextualUserFragmentMarkers {
+    pub(crate) const fn new(start_marker: &'static str, end_marker: &'static str) -> Self {
         Self {
-            start_marker: None,
-            end_marker: None,
+            start_marker,
+            end_marker,
         }
     }
 
-    pub(crate) const fn contextual_user(
-        start_marker: &'static str,
-        end_marker: &'static str,
-    ) -> Self {
-        Self {
-            start_marker: Some(start_marker),
-            end_marker: Some(end_marker),
-        }
-    }
-
-    pub(crate) fn matches_text(&self, text: &str) -> bool {
-        let (Some(start_marker), Some(end_marker)) = (self.start_marker, self.end_marker) else {
-            return false;
-        };
+    pub(crate) fn matches_text(self, text: &str) -> bool {
         let trimmed = text.trim_start();
         let starts_with_marker = trimmed
-            .get(..start_marker.len())
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(start_marker));
+            .get(..self.start_marker.len())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(self.start_marker));
         let trimmed = trimmed.trim_end();
         let ends_with_marker = trimmed
-            .get(trimmed.len().saturating_sub(end_marker.len())..)
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(end_marker));
+            .get(trimmed.len().saturating_sub(self.end_marker.len())..)
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(self.end_marker));
         starts_with_marker && ends_with_marker
     }
 
-    pub(crate) fn start_marker(&self) -> &'static str {
-        match self.start_marker {
-            Some(start_marker) => start_marker,
-            None => panic!("model-visible fragment has no start marker"),
-        }
+    pub(crate) fn wrap_body(self, body: String) -> String {
+        format!("{}\n{}\n{}", self.start_marker, body, self.end_marker)
     }
+}
 
-    pub(crate) fn end_marker(&self) -> &'static str {
-        match self.end_marker {
-            Some(end_marker) => end_marker,
-            None => panic!("model-visible fragment has no end marker"),
-        }
+pub(crate) fn model_visible_content_item(text: String) -> ContentItem {
+    ContentItem::InputText { text }
+}
+
+pub(crate) fn model_visible_message<R: ModelVisibleContextRole>(text: String) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: R::MESSAGE_ROLE.to_string(),
+        content: vec![model_visible_content_item(text)],
+        end_turn: None,
+        phase: None,
     }
+}
 
-    pub(crate) fn wrap_body(&self, body: String) -> String {
-        format!("{}\n{}\n{}", self.start_marker(), body, self.end_marker())
-    }
-
-    pub(crate) fn into_content_item(self, text: String) -> ContentItem {
-        ContentItem::InputText { text }
-    }
-
-    pub(crate) fn into_message<R: ModelVisibleContextRole>(self, text: String) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: R::MESSAGE_ROLE.to_string(),
-            content: vec![self.into_content_item(text)],
-            end_turn: None,
-            phase: None,
-        }
-    }
-
-    pub(crate) fn into_response_input_item<R: ModelVisibleContextRole>(
-        self,
-        text: String,
-    ) -> ResponseInputItem {
-        ResponseInputItem::Message {
-            role: R::MESSAGE_ROLE.to_string(),
-            content: vec![self.into_content_item(text)],
-        }
+pub(crate) fn model_visible_response_input_item<R: ModelVisibleContextRole>(
+    text: String,
+) -> ResponseInputItem {
+    ResponseInputItem::Message {
+        role: R::MESSAGE_ROLE.to_string(),
+        content: vec![model_visible_content_item(text)],
     }
 }
 
@@ -138,22 +110,20 @@ impl ModelVisibleContextFragmentSpec {
 pub(crate) trait ModelVisibleContextFragment {
     type Role: ModelVisibleContextRole;
 
-    fn spec(&self) -> ModelVisibleContextFragmentSpec;
-
     fn render_text(&self) -> String;
 
     fn into_content_item(self) -> ContentItem
     where
         Self: Sized,
     {
-        self.spec().into_content_item(self.render_text())
+        model_visible_content_item(self.render_text())
     }
 
     fn into_message(self) -> ResponseItem
     where
         Self: Sized,
     {
-        self.spec().into_message::<Self::Role>(self.render_text())
+        model_visible_message::<Self::Role>(self.render_text())
     }
 }
 
@@ -208,40 +178,28 @@ pub(crate) trait TurnContextDiffFragment: ModelVisibleContextFragment + Sized {
     ) -> Option<Self>;
 }
 
-/// Untagged developer-envelope fragment spec, including `CustomDeveloperInstructions`.
-pub(crate) const DEVELOPER_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
-    ModelVisibleContextFragmentSpec::markerless();
-/// AGENTS.md / user-instructions contextual-user fragment spec.
-pub(crate) const AGENTS_MD_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
-    ModelVisibleContextFragmentSpec::markerless();
-/// Environment-context contextual-user fragment spec.
-pub(crate) const ENVIRONMENT_CONTEXT_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
-    ModelVisibleContextFragmentSpec::contextual_user(
-        ENVIRONMENT_CONTEXT_OPEN_TAG,
-        ENVIRONMENT_CONTEXT_CLOSE_TAG,
-    );
-/// Skill contextual-user fragment spec.
-pub(crate) const SKILL_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
-    ModelVisibleContextFragmentSpec::contextual_user(SKILL_OPEN_TAG, SKILL_CLOSE_TAG);
-/// User-shell-command contextual-user fragment spec.
-pub(crate) const USER_SHELL_COMMAND_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
-    ModelVisibleContextFragmentSpec::contextual_user(
-        USER_SHELL_COMMAND_OPEN_TAG,
-        USER_SHELL_COMMAND_CLOSE_TAG,
-    );
-/// Turn-aborted contextual-user fragment spec.
-pub(crate) const TURN_ABORTED_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
-    ModelVisibleContextFragmentSpec::contextual_user(TURN_ABORTED_OPEN_TAG, TURN_ABORTED_CLOSE_TAG);
-/// Plugin contextual-user fragment spec.
-pub(crate) const PLUGINS_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
-    ModelVisibleContextFragmentSpec::contextual_user(PLUGINS_OPEN_TAG, PLUGINS_CLOSE_TAG);
+/// Environment-context contextual-user fragment markers.
+pub(crate) const ENVIRONMENT_CONTEXT_FRAGMENT_MARKERS: ContextualUserFragmentMarkers =
+    ContextualUserFragmentMarkers::new(ENVIRONMENT_CONTEXT_OPEN_TAG, ENVIRONMENT_CONTEXT_CLOSE_TAG);
+/// Skill contextual-user fragment markers.
+pub(crate) const SKILL_FRAGMENT_MARKERS: ContextualUserFragmentMarkers =
+    ContextualUserFragmentMarkers::new(SKILL_OPEN_TAG, SKILL_CLOSE_TAG);
+/// User-shell-command contextual-user fragment markers.
+pub(crate) const USER_SHELL_COMMAND_FRAGMENT_MARKERS: ContextualUserFragmentMarkers =
+    ContextualUserFragmentMarkers::new(USER_SHELL_COMMAND_OPEN_TAG, USER_SHELL_COMMAND_CLOSE_TAG);
+/// Turn-aborted contextual-user fragment markers.
+pub(crate) const TURN_ABORTED_FRAGMENT_MARKERS: ContextualUserFragmentMarkers =
+    ContextualUserFragmentMarkers::new(TURN_ABORTED_OPEN_TAG, TURN_ABORTED_CLOSE_TAG);
+/// Plugin contextual-user fragment markers.
+pub(crate) const PLUGINS_FRAGMENT_MARKERS: ContextualUserFragmentMarkers =
+    ContextualUserFragmentMarkers::new(PLUGINS_OPEN_TAG, PLUGINS_CLOSE_TAG);
 
-const CONTEXTUAL_USER_FRAGMENT_SPECS: &[ModelVisibleContextFragmentSpec] = &[
-    ENVIRONMENT_CONTEXT_FRAGMENT_SPEC,
-    SKILL_FRAGMENT_SPEC,
-    USER_SHELL_COMMAND_FRAGMENT_SPEC,
-    TURN_ABORTED_FRAGMENT_SPEC,
-    PLUGINS_FRAGMENT_SPEC,
+const CONTEXTUAL_USER_FRAGMENT_MARKERS: &[ContextualUserFragmentMarkers] = &[
+    ENVIRONMENT_CONTEXT_FRAGMENT_MARKERS,
+    SKILL_FRAGMENT_MARKERS,
+    USER_SHELL_COMMAND_FRAGMENT_MARKERS,
+    TURN_ABORTED_FRAGMENT_MARKERS,
+    PLUGINS_FRAGMENT_MARKERS,
 ];
 
 fn is_agents_md_fragment(text: &str) -> bool {
@@ -264,17 +222,13 @@ pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
         return false;
     };
     is_agents_md_fragment(text)
-        || CONTEXTUAL_USER_FRAGMENT_SPECS
+        || CONTEXTUAL_USER_FRAGMENT_MARKERS
             .iter()
             .any(|definition| definition.matches_text(text))
 }
 
 impl ModelVisibleContextFragment for CustomDeveloperInstructions {
     type Role = DeveloperContextRole;
-
-    fn spec(&self) -> ModelVisibleContextFragmentSpec {
-        DEVELOPER_FRAGMENT_SPEC
-    }
 
     fn render_text(&self) -> String {
         self.clone().into_text()
@@ -283,10 +237,6 @@ impl ModelVisibleContextFragment for CustomDeveloperInstructions {
 
 impl ModelVisibleContextFragment for DeveloperTextFragment {
     type Role = DeveloperContextRole;
-
-    fn spec(&self) -> ModelVisibleContextFragmentSpec {
-        DEVELOPER_FRAGMENT_SPEC
-    }
 
     fn render_text(&self) -> String {
         self.text.clone()
@@ -320,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn developer_spec_does_not_match_contextual_user_text() {
-        assert!(!DEVELOPER_FRAGMENT_SPEC.matches_text("<permissions instructions>body"));
+    fn marker_matching_ignores_plain_text() {
+        assert!(!SKILL_FRAGMENT_MARKERS.matches_text("plain text"));
     }
 }

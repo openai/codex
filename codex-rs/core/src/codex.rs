@@ -156,11 +156,12 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
-use crate::model_visible_context::DEVELOPER_FRAGMENT_SPEC;
 use crate::model_visible_context::DeveloperContextRole;
 use crate::model_visible_context::DeveloperTextFragment;
 use crate::model_visible_context::TurnContextDiffFragment;
 use crate::model_visible_context::TurnContextDiffParams;
+use crate::model_visible_context::model_visible_message;
+use crate::model_visible_context::model_visible_response_input_item;
 use codex_config::CONFIG_TOML_FILE;
 
 mod rollout_reconstruction;
@@ -2549,17 +2550,16 @@ impl Session {
         let text = format!("Approved command prefix saved:\n{prefixes}");
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            let message =
-                DEVELOPER_FRAGMENT_SPEC.into_message::<DeveloperContextRole>(text.clone());
+            let message = model_visible_message::<DeveloperContextRole>(text.clone());
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
             return;
         }
 
         if self
-            .inject_response_items(vec![
-                DEVELOPER_FRAGMENT_SPEC.into_response_input_item::<DeveloperContextRole>(text),
-            ])
+            .inject_response_items(vec![model_visible_response_input_item::<
+                DeveloperContextRole,
+            >(text)])
             .await
             .is_err()
         {
@@ -2646,17 +2646,16 @@ impl Session {
         );
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            let message =
-                DEVELOPER_FRAGMENT_SPEC.into_message::<DeveloperContextRole>(text.clone());
+            let message = model_visible_message::<DeveloperContextRole>(text.clone());
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
             return;
         }
 
         if self
-            .inject_response_items(vec![
-                DEVELOPER_FRAGMENT_SPEC.into_response_input_item::<DeveloperContextRole>(text),
-            ])
+            .inject_response_items(vec![model_visible_response_input_item::<
+                DeveloperContextRole,
+            >(text)])
             .await
             .is_err()
         {

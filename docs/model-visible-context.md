@@ -15,13 +15,13 @@ When adding new model-visible context:
 1. Define a typed fragment type.
 2. Implement `ModelVisibleContextFragment` for it.
 3. Set the fragment `type Role` to the correct developer or contextual-user role.
-4. Give it a `ModelVisibleContextFragmentSpec` with the right marker behavior.
+4. If it is a contextual-user fragment, wrap content with shared marker helpers/constants from `model_visible_context`.
 5. If the fragment is derived from `TurnContext` and participates in turn-to-turn diffing, also implement `TurnContextDiffFragment`.
 6. Push the fragment through the shared envelope builders in initial-context or settings-update assembly.
 
 Do not hand-build developer or contextual-user `ResponseItem`s in new code unless there is a strong reason to bypass the fragment path.
 
-The role lives in the fragment's associated `type Role`. `ModelVisibleContextFragmentSpec` only carries marker/tag metadata.
+The role lives in the fragment's associated `type Role`. Marker/tag metadata for contextual-user fragments lives in the shared marker constants/helpers.
 
 ## Choosing an envelope
 

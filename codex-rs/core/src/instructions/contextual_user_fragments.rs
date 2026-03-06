@@ -9,10 +9,9 @@ use crate::model_visible_context::TurnContextDiffParams;
 use codex_protocol::protocol::TurnContextItem;
 
 use crate::model_visible_context::AGENTS_MD_CLOSE_TAG_PREFIX;
-use crate::model_visible_context::AGENTS_MD_FRAGMENT_SPEC;
 use crate::model_visible_context::AGENTS_MD_OPEN_TAG_PREFIX;
-use crate::model_visible_context::PLUGINS_FRAGMENT_SPEC;
-use crate::model_visible_context::SKILL_FRAGMENT_SPEC;
+use crate::model_visible_context::PLUGINS_FRAGMENT_MARKERS;
+use crate::model_visible_context::SKILL_FRAGMENT_MARKERS;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "user_instructions", rename_all = "snake_case")]
@@ -23,10 +22,6 @@ pub(crate) struct AgentsMdInstructions {
 
 impl ModelVisibleContextFragment for AgentsMdInstructions {
     type Role = ContextualUserContextRole;
-
-    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
-        AGENTS_MD_FRAGMENT_SPEC
-    }
 
     fn render_text(&self) -> String {
         format!(
@@ -79,12 +74,8 @@ pub(crate) struct SkillInstructions {
 impl ModelVisibleContextFragment for SkillInstructions {
     type Role = ContextualUserContextRole;
 
-    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
-        SKILL_FRAGMENT_SPEC
-    }
-
     fn render_text(&self) -> String {
-        SKILL_FRAGMENT_SPEC.wrap_body(format!(
+        SKILL_FRAGMENT_MARKERS.wrap_body(format!(
             "<name>{}</name>\n<path>{}</path>\n{}",
             self.name, self.path, self.contents
         ))
@@ -100,12 +91,8 @@ pub(crate) struct PluginInstructions {
 impl ModelVisibleContextFragment for PluginInstructions {
     type Role = ContextualUserContextRole;
 
-    fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
-        PLUGINS_FRAGMENT_SPEC
-    }
-
     fn render_text(&self) -> String {
-        PLUGINS_FRAGMENT_SPEC.wrap_body(self.text.clone())
+        PLUGINS_FRAGMENT_MARKERS.wrap_body(self.text.clone())
     }
 }
 
@@ -148,7 +135,6 @@ mod tests {
                     .to_string(),
             }
         ));
-        assert!(!AGENTS_MD_FRAGMENT_SPEC.matches_text("test_text"));
     }
 
     #[test]
@@ -178,10 +164,10 @@ mod tests {
 
     #[test]
     fn test_is_skill_instructions() {
-        assert!(SKILL_FRAGMENT_SPEC.matches_text(
+        assert!(SKILL_FRAGMENT_MARKERS.matches_text(
             "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
         ));
-        assert!(!SKILL_FRAGMENT_SPEC.matches_text("regular text"));
+        assert!(!SKILL_FRAGMENT_MARKERS.matches_text("regular text"));
     }
 
     #[test]
