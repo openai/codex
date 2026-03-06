@@ -1772,6 +1772,78 @@
             },
             "method": {
               "enum": [
+                "command/exec/write"
+              ],
+              "title": "Command/exec/writeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecWriteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/writeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec/terminate"
+              ],
+              "title": "Command/exec/terminateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecTerminateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/terminateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec/resize"
+              ],
+              "title": "Command/exec/resizeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecResizeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/resizeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "config/read"
               ],
               "title": "Config/readRequestMethod",
@@ -2359,6 +2431,38 @@
         }
       ]
     },
+    "CommandExecOutputDeltaNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "capReached": {
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "type": "string"
+        },
+        "processId": {
+          "type": "string"
+        },
+        "stream": {
+          "$ref": "#/definitions/CommandExecOutputStream"
+        }
+      },
+      "required": [
+        "capReached",
+        "deltaBase64",
+        "processId",
+        "stream"
+      ],
+      "title": "CommandExecOutputDeltaNotification",
+      "type": "object"
+    },
+    "CommandExecOutputStream": {
+      "enum": [
+        "stdout",
+        "stderr"
+      ],
+      "type": "string"
+    },
     "CommandExecParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2374,6 +2478,38 @@
             "null"
           ]
         },
+        "disableOutputCap": {
+          "type": "boolean"
+        },
+        "disableTimeout": {
+          "type": "boolean"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "outputBytesCap": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "processId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "sandboxPolicy": {
           "anyOf": [
             {
@@ -2384,18 +2520,59 @@
             }
           ]
         },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CommandExecTerminalSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "streamStdin": {
+          "type": "boolean"
+        },
+        "streamStdoutStderr": {
+          "type": "boolean"
+        },
         "timeoutMs": {
           "format": "int64",
           "type": [
             "integer",
             "null"
           ]
+        },
+        "tty": {
+          "type": "boolean"
         }
       },
       "required": [
         "command"
       ],
       "title": "CommandExecParams",
+      "type": "object"
+    },
+    "CommandExecResizeParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "processId": {
+          "type": "string"
+        },
+        "size": {
+          "$ref": "#/definitions/CommandExecTerminalSize"
+        }
+      },
+      "required": [
+        "processId",
+        "size"
+      ],
+      "title": "CommandExecResizeParams",
+      "type": "object"
+    },
+    "CommandExecResizeResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "CommandExecResizeResponse",
       "type": "object"
     },
     "CommandExecResponse": {
@@ -2418,6 +2595,70 @@
         "stdout"
       ],
       "title": "CommandExecResponse",
+      "type": "object"
+    },
+    "CommandExecTerminalSize": {
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "CommandExecTerminateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "processId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "processId"
+      ],
+      "title": "CommandExecTerminateParams",
+      "type": "object"
+    },
+    "CommandExecTerminateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "CommandExecTerminateResponse",
+      "type": "object"
+    },
+    "CommandExecWriteParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "closeStdin": {
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "processId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "processId"
+      ],
+      "title": "CommandExecWriteParams",
+      "type": "object"
+    },
+    "CommandExecWriteResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "CommandExecWriteResponse",
       "type": "object"
     },
     "CommandExecutionOutputDeltaNotification": {
@@ -10589,6 +10830,26 @@
             "params"
           ],
           "title": "Item/plan/deltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "command/exec/outputDelta"
+              ],
+              "title": "Command/exec/outputDeltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecOutputDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/outputDeltaNotification",
           "type": "object"
         },
         {

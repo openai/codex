@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "processId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "processId"
+  ],
+  "title": "CommandExecTerminateParams",
+  "type": "object"
+}

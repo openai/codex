@@ -2,6 +2,8 @@ mod account;
 mod analytics;
 mod app_list;
 mod collaboration_mode_list;
+#[cfg(unix)]
+mod command_exec;
 mod compaction;
 mod config_rpc;
 mod connection_handling_websocket;

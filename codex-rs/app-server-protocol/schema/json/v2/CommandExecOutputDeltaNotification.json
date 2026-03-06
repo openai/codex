@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "CommandExecOutputStream": {
+      "enum": [
+        "stdout",
+        "stderr"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "capReached": {
+      "type": "boolean"
+    },
+    "deltaBase64": {
+      "type": "string"
+    },
+    "processId": {
+      "type": "string"
+    },
+    "stream": {
+      "$ref": "#/definitions/CommandExecOutputStream"
+    }
+  },
+  "required": [
+    "capReached",
+    "deltaBase64",
+    "processId",
+    "stream"
+  ],
+  "title": "CommandExecOutputDeltaNotification",
+  "type": "object"
+}

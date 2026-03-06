@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "closeStdin": {
+      "type": "boolean"
+    },
+    "deltaBase64": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "processId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "processId"
+  ],
+  "title": "CommandExecWriteParams",
+  "type": "object"
+}

@@ -5,6 +5,25 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "CommandExecTerminalSize": {
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    },
     "NetworkAccess": {
       "enum": [
         "restricted",
@@ -192,6 +211,38 @@
         "null"
       ]
     },
+    "disableOutputCap": {
+      "type": "boolean"
+    },
+    "disableTimeout": {
+      "type": "boolean"
+    },
+    "env": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "outputBytesCap": {
+      "format": "uint",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "processId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "sandboxPolicy": {
       "anyOf": [
         {
@@ -202,12 +253,31 @@
         }
       ]
     },
+    "size": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CommandExecTerminalSize"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "streamStdin": {
+      "type": "boolean"
+    },
+    "streamStdoutStderr": {
+      "type": "boolean"
+    },
     "timeoutMs": {
       "format": "int64",
       "type": [
         "integer",
         "null"
       ]
+    },
+    "tty": {
+      "type": "boolean"
     }
   },
   "required": [
