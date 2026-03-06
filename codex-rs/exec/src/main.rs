@@ -29,7 +29,10 @@ fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let top_cli = TopCli::parse();
         // Merge root-level overrides into inner CLI struct so downstream logic remains unchanged.
-        let mut inner = top_cli.inner;
+        let mut inner = match top_cli.inner.validate() {
+            Ok(inner) => inner,
+            Err(err) => err.exit(),
+        };
         inner
             .config_overrides
             .raw_overrides
@@ -73,6 +76,26 @@ mod tests {
             }
         });
         assert_eq!(effective_prompt.as_deref(), Some(PROMPT));
+        assert_eq!(cli.config_overrides.raw_overrides.len(), 1);
+        assert_eq!(
+            cli.config_overrides.raw_overrides[0],
+            "reasoning_level=xhigh"
+        );
+    }
+    #[test]
+    fn top_cli_parses_fork_option_with_root_config() {
+        let cli = TopCli::parse_from([
+            "codex-exec",
+            "--config",
+            "reasoning_level=xhigh",
+            "--fork",
+            "session-123",
+            "echo fork",
+        ]);
+
+        assert_eq!(cli.inner.fork_session_id.as_deref(), Some("session-123"));
+        assert!(cli.inner.command.is_none());
+        assert_eq!(cli.inner.prompt.as_deref(), Some("echo fork"));
         assert_eq!(cli.config_overrides.raw_overrides.len(), 1);
         assert_eq!(
             cli.config_overrides.raw_overrides[0],
