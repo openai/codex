@@ -819,6 +819,31 @@ impl App {
 
         for (feature, enabled) in updates {
             let feature_key = feature.key();
+            if feature == Feature::GuardianApproval
+                && !enabled
+                && self.config.permissions.approval_policy.value() == AskForApproval::Guardian
+                && [
+                    AskForApproval::OnRequest,
+                    AskForApproval::OnFailure,
+                    AskForApproval::UnlessTrusted,
+                    AskForApproval::Never,
+                ]
+                .into_iter()
+                .find(|candidate| {
+                    self.config
+                        .permissions
+                        .approval_policy
+                        .can_set(candidate)
+                        .is_ok()
+                })
+                .is_none()
+            {
+                self.chat_widget.add_error_message(
+                    "Failed to disable guardian approvals for future sessions: no supported fallback approval policy is allowed."
+                        .to_string(),
+                );
+                continue;
+            }
             if let Err(err) = self.config.features.set_enabled(feature, enabled) {
                 tracing::error!(
                     error = %err,
@@ -5043,6 +5068,54 @@ mod tests {
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("guardian_approval = true"));
         assert!(config.contains("approval_policy = \"on-request\""));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_feature_flags_disabling_guardian_keeps_feature_enabled_without_fallback()
+    -> Result<()> {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "approval_policy = \"guardian\"\n\n[features]\nguardian_approval = true\n",
+        )?;
+        app.config
+            .features
+            .set_enabled(Feature::GuardianApproval, true)?;
+        app.chat_widget
+            .set_feature_enabled(Feature::GuardianApproval, true);
+        app.set_future_session_approval_policy(AskForApproval::Guardian)?;
+        app.config.permissions.approval_policy =
+            codex_core::config::Constrained::allow_only(AskForApproval::Guardian);
+
+        app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+            .await;
+
+        assert!(app.config.features.enabled(Feature::GuardianApproval));
+        assert!(
+            app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::GuardianApproval)
+        );
+        assert_eq!(
+            app.config.permissions.approval_policy.value(),
+            AskForApproval::Guardian
+        );
+        assert_eq!(
+            app.runtime_approval_policy_override,
+            Some(AskForApproval::Guardian)
+        );
+        assert!(
+            op_rx.try_recv().is_err(),
+            "feature toggle should not patch the active session"
+        );
+
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert!(config.contains("guardian_approval = true"));
+        assert!(config.contains("approval_policy = \"guardian\""));
         Ok(())
     }
 
