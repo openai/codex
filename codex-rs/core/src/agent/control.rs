@@ -3,7 +3,6 @@ use crate::agent::guards::Guards;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
-use crate::codex_thread::SessionPrefixMessageRole;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
@@ -15,6 +14,7 @@ use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::MessageRoleKind;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
@@ -458,7 +458,7 @@ impl AgentControl {
             };
             parent_thread
                 .inject_message_without_turn(
-                    SessionPrefixMessageRole::Developer,
+                    MessageRoleKind::Developer,
                     format_subagent_notification_message(&child_thread_id.to_string(), &status),
                 )
                 .await;
@@ -872,10 +872,7 @@ mod tests {
         let harness = AgentControlHarness::new().await;
         let (parent_thread_id, parent_thread) = harness.start_thread().await;
         parent_thread
-            .inject_message_without_turn(
-                SessionPrefixMessageRole::User,
-                "parent seed context".to_string(),
-            )
+            .inject_message_without_turn(MessageRoleKind::User, "parent seed context".to_string())
             .await;
         let turn_context = parent_thread.codex.session.new_default_turn().await;
         let parent_spawn_call_id = "spawn-call-history".to_string();

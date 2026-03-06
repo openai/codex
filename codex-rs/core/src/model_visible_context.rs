@@ -13,6 +13,7 @@ use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::CustomDeveloperInstructions;
+use codex_protocol::models::MessageRoleKind;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
@@ -35,19 +36,19 @@ pub(crate) const SUBAGENT_NOTIFICATION_OPEN_TAG: &str = "<subagent_notification>
 pub(crate) const SUBAGENT_NOTIFICATION_CLOSE_TAG: &str = "</subagent_notification>";
 
 pub(crate) trait ModelVisibleContextRole {
-    const RESPONSE_ROLE: &'static str;
+    const MESSAGE_ROLE: MessageRoleKind;
 }
 
 pub(crate) struct DeveloperContextRole;
 
 impl ModelVisibleContextRole for DeveloperContextRole {
-    const RESPONSE_ROLE: &'static str = "developer";
+    const MESSAGE_ROLE: MessageRoleKind = MessageRoleKind::Developer;
 }
 
 pub(crate) struct ContextualUserContextRole;
 
 impl ModelVisibleContextRole for ContextualUserContextRole {
-    const RESPONSE_ROLE: &'static str = "user";
+    const MESSAGE_ROLE: MessageRoleKind = MessageRoleKind::User;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,7 +115,7 @@ impl ModelVisibleContextFragmentSpec {
     pub(crate) fn into_message<R: ModelVisibleContextRole>(self, text: String) -> ResponseItem {
         ResponseItem::Message {
             id: None,
-            role: R::RESPONSE_ROLE.to_string(),
+            role: R::MESSAGE_ROLE.into_message_role(),
             content: vec![self.into_content_item(text)],
             end_turn: None,
             phase: None,
@@ -126,7 +127,7 @@ impl ModelVisibleContextFragmentSpec {
         text: String,
     ) -> ResponseInputItem {
         ResponseInputItem::Message {
-            role: R::RESPONSE_ROLE.to_string(),
+            role: R::MESSAGE_ROLE.into_message_role(),
             content: vec![self.into_content_item(text)],
         }
     }

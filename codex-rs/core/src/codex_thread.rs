@@ -11,6 +11,7 @@ use crate::protocol::Submission;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::MessageRoleKind;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -42,22 +43,6 @@ pub struct CodexThread {
     pub(crate) codex: Codex,
     rollout_path: Option<PathBuf>,
     _watch_registration: WatchRegistration,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum SessionPrefixMessageRole {
-    #[cfg_attr(not(test), allow(dead_code))]
-    User,
-    Developer,
-}
-
-impl SessionPrefixMessageRole {
-    fn as_response_role(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Developer => "developer",
-        }
-    }
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
@@ -117,13 +102,9 @@ impl CodexThread {
         self.codex.session.total_token_usage().await
     }
 
-    pub(crate) async fn inject_message_without_turn(
-        &self,
-        role: SessionPrefixMessageRole,
-        message: String,
-    ) {
+    pub(crate) async fn inject_message_without_turn(&self, role: MessageRoleKind, message: String) {
         let pending_item = ResponseInputItem::Message {
-            role: role.as_response_role().to_string(),
+            role: role.into_message_role(),
             content: vec![ContentItem::InputText { text: message }],
         };
         let pending_items = vec![pending_item];

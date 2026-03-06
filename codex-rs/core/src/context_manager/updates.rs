@@ -459,7 +459,7 @@ fn build_message<R: ModelVisibleContextRole>(content: Vec<ContentItem>) -> Optio
 
     Some(ResponseItem::Message {
         id: None,
-        role: R::RESPONSE_ROLE.to_string(),
+        role: R::MESSAGE_ROLE.into_message_role(),
         content,
         end_turn: None,
         phase: None,

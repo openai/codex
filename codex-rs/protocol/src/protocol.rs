@@ -35,6 +35,7 @@ use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::MessagePhase;
+use crate::models::MessageRole;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
@@ -122,7 +123,7 @@ pub struct RealtimeAudioFrame {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RealtimeHandoffMessage {
-    pub role: String,
+    pub role: MessageRole,
     pub text: String,
 }
 
