@@ -56,6 +56,10 @@ pub fn build_config_state(
     constraints: NetworkProxyConstraints,
 ) -> anyhow::Result<ConfigState> {
     crate::config::validate_unix_socket_allowlist_paths(&config)?;
+    validate_domain_patterns("network.allowed_domains", &config.network.allowed_domains)
+        .map_err(NetworkProxyConstraintError::into_anyhow)?;
+    validate_domain_patterns("network.denied_domains", &config.network.denied_domains)
+        .map_err(NetworkProxyConstraintError::into_anyhow)?;
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
     let mitm = if config.network.mitm {
@@ -100,6 +104,8 @@ pub fn validate_policy_against_constraints(
     }
 
     let enabled = config.network.enabled;
+    validate_domain_patterns("network.allowed_domains", &config.network.allowed_domains)?;
+    validate_domain_patterns("network.denied_domains", &config.network.denied_domains)?;
     if let Some(max_enabled) = constraints.enabled {
         validate(enabled, move |candidate| {
             if *candidate && !max_enabled {
@@ -199,6 +205,7 @@ pub fn validate_policy_against_constraints(
     }
 
     if let Some(allowed_domains) = &constraints.allowed_domains {
+        validate_domain_patterns("network.allowed_domains", allowed_domains)?;
         let managed_patterns: Vec<DomainPattern> = allowed_domains
             .iter()
             .map(|entry| DomainPattern::parse_for_constraints(entry))
@@ -227,6 +234,7 @@ pub fn validate_policy_against_constraints(
     }
 
     if let Some(denied_domains) = &constraints.denied_domains {
+        validate_domain_patterns("network.denied_domains", denied_domains)?;
         let required_set: HashSet<String> = denied_domains
             .iter()
             .map(|s| s.to_ascii_lowercase())
@@ -278,6 +286,21 @@ pub fn validate_policy_against_constraints(
         )?;
     }
 
+    Ok(())
+}
+
+fn validate_domain_patterns(
+    field_name: &'static str,
+    patterns: &[String],
+) -> Result<(), NetworkProxyConstraintError> {
+    if patterns.iter().any(|pattern| pattern.trim() == "*") {
+        return Err(NetworkProxyConstraintError::InvalidValue {
+            field_name,
+            candidate: "\"*\"".to_string(),
+            allowed: "exact hosts or scoped wildcards like *.example.com or **.example.com"
+                .to_string(),
+        });
+    }
     Ok(())
 }
 

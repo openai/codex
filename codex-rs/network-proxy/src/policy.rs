@@ -148,12 +148,15 @@ pub(crate) fn compile_globset(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     let mut seen = HashSet::new();
     for pattern in patterns {
+        ensure!(
+            pattern.trim() != "*",
+            "unsupported global wildcard domain pattern \"*\"; use exact hosts or scoped wildcards like *.example.com or **.example.com"
+        );
         let pattern = normalize_pattern(pattern);
         // Supported domain patterns:
         // - "example.com": match the exact host
         // - "*.example.com": match any subdomain (not the apex)
         // - "**.example.com": match the apex and any subdomain
-        // - "*": match any host
         for candidate in expand_domain_pattern(&pattern) {
             if !seen.insert(candidate.clone()) {
                 continue;
@@ -170,7 +173,6 @@ pub(crate) fn compile_globset(patterns: &[String]) -> Result<GlobSet> {
 
 #[derive(Debug, Clone)]
 pub(crate) enum DomainPattern {
-    Any,
     ApexAndSubdomains(String),
     SubdomainsOnly(String),
     Exact(String),
@@ -186,9 +188,7 @@ impl DomainPattern {
         if input.is_empty() {
             return Self::Exact(String::new());
         }
-        if input == "*" {
-            Self::Any
-        } else if let Some(domain) = input.strip_prefix("**.") {
+        if let Some(domain) = input.strip_prefix("**.") {
             Self::parse_domain(domain, Self::ApexAndSubdomains)
         } else if let Some(domain) = input.strip_prefix("*.") {
             Self::parse_domain(domain, Self::SubdomainsOnly)
@@ -202,9 +202,6 @@ impl DomainPattern {
         let input = input.trim();
         if input.is_empty() {
             return Self::Exact(String::new());
-        }
-        if input == "*" {
-            return Self::Any;
         }
         if let Some(domain) = input.strip_prefix("**.") {
             return Self::ApexAndSubdomains(parse_domain_for_constraints(domain));
@@ -225,13 +222,11 @@ impl DomainPattern {
 
     pub(crate) fn allows(&self, candidate: &DomainPattern) -> bool {
         match self {
-            DomainPattern::Any => true,
             DomainPattern::Exact(domain) => match candidate {
                 DomainPattern::Exact(candidate) => domain_eq(candidate, domain),
                 _ => false,
             },
             DomainPattern::SubdomainsOnly(domain) => match candidate {
-                DomainPattern::Any => false,
                 DomainPattern::Exact(candidate) => is_strict_subdomain(candidate, domain),
                 DomainPattern::SubdomainsOnly(candidate) => {
                     is_subdomain_or_equal(candidate, domain)
@@ -241,7 +236,6 @@ impl DomainPattern {
                 }
             },
             DomainPattern::ApexAndSubdomains(domain) => match candidate {
-                DomainPattern::Any => false,
                 DomainPattern::Exact(candidate) => is_subdomain_or_equal(candidate, domain),
                 DomainPattern::SubdomainsOnly(candidate) => {
                     is_subdomain_or_equal(candidate, domain)
@@ -275,7 +269,6 @@ fn parse_domain_for_constraints(domain: &str) -> String {
 
 fn expand_domain_pattern(pattern: &str) -> Vec<String> {
     match DomainPattern::parse(pattern) {
-        DomainPattern::Any => vec![pattern.to_string()],
         DomainPattern::Exact(domain) => vec![domain],
         DomainPattern::SubdomainsOnly(domain) => {
             vec![format!("?*.{domain}")]
