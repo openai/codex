@@ -191,6 +191,21 @@ impl ModelVisibleContextFragment for PersonalityUpdateFragment {
 }
 
 impl TurnContextDiffFragment for PersonalityUpdateFragment {
+    fn from_turn_context(
+        turn_context: &TurnContext,
+        params: &TurnContextDiffParams<'_>,
+    ) -> Option<Self> {
+        if !params.personality_feature_enabled {
+            return None;
+        }
+
+        let personality = turn_context.personality?;
+        let personality_message = personality_message_for(&turn_context.model_info, personality)?;
+        Some(Self {
+            text: developer_personality_spec_text(personality_message),
+        })
+    }
+
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
@@ -331,19 +346,6 @@ fn build_collaboration_mode_update_item(
         .map(|fragment| fragment.text)
 }
 
-fn build_realtime_update_fragment(
-    previous: Option<&TurnContextItem>,
-    turn_context: &TurnContext,
-    params: &TurnContextDiffParams<'_>,
-) -> Option<RealtimeUpdateFragment> {
-    match previous {
-        Some(previous) => {
-            RealtimeUpdateFragment::diff_from_turn_context_item(previous, turn_context, params)
-        }
-        None => RealtimeUpdateFragment::from_turn_context(turn_context, params),
-    }
-}
-
 pub(crate) fn build_realtime_update_item(
     previous: Option<&TurnContextItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
@@ -361,18 +363,6 @@ pub(crate) fn build_realtime_update_item(
             .filter(|realtime_active| *realtime_active)
             .map(|_| developer_realtime_end_text("inactive")),
     }
-}
-
-fn build_personality_update_item(
-    previous: Option<&TurnContextItem>,
-    turn_context: &TurnContext,
-    params: &TurnContextDiffParams<'_>,
-) -> Option<String> {
-    previous
-        .and_then(|previous| {
-            PersonalityUpdateFragment::diff_from_turn_context_item(previous, turn_context, params)
-        })
-        .map(|fragment| fragment.text)
 }
 
 struct ModelVisibleContextEnvelopeBuilder<R: ModelVisibleContextRole> {
@@ -483,8 +473,20 @@ pub(crate) fn build_settings_update_items(
             })
             .map(|fragment| fragment.text),
         build_collaboration_mode_update_item(previous, next, params),
-        build_realtime_update_fragment(previous, next, params).map(|fragment| fragment.text),
-        build_personality_update_item(previous, next, params),
+        match previous {
+            Some(previous) => {
+                RealtimeUpdateFragment::diff_from_turn_context_item(previous, next, params)
+            }
+            None => RealtimeUpdateFragment::from_turn_context(next, params),
+        }
+        .map(|fragment| fragment.text),
+        match previous {
+            Some(previous) => {
+                PersonalityUpdateFragment::diff_from_turn_context_item(previous, next, params)
+            }
+            None => PersonalityUpdateFragment::from_turn_context(next, params),
+        }
+        .map(|fragment| fragment.text),
     ]
     .into_iter()
     .flatten()
