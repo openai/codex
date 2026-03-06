@@ -3,6 +3,7 @@ use crate::agent::guards::Guards;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
+use crate::codex_thread::SessionPrefixMessageRole;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
@@ -456,10 +457,10 @@ impl AgentControl {
                 return;
             };
             parent_thread
-                .inject_developer_message_without_turn(format_subagent_notification_message(
-                    &child_thread_id.to_string(),
-                    &status,
-                ))
+                .inject_message_without_turn(
+                    SessionPrefixMessageRole::Developer,
+                    format_subagent_notification_message(&child_thread_id.to_string(), &status),
+                )
                 .await;
         });
     }
@@ -871,7 +872,10 @@ mod tests {
         let harness = AgentControlHarness::new().await;
         let (parent_thread_id, parent_thread) = harness.start_thread().await;
         parent_thread
-            .inject_user_message_without_turn("parent seed context".to_string())
+            .inject_message_without_turn(
+                SessionPrefixMessageRole::User,
+                "parent seed context".to_string(),
+            )
             .await;
         let turn_context = parent_thread.codex.session.new_default_turn().await;
         let parent_spawn_call_id = "spawn-call-history".to_string();

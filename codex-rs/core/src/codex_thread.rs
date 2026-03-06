@@ -44,6 +44,22 @@ pub struct CodexThread {
     _watch_registration: WatchRegistration,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SessionPrefixMessageRole {
+    #[cfg_attr(not(test), allow(dead_code))]
+    User,
+    Developer,
+}
+
+impl SessionPrefixMessageRole {
+    fn as_response_role(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Developer => "developer",
+        }
+    }
+}
+
 /// Conduit for the bidirectional stream of messages that compose a thread
 /// (formerly called a conversation) in Codex.
 impl CodexThread {
@@ -101,9 +117,13 @@ impl CodexThread {
         self.codex.session.total_token_usage().await
     }
 
-    async fn inject_message_without_turn(&self, role: &str, message: String) {
+    pub(crate) async fn inject_message_without_turn(
+        &self,
+        role: SessionPrefixMessageRole,
+        message: String,
+    ) {
         let pending_item = ResponseInputItem::Message {
-            role: role.to_string(),
+            role: role.as_response_role().to_string(),
             content: vec![ContentItem::InputText { text: message }],
         };
         let pending_items = vec![pending_item];
@@ -125,17 +145,6 @@ impl CodexThread {
             .session
             .record_conversation_items(turn_context.as_ref(), &items)
             .await;
-    }
-
-    /// Records a user-role session-prefix message without creating a new user turn boundary.
-    #[cfg(test)]
-    pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
-        self.inject_message_without_turn("user", message).await;
-    }
-
-    /// Records a developer-role session-prefix message without creating a new user turn boundary.
-    pub(crate) async fn inject_developer_message_without_turn(&self, message: String) {
-        self.inject_message_without_turn("developer", message).await;
     }
 
     pub fn rollout_path(&self) -> Option<PathBuf> {
