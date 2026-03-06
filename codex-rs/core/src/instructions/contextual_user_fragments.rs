@@ -14,8 +14,6 @@ use crate::model_visible_context::AGENTS_MD_OPEN_TAG_PREFIX;
 use crate::model_visible_context::PLUGINS_FRAGMENT_SPEC;
 use crate::model_visible_context::SKILL_FRAGMENT_SPEC;
 
-pub const USER_INSTRUCTIONS_PREFIX: &str = AGENTS_MD_OPEN_TAG_PREFIX;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "user_instructions", rename_all = "snake_case")]
 pub(crate) struct AgentsMdInstructions {
