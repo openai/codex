@@ -69,5 +69,14 @@
 - [x] `#8` 反馈 issue 模板：`.github/ISSUE_TEMPLATE/7-norm-rule-feedback.yml`
 
 ## J. 下一里程碑（进行中）
-- [ ] `#11` 本地会话治理 Hook MVP（生成后/写入前/命令前）
-- [ ] `#12` CI Block 模式与 Waiver 机制
+- [x] `#11` 本地会话治理 Hook MVP（生成后/写入前/命令前）
+- [x] `#12` CI Block 模式与 Waiver 机制
+
+## K. M5/M6 交付物（本轮）
+- [x] `#11` hook 事件扩展：`before_tool_use`（`codex-rs/hooks/src/types.rs`）
+- [x] `#11` 工具执行前分发：`codex-rs/core/src/tools/registry.rs`
+- [x] `#11` 治理判定引擎：`codex-rs/hooks/src/norm_governance.rs`
+- [x] `#11` 运行说明：`docs/exomind-governance-runtime-mvp.md`
+- [x] `#12` CI 模式升级：`scripts/exomind_norm_governance_warn.py`（warn/block + waivers）
+- [x] `#12` CI 工作流接入：`.github/workflows/exomind-norm-governance-warn.yml`
+- [x] `#12` waiver 文件与规范：`docs/exomind-norm-waivers.json` `docs/exomind-norm-waiver-spec.md`

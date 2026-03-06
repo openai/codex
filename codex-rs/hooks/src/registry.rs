@@ -13,6 +13,7 @@ pub struct HooksConfig {
 #[derive(Clone)]
 pub struct Hooks {
     after_agent: Vec<Hook>,
+    before_tool_use: Vec<Hook>,
     after_tool_use: Vec<Hook>,
 }
 
@@ -26,14 +27,20 @@ impl Default for Hooks {
 // executed after specific events in the Codex lifecycle.
 impl Hooks {
     pub fn new(config: HooksConfig) -> Self {
-        let after_agent = config
+        let mut after_agent: Vec<Hook> = config
             .legacy_notify_argv
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
             .map(crate::notify_hook)
             .into_iter()
             .collect();
+        let mut before_tool_use: Vec<Hook> = Vec::new();
+        if let Some(governance_hook) = crate::norm_governance::norm_governance_hook() {
+            after_agent.push(governance_hook.clone());
+            before_tool_use.push(governance_hook);
+        }
         Self {
             after_agent,
+            before_tool_use,
             after_tool_use: Vec::new(),
         }
     }
@@ -41,6 +48,7 @@ impl Hooks {
     fn hooks_for_event(&self, hook_event: &HookEvent) -> &[Hook] {
         match hook_event {
             HookEvent::AfterAgent { .. } => &self.after_agent,
+            HookEvent::BeforeToolUse { .. } => &self.before_tool_use,
             HookEvent::AfterToolUse { .. } => &self.after_tool_use,
         }
     }
@@ -93,6 +101,7 @@ mod tests {
     use super::*;
     use crate::types::HookEventAfterAgent;
     use crate::types::HookEventAfterToolUse;
+    use crate::types::HookEventBeforeToolUse;
     use crate::types::HookResult;
     use crate::types::HookToolInput;
     use crate::types::HookToolKind;
@@ -194,6 +203,32 @@ mod tests {
                     sandbox: "none".to_string(),
                     sandbox_policy: "danger-full-access".to_string(),
                     output_preview: "ok".to_string(),
+                },
+            },
+        }
+    }
+
+    fn before_tool_use_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::BeforeToolUse {
+                event: HookEventBeforeToolUse {
+                    turn_id: format!("turn-{label}"),
+                    call_id: format!("call-{label}"),
+                    tool_name: "shell".to_string(),
+                    tool_kind: HookToolKind::Function,
+                    tool_input: HookToolInput::Function {
+                        arguments: "{\"command\":\"echo hi\"}".to_string(),
+                    },
+                    mutating: false,
+                    sandbox: "none".to_string(),
+                    sandbox_policy: "danger-full-access".to_string(),
                 },
             },
         }
@@ -322,6 +357,21 @@ mod tests {
         };
 
         let outcomes = hooks.dispatch(after_tool_use_payload("p")).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "counting");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_before_tool_use_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            before_tool_use: vec![counting_success_hook(&calls, "counting")],
+            ..Hooks::default()
+        };
+
+        let outcomes = hooks.dispatch(before_tool_use_payload("b")).await;
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].hook_name, "counting");
         assert!(matches!(outcomes[0].result, HookResult::Success));

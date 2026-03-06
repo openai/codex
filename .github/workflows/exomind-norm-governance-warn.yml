@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "docs/exomind-*.md"
+      - "docs/exomind-*.json"
       - "docs/exomind-rule-catalog-template.json"
       - "scripts/exomind_norm_governance_warn.py"
       - ".github/ISSUE_TEMPLATE/7-norm-rule-feedback.yml"
@@ -12,13 +13,14 @@ on:
     branches: [main]
     paths:
       - "docs/exomind-*.md"
+      - "docs/exomind-*.json"
       - "docs/exomind-rule-catalog-template.json"
       - "scripts/exomind_norm_governance_warn.py"
       - ".github/ISSUE_TEMPLATE/7-norm-rule-feedback.yml"
       - ".github/workflows/exomind-norm-governance-warn.yml"
 
 jobs:
-  norm-governance-warn:
+  norm-governance:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -32,11 +34,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Generate warn-only governance report
+      - name: Generate governance report
+        env:
+          EXOMIND_NORM_GOVERNANCE_MODE: ${{ vars.EXOMIND_NORM_GOVERNANCE_MODE }}
         run: |
+          MODE="${EXOMIND_NORM_GOVERNANCE_MODE:-warn}"
           mkdir -p artifacts
           python3 scripts/exomind_norm_governance_warn.py \
             --catalog docs/exomind-rule-catalog-template.json \
+            --mode "$MODE" \
+            --waivers docs/exomind-norm-waivers.json \
             --markdown-out artifacts/norm-governance-report.md \
             --json-out artifacts/norm-governance-report.json
 
