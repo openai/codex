@@ -2279,15 +2279,6 @@ mod tests {
             .control
             .set_watchdog_active_helper_for_tests(watchdog_handle_id, helper_thread_id)
             .await;
-        {
-            let mut compacting = harness
-                .control
-                .watchdog_compactions_in_progress
-                .lock()
-                .await;
-            compacting.insert(owner_thread_id);
-        }
-
         let result = harness
             .control
             .compact_parent_for_watchdog_helper(helper_thread_id)
