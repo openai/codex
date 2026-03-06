@@ -2704,6 +2704,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_model: None,
             experimental_realtime_ws_backend_prompt: None,
+            experimental_realtime_ws_startup_context: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -2833,6 +2834,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
         experimental_realtime_ws_backend_prompt: None,
+        experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
         compact_prompt: None,
@@ -2960,6 +2962,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
         experimental_realtime_ws_backend_prompt: None,
+        experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
         compact_prompt: None,
@@ -3073,6 +3076,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
         experimental_realtime_ws_backend_prompt: None,
+        experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
         compact_prompt: None,
@@ -4029,6 +4033,34 @@ experimental_realtime_ws_backend_prompt = "prompt from config"
     assert_eq!(
         config.experimental_realtime_ws_backend_prompt.as_deref(),
         Some("prompt from config")
+    );
+    Ok(())
+}
+
+#[test]
+fn experimental_realtime_ws_startup_context_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+experimental_realtime_ws_startup_context = "startup context from config"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.experimental_realtime_ws_startup_context.as_deref(),
+        Some("startup context from config")
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.experimental_realtime_ws_startup_context.as_deref(),
+        Some("startup context from config")
     );
     Ok(())
 }

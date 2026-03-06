@@ -629,6 +629,123 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_uses_experimental_realtime_ws_startup_context_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![],
+        vec![vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_custom_context", "instructions": "prompt from config" }
+        })]],
+    ])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.experimental_realtime_ws_backend_prompt = Some("prompt from config".to_string());
+        config.experimental_realtime_ws_startup_context =
+            Some("custom startup context".to_string());
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+    seed_recent_thread(
+        &test,
+        "Recent work: cleaned up startup flows and reviewed websocket routing.",
+        "Investigate realtime startup context",
+        "custom-context",
+    )
+    .await?;
+    fs::create_dir_all(test.workspace_path("docs"))?;
+    fs::write(test.workspace_path("README.md"), "workspace marker")?;
+    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "prompt from op".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) if session_id == "sess_custom_context" => Some(Ok(())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+
+    let startup_context_request = server.wait_for_request(1, 0).await;
+    let instructions = websocket_request_instructions(&startup_context_request)
+        .expect("custom startup context request should contain instructions");
+
+    assert_eq!(instructions, "prompt from config\n\ncustom startup context");
+    assert!(!instructions.contains(STARTUP_CONTEXT_HEADER));
+    assert!(!instructions.contains("## Machine / Workspace Map"));
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_disables_realtime_startup_context_with_empty_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![],
+        vec![vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_no_context", "instructions": "prompt from config" }
+        })]],
+    ])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.experimental_realtime_ws_backend_prompt = Some("prompt from config".to_string());
+        config.experimental_realtime_ws_startup_context = Some(String::new());
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+    seed_recent_thread(
+        &test,
+        "Recent work: cleaned up startup flows and reviewed websocket routing.",
+        "Investigate realtime startup context",
+        "no-context",
+    )
+    .await?;
+    fs::create_dir_all(test.workspace_path("docs"))?;
+    fs::write(test.workspace_path("README.md"), "workspace marker")?;
+    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "prompt from op".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) if session_id == "sess_no_context" => Some(Ok(())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+
+    let startup_context_request = server.wait_for_request(1, 0).await;
+    let instructions = websocket_request_instructions(&startup_context_request)
+        .expect("startup context disable request should contain instructions");
+
+    assert_eq!(instructions, "prompt from config");
+    assert!(!instructions.contains(STARTUP_CONTEXT_HEADER));
+    assert!(!instructions.contains("## Machine / Workspace Map"));
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_start_injects_startup_context_from_thread_history() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
