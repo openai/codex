@@ -10,16 +10,18 @@ use anyhow::Result;
 #[cfg(not(windows))]
 use portable_pty::native_pty_system;
 use portable_pty::CommandBuilder;
-use portable_pty::PtySize;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::process::ChildTerminator;
+use crate::process::OutputSink;
+use crate::process::OutputStream;
 use crate::process::ProcessHandle;
 use crate::process::PtyHandles;
 use crate::process::SpawnedProcess;
+use crate::process::SpawnedStreamingProcess;
+use crate::process::TerminalSize;
 
 /// Returns true when ConPTY support is available (Windows only).
 #[cfg(windows)]
@@ -72,25 +74,23 @@ fn platform_native_pty_system() -> Box<dyn portable_pty::PtySystem + Send> {
     }
 }
 
-/// Spawn a process attached to a PTY, returning handles for stdin, output, and exit.
-pub async fn spawn_process(
+/// Spawn a process attached to a PTY, returning handles for stdin and exit
+/// while routing output through the caller-provided sink.
+pub async fn spawn_streaming_process(
     program: &str,
     args: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
     arg0: &Option<String>,
-) -> Result<SpawnedProcess> {
+    size: TerminalSize,
+    output_sink: OutputSink,
+) -> Result<SpawnedStreamingProcess> {
     if program.is_empty() {
         anyhow::bail!("missing program for PTY spawn");
     }
 
     let pty_system = platform_native_pty_system();
-    let pair = pty_system.openpty(PtySize {
-        rows: 24,
-        cols: 80,
-        pixel_width: 0,
-        pixel_height: 0,
-    })?;
+    let pair = pty_system.openpty(size.into())?;
 
     let mut command_builder = CommandBuilder::new(arg0.as_ref().unwrap_or(&program.to_string()));
     command_builder.cwd(cwd);
@@ -111,18 +111,15 @@ pub async fn spawn_process(
     let killer = child.clone_killer();
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
-    let (output_tx, _) = broadcast::channel::<Vec<u8>>(256);
-    let initial_output_rx = output_tx.subscribe();
-
+    let output_tx = output_sink.combined_sender();
     let mut reader = pair.master.try_clone_reader()?;
-    let output_tx_clone = output_tx.clone();
     let reader_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 8_192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let _ = output_tx_clone.send(buf[..n].to_vec());
+                    output_sink.send_blocking(buf[..n].to_vec(), OutputStream::Stdout);
                 }
                 Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
@@ -174,10 +171,9 @@ pub async fn spawn_process(
         _master: pair.master,
     };
 
-    let (handle, output_rx) = ProcessHandle::new(
+    let handle = ProcessHandle::new(
         writer_tx,
         output_tx,
-        initial_output_rx,
         Box::new(PtyChildTerminator {
             killer,
             #[cfg(unix)]
@@ -192,9 +188,22 @@ pub async fn spawn_process(
         Some(handles),
     );
 
-    Ok(SpawnedProcess {
+    Ok(SpawnedStreamingProcess {
         session: handle,
-        output_rx,
         exit_rx,
     })
+}
+
+/// Spawn a process attached to a PTY, returning handles for stdin, output, and exit.
+pub async fn spawn_process(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+    size: TerminalSize,
+) -> Result<SpawnedProcess> {
+    let (output_sink, output_rx) = OutputSink::broadcast_combined();
+    let spawned = spawn_streaming_process(program, args, cwd, env, arg0, size, output_sink).await?;
+    Ok(spawned.into_spawned_process(output_rx))
 }

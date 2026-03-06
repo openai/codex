@@ -71,6 +71,7 @@ async fn run_codex_cli(
         cwd.as_ref(),
         &env,
         &None,
+        codex_utils_pty::TerminalSize::default(),
     )
     .await?;
     let mut output = Vec::new();

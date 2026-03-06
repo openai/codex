@@ -124,6 +124,7 @@ trust_level = "trusted"
         &repo_root,
         &env,
         &None,
+        codex_utils_pty::TerminalSize::default(),
     )
     .await?;
 
