@@ -608,7 +608,7 @@ impl ThreadManagerState {
         } = Codex::spawn(
             config,
             auth_manager,
-            Arc::clone(&self.apps_mcp_cookie_store),
+            Arc::new(AppsMcpCookieStore::default()),
             Arc::clone(&self.models_manager),
             Arc::clone(&self.skills_manager),
             Arc::clone(&self.plugins_manager),
@@ -681,6 +681,7 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::config::test_config;
     use assert_matches::assert_matches;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -789,6 +790,28 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&got_items).unwrap(),
             serde_json::to_value(&expected).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn spawned_threads_use_session_local_apps_mcp_cookie_stores() {
+        let auth = CodexAuth::from_api_key("Test API Key");
+        let manager = ThreadManager::with_models_provider_for_tests(
+            auth,
+            ModelProviderInfo::create_openai_provider(),
+        );
+
+        let thread = manager
+            .start_thread(test_config())
+            .await
+            .expect("spawn test thread");
+
+        assert!(
+            !Arc::ptr_eq(
+                &manager.state.apps_mcp_cookie_store,
+                &thread.thread.codex.session.services.apps_mcp_cookie_store,
+            ),
+            "live sessions should not share the app/list cookie store",
         );
     }
 }
