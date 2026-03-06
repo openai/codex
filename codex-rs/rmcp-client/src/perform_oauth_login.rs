@@ -9,6 +9,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 use reqwest::ClientBuilder;
 use reqwest::Url;
+use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::AuthorizationManager;
 use rmcp::transport::auth::AuthorizationMetadata;
 use rmcp::transport::auth::OAuthState;
@@ -248,6 +249,12 @@ struct OauthLoginFlow {
     timeout: Duration,
 }
 
+struct CallbackListener {
+    guard: CallbackServerGuard,
+    redirect_uri: String,
+    rx: oneshot::Receiver<(String, String)>,
+}
+
 fn resolve_callback_port(
     callback_port: Option<u16>,
     use_default_cimd_metadata: bool,
@@ -323,6 +330,34 @@ fn callback_bind_host(callback_url: Option<&str>) -> String {
     }
 }
 
+fn start_callback_listener(
+    bind_host: &str,
+    callback_port: Option<u16>,
+    callback_url: Option<&str>,
+) -> Result<CallbackListener> {
+    let bind_addr = match callback_port {
+        Some(port) => format!("{bind_host}:{port}"),
+        None => format!("{bind_host}:0"),
+    };
+
+    let server = Arc::new(Server::http(&bind_addr).map_err(|err| anyhow!(err))?);
+    let guard = CallbackServerGuard {
+        server: Arc::clone(&server),
+    };
+
+    let redirect_uri = resolve_redirect_uri(&server, callback_url)?;
+    let callback_path = callback_path_from_redirect_uri(&redirect_uri)?;
+
+    let (tx, rx) = oneshot::channel();
+    spawn_callback_server(server, tx, callback_path);
+
+    Ok(CallbackListener {
+        guard,
+        redirect_uri,
+        rx,
+    })
+}
+
 impl OauthLoginFlow {
     #[allow(clippy::too_many_arguments)]
     async fn new(
@@ -348,35 +383,71 @@ impl OauthLoginFlow {
         let metadata = discover_oauth_authorization_metadata(server_url, http_client.clone())
             .await
             .context("failed to discover OAuth authorization metadata")?;
-        let use_default_cimd_metadata = should_use_default_cimd_metadata(&metadata);
+        let should_start_with_default_cimd_metadata = should_use_default_cimd_metadata(&metadata);
+        let supports_default_cimd_metadata = client_id_metadata_document_supported(&metadata);
+        let should_rebind_callback_for_cimd_fallback =
+            callback_port.is_none() && callback_url.is_none();
 
         let bind_host = callback_bind_host(callback_url);
-        let callback_port = resolve_callback_port(callback_port, use_default_cimd_metadata)?;
-        let bind_addr = match callback_port {
-            Some(port) => format!("{bind_host}:{port}"),
-            None => format!("{bind_host}:0"),
-        };
-
-        let server = Arc::new(Server::http(&bind_addr).map_err(|err| anyhow!(err))?);
-        let guard = CallbackServerGuard {
-            server: Arc::clone(&server),
-        };
-
-        let redirect_uri = resolve_redirect_uri(&server, callback_url)?;
-        let callback_path = callback_path_from_redirect_uri(&redirect_uri)?;
-
-        let (tx, rx) = oneshot::channel();
-        spawn_callback_server(server, tx, callback_path);
+        let callback_port =
+            resolve_callback_port(callback_port, should_start_with_default_cimd_metadata)?;
+        let mut callback_listener =
+            start_callback_listener(&bind_host, callback_port, callback_url)?;
 
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-        let oauth_state = start_oauth_authorization(
+        let oauth_state = match start_oauth_authorization(
             server_url,
-            http_client,
+            &http_client,
             &scope_refs,
-            &redirect_uri,
-            use_default_cimd_metadata,
+            &callback_listener.redirect_uri,
+            should_start_with_default_cimd_metadata,
         )
-        .await?;
+        .await
+        {
+            Ok(oauth_state) => oauth_state,
+            Err(dynamic_registration_err)
+                if !should_start_with_default_cimd_metadata
+                    && supports_default_cimd_metadata
+                    && matches!(dynamic_registration_err, AuthError::RegistrationFailed(_)) =>
+            {
+                if should_rebind_callback_listener_for_cimd_fallback(
+                    should_rebind_callback_for_cimd_fallback,
+                    &callback_listener.redirect_uri,
+                ) {
+                    callback_listener = start_callback_listener(
+                        "127.0.0.1",
+                        Some(DEFAULT_CIMD_CALLBACK_PORT),
+                        None,
+                    )
+                    .context("failed to rebind OAuth callback listener for CIMD fallback")?;
+                } else if !should_rebind_callback_for_cimd_fallback {
+                    validate_redirect_uri_for_default_cimd_metadata(
+                        &callback_listener.redirect_uri,
+                    )?;
+                }
+
+                start_oauth_authorization(
+                    server_url,
+                    &http_client,
+                    &scope_refs,
+                    &callback_listener.redirect_uri,
+                    true,
+                )
+                .await
+                .map_err(anyhow::Error::from)
+                .context(
+                    "failed to start OAuth authorization with default client metadata URL after dynamic registration failed",
+                )?
+            }
+            Err(err) if should_start_with_default_cimd_metadata => {
+                return Err(anyhow::Error::from(err).context(
+                    "failed to start OAuth authorization with default client metadata URL",
+                ));
+            }
+            Err(err) => {
+                return Err(anyhow::Error::from(err).context("failed to start OAuth authorization"));
+            }
+        };
         let auth_url = append_query_param(
             &oauth_state.get_authorization_url().await?,
             "resource",
@@ -388,8 +459,8 @@ impl OauthLoginFlow {
         Ok(Self {
             auth_url,
             oauth_state,
-            rx,
-            guard,
+            rx: callback_listener.rx,
+            guard: callback_listener.guard,
             server_name: server_name.to_string(),
             server_url: server_url.to_string(),
             store_mode,
@@ -474,15 +545,16 @@ impl OauthLoginFlow {
 
 async fn start_oauth_authorization(
     server_url: &str,
-    http_client: reqwest::Client,
+    http_client: &reqwest::Client,
     scope_refs: &[&str],
     redirect_uri: &str,
     use_default_cimd_metadata: bool,
-) -> Result<OAuthState> {
-    let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
+) -> std::result::Result<OAuthState, AuthError> {
+    let mut oauth_state = OAuthState::new(server_url, Some(http_client.clone())).await?;
 
     if use_default_cimd_metadata {
-        validate_redirect_uri_for_default_cimd_metadata(redirect_uri)?;
+        validate_redirect_uri_for_default_cimd_metadata(redirect_uri)
+            .map_err(|err| AuthError::InternalError(err.to_string()))?;
         oauth_state
             .start_authorization_with_metadata_url(
                 scope_refs,
@@ -490,13 +562,11 @@ async fn start_oauth_authorization(
                 Some("Codex"),
                 Some(DEFAULT_CIMD_CLIENT_METADATA_URL),
             )
-            .await
-            .context("failed to start OAuth authorization with default client metadata URL")?;
+            .await?;
     } else {
         oauth_state
             .start_authorization(scope_refs, redirect_uri, Some("Codex"))
-            .await
-            .context("failed to start OAuth authorization")?;
+            .await?;
     }
 
     Ok(oauth_state)
@@ -543,6 +613,14 @@ fn validate_redirect_uri_for_default_cimd_metadata(redirect_uri: &str) -> Result
     )
 }
 
+fn should_rebind_callback_listener_for_cimd_fallback(
+    should_rebind_callback_for_cimd_fallback: bool,
+    redirect_uri: &str,
+) -> bool {
+    should_rebind_callback_for_cimd_fallback
+        && validate_redirect_uri_for_default_cimd_metadata(redirect_uri).is_err()
+}
+
 fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
     let Some(value) = value else {
         return url.to_string();
@@ -564,11 +642,13 @@ fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
 mod tests {
     use axum::Json;
     use axum::Router;
+    use axum::http::StatusCode;
     use axum::routing::get;
     use axum::routing::post;
     use pretty_assertions::assert_eq;
     use reqwest::Url;
     use serde_json::json;
+    use std::io::ErrorKind;
     use std::net::TcpListener;
     use std::sync::OnceLock;
     use tokio::task::JoinHandle;
@@ -585,6 +665,7 @@ mod tests {
     use super::client_id_metadata_document_supported;
     use super::parse_oauth_callback;
     use super::perform_oauth_login_return_url;
+    use super::should_rebind_callback_listener_for_cimd_fallback;
     use super::should_use_default_cimd_metadata;
     use super::validate_redirect_uri_for_default_cimd_metadata;
     use rmcp::transport::auth::AuthorizationMetadata;
@@ -592,6 +673,14 @@ mod tests {
     fn callback_port_test_lock() -> &'static tokio::sync::Mutex<()> {
         static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    fn available_loopback_port() -> u16 {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("ephemeral listener should bind");
+        listener
+            .local_addr()
+            .expect("listener should have local addr")
+            .port()
     }
 
     #[test]
@@ -707,6 +796,32 @@ mod tests {
     }
 
     #[test]
+    fn cimd_fallback_skips_rebind_when_existing_listener_is_compatible() {
+        let should_rebind = should_rebind_callback_listener_for_cimd_fallback(
+            true,
+            DEFAULT_CIMD_REDIRECT_URI_CALLBACK,
+        );
+
+        assert_eq!(should_rebind, false);
+    }
+
+    #[test]
+    fn cimd_fallback_rebinds_when_existing_listener_is_incompatible() {
+        let should_rebind =
+            should_rebind_callback_listener_for_cimd_fallback(true, "http://127.0.0.1:43210/");
+
+        assert_eq!(should_rebind, true);
+    }
+
+    #[test]
+    fn cimd_fallback_never_rebinds_when_rebind_not_requested() {
+        let should_rebind =
+            should_rebind_callback_listener_for_cimd_fallback(false, "http://127.0.0.1:43210/");
+
+        assert_eq!(should_rebind, false);
+    }
+
+    #[test]
     fn cimd_support_requires_metadata_flag_and_missing_registration_endpoint() {
         let supported = authorization_metadata(None, true);
         let missing_flag = authorization_metadata(None, false);
@@ -721,7 +836,7 @@ mod tests {
     #[tokio::test]
     async fn oauth_login_uses_default_cimd_metadata_when_dynamic_registration_unsupported() {
         let _lock = callback_port_test_lock().lock().await;
-        let (server_url, server_handle) = start_oauth_metadata_server(true, false).await;
+        let (server_url, server_handle) = start_oauth_metadata_server(true, false, false).await;
 
         let login_handle = perform_oauth_login_return_url(
             "rmcp-http",
@@ -763,7 +878,9 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_login_rejects_incompatible_callback_for_default_cimd_metadata() {
-        let (server_url, server_handle) = start_oauth_metadata_server(true, false).await;
+        let _lock = callback_port_test_lock().lock().await;
+        let (server_url, server_handle) = start_oauth_metadata_server(true, false, false).await;
+        let incompatible_port = available_loopback_port();
 
         let err = perform_oauth_login_return_url(
             "rmcp-http",
@@ -774,16 +891,16 @@ mod tests {
             &[],
             None,
             Some(1),
-            Some(super::DEFAULT_CIMD_CALLBACK_PORT + 1),
+            Some(incompatible_port),
             None,
         )
         .await
         .err()
         .expect("oauth login should fail when callback URI is incompatible with fallback metadata");
+        let err_text = format!("{err:#}");
 
         assert!(
-            err.to_string()
-                .contains("incompatible with built-in Codex client metadata"),
+            err_text.contains("incompatible with built-in Codex client metadata"),
             "unexpected oauth setup error: {err:#}"
         );
 
@@ -794,9 +911,12 @@ mod tests {
     async fn oauth_login_non_cimd_starts_when_cimd_default_port_is_occupied() {
         let _lock = callback_port_test_lock().lock().await;
         let _occupied_port_listener =
-            TcpListener::bind(("127.0.0.1", super::DEFAULT_CIMD_CALLBACK_PORT))
-                .expect("should occupy default CIMD callback port");
-        let (server_url, server_handle) = start_oauth_metadata_server(false, true).await;
+            match TcpListener::bind(("127.0.0.1", super::DEFAULT_CIMD_CALLBACK_PORT)) {
+                Ok(listener) => Some(listener),
+                Err(err) if err.kind() == ErrorKind::AddrInUse => None,
+                Err(err) => panic!("failed to bind default CIMD callback port: {err}"),
+            };
+        let (server_url, server_handle) = start_oauth_metadata_server(false, true, false).await;
 
         let login_handle = perform_oauth_login_return_url(
             "rmcp-http",
@@ -844,6 +964,87 @@ mod tests {
         server_handle.abort();
     }
 
+    #[tokio::test]
+    async fn oauth_login_falls_back_to_default_cimd_metadata_when_registration_fails() {
+        let _lock = callback_port_test_lock().lock().await;
+        let (server_url, server_handle) = start_oauth_metadata_server(true, true, true).await;
+
+        let login_handle = perform_oauth_login_return_url(
+            "rmcp-http",
+            &server_url,
+            OAuthCredentialsStoreMode::File,
+            None,
+            None,
+            &[],
+            None,
+            Some(1),
+            None,
+            None,
+        )
+        .await
+        .expect("oauth login should fall back to default CIMD metadata URL");
+        let (authorization_url, completion) = login_handle.into_parts();
+
+        let parsed = Url::parse(&authorization_url).expect("authorization URL should parse");
+        let params = parsed
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            params.get("client_id").map(std::convert::AsRef::as_ref),
+            Some(DEFAULT_CIMD_CLIENT_METADATA_URL)
+        );
+        assert_eq!(
+            params.get("redirect_uri").map(std::convert::AsRef::as_ref),
+            Some(DEFAULT_CIMD_REDIRECT_URI_CALLBACK)
+        );
+
+        let err = completion
+            .await
+            .expect("oauth completion receiver should resolve")
+            .expect_err("oauth should time out in test without callback");
+        assert!(
+            err.to_string()
+                .contains("timed out waiting for OAuth callback"),
+            "unexpected oauth completion error: {err}"
+        );
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn oauth_login_fallback_rejects_incompatible_explicit_callback_after_registration_failure()
+     {
+        let _lock = callback_port_test_lock().lock().await;
+        let (server_url, server_handle) = start_oauth_metadata_server(true, true, true).await;
+        let incompatible_port = available_loopback_port();
+
+        let err = perform_oauth_login_return_url(
+            "rmcp-http",
+            &server_url,
+            OAuthCredentialsStoreMode::File,
+            None,
+            None,
+            &[],
+            None,
+            Some(1),
+            Some(incompatible_port),
+            None,
+        )
+        .await
+        .err()
+        .expect(
+            "oauth login should fail when explicit callback is incompatible with CIMD fallback",
+        );
+
+        assert!(
+            err.to_string()
+                .contains("incompatible with built-in Codex client metadata"),
+            "unexpected oauth setup error: {err:#}"
+        );
+
+        server_handle.abort();
+    }
+
     fn authorization_metadata(
         registration_endpoint: Option<&str>,
         client_metadata_document_supported: bool,
@@ -869,6 +1070,7 @@ mod tests {
     async fn start_oauth_metadata_server(
         client_id_metadata_document_supported: bool,
         include_registration_endpoint: bool,
+        registration_fails: bool,
     ) -> (String, JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -913,12 +1115,24 @@ mod tests {
             .route(
                 "/oauth/register",
                 post(move || async move {
-                    Json(json!({
-                        "client_id": "codex-test-client-id",
-                        "client_secret": null,
-                        "client_name": "Codex Test Client",
-                        "redirect_uris": [],
-                    }))
+                    if registration_fails {
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Json(json!({
+                                "error": "access_denied",
+                                "error_description": "dynamic registration denied by policy",
+                            })),
+                        );
+                    }
+                    (
+                        StatusCode::CREATED,
+                        Json(json!({
+                            "client_id": "codex-test-client-id",
+                            "client_secret": null,
+                            "client_name": "Codex Test Client",
+                            "redirect_uris": [],
+                        })),
+                    )
                 }),
             );
 
