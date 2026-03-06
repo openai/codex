@@ -4574,26 +4574,25 @@ approval_policy = "guardian"
 
 #[test]
 fn guardian_approval_is_allowed_when_feature_enabled() -> std::io::Result<()> {
-    let mut features = std::collections::HashMap::new();
-    features.insert("guardian_approval".to_string(), true);
     let cfg: ConfigToml = toml::from_str(
         r#"
 approval_policy = "guardian"
+[features]
+guardian_approval = true
 "#,
     )
     .expect("TOML deserialization should succeed");
-    let overrides = ConfigOverrides {
-        features: Some(features),
-        ..ConfigOverrides::default()
-    };
 
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
         cfg,
-        overrides,
+        ConfigOverrides::default(),
         codex_home.path().to_path_buf(),
     )?;
 
-    assert_eq!(config.permissions.approval_policy.value(), AskForApproval::Guardian);
+    assert_eq!(
+        config.permissions.approval_policy.value(),
+        AskForApproval::Guardian
+    );
     Ok(())
 }

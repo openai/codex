@@ -24,6 +24,13 @@ pub enum ConstraintError {
         requirement_source: RequirementSource,
         reason: String,
     },
+
+    #[error("{field_name} `{candidate}` requires `features.{feature_key} = true`")]
+    FeatureFlagRequired {
+        field_name: &'static str,
+        candidate: String,
+        feature_key: &'static str,
+    },
 }
 
 impl ConstraintError {

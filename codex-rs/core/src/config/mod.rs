@@ -135,6 +135,23 @@ pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
+pub(crate) fn ensure_guardian_approval_feature_enabled(
+    features: &Features,
+    approval_policy: AskForApproval,
+) -> ConstraintResult<()> {
+    if matches!(approval_policy, AskForApproval::Guardian)
+        && !features.enabled(Feature::GuardianApproval)
+    {
+        return Err(ConstraintError::FeatureFlagRequired {
+            field_name: "approval_policy",
+            candidate: "guardian".to_string(),
+            feature_key: Feature::GuardianApproval.key(),
+        });
+    }
+
+    Ok(())
+}
+
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
     let trimmed = raw.trim();
@@ -2037,6 +2054,7 @@ impl Config {
             );
             approval_policy = constrained_approval_policy.value();
         }
+        ensure_guardian_approval_feature_enabled(&features, approval_policy)?;
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
