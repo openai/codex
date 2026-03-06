@@ -40,14 +40,32 @@ use codex_protocol::protocol::ReviewDecision;
 
 const GUARDIAN_MODEL: &str = "gpt-5.4";
 const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
-// Leave room for the planned action JSON and policy prompt; the transcript is
-// intentionally only one part of the guardian context window.
+// This is intentionally much smaller than the model's context window. Guardian
+// only needs enough conversation state to establish intent and recent context;
+// keeping the transcript compact helps latency and leaves plenty of room for
+// the policy prompt and exact planned action JSON.
 const GUARDIAN_MAX_TRANSCRIPT_TOKENS: usize = 3_500;
 // Always keep some recent non-user context so the reviewer can see what the
 // agent was trying to do immediately before the escalation.
 const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 20;
 
 pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = "Guardian rejected this action due to unacceptable risk. The agent must not attempt to achieve the same outcome via workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or stop and request user input.";
+
+/// Canonical description of the action the guardian is being asked to review.
+#[derive(Debug, Clone)]
+pub(crate) struct GuardianReviewRequest {
+    pub(crate) tool_name: &'static str,
+    pub(crate) action: Value,
+}
+
+/// Coarse risk label paired with the numeric `risk_score`.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum GuardianRiskLevel {
+    Low,
+    Medium,
+    High,
+}
 
 /// Evidence item returned by the guardian subagent.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -65,26 +83,10 @@ pub(crate) struct GuardianAssessment {
     evidence: Vec<GuardianEvidence>,
 }
 
-/// Coarse risk label paired with the numeric `risk_score`.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum GuardianRiskLevel {
-    Low,
-    Medium,
-    High,
-}
-
 /// Minimal result shape used by the existing approval/escalation pipeline.
 #[derive(Debug, Clone)]
 pub(crate) struct GuardianReviewResult {
     pub(crate) approved: bool,
-}
-
-/// Canonical description of the action the guardian is being asked to review.
-#[derive(Debug, Clone)]
-pub(crate) struct GuardianReviewRequest {
-    pub(crate) tool_name: &'static str,
-    pub(crate) action: Value,
 }
 
 /// Transcript entry retained for guardian review after filtering and numbering.
