@@ -17,6 +17,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use codex_arg0::Arg0DispatchPaths;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -25,6 +26,7 @@ use codex_core::config::ConstraintError;
 use codex_core::config::types::Notifications;
 #[cfg(target_os = "windows")]
 use codex_core::config::types::WindowsSandboxModeToml;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::RequirementSource;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
@@ -1693,6 +1695,11 @@ async fn helpers_are_available_and_do_not_panic() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
+        in_process_context: InProcessAgentContext {
+            arg0_paths: Arg0DispatchPaths::default(),
+            cli_kv_overrides: Vec::new(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+        },
     };
     let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
@@ -5316,6 +5323,11 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
+        in_process_context: InProcessAgentContext {
+            arg0_paths: Arg0DispatchPaths::default(),
+            cli_kv_overrides: Vec::new(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+        },
     };
 
     let chat = ChatWidget::new(init, thread_manager);
@@ -5366,6 +5378,11 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
+        in_process_context: InProcessAgentContext {
+            arg0_paths: Arg0DispatchPaths::default(),
+            cli_kv_overrides: Vec::new(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+        },
     };
 
     let chat = ChatWidget::new(init, thread_manager);
