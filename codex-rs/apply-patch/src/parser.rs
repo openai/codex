@@ -152,7 +152,7 @@ enum ParseMode {
 }
 
 fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
-    let lines: Vec<&str> = patch.trim().lines().collect();
+    let lines: Vec<&str> = patch.trim().split('\n').collect();
     let lines: &[&str] = match check_patch_boundaries_strict(&lines) {
         Ok(()) => &lines,
         Err(e) => match mode {
@@ -206,7 +206,9 @@ fn check_patch_boundaries_lenient<'a>(
 ) -> Result<&'a [&'a str], ParseError> {
     match original_lines {
         [first, .., last] => {
-            if (first == &"<<EOF" || first == &"<<'EOF'" || first == &"<<\"EOF\"")
+            let first = first.trim();
+            let last = last.trim();
+            if (first == "<<EOF" || first == "<<'EOF'" || first == "<<\"EOF\"")
                 && last.ends_with("EOF")
                 && original_lines.len() >= 4
             {
@@ -282,9 +284,11 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
         let mut parsed_lines = 1;
 
         // Optional: move file line
-        let move_path = remaining_lines
-            .first()
-            .and_then(|x| x.strip_prefix(MOVE_TO_MARKER));
+        let move_path = remaining_lines.first().and_then(|x| {
+            x.strip_suffix('\r')
+                .unwrap_or(x)
+                .strip_prefix(MOVE_TO_MARKER)
+        });
 
         if move_path.is_some() {
             remaining_lines = &remaining_lines[1..];
@@ -353,9 +357,10 @@ fn parse_update_file_chunk(
     }
     // If we see an explicit context marker @@ or @@ <context>, consume it; otherwise, optionally
     // allow treating the chunk as starting directly with diff lines.
-    let (change_context, start_index) = if lines[0] == EMPTY_CHANGE_CONTEXT_MARKER {
+    let first_line = lines[0].strip_suffix('\r').unwrap_or(lines[0]);
+    let (change_context, start_index) = if first_line == EMPTY_CHANGE_CONTEXT_MARKER {
         (None, 1)
-    } else if let Some(context) = lines[0].strip_prefix(CHANGE_CONTEXT_MARKER) {
+    } else if let Some(context) = first_line.strip_prefix(CHANGE_CONTEXT_MARKER) {
         (Some(context.to_string()), 1)
     } else {
         if !allow_missing_context {
@@ -383,7 +388,8 @@ fn parse_update_file_chunk(
     };
     let mut parsed_lines = 0;
     for line in &lines[start_index..] {
-        match *line {
+        let line_contents = line.strip_suffix('\r').unwrap_or(line);
+        match line_contents {
             EOF_MARKER => {
                 if parsed_lines == 0 {
                     return Err(InvalidHunkError {
@@ -395,7 +401,7 @@ fn parse_update_file_chunk(
                 parsed_lines += 1;
                 break;
             }
-            line_contents => {
+            _ => {
                 match line_contents.chars().next() {
                     None => {
                         // Interpret this as an empty line.
@@ -403,14 +409,14 @@ fn parse_update_file_chunk(
                         chunk.new_lines.push(String::new());
                     }
                     Some(' ') => {
-                        chunk.old_lines.push(line_contents[1..].to_string());
-                        chunk.new_lines.push(line_contents[1..].to_string());
+                        chunk.old_lines.push(line[1..].to_string());
+                        chunk.new_lines.push(line[1..].to_string());
                     }
                     Some('+') => {
-                        chunk.new_lines.push(line_contents[1..].to_string());
+                        chunk.new_lines.push(line[1..].to_string());
                     }
                     Some('-') => {
-                        chunk.old_lines.push(line_contents[1..].to_string());
+                        chunk.old_lines.push(line[1..].to_string());
                     }
                     _ => {
                         if parsed_lines == 0 {
@@ -666,6 +672,28 @@ fn test_parse_patch_lenient() {
         Err(InvalidPatchError(
             "The last line of the patch must be '*** End Patch'".to_string()
         ))
+    );
+}
+
+#[test]
+fn test_parse_patch_preserves_crlf() {
+    let patch_text = "*** Begin Patch\r\n*** Update File: sample.txt\r\n@@\r\n-one\r\n+uno\r\n two\r\n*** End Patch\r\n";
+    assert_eq!(
+        parse_patch_text(patch_text, ParseMode::Strict),
+        Ok(ApplyPatchArgs {
+            hunks: vec![UpdateFile {
+                path: PathBuf::from("sample.txt"),
+                move_path: None,
+                chunks: vec![UpdateFileChunk {
+                    change_context: None,
+                    old_lines: vec!["one\r".to_string(), "two\r".to_string()],
+                    new_lines: vec!["uno\r".to_string(), "two\r".to_string()],
+                    is_end_of_file: false,
+                }],
+            }],
+            patch: patch_text.trim().to_string(),
+            workdir: None,
+        })
     );
 }
 
