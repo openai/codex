@@ -8,11 +8,13 @@ use crate::model_visible_context::TurnContextDiffFragment;
 use crate::model_visible_context::TurnContextDiffParams;
 use codex_protocol::protocol::TurnContextItem;
 
+use crate::model_visible_context::AGENTS_MD_CLOSE_TAG_PREFIX;
 use crate::model_visible_context::AGENTS_MD_FRAGMENT_SPEC;
+use crate::model_visible_context::AGENTS_MD_OPEN_TAG_PREFIX;
 use crate::model_visible_context::PLUGINS_FRAGMENT_SPEC;
 use crate::model_visible_context::SKILL_FRAGMENT_SPEC;
 
-pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
+pub const USER_INSTRUCTIONS_PREFIX: &str = AGENTS_MD_OPEN_TAG_PREFIX;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "user_instructions", rename_all = "snake_case")]
@@ -30,11 +32,11 @@ impl ModelVisibleContextFragment for UserInstructions {
 
     fn render_text(&self) -> String {
         format!(
-            "{prefix}{directory}\n\n<INSTRUCTIONS>\n{contents}\n{suffix}",
-            prefix = AGENTS_MD_FRAGMENT_SPEC.start_marker(),
+            "{prefix}{directory}>\n{contents}\n{suffix}{directory}>",
+            prefix = AGENTS_MD_OPEN_TAG_PREFIX,
             directory = self.directory,
             contents = self.text,
-            suffix = AGENTS_MD_FRAGMENT_SPEC.end_marker(),
+            suffix = AGENTS_MD_CLOSE_TAG_PREFIX,
         )
     }
 }
@@ -136,14 +138,17 @@ mod tests {
 
         assert_eq!(
             text,
-            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
+            "<AGENTS.md INSTRUCTIONS FOR test_directory>\ntest_text\n</AGENTS.md INSTRUCTIONS FOR test_directory>",
         );
     }
 
     #[test]
     fn test_is_user_instructions() {
-        assert!(AGENTS_MD_FRAGMENT_SPEC.matches_text(
-            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>"
+        assert!(crate::model_visible_context::is_contextual_user_fragment(
+            &ContentItem::InputText {
+                text: "<AGENTS.md INSTRUCTIONS FOR test_directory>\ntest_text\n</AGENTS.md INSTRUCTIONS FOR test_directory>"
+                    .to_string(),
+            }
         ));
         assert!(!AGENTS_MD_FRAGMENT_SPEC.matches_text("test_text"));
     }

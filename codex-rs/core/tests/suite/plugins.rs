@@ -168,7 +168,7 @@ async fn plugin_instructions_are_split_from_agents_instructions() -> Result<()> 
     let user_texts = request.message_input_texts("user");
     let instructions_text = user_texts
         .iter()
-        .find(|text| text.starts_with("# AGENTS.md instructions for "))
+        .find(|text| text.starts_with("<AGENTS.md INSTRUCTIONS FOR "))
         .expect("AGENTS instructions text");
     let plugin_text = user_texts
         .iter()

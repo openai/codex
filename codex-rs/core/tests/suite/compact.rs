@@ -767,7 +767,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                 !item
                     .get("text")
                     .and_then(|text| text.as_str())
-                    .is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
+                    .is_some_and(|text| text.starts_with("<AGENTS.md INSTRUCTIONS FOR "))
             })
             .cloned()
             .collect::<Vec<_>>();

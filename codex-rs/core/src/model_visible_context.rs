@@ -19,8 +19,8 @@ use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::TurnContextItem;
 
-pub(crate) const AGENTS_MD_START_MARKER: &str = "# AGENTS.md instructions for ";
-pub(crate) const AGENTS_MD_END_MARKER: &str = "</INSTRUCTIONS>";
+pub(crate) const AGENTS_MD_OPEN_TAG_PREFIX: &str = "<AGENTS.md INSTRUCTIONS FOR ";
+pub(crate) const AGENTS_MD_CLOSE_TAG_PREFIX: &str = "</AGENTS.md INSTRUCTIONS FOR ";
 pub(crate) const SKILL_OPEN_TAG: &str = "<skill>";
 pub(crate) const SKILL_CLOSE_TAG: &str = "</skill>";
 pub(crate) const USER_SHELL_COMMAND_OPEN_TAG: &str = "<user_shell_command>";
@@ -212,7 +212,7 @@ pub(crate) const DEVELOPER_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
     ModelVisibleContextFragmentSpec::markerless();
 /// AGENTS.md / user-instructions contextual-user fragment spec.
 pub(crate) const AGENTS_MD_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
-    ModelVisibleContextFragmentSpec::contextual_user(AGENTS_MD_START_MARKER, AGENTS_MD_END_MARKER);
+    ModelVisibleContextFragmentSpec::markerless();
 /// Environment-context contextual-user fragment spec.
 pub(crate) const ENVIRONMENT_CONTEXT_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
     ModelVisibleContextFragmentSpec::contextual_user(
@@ -236,7 +236,6 @@ pub(crate) const PLUGINS_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
     ModelVisibleContextFragmentSpec::contextual_user(PLUGINS_OPEN_TAG, PLUGINS_CLOSE_TAG);
 
 const CONTEXTUAL_USER_FRAGMENT_SPECS: &[ModelVisibleContextFragmentSpec] = &[
-    AGENTS_MD_FRAGMENT_SPEC,
     ENVIRONMENT_CONTEXT_FRAGMENT_SPEC,
     SKILL_FRAGMENT_SPEC,
     USER_SHELL_COMMAND_FRAGMENT_SPEC,
@@ -244,13 +243,29 @@ const CONTEXTUAL_USER_FRAGMENT_SPECS: &[ModelVisibleContextFragmentSpec] = &[
     PLUGINS_FRAGMENT_SPEC,
 ];
 
+fn is_agents_md_fragment(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    let Some(after_open_tag_prefix) = trimmed.strip_prefix(AGENTS_MD_OPEN_TAG_PREFIX) else {
+        return false;
+    };
+    let Some((directory, remaining)) = after_open_tag_prefix.split_once('>') else {
+        return false;
+    };
+    if directory.is_empty() {
+        return false;
+    }
+    let expected_close_tag = format!("{AGENTS_MD_CLOSE_TAG_PREFIX}{directory}>");
+    remaining.trim_end().ends_with(&expected_close_tag)
+}
+
 pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
     let ContentItem::InputText { text } = content_item else {
         return false;
     };
-    CONTEXTUAL_USER_FRAGMENT_SPECS
-        .iter()
-        .any(|definition| definition.matches_text(text))
+    is_agents_md_fragment(text)
+        || CONTEXTUAL_USER_FRAGMENT_SPECS
+            .iter()
+            .any(|definition| definition.matches_text(text))
 }
 
 impl ModelVisibleContextFragment for CustomDeveloperInstructions {
@@ -291,7 +306,7 @@ mod tests {
     #[test]
     fn detects_agents_instructions_fragment() {
         assert!(is_contextual_user_fragment(&ContentItem::InputText {
-            text: "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
+            text: "<AGENTS.md INSTRUCTIONS FOR /tmp>\nbody\n</AGENTS.md INSTRUCTIONS FOR /tmp>"
                 .to_string(),
         }));
     }

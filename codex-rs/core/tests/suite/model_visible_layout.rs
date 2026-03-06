@@ -49,7 +49,7 @@ fn agents_message_count(request: &ResponsesRequest) -> usize {
     request
         .message_input_texts("user")
         .iter()
-        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .filter(|text| text.starts_with("<AGENTS.md INSTRUCTIONS FOR "))
         .count()
 }
 
