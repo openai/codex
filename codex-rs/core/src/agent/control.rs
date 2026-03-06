@@ -345,10 +345,10 @@ impl AgentControl {
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
-        if matches!(
-            thread.config_snapshot().await.session_source,
-            SessionSource::SubAgent(_)
-        ) {
+        let snapshot = thread.config_snapshot().await;
+        if matches!(snapshot.session_source, SessionSource::SubAgent(_))
+            || !snapshot.agent_use_function_call_inbox
+        {
             return self.send_prompt(agent_id, message).await;
         }
 
@@ -764,8 +764,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_agent_message_to_root_thread_injects_response_items() {
+    async fn send_agent_message_to_root_thread_defaults_to_user_input() {
         let harness = AgentControlHarness::new().await;
+        let (receiver_thread_id, _thread) = harness.start_thread().await;
+        let sender_thread_id = ThreadId::new();
+
+        let submission_id = harness
+            .control
+            .send_agent_message(
+                receiver_thread_id,
+                sender_thread_id,
+                "watchdog update".to_string(),
+            )
+            .await
+            .expect("send_agent_message should succeed");
+        assert!(!submission_id.is_empty());
+
+        let expected = (
+            receiver_thread_id,
+            Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: "watchdog update".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            },
+        );
+        let captured = harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .find(|entry| *entry == expected);
+
+        assert_eq!(captured, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn send_agent_message_to_root_thread_injects_response_items_when_enabled() {
+        let mut harness = AgentControlHarness::new().await;
+        harness.config.agent_use_function_call_inbox = true;
         let (receiver_thread_id, _thread) = harness.start_thread().await;
         let sender_thread_id = ThreadId::new();
 
