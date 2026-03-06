@@ -516,10 +516,7 @@ fn required_state_db(
     session: &Arc<Session>,
 ) -> Result<Arc<codex_state::StateRuntime>, FunctionCallError> {
     session.state_db().ok_or_else(|| {
-        FunctionCallError::Fatal(
-            "sqlite state db is unavailable for this session; enable the sqlite feature"
-                .to_string(),
-        )
+        FunctionCallError::Fatal("sqlite state db is unavailable for this session".to_string())
     })
 }
 
