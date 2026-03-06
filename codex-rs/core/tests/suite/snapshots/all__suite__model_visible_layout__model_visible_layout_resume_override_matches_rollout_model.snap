@@ -5,14 +5,18 @@ expression: "format_labeled_requests_snapshot(\"First post-resume turn where pre
 Scenario: First post-resume turn where pre-turn override sets model to rollout model; no model-switch update should appear.
 
 ## Last Request Before Resume
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a multi-agent Codex session. Until you...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:seed resume history
 
 ## First Request After Resume + Override
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a multi-agent Codex session. Until you...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>

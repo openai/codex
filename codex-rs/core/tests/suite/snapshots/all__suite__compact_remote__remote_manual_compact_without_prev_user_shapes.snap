@@ -5,13 +5,17 @@ expression: "format_labeled_requests_snapshot(\"Remote manual /compact with no p
 Scenario: Remote manual /compact with no prior user turn still issues a compact request; follow-up turn carries canonical context and new user message.
 
 ## Remote Compaction Request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 
 ## Remote Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
