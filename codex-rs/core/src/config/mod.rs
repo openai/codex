@@ -1403,8 +1403,8 @@ pub struct AgentsToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentRoleSpawnMode {
-    Spawn,
     #[default]
+    Spawn,
     Fork,
 }
 
