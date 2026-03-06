@@ -35,6 +35,8 @@
 - [x] 每轮改动后执行编译检查并中途修复编译错误
 - [x] `cargo test -p codex-tui --lib --no-run` 通过（切换 `CARGO_TARGET_DIR=G:\codex-rs-target`）
 - [x] 运行目标测试集并处理 snapshot 变更（`pending_input_preview::tests`）
+- [x] 全局 Cargo 构建目录统一为 `G:/cargo-target`（`%USERPROFILE%/.cargo/config.toml`）
+- [x] 无临时环境变量验证：`cargo check -p codex-hooks -v` 输出路径为 `G:/cargo-target`
 
 ## E. 提交与汇报
 - [x] 提交 commit（关联 `#1` `#2` `#3`）
@@ -80,3 +82,7 @@
 - [x] `#12` CI 模式升级：`scripts/exomind_norm_governance_warn.py`（warn/block + waivers）
 - [x] `#12` CI 工作流接入：`.github/workflows/exomind-norm-governance-warn.yml`
 - [x] `#12` waiver 文件与规范：`docs/exomind-norm-waivers.json` `docs/exomind-norm-waiver-spec.md`
+
+## L. 运行环境基线（本轮）
+- [x] 构建产物目录统一到 G 盘：`G:/cargo-target`
+- [x] 同步更新 issue `#1` 与 `#3` 的需求快照和执行状态
