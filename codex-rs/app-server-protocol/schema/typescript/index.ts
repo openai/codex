@@ -11,6 +11,7 @@ export type { AgentReasoningEvent } from "./AgentReasoningEvent";
 export type { AgentReasoningRawContentDeltaEvent } from "./AgentReasoningRawContentDeltaEvent";
 export type { AgentReasoningRawContentEvent } from "./AgentReasoningRawContentEvent";
 export type { AgentReasoningSectionBreakEvent } from "./AgentReasoningSectionBreakEvent";
+export type { AgentSpawnMode } from "./AgentSpawnMode";
 export type { AgentStatus } from "./AgentStatus";
 export type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 export type { ApplyPatchApprovalRequestEvent } from "./ApplyPatchApprovalRequestEvent";

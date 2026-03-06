@@ -39,6 +39,7 @@ use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AgentReasoningEvent;
+use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -576,6 +577,7 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             new_agent_nickname: None,
             new_agent_role: None,
             prompt: prompt.clone(),
+            spawn_mode: AgentSpawnMode::Spawn,
             status: AgentStatus::Running,
         }),
     );

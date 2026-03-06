@@ -163,6 +163,14 @@
       "title": "AgentMessageDeltaNotification",
       "type": "object"
     },
+    "AgentSpawnMode": {
+      "enum": [
+        "spawn",
+        "fork",
+        "watchdog"
+      ],
+      "type": "string"
+    },
     "AgentStatus": {
       "description": "Agent lifecycle status, derived from emitted events.",
       "oneOf": [
@@ -5815,6 +5823,15 @@
                 }
               ],
               "description": "Thread ID of the sender."
+            },
+            "spawn_mode": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AgentSpawnMode"
+                }
+              ],
+              "default": "spawn",
+              "description": "Spawn mode used for this agent."
             },
             "status": {
               "allOf": [
