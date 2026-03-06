@@ -1,0 +1,76 @@
+{
+  "catalog_version": "0.1.0",
+  "updated_at": "2026-03-06",
+  "owner": "exomind-team",
+  "rules": [
+    {
+      "rule_id": "L1-SEC-NO-SHELL-UNSAFE",
+      "title": "Disallow shell command construction with untrusted interpolation",
+      "rule_level": "L1",
+      "severity": "critical",
+      "scope": "codex-rs/**",
+      "owner": "security-architecture",
+      "version": "1.0.0",
+      "matcher": {
+        "type": "semantic_pattern",
+        "value": "shell_command(arg contains untrusted_user_input)",
+        "language": "rust"
+      },
+      "action": "block",
+      "evidence": {
+        "required_fields": [
+          "file_path",
+          "line",
+          "snippet"
+        ],
+        "note": "Capture exact interpolated command fragment."
+      }
+    },
+    {
+      "rule_id": "L2-TEST-CHANGED-CODE-HAS-TEST",
+      "title": "Changed runtime logic should include or update tests",
+      "rule_level": "L2",
+      "severity": "high",
+      "scope": "codex-rs/**",
+      "owner": "runtime-quality",
+      "version": "1.0.0",
+      "matcher": {
+        "type": "diff_heuristic",
+        "value": "runtime_code_changed && no_test_file_changed",
+        "language": "generic"
+      },
+      "action": "warn",
+      "evidence": {
+        "required_fields": [
+          "pr_number",
+          "changed_files",
+          "missing_tests_hint"
+        ],
+        "note": "Suggest candidate test modules based on changed paths."
+      }
+    },
+    {
+      "rule_id": "L3-STYLE-IMPORT-ORDER",
+      "title": "Keep imports grouped and sorted by project convention",
+      "rule_level": "L3",
+      "severity": "low",
+      "scope": "codex-rs/**",
+      "owner": "dev-experience",
+      "version": "1.0.0",
+      "matcher": {
+        "type": "ast_pattern",
+        "value": "imports_not_sorted_by_group_then_alpha",
+        "language": "rust"
+      },
+      "action": "autofix",
+      "evidence": {
+        "required_fields": [
+          "file_path",
+          "line_range",
+          "autofix_patch"
+        ],
+        "note": "Autofix patch should be attached to the report."
+      }
+    }
+  ]
+}
