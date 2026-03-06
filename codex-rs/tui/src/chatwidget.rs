@@ -631,6 +631,8 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // Monotonic sequence source used when enqueuing `queued_user_messages`.
+    next_queued_message_seq: u64,
     // RLPH `/exec` commands are submitted as user shell commands and bridged
     // back into a follow-up prompt on command completion.
     pending_rlph_exec_commands: VecDeque<String>,
@@ -750,6 +752,11 @@ pub(crate) struct UserMessage {
     mention_bindings: Vec<MentionBinding>,
     repeat_mode: bool,
     steer_mode: bool,
+    /// Monotonic enqueue sequence for edit recall ordering.
+    ///
+    /// Queue dispatch priority may move steer messages to the front; this field preserves true
+    /// insertion recency so `Alt+Up` can recall the latest queued draft regardless of priority.
+    enqueue_seq: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -794,8 +801,25 @@ impl From<String> for UserMessage {
             mention_bindings: Vec::new(),
             repeat_mode: false,
             steer_mode: false,
+            enqueue_seq: 0,
         }
     }
+}
+
+fn is_cycle_mode_or_repeat_queue_key(key_event: KeyEvent) -> bool {
+    matches!(
+        key_event,
+        KeyEvent {
+            code: KeyCode::BackTab,
+            kind: KeyEventKind::Press,
+            ..
+        } | KeyEvent {
+            code: KeyCode::Tab,
+            modifiers: KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            ..
+        }
+    )
 }
 
 impl From<&str> for UserMessage {
@@ -809,6 +833,7 @@ impl From<&str> for UserMessage {
             mention_bindings: Vec::new(),
             repeat_mode: false,
             steer_mode: false,
+            enqueue_seq: 0,
         }
     }
 }
@@ -849,6 +874,7 @@ pub(crate) fn create_initial_user_message(
             mention_bindings: Vec::new(),
             repeat_mode: false,
             steer_mode: false,
+            enqueue_seq: 0,
         })
     }
 }
@@ -881,6 +907,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         mention_bindings,
         repeat_mode,
         steer_mode,
+        enqueue_seq,
     } = message;
     if local_images.is_empty() {
         return UserMessage {
@@ -891,6 +918,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
             mention_bindings,
             repeat_mode,
             steer_mode,
+            enqueue_seq,
         };
     }
 
@@ -949,6 +977,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         mention_bindings,
         repeat_mode,
         steer_mode,
+        enqueue_seq,
     }
 }
 
@@ -2022,6 +2051,7 @@ impl ChatWidget {
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
             repeat_mode: false,
             steer_mode: false,
+            enqueue_seq: 0,
         };
 
         let mut to_merge: Vec<UserMessage> = self
@@ -2045,6 +2075,7 @@ impl ChatWidget {
             mention_bindings: Vec::new(),
             repeat_mode: false,
             steer_mode: false,
+            enqueue_seq: 0,
         };
         let total_remote_images = to_merge
             .iter()
@@ -2173,6 +2204,7 @@ impl ChatWidget {
             self.pending_rlph_exec_commands.clear();
             self.active_rlph_exec_commands.clear();
         }
+        self.sync_next_queued_message_seq();
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
         self.update_task_running_state();
@@ -3190,6 +3222,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            next_queued_message_seq: 0,
             pending_rlph_exec_commands: VecDeque::new(),
             active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
@@ -3378,6 +3411,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
+            next_queued_message_seq: 0,
             pending_rlph_exec_commands: VecDeque::new(),
             active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
@@ -3550,6 +3584,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            next_queued_message_seq: 0,
             pending_rlph_exec_commands: VecDeque::new(),
             active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
@@ -3684,7 +3719,7 @@ impl ChatWidget {
             && self.queued_message_edit_binding.is_press(key_event)
             && !self.queued_user_messages.is_empty()
         {
-            if let Some(user_message) = self.queued_user_messages.pop_back() {
+            if let Some(user_message) = self.pop_most_recent_queued_user_message_for_edit() {
                 self.restore_user_message_to_composer(user_message);
                 self.refresh_pending_input_preview();
                 self.request_redraw();
@@ -3693,14 +3728,11 @@ impl ChatWidget {
         }
 
         match key_event {
-            KeyEvent {
-                code: KeyCode::BackTab,
-                kind: KeyEventKind::Press,
-                ..
-            } if self.collaboration_modes_enabled()
+            _ if is_cycle_mode_or_repeat_queue_key(key_event)
+                && self.collaboration_modes_enabled()
                 && !self.bottom_pane.is_task_running()
                 && self.bottom_pane.no_modal_or_popup_active()
-                && self.bottom_pane.composer_is_empty() =>
+                && self.bottom_pane.composer_text().is_empty() =>
             {
                 self.cycle_collaboration_mode();
             }
@@ -3723,6 +3755,7 @@ impl ChatWidget {
                             .take_recent_submission_mention_bindings(),
                         repeat_mode: false,
                         steer_mode: false,
+                        enqueue_seq: 0,
                     };
                     if user_message.text.is_empty()
                         && user_message.local_images.is_empty()
@@ -3766,6 +3799,7 @@ impl ChatWidget {
                             .take_recent_submission_mention_bindings(),
                         repeat_mode: false,
                         steer_mode: false,
+                        enqueue_seq: 0,
                     };
                     let Some(user_message) =
                         self.maybe_defer_user_message_for_realtime(user_message)
@@ -3793,6 +3827,7 @@ impl ChatWidget {
                             .take_recent_submission_mention_bindings(),
                         repeat_mode: false,
                         steer_mode: false,
+                        enqueue_seq: 0,
                     };
                     if user_message.text.is_empty()
                         && user_message.local_images.is_empty()
@@ -4285,6 +4320,7 @@ impl ChatWidget {
                     mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
                     repeat_mode: false,
                     steer_mode: false,
+                    enqueue_seq: 0,
                 };
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
@@ -4409,12 +4445,46 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 
+    fn with_next_queue_seq(&mut self, mut user_message: UserMessage) -> UserMessage {
+        user_message.enqueue_seq = self.next_queued_message_seq;
+        self.next_queued_message_seq = self.next_queued_message_seq.saturating_add(1);
+        user_message
+    }
+
+    fn push_queued_user_message_front(&mut self, user_message: UserMessage) {
+        let queued = self.with_next_queue_seq(user_message);
+        self.queued_user_messages.push_front(queued);
+    }
+
+    fn push_queued_user_message_back(&mut self, user_message: UserMessage) {
+        let queued = self.with_next_queue_seq(user_message);
+        self.queued_user_messages.push_back(queued);
+    }
+
+    fn pop_most_recent_queued_user_message_for_edit(&mut self) -> Option<UserMessage> {
+        let (index, _) = self
+            .queued_user_messages
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, message)| message.enqueue_seq)?;
+        self.queued_user_messages.remove(index)
+    }
+
+    fn sync_next_queued_message_seq(&mut self) {
+        self.next_queued_message_seq = self
+            .queued_user_messages
+            .iter()
+            .map(|message| message.enqueue_seq)
+            .max()
+            .map_or(0, |seq| seq.saturating_add(1));
+    }
+
     fn queue_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured()
             || self.bottom_pane.is_task_running()
             || self.is_review_mode
         {
-            self.queued_user_messages.push_back(user_message);
+            self.push_queued_user_message_back(user_message);
             self.refresh_pending_input_preview();
         } else {
             self.submit_user_message(user_message);
@@ -4429,9 +4499,9 @@ impl ChatWidget {
         user_message.repeat_mode = true;
         user_message.steer_mode = matches!(priority, BufferedQueuePriority::High);
         if user_message.steer_mode {
-            self.queued_user_messages.push_front(user_message);
+            self.push_queued_user_message_front(user_message);
         } else {
-            self.queued_user_messages.push_back(user_message);
+            self.push_queued_user_message_back(user_message);
         }
         self.maybe_send_next_queued_input();
         self.refresh_pending_input_preview();
@@ -4545,12 +4615,12 @@ impl ChatWidget {
     fn submit_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
-            self.queued_user_messages.push_front(user_message);
+            self.push_queued_user_message_front(user_message);
             self.refresh_pending_input_preview();
             return;
         }
         if self.is_review_mode {
-            self.queued_user_messages.push_back(user_message);
+            self.push_queued_user_message_back(user_message);
             self.refresh_pending_input_preview();
             return;
         }
@@ -4563,6 +4633,7 @@ impl ChatWidget {
             mention_bindings,
             repeat_mode,
             steer_mode,
+            enqueue_seq: _,
         } = user_message;
         if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
             return;
@@ -4718,6 +4789,7 @@ impl ChatWidget {
                 mention_bindings: mention_bindings.clone(),
                 repeat_mode,
                 steer_mode,
+                enqueue_seq: 0,
             },
             compare_key: Self::pending_steer_compare_key_from_items(&items),
         });
@@ -5292,7 +5364,7 @@ impl ChatWidget {
                 self.submit_user_message(user_message);
             }
             if let Some(repeating_message) = repeat_clone {
-                self.queued_user_messages.push_back(repeating_message);
+                self.push_queued_user_message_back(repeating_message);
             }
         }
         // Update the list to reflect the remaining queued messages (if any).
@@ -8218,6 +8290,7 @@ impl ChatWidget {
             mention_bindings: Vec::new(),
             repeat_mode: false,
             steer_mode: false,
+            enqueue_seq: 0,
         };
         if should_queue {
             self.queue_user_message(user_message);

@@ -124,12 +124,12 @@ impl PendingInputPreview {
                         message
                             .text
                             .lines()
-                            .map(|line| Line::from(line.magenta().italic())),
+                            .map(|line| Line::from(line.yellow().italic())),
                         RtOptions::new(width as usize)
-                            .initial_indent(Line::from("  ↻ ".magenta()))
+                            .initial_indent(Line::from("  ↻ ".yellow()))
                             .subsequent_indent(Line::from("    ")),
                     ),
-                    Line::from("    …".magenta().italic()),
+                    Line::from("    …".yellow().italic()),
                 ),
                 (false, false) => (
                     adaptive_wrap_lines(
