@@ -9,7 +9,7 @@ Scenario: Turns resend fresh ephemeral editor context while keeping it outside d
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:<additional_context>\n  <title>Context from my editor</title>\n  <content>\n## Active file: src/...
+02:message/user:<additional_context_for_this_turn>\n  <title>Context from my editor</title>\n  <content>\n## Act...
 03:message/user:first turn with editor context
 
 ## Second Request (Refreshed Editor Context)
@@ -17,8 +17,8 @@ Scenario: Turns resend fresh ephemeral editor context while keeping it outside d
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:<additional_context>\n  <title>Context from my editor</title>\n  <content>\n## Active file: src/...
+02:message/user:<additional_context_for_this_turn>\n  <title>Context from my editor</title>\n  <content>\n## Act...
 03:message/user:first turn with editor context
 04:message/assistant:turn one complete
-05:message/user:<additional_context>\n  <title>Context from my editor</title>\n  <content>\n## Active file: src/...
+05:message/user:<additional_context_for_this_turn>\n  <title>Context from my editor</title>\n  <content>\n## Act...
 06:message/user:second turn with refreshed editor context

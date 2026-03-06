@@ -570,7 +570,7 @@ do things
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<additional_context>\n  <title>Context from my editor</title>\n  <content>\n## Active file: src/main.rs\n  </content>\n</additional_context>"
+                    text: "<additional_context_for_this_turn>\n  <title>Context from my editor</title>\n  <content>\n## Active file: src/main.rs\n  </content>\n</additional_context_for_this_turn>"
                         .to_string(),
                 }],
                 end_turn: None,

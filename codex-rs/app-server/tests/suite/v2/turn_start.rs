@@ -292,7 +292,7 @@ async fn turn_start_forwards_ephemeral_context_to_model_input() -> Result<()> {
     let body = serde_json::from_slice::<serde_json::Value>(&requests[0].body)?;
     let body_text = body.to_string();
     assert!(
-        body_text.contains("<additional_context>"),
+        body_text.contains("<additional_context_for_this_turn>"),
         "expected model request to contain additional_context wrapper"
     );
     assert!(

@@ -113,6 +113,13 @@ pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
         .any(|definition| definition.matches_text(text))
 }
 
+pub(crate) fn is_additional_context_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+    ADDITIONAL_CONTEXT_FRAGMENT.matches_text(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,9 +150,7 @@ mod tests {
     #[test]
     fn detects_additional_context_fragment() {
         assert!(is_contextual_user_fragment(&ContentItem::InputText {
-            text:
-                "<additional_context>\n<title>Context from my editor</title>\n</additional_context>"
-                    .to_string(),
+            text: "<additional_context_for_this_turn>\n<title>Context from my editor</title>\n</additional_context_for_this_turn>".to_string(),
         }));
     }
 

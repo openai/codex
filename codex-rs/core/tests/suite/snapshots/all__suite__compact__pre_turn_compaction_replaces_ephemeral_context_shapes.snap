@@ -9,7 +9,7 @@ Scenario: Pre-turn auto-compaction keeps prior turn additional_context in the co
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:<additional_context>\n  <title>Context from my editor</title>\n ...
+02:message/user:<additional_context_for_this_turn>\n  <title>Context from my edi...
 03:message/user:USER_ONE
 04:message/assistant:FIRST_REPLY
 05:message/user:USER_TWO
@@ -24,5 +24,5 @@ Scenario: Pre-turn auto-compaction keeps prior turn additional_context in the co
 04:message/user[3]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-    [03] <additional_context>\n  <title>Context from my editor</title>\n ...
+    [03] <additional_context_for_this_turn>\n  <title>Context from my edi...
 05:message/user:USER_THREE
