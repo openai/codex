@@ -53,41 +53,34 @@ fn agents_message_count(request: &ResponsesRequest) -> usize {
         .count()
 }
 
-fn format_subagents_fragment_snapshot(subagents: &[&str]) -> String {
-    let items = if subagents.is_empty() {
-        vec![json!({
+fn format_subagents_snapshot(subagents: &[&str]) -> String {
+    assert!(
+        !subagents.is_empty(),
+        "format_subagents_snapshot requires at least one subagent entry"
+    );
+    let lines = subagents
+        .iter()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let items = vec![
+        json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": format!("<subagents>\n{lines}\n</subagents>"),
+            }],
+        }),
+        json!({
             "type": "message",
             "role": "user",
             "content": [{
                 "type": "input_text",
                 "text": "<environment_context>\n  <cwd>/tmp/example</cwd>\n  <shell>bash</shell>\n</environment_context>",
             }],
-        })]
-    } else {
-        let lines = subagents
-            .iter()
-            .map(|line| format!("  {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        vec![
-            json!({
-                "type": "message",
-                "role": "developer",
-                "content": [{
-                    "type": "input_text",
-                    "text": format!("<subagents>\n{lines}\n</subagents>"),
-                }],
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": "<environment_context>\n  <cwd>/tmp/example</cwd>\n  <shell>bash</shell>\n</environment_context>",
-                }],
-            }),
-        ]
-    };
+        }),
+    ];
     context_snapshot::format_response_items_snapshot(items.as_slice(), &context_snapshot_options())
 }
 
@@ -500,7 +493,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
 async fn snapshot_model_visible_layout_subagents_fragment_includes_one_subagent() -> Result<()> {
     insta::assert_snapshot!(
         "model_visible_layout_subagents_fragment_includes_one_subagent",
-        format_subagents_fragment_snapshot(&["- agent-1: Atlas"])
+        format_subagents_snapshot(&["- agent-1: Atlas"])
     );
 
     Ok(())
@@ -510,7 +503,7 @@ async fn snapshot_model_visible_layout_subagents_fragment_includes_one_subagent(
 async fn snapshot_model_visible_layout_subagents_fragment_includes_two_subagents() -> Result<()> {
     insta::assert_snapshot!(
         "model_visible_layout_subagents_fragment_includes_two_subagents",
-        format_subagents_fragment_snapshot(&["- agent-1: Atlas", "- agent-2: Juniper"])
+        format_subagents_snapshot(&["- agent-1: Atlas", "- agent-2: Juniper"])
     );
 
     Ok(())
