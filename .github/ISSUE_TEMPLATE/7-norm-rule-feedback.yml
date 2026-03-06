@@ -1,0 +1,80 @@
+name: Norm Rule Feedback
+description: Report false positives, false negatives, and rule improvement proposals.
+labels: [governance, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form to improve norm governance quality with reproducible evidence.
+
+  - type: dropdown
+    attributes:
+      label: Feedback Type
+      options:
+        - False Positive
+        - False Negative
+        - Conflict
+        - Improvement Proposal
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Rule ID
+      placeholder: e.g. L1-SEC-NO-SHELL-UNSAFE
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Rule Version
+      placeholder: e.g. 1.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    attributes:
+      label: Impact Level
+      options:
+        - critical
+        - high
+        - medium
+        - low
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Expected Behavior
+      description: What should have happened according to rule intent?
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Actual Behavior
+      description: What happened in runtime/CI?
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Evidence
+      description: File paths, lines, report artifacts, links.
+      placeholder: path/to/file.rs:42, report URL, screenshot URL
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Proposed Change
+      description: Matcher/action/schema changes and rollout suggestion.
+
+  - type: checkboxes
+    attributes:
+      label: Checklist
+      options:
+        - label: I linked all relevant issues/PRs.
+          required: true
+        - label: I included enough evidence to reproduce the behavior.
+          required: true

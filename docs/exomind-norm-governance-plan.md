@@ -113,3 +113,18 @@
 - 本地实时校验引擎（MVP）。
 - CI 审查 Gate 与报告模板。
 - 规则演进提案模板与审批流程。
+
+## 13. 里程碑交付快照（2026-03-06）
+对应 issue：`#6` `#7` `#8` `#9`
+
+- `#7` Rule Catalog 模板与样例
+  - `docs/exomind-rule-catalog-template.json`
+  - `docs/exomind-rule-catalog-spec.md`
+- `#9` 冲突裁决接口草案
+  - `docs/exomind-rule-conflict-resolution-interface.md`
+- `#6` CI Warn 模式入口与基础报告
+  - `scripts/exomind_norm_governance_warn.py`
+  - `.github/workflows/exomind-norm-governance-warn.yml`
+- `#8` 误报/漏报反馈闭环模板
+  - `docs/exomind-norm-feedback-template.md`
+  - `.github/ISSUE_TEMPLATE/7-norm-rule-feedback.yml`

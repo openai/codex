@@ -1,0 +1,47 @@
+name: exomind-norm-governance-warn
+
+on:
+  pull_request:
+    paths:
+      - "docs/exomind-*.md"
+      - "docs/exomind-rule-catalog-template.json"
+      - "scripts/exomind_norm_governance_warn.py"
+      - ".github/ISSUE_TEMPLATE/7-norm-rule-feedback.yml"
+      - ".github/workflows/exomind-norm-governance-warn.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/exomind-*.md"
+      - "docs/exomind-rule-catalog-template.json"
+      - "scripts/exomind_norm_governance_warn.py"
+      - ".github/ISSUE_TEMPLATE/7-norm-rule-feedback.yml"
+      - ".github/workflows/exomind-norm-governance-warn.yml"
+
+jobs:
+  norm-governance-warn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Generate warn-only governance report
+        run: |
+          mkdir -p artifacts
+          python3 scripts/exomind_norm_governance_warn.py \
+            --catalog docs/exomind-rule-catalog-template.json \
+            --markdown-out artifacts/norm-governance-report.md \
+            --json-out artifacts/norm-governance-report.json
+
+      - name: Upload governance report artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: norm-governance-report
+          path: artifacts/norm-governance-report.*

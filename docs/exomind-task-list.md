@@ -50,10 +50,20 @@
 - [-] 想法一的长期治理任务持续拆解并通过 issue/PR 追踪至完成
 
 ## G. 下一阶段（未完成）
-- [ ] 设计并提交 Rule Catalog 模板（含 L1/L2/L3 示例，Issue `#7`）
-- [ ] 定义规则冲突裁决接口草案（映射到 Codex CLI 执行点，Issue `#9`）
-- [ ] 建立 CI “warn 模式”入口并输出基础报告格式（Issue `#6`）
-- [ ] 形成误报/漏报反馈闭环模板（issue/PR 模板或文档，Issue `#8`）
+- [x] 设计并提交 Rule Catalog 模板（含 L1/L2/L3 示例，Issue `#7`）
+- [x] 定义规则冲突裁决接口草案（映射到 Codex CLI 执行点，Issue `#9`）
+- [x] 建立 CI “warn 模式”入口并输出基础报告格式（Issue `#6`）
+- [x] 形成误报/漏报反馈闭环模板（issue/PR 模板或文档，Issue `#8`）
 
 ## H. 当前活跃 PR
-- [-] 跟踪同步 PR：`#5`（任务清单/issue 状态同步）
+- [x] 跟踪同步 PR：`#5`（任务清单/issue 状态同步，已合并）
+- [-] 里程碑落地 PR：待创建（#6/#7/#8/#9 交付物）
+
+## I. Idea1 子任务实施（本轮）
+- [x] `#7` 规则目录模板与样例：`docs/exomind-rule-catalog-template.json`
+- [x] `#7` 规则目录规范文档：`docs/exomind-rule-catalog-spec.md`
+- [x] `#9` 冲突裁决接口草案：`docs/exomind-rule-conflict-resolution-interface.md`
+- [x] `#6` warn 模式脚本：`scripts/exomind_norm_governance_warn.py`
+- [x] `#6` warn 模式 workflow：`.github/workflows/exomind-norm-governance-warn.yml`
+- [x] `#8` 反馈流程模板文档：`docs/exomind-norm-feedback-template.md`
+- [x] `#8` 反馈 issue 模板：`.github/ISSUE_TEMPLATE/7-norm-rule-feedback.yml`
