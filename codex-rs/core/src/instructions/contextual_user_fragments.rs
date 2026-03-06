@@ -1,3 +1,9 @@
+//! Contextual-user model-visible fragments used by initial-context assembly.
+//!
+//! These fragments represent injected user-role context (for example AGENTS.md,
+//! skills, and plugin guidance) and include turn-context extraction/diffing for
+//! AGENTS.md instructions.
+
 use serde::Deserialize;
 use serde::Serialize;
 

@@ -1,4 +1,4 @@
-mod fragments;
+mod developer_update_fragments;
 
 use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
@@ -14,11 +14,12 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use std::marker::PhantomData;
 
-// Keep fragment-specific diff/render logic in `updates/fragments.rs` so this
-// file can focus on shared envelope wiring and message assembly.
-pub(crate) use fragments::build_model_instructions_update_item;
-pub(crate) use fragments::build_realtime_update_item;
-pub(crate) use fragments::personality_message_for;
+// Keep fragment-specific diff/render logic in
+// `updates/developer_update_fragments.rs` so this file can focus on shared
+// envelope wiring and message assembly.
+pub(crate) use developer_update_fragments::build_model_instructions_update_item;
+pub(crate) use developer_update_fragments::build_realtime_update_item;
+pub(crate) use developer_update_fragments::personality_message_for;
 
 // Adjacent ContentItems in a single message are effectively concatenated in
 // the model-visible token stream, so we inject an explicit separator between
@@ -119,7 +120,8 @@ pub(crate) fn build_settings_update_items(
     params: &TurnContextDiffParams<'_>,
 ) -> Vec<ResponseItem> {
     let mut developer_envelope = DeveloperEnvelopeBuilder::default();
-    for fragment in fragments::build_developer_update_texts(previous, next, params) {
+    for fragment in developer_update_fragments::build_developer_update_texts(previous, next, params)
+    {
         developer_envelope.push(DeveloperTextFragment::new(fragment));
     }
 

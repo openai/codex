@@ -1,3 +1,10 @@
+//! Developer-envelope model-visible fragments used by steady-state settings
+//! updates (`build_settings_update_items`).
+//!
+//! This module owns the turn-context diffing logic for developer-role context
+//! updates (permissions, collaboration mode, realtime, personality, and model
+//! switch guidance).
+
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::features::Feature;
