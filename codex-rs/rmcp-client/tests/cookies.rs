@@ -173,6 +173,7 @@ async fn streamable_http_client_replays_affinity_cookie_from_initialize_response
                     Ok(ElicitationResponse {
                         action: ElicitationAction::Accept,
                         content: Some(json!({})),
+                        meta: None,
                     })
                 }
                 .boxed()
