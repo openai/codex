@@ -34,7 +34,7 @@ prompt: string,
 /**
  * Spawn mode used for this agent.
  */
-spawn_mode: AgentSpawnMode,
+spawn_mode: AgentSpawnMode, 
 /**
  * Last known status of the new agent reported to the sender agent.
  */
