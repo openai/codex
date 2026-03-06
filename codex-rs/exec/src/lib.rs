@@ -437,6 +437,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,
+        disable_bundled_system_skills: false,
         client_name: "codex-exec".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,

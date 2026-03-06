@@ -130,6 +130,8 @@ pub struct InProcessStartArgs {
     pub session_source: SessionSource,
     /// Whether auth loading should honor the `CODEX_API_KEY` environment variable.
     pub enable_codex_api_key_env: bool,
+    /// Whether bundled system skills should be disabled for this runtime.
+    pub disable_bundled_system_skills: bool,
     /// Initialize params used for initial handshake.
     pub initialize: InitializeParams,
     /// Capacity used for all runtime queues (clamped to at least 1).
@@ -408,6 +410,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 enable_codex_api_key_env: args.enable_codex_api_key_env,
+                disable_bundled_system_skills: args.disable_bundled_system_skills,
             });
             let mut thread_created_rx = processor.thread_created_receiver();
             let mut session = ConnectionSessionState::default();
@@ -750,6 +753,7 @@ mod tests {
             config_warnings: Vec::new(),
             session_source,
             enable_codex_api_key_env: false,
+            disable_bundled_system_skills: false,
             initialize: InitializeParams {
                 client_info: ClientInfo {
                     name: "codex-in-process-test".to_string(),

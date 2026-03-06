@@ -186,6 +186,7 @@ impl TestCodexBuilder {
                 SessionSource::Exec,
                 Some(model_catalog),
                 CollaborationModesConfig::default(),
+                false,
             )
         } else {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
