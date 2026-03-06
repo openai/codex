@@ -189,32 +189,9 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode) {
-                let turn_item = match turn_item {
-                    TurnItem::ImageGeneration(mut image_item) => {
-                        match save_image_generation_result_to_cwd(
-                            &ctx.turn_context.cwd,
-                            &image_item.id,
-                            &image_item.result,
-                        )
-                        .await
-                        {
-                            Ok(path) => {
-                                image_item.saved_path = Some(path.to_string_lossy().into_owned());
-                            }
-                            Err(err) => {
-                                tracing::warn!(
-                                    call_id = %image_item.id,
-                                    cwd = %ctx.turn_context.cwd.display(),
-                                    "failed to save generated image: {err}"
-                                );
-                            }
-                        }
-                        TurnItem::ImageGeneration(image_item)
-                    }
-                    other => other,
-                };
-
+            if let Some(turn_item) =
+                handle_non_tool_response_item(&item, plan_mode, Some(&ctx.turn_context.cwd)).await
+            {
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -298,9 +275,10 @@ pub(crate) async fn handle_output_item_done(
     Ok(output)
 }
 
-pub(crate) fn handle_non_tool_response_item(
+pub(crate) async fn handle_non_tool_response_item(
     item: &ResponseItem,
     plan_mode: bool,
+    image_output_cwd: Option<&Path>,
 ) -> Option<TurnItem> {
     debug!(?item, "Output item");
 
@@ -321,6 +299,24 @@ pub(crate) fn handle_non_tool_response_item(
                 let stripped = strip_hidden_assistant_markup(&combined, plan_mode);
                 agent_message.content =
                     vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
+            }
+            if let TurnItem::ImageGeneration(image_item) = &mut turn_item
+                && let Some(cwd) = image_output_cwd
+            {
+                match save_image_generation_result_to_cwd(cwd, &image_item.id, &image_item.result)
+                    .await
+                {
+                    Ok(path) => {
+                        image_item.saved_path = Some(path.to_string_lossy().into_owned());
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            call_id = %image_item.id,
+                            cwd = %cwd.display(),
+                            "failed to save generated image: {err}"
+                        );
+                    }
+                }
             }
             Some(turn_item)
         }
@@ -404,12 +400,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn handle_non_tool_response_item_strips_citations_from_assistant_message() {
+    #[tokio::test]
+    async fn handle_non_tool_response_item_strips_citations_from_assistant_message() {
         let item = assistant_output_text("hello<oai-mem-citation>doc1</oai-mem-citation> world");
 
-        let turn_item =
-            handle_non_tool_response_item(&item, false).expect("assistant message should parse");
+        let turn_item = handle_non_tool_response_item(&item, false, None)
+            .await
+            .expect("assistant message should parse");
 
         let TurnItem::AgentMessage(agent_message) = turn_item else {
             panic!("expected agent message");
