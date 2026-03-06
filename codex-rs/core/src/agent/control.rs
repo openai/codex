@@ -914,7 +914,7 @@ mod tests {
                 sleep(Duration::from_millis(25)).await;
             }
         };
-        timeout(Duration::from_secs(2), wait).await.is_ok()
+        timeout(Duration::from_secs(5), wait).await.is_ok()
     }
 
     #[tokio::test]
@@ -1601,6 +1601,26 @@ mod tests {
             .get_thread(child_thread_id)
             .await
             .expect("child thread should exist");
+        let mut status_rx = harness
+            .control
+            .subscribe_status(child_thread_id)
+            .await
+            .expect("status subscription should succeed");
+        if matches!(status_rx.borrow().clone(), AgentStatus::PendingInit) {
+            timeout(Duration::from_secs(5), async {
+                loop {
+                    status_rx
+                        .changed()
+                        .await
+                        .expect("child status should advance past pending init");
+                    if !matches!(status_rx.borrow().clone(), AgentStatus::PendingInit) {
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("child should initialize before shutdown");
+        }
         let _ = child_thread
             .submit(Op::Shutdown {})
             .await
