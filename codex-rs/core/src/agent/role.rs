@@ -918,8 +918,8 @@ enabled = false
         let spec = spawn_tool_spec::build(&user_defined_roles);
 
         assert!(spec.contains("researcher: no description"));
-        assert!(spec.contains("explorer: {\nuser override\n}"));
-        assert!(spec.contains("default: {\nDefault agent.\n}"));
+        assert!(spec.contains("explorer: {\nuser override\nDefault spawn mode: fork\n}"));
+        assert!(spec.contains("default: {\nDefault agent.\nDefault spawn mode: fork\n}"));
         assert!(!spec.contains("Explorers are fast and authoritative."));
     }
 
@@ -936,9 +936,11 @@ enabled = false
         )]);
 
         let spec = spawn_tool_spec::build(&user_defined_roles);
-        let user_index = spec.find("aaa: {\nfirst\n}").expect("find user role");
+        let user_index = spec
+            .find("aaa: {\nfirst\nDefault spawn mode: fork\n}")
+            .expect("find user role");
         let built_in_index = spec
-            .find("default: {\nDefault agent.\n}")
+            .find("default: {\nDefault agent.\nDefault spawn mode: fork\n}")
             .expect("find built-in role");
 
         assert!(user_index < built_in_index);

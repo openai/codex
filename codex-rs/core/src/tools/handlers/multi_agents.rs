@@ -1412,7 +1412,7 @@ fn apply_spawn_agent_runtime_overrides(
 }
 
 fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
-    if child_depth >= config.agent_max_depth {
+    if child_depth > config.agent_max_depth {
         let _ = config.features.disable(Feature::Collab);
     }
 }
@@ -1639,7 +1639,7 @@ mod tests {
             Arc::new(session),
             Arc::new(turn),
             "spawn_agent",
-            function_payload(json!({"message": "hello"})),
+            function_payload(json!({"message": "hello", "spawn_mode": "spawn"})),
         );
         let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("spawn should fail without a manager");
@@ -1785,11 +1785,13 @@ mod tests {
             agent_role: None,
         });
 
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
         let invocation = invocation(
-            Arc::new(session),
-            Arc::new(turn),
+            Arc::clone(&session),
+            Arc::clone(&turn),
             "spawn_agent",
-            function_payload(json!({"message": "hello"})),
+            function_payload(json!({"message": "hello", "spawn_mode": "spawn"})),
         );
         let output = MultiAgentHandler
             .handle(invocation)
@@ -1805,7 +1807,11 @@ mod tests {
         };
         let result: SpawnAgentResult =
             serde_json::from_str(&content).expect("spawn_agent result should be json");
-        assert!(!result.agent_id.is_empty());
+        let agent_id = agent_id(&result.agent_id).expect("agent_id should be valid");
+        assert!(
+            manager.get_thread(agent_id).await.is_ok(),
+            "spawned agent thread should exist"
+        );
         assert!(
             result
                 .nickname
@@ -2523,7 +2529,7 @@ mod tests {
         expected.model_provider = turn.provider.clone();
         expected.model_reasoning_effort = turn.reasoning_effort;
         expected.model_reasoning_summary = Some(turn.reasoning_summary);
-        expected.developer_instructions = turn.developer_instructions.clone();
+        expected.developer_instructions = turn.config.developer_instructions.clone();
         expected.compact_prompt = turn.compact_prompt.clone();
         expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
         expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
