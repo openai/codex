@@ -3,9 +3,8 @@ use std::path::Path;
 
 use pretty_assertions::assert_eq;
 
-use crate::combine_output_receivers;
 use crate::spawn_pipe_process;
-use crate::spawn_pipe_process_no_stdin;
+use crate::spawn_pipe_process_split;
 use crate::spawn_pty_process;
 use crate::SpawnedProcess;
 use crate::TerminalSize;
@@ -59,14 +58,6 @@ fn split_stdout_stderr_command() -> String {
     "printf 'split-out\\n'; printf 'split-err\\n' >&2".to_string()
 }
 
-async fn collect_split_output(mut output_rx: tokio::sync::mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
-    let mut collected = Vec::new();
-    while let Some(chunk) = output_rx.recv().await {
-        collected.extend_from_slice(&chunk);
-    }
-    collected
-}
-
 fn combine_spawned_output(
     spawned: SpawnedProcess,
 ) -> (
@@ -76,15 +67,18 @@ fn combine_spawned_output(
 ) {
     let SpawnedProcess {
         session,
-        stdout_rx,
-        stderr_rx,
+        output_rx,
         exit_rx,
     } = spawned;
-    (
-        session,
-        combine_output_receivers(stdout_rx, stderr_rx),
-        exit_rx,
-    )
+    (session, output_rx, exit_rx)
+}
+
+async fn collect_split_output(mut output_rx: tokio::sync::mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
+    let mut collected = Vec::new();
+    while let Some(chunk) = output_rx.recv().await {
+        collected.extend_from_slice(&chunk);
+    }
+    collected
 }
 
 async fn collect_output_until_exit(
@@ -319,6 +313,106 @@ async fn pipe_process_round_trips_stdin() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_process_preserves_initial_output_for_quick_exit() -> anyhow::Result<()> {
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let script = if cfg!(windows) {
+        "echo stdout-line & echo stderr-line 1>&2"
+    } else {
+        "printf 'stdout-line\\n'; printf 'stderr-line\\n' >&2"
+    };
+    let (program, args) = shell_command(script);
+
+    for _ in 0..32 {
+        let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
+        let (output, code) =
+            collect_output_until_exit(spawned.output_rx, spawned.exit_rx, 2_000).await;
+        let text = String::from_utf8_lossy(&output);
+        assert_eq!(code, 0, "expected quick pipe process to exit cleanly");
+        assert!(
+            text.contains("stdout-line"),
+            "expected stdout in merged output: {text:?}"
+        );
+        assert!(
+            text.contains("stderr-line"),
+            "expected stderr in merged output: {text:?}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_process_split_preserves_stdout_and_stderr() -> anyhow::Result<()> {
+    let Some(python) = find_python() else {
+        eprintln!("python not found; skipping pipe_process_split_preserves_stdout_and_stderr");
+        return Ok(());
+    };
+
+    let args = vec![
+        "-u".to_string(),
+        "-c".to_string(),
+        "import sys; print('stdout-line'); sys.stderr.write('stderr-line\\n'); sys.stderr.flush()"
+            .to_string(),
+    ];
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let spawned = spawn_pipe_process_split(&python, &args, Path::new("."), &env_map, &None).await?;
+    let crate::process::SpawnedProcessSplit {
+        output_rx,
+        stdout_rx,
+        stderr_rx,
+        exit_rx,
+        ..
+    } = spawned;
+    let stdout_task = tokio::spawn(async move { collect_split_output(stdout_rx).await });
+    let stderr_task = tokio::spawn(async move { collect_split_output(stderr_rx).await });
+    let merged_task =
+        tokio::spawn(async move { collect_output_until_exit(output_rx, exit_rx, 5_000).await });
+
+    let stdout = stdout_task.await?;
+    let stderr = stderr_task.await?;
+    let (merged, code) = merged_task.await?;
+
+    assert_eq!(code, 0, "expected python -c to exit cleanly");
+    assert_eq!(String::from_utf8_lossy(&stdout), "stdout-line\n");
+    assert_eq!(String::from_utf8_lossy(&stderr), "stderr-line\n");
+    let merged = String::from_utf8_lossy(&merged);
+    assert!(merged.contains("stdout-line"));
+    assert!(merged.contains("stderr-line"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_process_split_preserves_initial_merged_output_for_quick_exit() -> anyhow::Result<()> {
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let script = if cfg!(windows) {
+        "echo stdout-line & echo stderr-line 1>&2"
+    } else {
+        "printf 'stdout-line\\n'; printf 'stderr-line\\n' >&2"
+    };
+    let (program, args) = shell_command(script);
+
+    for _ in 0..32 {
+        let spawned =
+            spawn_pipe_process_split(&program, &args, Path::new("."), &env_map, &None).await?;
+        let (output, code) =
+            collect_output_until_exit(spawned.output_rx, spawned.exit_rx, 2_000).await;
+        let text = String::from_utf8_lossy(&output);
+        assert_eq!(code, 0, "expected quick split pipe process to exit cleanly");
+        assert!(
+            text.contains("stdout-line"),
+            "expected stdout in merged output: {text:?}"
+        );
+        assert!(
+            text.contains("stderr-line"),
+            "expected stderr in merged output: {text:?}"
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_process_detaches_from_parent_session() -> anyhow::Result<()> {
@@ -443,12 +537,13 @@ async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()>
         shell_command(&split_stdout_stderr_command())
     };
     let spawned =
-        spawn_pipe_process_no_stdin(&program, &args, Path::new("."), &env_map, &None).await?;
-    let SpawnedProcess {
+        spawn_pipe_process_split(&program, &args, Path::new("."), &env_map, &None).await?;
+    let crate::process::SpawnedProcessSplit {
         session: _session,
         stdout_rx,
         stderr_rx,
         exit_rx,
+        ..
     } = spawned;
 
     let stdout_task = tokio::spawn(async move { collect_split_output(stdout_rx).await });

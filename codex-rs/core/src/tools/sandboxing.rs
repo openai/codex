@@ -7,6 +7,7 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
+use crate::features::Feature;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
@@ -320,7 +321,7 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 pub(crate) struct SandboxAttempt<'a> {
     pub sandbox: crate::exec::SandboxType,
     pub policy: &'a crate::protocol::SandboxPolicy,
-    pub file_system_policy: &'a FileSystemSandboxPolicy,
+    pub file_system_policy: FileSystemSandboxPolicy,
     pub network_policy: NetworkSandboxPolicy,
     pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
@@ -330,8 +331,52 @@ pub(crate) struct SandboxAttempt<'a> {
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
 }
 
+pub(crate) fn has_managed_network_requirements(turn_ctx: &TurnContext) -> bool {
+    turn_ctx
+        .config
+        .config_layer_stack
+        .requirements_toml()
+        .network
+        .is_some()
+}
+
 impl<'a> SandboxAttempt<'a> {
-    pub fn env_for(
+    pub(crate) fn initial_for_turn(
+        manager: &'a SandboxManager,
+        turn_ctx: &'a TurnContext,
+        preference: SandboxablePreference,
+        sandbox_override: SandboxOverride,
+    ) -> Self {
+        let enforce_managed_network = has_managed_network_requirements(turn_ctx);
+        let policy = turn_ctx.sandbox_policy.get();
+        let file_system_policy = FileSystemSandboxPolicy::from(policy);
+        let network_policy = NetworkSandboxPolicy::from(policy);
+        let sandbox = match sandbox_override {
+            SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
+            SandboxOverride::NoOverride => manager.select_initial(
+                &file_system_policy,
+                network_policy,
+                preference,
+                turn_ctx.windows_sandbox_level,
+                enforce_managed_network,
+            ),
+        };
+
+        Self {
+            sandbox,
+            policy,
+            file_system_policy,
+            network_policy,
+            enforce_managed_network,
+            manager,
+            sandbox_cwd: &turn_ctx.cwd,
+            codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
+            use_linux_sandbox_bwrap: turn_ctx.features.enabled(Feature::UseLinuxSandboxBwrap),
+            windows_sandbox_level: turn_ctx.windows_sandbox_level,
+        }
+    }
+
+    pub(crate) fn env_for(
         &self,
         spec: CommandSpec,
         network: Option<&NetworkProxy>,
@@ -340,7 +385,7 @@ impl<'a> SandboxAttempt<'a> {
             .transform(crate::sandboxing::SandboxTransformRequest {
                 spec,
                 policy: self.policy,
-                file_system_policy: self.file_system_policy,
+                file_system_policy: &self.file_system_policy,
                 network_policy: self.network_policy,
                 sandbox: self.sandbox,
                 enforce_managed_network: self.enforce_managed_network,
