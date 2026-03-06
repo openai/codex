@@ -1423,7 +1423,7 @@ pub struct AgentRoleToml {
 impl From<ToolsToml> for Tools {
     fn from(tools_toml: ToolsToml) -> Self {
         Self {
-            web_search: tools_toml.web_search,
+            web_search: tools_toml.web_search.is_some().then_some(true),
             view_image: tools_toml.view_image,
         }
     }

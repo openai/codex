@@ -71,7 +71,6 @@ impl From<ConfigProfile> for codex_app_server_protocol::Profile {
             model_reasoning_effort: config_profile.model_reasoning_effort,
             model_reasoning_summary: config_profile.model_reasoning_summary,
             model_verbosity: config_profile.model_verbosity,
-            tools: config_profile.tools.map(Into::into),
             chatgpt_base_url: config_profile.chatgpt_base_url,
         }
     }
