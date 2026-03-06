@@ -538,12 +538,12 @@ impl SubagentStatusCell {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     pub(crate) fn state_handle(&self) -> Arc<Mutex<SubagentPanelState>> {
         Arc::clone(&self.state)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     pub(crate) fn matches_state(&self, other: &Arc<Mutex<SubagentPanelState>>) -> bool {
         Arc::ptr_eq(&self.state, other)
     }
@@ -612,7 +612,7 @@ impl HistoryCell for SubagentStatusCell {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 pub(crate) fn new_subagent_spawned_cell(name: &str, prompt_preview: &str) -> PlainHistoryCell {
     let mut lines = Vec::new();
     lines.push(Line::from(vec![
@@ -632,7 +632,7 @@ pub(crate) fn new_subagent_spawned_cell(name: &str, prompt_preview: &str) -> Pla
     PlainHistoryCell::new(lines)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 pub(crate) fn new_subagent_update_cell(
     name: &str,
     status: &AgentStatus,
@@ -690,7 +690,7 @@ fn should_shimmer(agent: &SubagentPanelAgent, now: Instant) -> bool {
         && now.saturating_duration_since(agent.latest_update_at) <= SUBAGENT_SHIMMER_WINDOW
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 fn status_label_span(status: &AgentStatus) -> Span<'static> {
     match status {
         AgentStatus::PendingInit | AgentStatus::Running => "running".cyan().bold(),
