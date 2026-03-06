@@ -3,6 +3,7 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::default_project_root_markers;
 use crate::config_loader::merge_toml_values;
 use crate::config_loader::project_root_markers_from_config;
+use crate::config_loader::trust_disabled_project_dirs_from_layer_stack;
 use crate::plugins::plugin_namespace_for_skill_path;
 use crate::skills::model::SkillDependencies;
 use crate::skills::model::SkillError;
@@ -213,7 +214,13 @@ fn skill_roots_with_home_dir(
         path,
         scope: SkillScope::User,
     }));
-    roots.extend(repo_agents_skill_roots(config_layer_stack, cwd));
+    let trust_disabled_project_dirs =
+        trust_disabled_project_dirs_from_layer_stack(config_layer_stack, cwd);
+    roots.extend(repo_agents_skill_roots(
+        config_layer_stack,
+        cwd,
+        &trust_disabled_project_dirs,
+    ));
     dedupe_skill_roots_by_path(&mut roots);
     roots
 }
@@ -225,7 +232,7 @@ fn skill_roots_from_layer_stack_inner(
     let mut roots = Vec::new();
 
     for layer in
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, true)
+        config_layer_stack.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, false)
     {
         let Some(config_folder) = layer.config_folder() else {
             continue;
@@ -279,12 +286,22 @@ fn skill_roots_from_layer_stack_inner(
     roots
 }
 
-fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) -> Vec<SkillRoot> {
+fn repo_agents_skill_roots(
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &Path,
+    trust_disabled_project_dirs: &HashSet<PathBuf>,
+) -> Vec<SkillRoot> {
     let project_root_markers = project_root_markers_from_stack(config_layer_stack);
     let project_root = find_project_root(cwd, &project_root_markers);
     let dirs = dirs_between_project_root_and_cwd(cwd, &project_root);
     let mut roots = Vec::new();
     for dir in dirs {
+        let normalized_dir = canonicalize_path(&dir).unwrap_or_else(|_| dir.clone());
+        if trust_disabled_project_dirs.contains(&dir)
+            || trust_disabled_project_dirs.contains(&normalized_dir)
+        {
+            continue;
+        }
         let agents_skills = dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
         if agents_skills.is_dir() {
             roots.push(SkillRoot {
@@ -995,7 +1012,7 @@ mod tests {
     }
 
     #[test]
-    fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Result<()> {
+    fn skill_roots_from_layer_stack_excludes_disabled_project_layers() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
 
         let home_folder = tmp.path().join("home");
@@ -1036,7 +1053,6 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                (SkillScope::Repo, dot_codex.join("skills")),
                 (SkillScope::User, user_folder.join("skills")),
                 (
                     SkillScope::User,
@@ -1050,6 +1066,80 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn repo_agents_skill_roots_are_gated_by_project_trust() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let codex_home = tmp.path().join("home");
+        fs::create_dir_all(&codex_home).expect("create codex home");
+
+        let repo_root = tmp.path().join("repo");
+        let nested = repo_root.join("workspace/member");
+        fs::create_dir_all(&nested).expect("create nested cwd");
+        mark_as_git_repo(&repo_root);
+
+        let repo_agents_skill = write_skill_at(
+            &repo_root.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
+            "root",
+            "repo-root-skill",
+            "from repo root",
+        );
+        let nested_agents_skill = write_skill_at(
+            &nested.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
+            "nested",
+            "nested-skill",
+            "from nested dir",
+        );
+
+        fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            toml::to_string(&ConfigToml {
+                projects: Some(HashMap::from([(
+                    repo_root.to_string_lossy().to_string(),
+                    ProjectConfig {
+                        trust_level: Some(TrustLevel::Untrusted),
+                    },
+                )])),
+                ..Default::default()
+            })
+            .expect("serialize config"),
+        )
+        .expect("write user config");
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(nested.clone()),
+                ..Default::default()
+            })
+            .build()
+            .await
+            .expect("build config");
+
+        let roots = super::skill_roots(&config.config_layer_stack, &config.cwd, Vec::new());
+        assert!(
+            roots
+                .iter()
+                .all(|root| !root.path.starts_with(repo_root.join(AGENTS_DIR_NAME))),
+            "untrusted repo .agents/skills roots should be skipped"
+        );
+
+        let outcome = load_skills_from_roots(roots);
+        assert!(
+            outcome
+                .skills
+                .iter()
+                .all(|skill| skill.path_to_skills_md != normalized(&repo_agents_skill)),
+            "repo root .agents skill should not load"
+        );
+        assert!(
+            outcome
+                .skills
+                .iter()
+                .all(|skill| skill.path_to_skills_md != normalized(&nested_agents_skill)),
+            "nested .agents skill should not load"
+        );
     }
 
     #[test]

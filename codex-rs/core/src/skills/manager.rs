@@ -18,6 +18,7 @@ use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
+use crate::config_loader::trust_disabled_project_dirs_from_layer_stack;
 use crate::plugins::PluginsManager;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::build_implicit_skill_path_indexes;
@@ -54,8 +55,11 @@ impl SkillsManager {
         }
 
         let roots = self.skill_roots_for_config(config);
-        let outcome =
-            finalize_skill_outcome(load_skills_from_roots(roots), &config.config_layer_stack);
+        let outcome = finalize_skill_outcome(
+            load_skills_from_roots(roots),
+            &config.config_layer_stack,
+            cwd,
+        );
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -152,7 +156,7 @@ impl SkillsManager {
                 .skills
                 .retain(|skill| skill.scope != SkillScope::System);
         }
-        let outcome = finalize_skill_outcome(outcome, &config_layer_stack);
+        let outcome = finalize_skill_outcome(outcome, &config_layer_stack, cwd);
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -220,11 +224,41 @@ fn disabled_paths_from_stack(
     disabled
 }
 
+fn trust_disabled_skill_paths(
+    skills: &[crate::skills::SkillMetadata],
+    config_layer_stack: &crate::config_loader::ConfigLayerStack,
+    cwd: &Path,
+) -> HashSet<PathBuf> {
+    let trust_disabled_project_dirs =
+        trust_disabled_project_dirs_from_layer_stack(config_layer_stack, cwd);
+    if trust_disabled_project_dirs.is_empty() {
+        return HashSet::new();
+    }
+
+    skills
+        .iter()
+        .filter(|skill| skill.scope == SkillScope::Repo)
+        .filter(|skill| {
+            skill
+                .path_to_skills_md
+                .ancestors()
+                .any(|ancestor| trust_disabled_project_dirs.contains(ancestor))
+        })
+        .map(|skill| skill.path_to_skills_md.clone())
+        .collect()
+}
+
 fn finalize_skill_outcome(
     mut outcome: SkillLoadOutcome,
     config_layer_stack: &crate::config_loader::ConfigLayerStack,
+    cwd: &Path,
 ) -> SkillLoadOutcome {
     outcome.disabled_paths = disabled_paths_from_stack(config_layer_stack);
+    outcome.disabled_paths.extend(trust_disabled_skill_paths(
+        &outcome.skills,
+        config_layer_stack,
+        cwd,
+    ));
     let (by_scripts_dir, by_doc_path) =
         build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
     outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
@@ -251,12 +285,17 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::config::ConfigOverrides;
+    use crate::config::ConfigToml;
+    use crate::config::ProjectConfig;
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirementsToml;
     use crate::plugins::PluginsManager;
+    use codex_protocol::config_types::TrustLevel;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -265,6 +304,15 @@ mod tests {
         fs::create_dir_all(&skill_dir).unwrap();
         let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+    }
+
+    fn write_skill_at(root: &Path, dir: &str, name: &str, description: &str) -> PathBuf {
+        let skill_dir = root.join(dir);
+        fs::create_dir_all(&skill_dir).unwrap();
+        let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
+        let skill_path = skill_dir.join("SKILL.md");
+        fs::write(&skill_path, content).unwrap();
+        skill_path
     }
 
     #[tokio::test]
@@ -519,6 +567,97 @@ enabled = false
         assert_eq!(
             disabled_paths_from_stack(&stack),
             HashSet::from([skill_path])
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_skill_outcome_disables_repo_skills_under_untrusted_project_dirs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let codex_home = tmp.path().join("home");
+        fs::create_dir_all(&codex_home).expect("create codex home");
+
+        let repo_root = tmp.path().join("repo");
+        let nested = repo_root.join("workspace/member");
+        fs::create_dir_all(&nested).expect("create nested cwd");
+        fs::write(repo_root.join(".git"), "gitdir: fake\n").expect("mark repo");
+
+        fs::write(
+            codex_home.join("config.toml"),
+            toml::to_string(&ConfigToml {
+                projects: Some(HashMap::from([(
+                    repo_root.to_string_lossy().to_string(),
+                    ProjectConfig {
+                        trust_level: Some(TrustLevel::Untrusted),
+                    },
+                )])),
+                ..Default::default()
+            })
+            .expect("serialize config"),
+        )
+        .expect("write user config");
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(nested.clone()),
+                ..Default::default()
+            })
+            .build()
+            .await
+            .expect("build config");
+
+        let repo_skill_path = write_skill_at(
+            &repo_root.join(".agents").join("skills"),
+            "repo",
+            "repo-skill",
+            "repo skill",
+        );
+        let user_skill_path = write_skill_at(
+            &codex_home.join("skills"),
+            "user",
+            "user-skill",
+            "user skill",
+        );
+
+        let outcome = finalize_skill_outcome(
+            crate::skills::SkillLoadOutcome {
+                skills: vec![
+                    crate::skills::SkillMetadata {
+                        name: "repo-skill".to_string(),
+                        description: "repo skill".to_string(),
+                        short_description: None,
+                        interface: None,
+                        dependencies: None,
+                        policy: None,
+                        permission_profile: None,
+                        path_to_skills_md: repo_skill_path.clone(),
+                        scope: SkillScope::Repo,
+                    },
+                    crate::skills::SkillMetadata {
+                        name: "user-skill".to_string(),
+                        description: "user skill".to_string(),
+                        short_description: None,
+                        interface: None,
+                        dependencies: None,
+                        policy: None,
+                        permission_profile: None,
+                        path_to_skills_md: user_skill_path.clone(),
+                        scope: SkillScope::User,
+                    },
+                ],
+                ..Default::default()
+            },
+            &config.config_layer_stack,
+            &config.cwd,
+        );
+
+        assert!(outcome.disabled_paths.contains(&repo_skill_path));
+        assert!(!outcome.disabled_paths.contains(&user_skill_path));
+        assert!(
+            outcome
+                .allowed_skills_for_implicit_invocation()
+                .iter()
+                .all(|skill| skill.path_to_skills_md != repo_skill_path)
         );
     }
 }
