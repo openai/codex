@@ -723,6 +723,30 @@
             },
             "method": {
               "enum": [
+                "plugin/list"
+              ],
+              "title": "Plugin/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/remote/list"
               ],
               "title": "Skills/remote/listRequestMethod",
@@ -11174,21 +11198,15 @@
       "PluginInstallParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "cwd": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "marketplaceName": {
-            "type": "string"
+          "marketplacePath": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "pluginName": {
             "type": "string"
           }
         },
         "required": [
-          "marketplaceName",
+          "marketplacePath",
           "pluginName"
         ],
         "title": "PluginInstallParams",
@@ -11197,6 +11215,104 @@
       "PluginInstallResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "PluginInstallResponse",
+        "type": "object"
+      },
+      "PluginListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cwds": {
+            "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces are considered.",
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "PluginListParams",
+        "type": "object"
+      },
+      "PluginListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "marketplaces": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginMarketplaceEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "marketplaces"
+        ],
+        "title": "PluginListResponse",
+        "type": "object"
+      },
+      "PluginMarketplaceEntry": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "plugins": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "plugins"
+        ],
+        "type": "object"
+      },
+      "PluginSource": {
+        "oneOf": [
+          {
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "local"
+                ],
+                "title": "LocalPluginSourceType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "type"
+            ],
+            "title": "LocalPluginSource",
+            "type": "object"
+          }
+        ]
+      },
+      "PluginSummary": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/definitions/v2/PluginSource"
+          }
+        },
+        "required": [
+          "enabled",
+          "name",
+          "source"
+        ],
         "type": "object"
       },
       "ProductSurface": {

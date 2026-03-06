@@ -7,17 +7,17 @@
     }
   },
   "properties": {
-    "marketplacePath": {
-      "$ref": "#/definitions/AbsolutePathBuf"
-    },
-    "pluginName": {
-      "type": "string"
+    "cwds": {
+      "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces are considered.",
+      "items": {
+        "$ref": "#/definitions/AbsolutePathBuf"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
     }
   },
-  "required": [
-    "marketplacePath",
-    "pluginName"
-  ],
-  "title": "PluginInstallParams",
+  "title": "PluginListParams",
   "type": "object"
 }
