@@ -4,15 +4,21 @@ Lightweight helpers for spawning interactive processes either under a PTY (pseud
 
 ## API surface
 
-- `spawn_pty_process(program, args, cwd, env, arg0)` → `SpawnedProcess`
+- `spawn_pty_process(program, args, cwd, env, arg0, size)` → `SpawnedProcess`
 - `spawn_pipe_process(program, args, cwd, env, arg0)` → `SpawnedProcess`
 - `spawn_pipe_process_no_stdin(program, args, cwd, env, arg0)` → `SpawnedProcess`
+- `pty::spawn_streaming_process(program, args, cwd, env, arg0, size, output_sink)` → `SpawnedStreamingProcess`
+- `pipe::spawn_streaming_process(program, args, cwd, env, arg0, stdin_mode, output_sink)` → `SpawnedStreamingProcess`
 - `conpty_supported()` → `bool` (Windows only; always true elsewhere)
+- `TerminalSize { rows, cols }` selects PTY dimensions in character cells.
 - `ProcessHandle` exposes:
   - `writer_sender()` → `mpsc::Sender<Vec<u8>>` (stdin)
   - `output_receiver()` → `broadcast::Receiver<Vec<u8>>` (stdout/stderr merged)
+  - `resize(TerminalSize)`
+  - `close_stdin()`
   - `has_exited()`, `exit_code()`, `terminate()`
-- `SpawnedProcess` bundles `handle`, `output_rx`, and `exit_rx` (oneshot exit code).
+- `SpawnedProcess` bundles `session`, `output_rx`, and `exit_rx` (oneshot exit code).
+- `SpawnedStreamingProcess` bundles `session` and `exit_rx`; callers own the output sink/receivers.
 
 ## Usage examples
 
@@ -20,6 +26,7 @@ Lightweight helpers for spawning interactive processes either under a PTY (pseud
 use std::collections::HashMap;
 use std::path::Path;
 use codex_utils_pty::spawn_pty_process;
+use codex_utils_pty::TerminalSize;
 
 # tokio_test::block_on(async {
 let env_map: HashMap<String, String> = std::env::vars().collect();
@@ -29,6 +36,7 @@ let spawned = spawn_pty_process(
     Path::new("."),
     &env_map,
     &None,
+    TerminalSize::default(),
 ).await?;
 
 let writer = spawned.session.writer_sender();

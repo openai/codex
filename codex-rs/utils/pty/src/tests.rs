@@ -3,8 +3,12 @@ use std::path::Path;
 
 use pretty_assertions::assert_eq;
 
+use crate::pipe::spawn_streaming_process as spawn_pipe_streaming_process;
+use crate::pipe::PipeStdinMode;
 use crate::spawn_pipe_process;
 use crate::spawn_pty_process;
+use crate::OutputSink;
+use crate::TerminalSize;
 
 fn find_python() -> Option<String> {
     for candidate in ["python3", "python"] {
@@ -219,7 +223,15 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
     };
 
     let env_map: HashMap<String, String> = std::env::vars().collect();
-    let spawned = spawn_pty_process(&python, &[], Path::new("."), &env_map, &None).await?;
+    let spawned = spawn_pty_process(
+        &python,
+        &[],
+        Path::new("."),
+        &env_map,
+        &None,
+        TerminalSize::default(),
+    )
+    .await?;
     let writer = spawned.session.writer_sender();
     let mut output_rx = spawned.output_rx;
     let newline = if cfg!(windows) { "\r\n" } else { "\n" };
@@ -327,7 +339,15 @@ async fn pipe_and_pty_share_interface() -> anyhow::Result<()> {
 
     let pipe =
         spawn_pipe_process(&pipe_program, &pipe_args, Path::new("."), &env_map, &None).await?;
-    let pty = spawn_pty_process(&pty_program, &pty_args, Path::new("."), &env_map, &None).await?;
+    let pty = spawn_pty_process(
+        &pty_program,
+        &pty_args,
+        Path::new("."),
+        &env_map,
+        &None,
+        TerminalSize::default(),
+    )
+    .await?;
 
     let timeout_ms = if cfg!(windows) { 10_000 } else { 3_000 };
     let (pipe_out, pipe_code) =
@@ -366,6 +386,39 @@ async fn pipe_drains_stderr_without_stdout_activity() -> anyhow::Result<()> {
 
     assert_eq!(code, 0, "expected python to exit cleanly");
     assert!(!output.is_empty(), "expected stderr output to be drained");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()> {
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let (program, args) = shell_command("printf 'split-out\\n'; printf 'split-err\\n' >&2");
+    let (output_sink, mut stdout_rx, mut stderr_rx) = OutputSink::guaranteed_separate();
+    let spawned = spawn_pipe_streaming_process(
+        &program,
+        &args,
+        Path::new("."),
+        &env_map,
+        &None,
+        PipeStdinMode::Null,
+        output_sink,
+    )
+    .await?;
+
+    let stdout = tokio::time::timeout(tokio::time::Duration::from_secs(2), stdout_rx.recv())
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for split stdout"))?
+        .ok_or_else(|| anyhow::anyhow!("split stdout receiver closed unexpectedly"))?;
+    let stderr = tokio::time::timeout(tokio::time::Duration::from_secs(2), stderr_rx.recv())
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for split stderr"))?
+        .ok_or_else(|| anyhow::anyhow!("split stderr receiver closed unexpectedly"))?;
+    let code = spawned.exit_rx.await.unwrap_or(-1);
+
+    assert_eq!(String::from_utf8_lossy(&stdout), "split-out\n");
+    assert_eq!(String::from_utf8_lossy(&stderr), "split-err\n");
+    assert_eq!(code, 0);
 
     Ok(())
 }
@@ -416,7 +469,15 @@ async fn pty_terminate_kills_background_children_in_same_process_group() -> anyh
     let marker = "__codex_bg_pid:";
     let script = format!("sleep 1000 & bg=$!; echo {marker}$bg; wait");
     let (program, args) = shell_command(&script);
-    let mut spawned = spawn_pty_process(&program, &args, Path::new("."), &env_map, &None).await?;
+    let mut spawned = spawn_pty_process(
+        &program,
+        &args,
+        Path::new("."),
+        &env_map,
+        &None,
+        TerminalSize::default(),
+    )
+    .await?;
 
     let bg_pid = match wait_for_marker_pid(&mut spawned.output_rx, marker, 2_000).await {
         Ok(pid) => pid,
