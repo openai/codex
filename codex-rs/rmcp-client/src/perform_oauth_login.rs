@@ -385,8 +385,10 @@ impl OauthLoginFlow {
             .context("failed to discover OAuth authorization metadata")?;
         let should_start_with_default_cimd_metadata = should_use_default_cimd_metadata(&metadata);
         let supports_default_cimd_metadata = client_id_metadata_document_supported(&metadata);
+        let callback_port_is_explicitly_set = callback_port.is_some();
+        let callback_url_is_explicitly_set = callback_url.is_some();
         let should_rebind_callback_for_cimd_fallback =
-            callback_port.is_none() && callback_url.is_none();
+            !callback_port_is_explicitly_set && !callback_url_is_explicitly_set;
 
         let bind_host = callback_bind_host(callback_url);
         let callback_port =
@@ -410,17 +412,29 @@ impl OauthLoginFlow {
                     && supports_default_cimd_metadata
                     && matches!(dynamic_registration_err, AuthError::RegistrationFailed(_)) =>
             {
+                let redirect_uri_is_compatible_with_default_cimd_metadata =
+                    validate_redirect_uri_for_default_cimd_metadata(
+                        &callback_listener.redirect_uri,
+                    )
+                    .is_ok();
+                let should_rebind_for_compatible_explicit_callback_url =
+                    !callback_port_is_explicitly_set
+                        && callback_url_is_explicitly_set
+                        && redirect_uri_is_compatible_with_default_cimd_metadata;
                 if should_rebind_callback_listener_for_cimd_fallback(
                     should_rebind_callback_for_cimd_fallback,
                     &callback_listener.redirect_uri,
-                ) {
+                ) || should_rebind_for_compatible_explicit_callback_url
+                {
+                    let explicit_callback_url = should_rebind_for_compatible_explicit_callback_url
+                        .then_some(callback_listener.redirect_uri.clone());
                     callback_listener = start_callback_listener(
                         "127.0.0.1",
                         Some(DEFAULT_CIMD_CALLBACK_PORT),
-                        None,
+                        explicit_callback_url.as_deref(),
                     )
                     .context("failed to rebind OAuth callback listener for CIMD fallback")?;
-                } else if !should_rebind_callback_for_cimd_fallback {
+                } else if callback_port_is_explicitly_set || callback_url_is_explicitly_set {
                     validate_redirect_uri_for_default_cimd_metadata(
                         &callback_listener.redirect_uri,
                     )?;
@@ -651,6 +665,7 @@ mod tests {
     use std::io::ErrorKind;
     use std::net::TcpListener;
     use std::sync::OnceLock;
+    use std::time::Duration;
     use tokio::task::JoinHandle;
 
     use super::CLIENT_ID_METADATA_DOCUMENT_SUPPORTED_FIELD;
@@ -1040,6 +1055,72 @@ mod tests {
             err.to_string()
                 .contains("incompatible with built-in Codex client metadata"),
             "unexpected oauth setup error: {err:#}"
+        );
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn oauth_login_fallback_rebinds_compatible_explicit_callback_without_port() {
+        let _lock = callback_port_test_lock().lock().await;
+        let (server_url, server_handle) = start_oauth_metadata_server(true, true, true).await;
+
+        let login_handle = perform_oauth_login_return_url(
+            "rmcp-http",
+            &server_url,
+            OAuthCredentialsStoreMode::File,
+            None,
+            None,
+            &[],
+            None,
+            Some(1),
+            None,
+            Some(DEFAULT_CIMD_REDIRECT_URI_CALLBACK),
+        )
+        .await
+        .expect("oauth login should start with compatible explicit callback URL");
+        let (authorization_url, completion) = login_handle.into_parts();
+
+        let parsed = Url::parse(&authorization_url).expect("authorization URL should parse");
+        let params = parsed
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            params.get("redirect_uri").map(std::convert::AsRef::as_ref),
+            Some(DEFAULT_CIMD_REDIRECT_URI_CALLBACK)
+        );
+        let state = params
+            .get("state")
+            .map(std::convert::AsRef::as_ref)
+            .expect("authorization URL should include state");
+
+        let mut callback_url =
+            Url::parse(DEFAULT_CIMD_REDIRECT_URI_CALLBACK).expect("callback URL should parse");
+        callback_url
+            .query_pairs_mut()
+            .append_pair("code", "test-code")
+            .append_pair("state", state);
+        let callback_response = reqwest::get(callback_url)
+            .await
+            .expect("callback request should reach local listener");
+        assert_eq!(callback_response.status(), StatusCode::OK);
+        let callback_response_body = callback_response
+            .text()
+            .await
+            .expect("callback response body should be readable");
+        assert_eq!(
+            callback_response_body,
+            "Authentication complete. You may close this window."
+        );
+
+        let err = tokio::time::timeout(Duration::from_secs(5), completion)
+            .await
+            .expect("oauth completion should resolve after callback")
+            .expect("oauth completion receiver should resolve")
+            .expect_err("oauth completion should fail in test without token endpoint");
+        assert!(
+            err.to_string().contains("failed to handle OAuth callback"),
+            "unexpected oauth completion error: {err:#}"
         );
 
         server_handle.abort();
