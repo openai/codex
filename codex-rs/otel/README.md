@@ -2,10 +2,11 @@
 
 `codex-otel` is the OpenTelemetry integration crate for Codex. It provides:
 
-- Trace/log/metrics exporters and tracing subscriber layers (`codex_otel::otel_provider`).
-- A structured event helper (`codex_otel::OtelManager`).
-- OpenTelemetry metrics support via OTLP exporters (`codex_otel::metrics`).
-- A metrics facade on `OtelManager` so tracing + metrics share metadata.
+- Provider wiring for log/trace/metric exporters (`codex_otel::OtelProvider`,
+  `codex_otel::provider`, and the compatibility shim `codex_otel::otel_provider`).
+- Session-scoped business event emission via `codex_otel::OtelManager`.
+- Low-level metrics APIs via `codex_otel::metrics`.
+- Trace-context helpers via `codex_otel::trace_context` and crate-root re-exports.
 
 ## Tracing and logs
 
@@ -17,7 +18,7 @@ registry:
 use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;
 use codex_otel::config::OtelSettings;
-use codex_otel::otel_provider::OtelProvider;
+use codex_otel::OtelProvider;
 use tracing_subscriber::prelude::*;
 
 let settings = OtelSettings {
@@ -51,7 +52,8 @@ if let Some(provider) = OtelProvider::from(&settings)? {
 ## OtelManager (events)
 
 `OtelManager` adds consistent metadata to tracing events and helps record
-Codex-specific events.
+Codex-specific session events. Rich session/business events should go through
+`OtelManager`; subsystem-owned audit events can stay with the owning subsystem.
 
 ```rust
 use codex_otel::OtelManager;
@@ -63,6 +65,7 @@ let manager = OtelManager::new(
     account_id,
     account_email,
     auth_mode,
+    originator,
     log_user_prompts,
     terminal_type,
     session_source,
@@ -117,6 +120,15 @@ let metrics = MetricsClient::new(MetricsConfig::in_memory(
 ))?;
 metrics.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
 metrics.shutdown()?; // flushes in-memory exporter
+```
+
+## Trace context
+
+Trace propagation helpers remain separate from the session event emitter:
+
+```rust
+use codex_otel::current_span_w3c_trace_context;
+use codex_otel::set_parent_from_w3c_trace_context;
 ```
 
 ## Shutdown
