@@ -548,6 +548,7 @@
       "oneOf": [
         {
           "properties": {
+            "_meta": true,
             "message": {
               "type": "string"
             },
@@ -568,6 +569,7 @@
         },
         {
           "properties": {
+            "_meta": true,
             "elicitation_id": {
               "type": "string"
             },
@@ -2024,6 +2026,13 @@
             },
             "server_name": {
               "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this elicitation belongs to, when known.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -7829,6 +7838,13 @@
         },
         "server_name": {
           "type": "string"
+        },
+        "turn_id": {
+          "description": "Turn ID that this elicitation belongs to, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "type": {
           "enum": [

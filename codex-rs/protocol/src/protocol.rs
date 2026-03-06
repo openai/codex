@@ -334,6 +334,9 @@ pub enum Op {
         /// Structured user input supplied for accepted elicitations.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         content: Option<Value>,
+        /// Optional client metadata associated with the elicitation response.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        meta: Option<Value>,
     },
 
     /// Resolve a request_user_input tool call.

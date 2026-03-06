@@ -42,6 +42,7 @@ use std::time::Duration;
 
 mod app_link_view;
 mod approval_overlay;
+mod mcp_server_elicitation;
 mod multi_select_picker;
 mod request_user_input;
 mod status_line_setup;
@@ -49,6 +50,8 @@ pub(crate) use app_link_view::AppLinkView;
 pub(crate) use app_link_view::AppLinkViewParams;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
+pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
+pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 mod bottom_pane_view;
 
@@ -916,6 +919,37 @@ impl BottomPane {
         self.set_composer_input_enabled(
             false,
             Some("Answer the questions to continue.".to_string()),
+        );
+        self.push_view(Box::new(modal));
+    }
+
+    pub(crate) fn push_mcp_server_elicitation_request(
+        &mut self,
+        request: McpServerElicitationFormRequest,
+    ) {
+        let request = if let Some(view) = self.view_stack.last_mut() {
+            match view.try_consume_mcp_server_elicitation_request(request) {
+                Some(request) => request,
+                None => {
+                    self.request_redraw();
+                    return;
+                }
+            }
+        } else {
+            request
+        };
+
+        let modal = McpServerElicitationOverlay::new(
+            request,
+            self.app_event_tx.clone(),
+            self.has_input_focus,
+            self.enhanced_keys_supported,
+            self.disable_paste_burst,
+        );
+        self.pause_status_timer_for_modal();
+        self.set_composer_input_enabled(
+            false,
+            Some("Respond to the MCP server request to continue.".to_string()),
         );
         self.push_view(Box::new(modal));
     }
