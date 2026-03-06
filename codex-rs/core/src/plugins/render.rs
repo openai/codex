@@ -1,9 +1,9 @@
-use crate::instructions::PluginInstructions;
+use crate::instructions::PluginsInstructions;
 use crate::plugins::PluginCapabilitySummary;
 
 pub(crate) fn render_plugins_instructions(
     plugins: &[PluginCapabilitySummary],
-) -> Option<PluginInstructions> {
+) -> Option<PluginsInstructions> {
     if plugins.is_empty() {
         return None;
     }
@@ -30,7 +30,7 @@ pub(crate) fn render_plugins_instructions(
             .to_string(),
     );
 
-    Some(PluginInstructions {
+    Some(PluginsInstructions {
         text: lines.join("\n"),
     })
 }
