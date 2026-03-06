@@ -16,6 +16,7 @@ export type { AppListUpdatedNotification } from "./AppListUpdatedNotification";
 export type { AppMetadata } from "./AppMetadata";
 export type { AppReview } from "./AppReview";
 export type { AppScreenshot } from "./AppScreenshot";
+export type { AppSummary } from "./AppSummary";
 export type { AppToolApproval } from "./AppToolApproval";
 export type { AppToolsConfig } from "./AppToolsConfig";
 export type { AppsConfig } from "./AppsConfig";

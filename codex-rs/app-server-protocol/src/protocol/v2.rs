@@ -1715,6 +1715,28 @@ pub struct AppInfo {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// EXPERIMENTAL - app metadata summary for plugin-install responses.
+pub struct AppSummary {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub install_url: Option<String>,
+}
+
+impl From<AppInfo> for AppSummary {
+    fn from(value: AppInfo) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            description: value.description,
+            install_url: value.install_url,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 /// EXPERIMENTAL - app list response.
 pub struct AppsListResponse {
     pub data: Vec<AppInfo>,
@@ -2604,7 +2626,9 @@ pub struct PluginInstallParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct PluginInstallResponse {}
+pub struct PluginInstallResponse {
+    pub apps_needing_auth: Vec<AppSummary>,
+}
 
 impl From<CoreSkillMetadata> for SkillMetadata {
     fn from(value: CoreSkillMetadata) -> Self {

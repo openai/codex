@@ -560,6 +560,34 @@
       ],
       "type": "object"
     },
+    "AppSummary": {
+      "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "installUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
     "AppToolApproval": {
       "enum": [
         "auto",
@@ -8411,6 +8439,17 @@
     },
     "PluginInstallResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "appsNeedingAuth": {
+          "items": {
+            "$ref": "#/definitions/AppSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "appsNeedingAuth"
+      ],
       "title": "PluginInstallResponse",
       "type": "object"
     },

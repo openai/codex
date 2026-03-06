@@ -523,10 +523,7 @@ fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) 
         }
     }
     loaded_plugin.mcp_servers = mcp_servers;
-    loaded_plugin.apps = load_apps_from_file(
-        plugin_root.as_path(),
-        &plugin_root.as_path().join(DEFAULT_APP_CONFIG_FILE),
-    );
+    loaded_plugin.apps = load_plugin_apps(plugin_root.as_path());
     loaded_plugin
 }
 
@@ -548,6 +545,10 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<PathBuf> {
     paths.sort_unstable();
     paths.dedup();
     paths
+}
+
+pub fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
+    load_apps_from_file(plugin_root, &plugin_root.join(DEFAULT_APP_CONFIG_FILE))
 }
 
 fn load_apps_from_file(plugin_root: &Path, app_config_path: &Path) -> Vec<AppConnectorId> {
