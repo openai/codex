@@ -638,7 +638,11 @@ jobs:
   winget:
     name: winget
     needs: release
+    # Only publish stable/mainline releases to WinGet; pre-releases include a
+    # '-' in the semver string (e.g., 1.2.3-alpha.1).
     if: ${{ !contains(needs.release.outputs.version, '-') }}
+    # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
+    # it does not execute Windows-only tooling, so Linux is sufficient.
     runs-on: ubuntu-latest
     permissions:
       contents: read
