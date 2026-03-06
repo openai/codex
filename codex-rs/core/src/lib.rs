@@ -110,6 +110,7 @@ pub mod terminal;
 mod tools;
 pub mod turn_diff_tracker;
 mod turn_metadata;
+mod turn_timing;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;

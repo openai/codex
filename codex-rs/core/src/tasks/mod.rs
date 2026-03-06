@@ -134,10 +134,10 @@ impl Session {
         let task_kind = task.kind();
         let span_name = task.span_name();
         let started_at = Instant::now();
-        {
-            let mut turn_timing_state = turn_context.turn_timing_state.lock().await;
-            turn_timing_state.mark_turn_started(started_at);
-        }
+        turn_context
+            .turn_timing_state
+            .mark_turn_started(started_at)
+            .await;
         let token_usage_at_turn_start = self.total_token_usage().await.unwrap_or_default();
 
         let cancellation_token = CancellationToken::new();
