@@ -89,6 +89,7 @@ async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> {
                     Ok(ElicitationResponse {
                         action: ElicitationAction::Accept,
                         content: Some(json!({})),
+                        meta: None,
                     })
                 }
                 .boxed()
