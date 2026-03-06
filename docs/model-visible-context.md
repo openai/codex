@@ -49,6 +49,8 @@ Use the contextual-user envelope for contextual state or runtime markers that sh
 
 Contextual-user fragments must have stable markers because history parsing uses those markers to distinguish contextual state from real user intent.
 
+Use `<environment_context>` only for environment facts derived from turn/session state (`TurnContext`) that may need turn-to-turn diffing. Today that includes `cwd`, `shell`, optional `current_date`, optional `timezone`, and optional network allow/deny domain summaries. Do not put developer policy/instructions or plugin/skill metadata into `<environment_context>`; those belong in their own typed fragments.
+
 ## Turn-backed fragments
 
 If a fragment is derived from durable turn/session state, keep its extraction, diffing, and rendering logic together by implementing `TurnContextDiffFragment`.

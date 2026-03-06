@@ -27,6 +27,7 @@ In the codex-rs folder where the rust code lives:
 - Every new model-visible fragment should implement `ModelVisibleContextFragment`, set `type Role`, and declare a `ModelVisibleContextFragmentSpec`.
 - Use the developer envelope for developer guidance. Custom override text (for example config/app-server `developer_instructions`) should use `CustomDeveloperInstructions`; system-generated developer context should use typed fragments plus the neutral `developer_*_text` helpers rather than reusing the custom override type.
 - Use the contextual-user envelope for user-role contextual state or runtime markers such as AGENTS instructions, plugin instructions, environment context, skills, and shell-command markers. Contextual-user fragments must provide stable markers so history parsing treats them as contextual state rather than user intent.
+- Use `<environment_context>` specifically for environment facts derived from `TurnContext` that may need turn-to-turn diffs (`cwd`, `shell`, optional `current_date`, optional `timezone`, optional network allow/deny domain summaries). Do not put policy text, plugin/skill listings, or other guidance into `<environment_context>`; those should use dedicated fragments.
 - Fragments derived from `TurnContext` and diffed against persisted turn state should implement `TurnContextDiffFragment` so current-state extraction, diffing, and rendering live together.
 - Do not inject raw strings directly into the initial-context or settings-update builders, and do not call fragment wrapping helpers ad hoc from new code.
 
