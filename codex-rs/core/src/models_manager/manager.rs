@@ -213,10 +213,9 @@ impl ModelsManager {
         candidates: &[ModelInfo],
         config: &Config,
     ) -> ModelInfo {
-        let custom_model = self
-            .custom_models
-            .get(model)
-            .or_else(|| config.custom_model_alias(model));
+        let custom_model = config
+            .custom_model_alias(model)
+            .or_else(|| self.custom_models.get(model));
         Self::construct_model_info_from_candidates_with_custom(
             model,
             candidates,
@@ -1115,6 +1114,55 @@ mod tests {
         assert_eq!(model_info.request_model.as_deref(), Some("gpt-5.4"));
         assert_eq!(model_info.context_window, Some(1_000_000));
         assert_eq!(model_info.auto_compact_token_limit, Some(800_000));
+    }
+
+    #[tokio::test]
+    async fn get_model_info_prefers_active_config_alias_over_startup_snapshot() {
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+
+        let alias = "gpt-5.4 1m".to_string();
+        config.custom_models.insert(
+            alias.clone(),
+            CustomModelConfig {
+                model: "gpt-5.4-updated".to_string(),
+                model_context_window: Some(1_000_000),
+                model_auto_compact_token_limit: Some(900_000),
+            },
+        );
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            Some(ModelsResponse {
+                models: vec![
+                    remote_model("gpt-5.4", "GPT 5.4", 0),
+                    remote_model("gpt-5.4-updated", "GPT 5.4 Updated", 1),
+                ],
+            }),
+            HashMap::from([(
+                alias.clone(),
+                CustomModelConfig {
+                    model: "gpt-5.4".to_string(),
+                    model_context_window: Some(500_000),
+                    model_auto_compact_token_limit: Some(400_000),
+                },
+            )]),
+            CollaborationModesConfig::default(),
+        );
+
+        let model_info = manager.get_model_info(&alias, &config).await;
+
+        assert_eq!(model_info.slug, alias);
+        assert_eq!(model_info.request_model.as_deref(), Some("gpt-5.4-updated"));
+        assert_eq!(model_info.context_window, Some(1_000_000));
+        assert_eq!(model_info.auto_compact_token_limit, Some(900_000));
     }
 
     #[test]
