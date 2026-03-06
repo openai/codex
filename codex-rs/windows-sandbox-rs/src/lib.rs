@@ -58,6 +58,8 @@ pub use dpapi::protect as dpapi_protect;
 #[cfg(target_os = "windows")]
 pub use dpapi::unprotect as dpapi_unprotect;
 #[cfg(target_os = "windows")]
+pub use helper_materialization::resolve_current_exe_for_launch;
+#[cfg(target_os = "windows")]
 pub use elevated_impl::run_windows_sandbox_capture as run_windows_sandbox_capture_elevated;
 #[cfg(target_os = "windows")]
 pub use hide_users::hide_current_user_profile_dir;

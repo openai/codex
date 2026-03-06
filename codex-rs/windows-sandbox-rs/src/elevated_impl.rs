@@ -1,27 +1,27 @@
 mod windows_impl {
     use crate::acl::allow_null_device;
-    use crate::allow::compute_allow_paths;
     use crate::allow::AllowDenyPaths;
+    use crate::allow::compute_allow_paths;
     use crate::cap::load_or_create_cap_sids;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
-    use crate::helper_materialization::resolve_helper_for_launch;
     use crate::helper_materialization::HelperExecutable;
+    use crate::helper_materialization::resolve_helper_for_launch;
     use crate::identity::require_logon_sandbox_creds;
     use crate::logging::log_failure;
     use crate::logging::log_note;
     use crate::logging::log_start;
     use crate::logging::log_success;
-    use crate::policy::parse_policy;
     use crate::policy::SandboxPolicy;
+    use crate::policy::parse_policy;
     use crate::token::convert_string_sid_to_sid;
     use crate::winutil::quote_windows_arg;
     use crate::winutil::to_wide;
     use anyhow::Result;
-    use rand::rngs::SmallRng;
     use rand::Rng;
     use rand::SeedableRng;
+    use rand::rngs::SmallRng;
     use std::collections::HashMap;
     use std::ffi::c_void;
     use std::fs;
@@ -45,11 +45,11 @@ mod windows_impl {
     use windows_sys::Win32::System::Pipes::PIPE_WAIT;
     use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
     use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
     use windows_sys::Win32::System::Threading::INFINITE;
     use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
     use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
     use windows_sys::Win32::System::Threading::STARTUPINFOW;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
     /// Ensures the parent directory of a path exists before writing to it.
     /// Walks upward from `start` to locate the git worktree root, following gitfile redirects.
@@ -515,8 +515,8 @@ pub use windows_impl::run_windows_sandbox_capture;
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
-    use anyhow::bail;
     use anyhow::Result;
+    use anyhow::bail;
     use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::path::Path;
