@@ -12,7 +12,7 @@ use crate::codex::TurnContext;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::CustomDeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
@@ -156,6 +156,16 @@ pub(crate) trait ModelVisibleContextFragment {
     }
 }
 
+pub(crate) struct DeveloperTextFragment {
+    text: String,
+}
+
+impl DeveloperTextFragment {
+    pub(crate) fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
+    }
+}
+
 pub(crate) struct TurnContextDiffParams<'a> {
     pub(crate) shell: &'a Shell,
     pub(crate) previous_turn_settings: Option<&'a PreviousTurnSettings>,
@@ -197,7 +207,7 @@ pub(crate) trait TurnContextDiffFragment: ModelVisibleContextFragment + Sized {
     ) -> Option<Self>;
 }
 
-/// Untagged developer-envelope fragment spec, including `DeveloperInstructions`.
+/// Untagged developer-envelope fragment spec, including `CustomDeveloperInstructions`.
 pub(crate) const DEVELOPER_FRAGMENT_SPEC: ModelVisibleContextFragmentSpec =
     ModelVisibleContextFragmentSpec::markerless();
 /// AGENTS.md / user-instructions contextual-user fragment spec.
@@ -243,7 +253,7 @@ pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
         .any(|definition| definition.matches_text(text))
 }
 
-impl ModelVisibleContextFragment for DeveloperInstructions {
+impl ModelVisibleContextFragment for CustomDeveloperInstructions {
     type Role = DeveloperContextRole;
 
     fn spec(&self) -> ModelVisibleContextFragmentSpec {
@@ -252,6 +262,18 @@ impl ModelVisibleContextFragment for DeveloperInstructions {
 
     fn render_text(&self) -> String {
         self.clone().into_text()
+    }
+}
+
+impl ModelVisibleContextFragment for DeveloperTextFragment {
+    type Role = DeveloperContextRole;
+
+    fn spec(&self) -> ModelVisibleContextFragmentSpec {
+        DEVELOPER_FRAGMENT_SPEC
+    }
+
+    fn render_text(&self) -> String {
+        self.text.clone()
     }
 }
 

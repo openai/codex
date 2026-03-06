@@ -362,13 +362,16 @@ impl Default for BaseInstructions {
 /// Developer-provided guidance that is injected into a turn as a developer role
 /// message.
 ///
-/// In `codex-core`, this is one implementation of the shared model-visible
-/// fragment path used to assemble prompt context.
+/// This type is only for custom developer instructions provided by users or
+/// clients (for example config/app-server overrides).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(rename = "developer_instructions", rename_all = "snake_case")]
-pub struct DeveloperInstructions {
+pub struct CustomDeveloperInstructions {
     text: String,
 }
+
+/// Backwards-compatibility alias. Prefer `CustomDeveloperInstructions` in new code.
+pub type DeveloperInstructions = CustomDeveloperInstructions;
 
 const APPROVAL_POLICY_NEVER: &str = include_str!("prompts/permissions/approval_policy/never.md");
 const APPROVAL_POLICY_UNLESS_TRUSTED: &str =
@@ -389,232 +392,155 @@ const SANDBOX_MODE_READ_ONLY: &str = include_str!("prompts/permissions/sandbox_m
 const REALTIME_START_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_start.md");
 const REALTIME_END_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_end.md");
 
-impl DeveloperInstructions {
+impl CustomDeveloperInstructions {
     pub fn new<T: Into<String>>(text: T) -> Self {
         Self { text: text.into() }
-    }
-
-    pub fn from(
-        approval_policy: AskForApproval,
-        exec_policy: &Policy,
-        request_permission_enabled: bool,
-    ) -> DeveloperInstructions {
-        let on_request_instructions = || {
-            let on_request_rule = if request_permission_enabled {
-                APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION
-            } else {
-                APPROVAL_POLICY_ON_REQUEST_RULE
-            };
-            let command_prefixes = format_allow_prefixes(exec_policy.get_allowed_prefixes());
-            match command_prefixes {
-                Some(prefixes) => {
-                    format!(
-                        "{on_request_rule}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-                    )
-                }
-                None => on_request_rule.to_string(),
-            }
-        };
-        let text = match approval_policy {
-            AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
-            AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.to_string(),
-            AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.to_string(),
-            AskForApproval::OnRequest => on_request_instructions(),
-            AskForApproval::Reject(reject_config) => {
-                let on_request_instructions = on_request_instructions();
-                let sandbox_approval = reject_config.sandbox_approval;
-                let rules = reject_config.rules;
-                let mcp_elicitations = reject_config.mcp_elicitations;
-                format!(
-                    "{on_request_instructions}\n\n\
-                     Approval policy is `reject`.\n\
-                     - `sandbox_approval`: {sandbox_approval}\n\
-                     - `rules`: {rules}\n\
-                     - `mcp_elicitations`: {mcp_elicitations}\n\
-                     When a category is `true`, requests in that category are auto-rejected instead of prompting the user."
-                )
-            }
-        };
-
-        DeveloperInstructions::new(text)
     }
 
     pub fn into_text(self) -> String {
         self.text
     }
+}
 
-    pub fn concat(self, other: impl Into<DeveloperInstructions>) -> Self {
-        let mut text = self.text;
-        if !text.ends_with('\n') {
-            text.push('\n');
+pub fn developer_model_switch_text(model_instructions: String) -> String {
+    format!(
+        "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{model_instructions}\n</model_switch>"
+    )
+}
+
+pub fn developer_realtime_start_text() -> String {
+    format!(
+        "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
+        REALTIME_START_INSTRUCTIONS.trim()
+    )
+}
+
+pub fn developer_realtime_end_text(reason: &str) -> String {
+    format!(
+        "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n\nReason: {reason}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
+        REALTIME_END_INSTRUCTIONS.trim()
+    )
+}
+
+pub fn developer_personality_spec_text(spec: String) -> String {
+    format!(
+        "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} </personality_spec>"
+    )
+}
+
+pub fn developer_permissions_text(
+    sandbox_policy: &SandboxPolicy,
+    approval_policy: AskForApproval,
+    exec_policy: &Policy,
+    cwd: &Path,
+    request_permission_enabled: bool,
+) -> String {
+    let network_access = if sandbox_policy.has_full_network_access() {
+        NetworkAccess::Enabled
+    } else {
+        NetworkAccess::Restricted
+    };
+    let (sandbox_mode, writable_roots) = match sandbox_policy {
+        SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, None),
+        SandboxPolicy::ReadOnly { .. } => (SandboxMode::ReadOnly, None),
+        SandboxPolicy::ExternalSandbox { .. } => (SandboxMode::DangerFullAccess, None),
+        SandboxPolicy::WorkspaceWrite { .. } => {
+            let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
+            (SandboxMode::WorkspaceWrite, Some(roots))
         }
-        text.push_str(&other.into().text);
-        Self { text }
-    }
+    };
+    developer_permissions_with_network_text(
+        sandbox_mode,
+        network_access,
+        approval_policy,
+        exec_policy,
+        writable_roots,
+        request_permission_enabled,
+    )
+}
 
-    pub fn model_switch_text(model_instructions: String) -> String {
-        format!(
-            "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{model_instructions}\n</model_switch>"
-        )
-    }
+pub fn developer_collaboration_mode_text(collaboration_mode: &CollaborationMode) -> Option<String> {
+    collaboration_mode
+        .settings
+        .developer_instructions
+        .as_ref()
+        .filter(|instructions| !instructions.is_empty())
+        .map(|instructions| {
+            format!("{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}")
+        })
+}
 
-    pub fn model_switch_message(model_instructions: String) -> Self {
-        DeveloperInstructions::new(Self::model_switch_text(model_instructions))
-    }
-
-    pub fn realtime_start_text() -> String {
-        format!(
-            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
-            REALTIME_START_INSTRUCTIONS.trim()
-        )
-    }
-
-    pub fn realtime_start_message() -> Self {
-        DeveloperInstructions::new(Self::realtime_start_text())
-    }
-
-    pub fn realtime_end_text(reason: &str) -> String {
-        format!(
-            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n\nReason: {reason}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
-            REALTIME_END_INSTRUCTIONS.trim()
-        )
-    }
-
-    pub fn realtime_end_message(reason: &str) -> Self {
-        DeveloperInstructions::new(Self::realtime_end_text(reason))
-    }
-
-    pub fn personality_spec_text(spec: String) -> String {
-        format!(
-            "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} </personality_spec>"
-        )
-    }
-
-    pub fn personality_spec_message(spec: String) -> Self {
-        DeveloperInstructions::new(Self::personality_spec_text(spec))
-    }
-
-    pub fn from_policy(
-        sandbox_policy: &SandboxPolicy,
-        approval_policy: AskForApproval,
-        exec_policy: &Policy,
-        cwd: &Path,
-        request_permission_enabled: bool,
-    ) -> Self {
-        let network_access = if sandbox_policy.has_full_network_access() {
-            NetworkAccess::Enabled
+pub fn developer_permissions_with_network_text(
+    sandbox_mode: SandboxMode,
+    network_access: NetworkAccess,
+    approval_policy: AskForApproval,
+    exec_policy: &Policy,
+    writable_roots: Option<Vec<WritableRoot>>,
+    request_permission_enabled: bool,
+) -> String {
+    let on_request_instructions = || {
+        let on_request_rule = if request_permission_enabled {
+            APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION
         } else {
-            NetworkAccess::Restricted
+            APPROVAL_POLICY_ON_REQUEST_RULE
         };
-
-        let (sandbox_mode, writable_roots) = match sandbox_policy {
-            SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, None),
-            SandboxPolicy::ReadOnly { .. } => (SandboxMode::ReadOnly, None),
-            SandboxPolicy::ExternalSandbox { .. } => (SandboxMode::DangerFullAccess, None),
-            SandboxPolicy::WorkspaceWrite { .. } => {
-                let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
-                (SandboxMode::WorkspaceWrite, Some(roots))
+        let command_prefixes = format_allow_prefixes(exec_policy.get_allowed_prefixes());
+        match command_prefixes {
+            Some(prefixes) => {
+                format!(
+                    "{on_request_rule}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
+                )
             }
-        };
-
-        DeveloperInstructions::from_permissions_with_network(
-            sandbox_mode,
-            network_access,
-            approval_policy,
-            exec_policy,
-            writable_roots,
-            request_permission_enabled,
-        )
-    }
-
-    pub fn from_policy_text(
-        sandbox_policy: &SandboxPolicy,
-        approval_policy: AskForApproval,
-        exec_policy: &Policy,
-        cwd: &Path,
-        request_permission_enabled: bool,
-    ) -> String {
-        Self::from_policy(
-            sandbox_policy,
-            approval_policy,
-            exec_policy,
-            cwd,
-            request_permission_enabled,
-        )
-        .into_text()
-    }
-
-    /// Returns developer instructions from a collaboration mode if they exist and are non-empty.
-    pub fn from_collaboration_mode(collaboration_mode: &CollaborationMode) -> Option<Self> {
-        Self::from_collaboration_mode_text(collaboration_mode).map(DeveloperInstructions::new)
-    }
-
-    pub fn from_collaboration_mode_text(collaboration_mode: &CollaborationMode) -> Option<String> {
-        collaboration_mode
-            .settings
-            .developer_instructions
-            .as_ref()
-            .filter(|instructions| !instructions.is_empty())
-            .map(|instructions| {
-                format!("{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}")
-            })
-    }
-
-    fn from_permissions_with_network(
-        sandbox_mode: SandboxMode,
-        network_access: NetworkAccess,
-        approval_policy: AskForApproval,
-        exec_policy: &Policy,
-        writable_roots: Option<Vec<WritableRoot>>,
-        request_permission_enabled: bool,
-    ) -> Self {
-        let start_tag = DeveloperInstructions::new("<permissions instructions>");
-        let end_tag = DeveloperInstructions::new("</permissions instructions>");
-        start_tag
-            .concat(DeveloperInstructions::sandbox_text(
-                sandbox_mode,
-                network_access,
-            ))
-            .concat(DeveloperInstructions::from(
-                approval_policy,
-                exec_policy,
-                request_permission_enabled,
-            ))
-            .concat(DeveloperInstructions::from_writable_roots(writable_roots))
-            .concat(end_tag)
-    }
-
-    fn from_writable_roots(writable_roots: Option<Vec<WritableRoot>>) -> Self {
-        let Some(roots) = writable_roots else {
-            return DeveloperInstructions::new("");
-        };
-
-        if roots.is_empty() {
-            return DeveloperInstructions::new("");
+            None => on_request_rule.to_string(),
         }
+    };
+    let approval_policy_text = match approval_policy {
+        AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
+        AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.to_string(),
+        AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.to_string(),
+        AskForApproval::OnRequest => on_request_instructions(),
+        AskForApproval::Reject(reject_config) => {
+            let on_request_instructions = on_request_instructions();
+            let sandbox_approval = reject_config.sandbox_approval;
+            let rules = reject_config.rules;
+            let mcp_elicitations = reject_config.mcp_elicitations;
+            format!(
+                "{on_request_instructions}\n\n\
+                 Approval policy is `reject`.\n\
+                 - `sandbox_approval`: {sandbox_approval}\n\
+                 - `rules`: {rules}\n\
+                 - `mcp_elicitations`: {mcp_elicitations}\n\
+                 When a category is `true`, requests in that category are auto-rejected instead of prompting the user."
+            )
+        }
+    };
+    let writable_roots_text = match writable_roots {
+        Some(roots) if !roots.is_empty() => {
+            let roots_list: Vec<String> = roots
+                .iter()
+                .map(|r| format!("`{}`", r.root.to_string_lossy()))
+                .collect();
+            if roots_list.len() == 1 {
+                format!(" The writable root is {}.", roots_list[0])
+            } else {
+                format!(" The writable roots are {}.", roots_list.join(", "))
+            }
+        }
+        _ => String::new(),
+    };
+    let sandbox_text = developer_sandbox_mode_text(sandbox_mode, network_access);
+    format!(
+        "<permissions instructions>\n{sandbox_text}\n{approval_policy_text}{writable_roots_text}\n</permissions instructions>"
+    )
+}
 
-        let roots_list: Vec<String> = roots
-            .iter()
-            .map(|r| format!("`{}`", r.root.to_string_lossy()))
-            .collect();
-        let text = if roots_list.len() == 1 {
-            format!(" The writable root is {}.", roots_list[0])
-        } else {
-            format!(" The writable roots are {}.", roots_list.join(", "))
-        };
-        DeveloperInstructions::new(text)
-    }
-
-    fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> DeveloperInstructions {
-        let template = match mode {
-            SandboxMode::DangerFullAccess => SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end(),
-            SandboxMode::WorkspaceWrite => SANDBOX_MODE_WORKSPACE_WRITE.trim_end(),
-            SandboxMode::ReadOnly => SANDBOX_MODE_READ_ONLY.trim_end(),
-        };
-        let text = template.replace("{network_access}", &network_access.to_string());
-
-        DeveloperInstructions::new(text)
-    }
+pub fn developer_sandbox_mode_text(mode: SandboxMode, network_access: NetworkAccess) -> String {
+    let template = match mode {
+        SandboxMode::DangerFullAccess => SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end(),
+        SandboxMode::WorkspaceWrite => SANDBOX_MODE_WORKSPACE_WRITE.trim_end(),
+        SandboxMode::ReadOnly => SANDBOX_MODE_READ_ONLY.trim_end(),
+    };
+    template.replace("{network_access}", &network_access.to_string())
 }
 
 const MAX_RENDERED_PREFIXES: usize = 100;
@@ -673,14 +599,14 @@ fn render_command_prefix(prefix: &[String]) -> String {
     format!("[{tokens}]")
 }
 
-impl From<SandboxMode> for DeveloperInstructions {
+impl From<SandboxMode> for CustomDeveloperInstructions {
     fn from(mode: SandboxMode) -> Self {
         let network_access = match mode {
             SandboxMode::DangerFullAccess => NetworkAccess::Enabled,
             SandboxMode::WorkspaceWrite | SandboxMode::ReadOnly => NetworkAccess::Restricted,
         };
 
-        DeveloperInstructions::sandbox_text(mode, network_access)
+        CustomDeveloperInstructions::new(developer_sandbox_mode_text(mode, network_access))
     }
 }
 
@@ -1457,18 +1383,18 @@ mod tests {
 
     #[test]
     fn converts_sandbox_mode_into_developer_instructions() {
-        let workspace_write: DeveloperInstructions = SandboxMode::WorkspaceWrite.into();
+        let workspace_write: CustomDeveloperInstructions = SandboxMode::WorkspaceWrite.into();
         assert_eq!(
             workspace_write,
-            DeveloperInstructions::new(
+            CustomDeveloperInstructions::new(
                 "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
             )
         );
 
-        let read_only: DeveloperInstructions = SandboxMode::ReadOnly.into();
+        let read_only: CustomDeveloperInstructions = SandboxMode::ReadOnly.into();
         assert_eq!(
             read_only,
-            DeveloperInstructions::new(
+            CustomDeveloperInstructions::new(
                 "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
             )
         );
@@ -1476,7 +1402,7 @@ mod tests {
 
     #[test]
     fn builds_permissions_with_network_access_override() {
-        let instructions = DeveloperInstructions::from_permissions_with_network(
+        let text = developer_permissions_with_network_text(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
@@ -1484,8 +1410,6 @@ mod tests {
             None,
             false,
         );
-
-        let text = instructions.into_text();
         assert!(
             text.contains("Network access is enabled."),
             "expected network access to be enabled in message"
@@ -1506,14 +1430,13 @@ mod tests {
             exclude_slash_tmp: false,
         };
 
-        let instructions = DeveloperInstructions::from_policy(
+        let text = developer_permissions_text(
             &policy,
             AskForApproval::UnlessTrusted,
             &Policy::empty(),
             &PathBuf::from("/tmp"),
             false,
         );
-        let text = instructions.into_text();
         assert!(text.contains("Network access is enabled."));
         assert!(text.contains("`approval_policy` is `unless-trusted`"));
     }
@@ -1527,7 +1450,7 @@ mod tests {
                 codex_execpolicy::Decision::Allow,
             )
             .expect("add rule");
-        let instructions = DeveloperInstructions::from_permissions_with_network(
+        let text = developer_permissions_with_network_text(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
@@ -1535,8 +1458,6 @@ mod tests {
             None,
             false,
         );
-
-        let text = instructions.into_text();
         assert!(text.contains("prefix_rule"));
         assert!(text.contains("Approved command prefixes"));
         assert!(text.contains(r#"["git", "pull"]"#));
@@ -1544,7 +1465,7 @@ mod tests {
 
     #[test]
     fn includes_request_permission_rule_instructions_for_on_request_when_enabled() {
-        let instructions = DeveloperInstructions::from_permissions_with_network(
+        let text = developer_permissions_with_network_text(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
@@ -1552,8 +1473,6 @@ mod tests {
             None,
             true,
         );
-
-        let text = instructions.into_text();
         assert!(text.contains("with_additional_permissions"));
         assert!(text.contains("additional_permissions"));
     }

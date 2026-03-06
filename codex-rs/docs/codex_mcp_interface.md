@@ -90,6 +90,7 @@ Fetch the built-in collaboration mode presets with `collaborationMode/list`. Thi
   - For tri-state fields like `reasoning_effort` and `developer_instructions`, omit the field to keep the current value, set it to `null` to clear it, or set a concrete value to update it.
 
 When sending `turn/start` with `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
+The top-level `developerInstructions` request field is a custom developer override and takes precedence over `~/.codex/config.toml` `developer_instructions` for the thread session.
 
 ## Event stream
 

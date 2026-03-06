@@ -1,7 +1,7 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_execpolicy::Policy;
-use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::developer_permissions_text;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -487,14 +487,13 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let body = req.single_request().body_json();
     let input = body["input"].as_array().expect("input array");
     let permissions = permissions_texts(input);
-    let expected = DeveloperInstructions::from_policy(
+    let expected = developer_permissions_text(
         &sandbox_policy,
         AskForApproval::OnRequest,
         &Policy::empty(),
         test.config.cwd.as_path(),
         false,
-    )
-    .into_text();
+    );
     // Normalize line endings to handle Windows vs Unix differences
     let normalize_line_endings = |s: &str| s.replace("\r\n", "\n");
     let expected_normalized = normalize_line_endings(&expected);

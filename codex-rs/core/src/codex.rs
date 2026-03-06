@@ -158,6 +158,7 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::model_visible_context::DEVELOPER_FRAGMENT_SPEC;
 use crate::model_visible_context::DeveloperContextRole;
+use crate::model_visible_context::DeveloperTextFragment;
 use crate::model_visible_context::TurnContextDiffFragment;
 use crate::model_visible_context::TurnContextDiffParams;
 use codex_config::CONFIG_TOML_FILE;
@@ -300,9 +301,12 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::CustomDeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::developer_collaboration_mode_text;
+use codex_protocol::models::developer_permissions_text;
+use codex_protocol::models::developer_personality_spec_text;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -3059,36 +3063,34 @@ impl Session {
                 turn_context,
             )
         {
-            developer_envelope.push(model_switch_message);
+            developer_envelope.push(DeveloperTextFragment::new(model_switch_message));
         }
-        developer_envelope.push(DeveloperInstructions::from_policy(
+        developer_envelope.push(DeveloperTextFragment::new(developer_permissions_text(
             turn_context.sandbox_policy.get(),
             turn_context.approval_policy.value(),
             exec_policy.as_ref(),
             &turn_context.cwd,
             turn_context.features.enabled(Feature::RequestPermissions),
-        ));
+        )));
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
-            developer_envelope.push(DeveloperInstructions::new(developer_instructions));
+            developer_envelope.push(CustomDeveloperInstructions::new(developer_instructions));
         }
         if turn_context.features.enabled(Feature::MemoryTool)
             && turn_context.config.memories.use_memories
             && let Some(memory_prompt) =
                 build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
         {
-            developer_envelope.push(memory_prompt);
+            developer_envelope.push(DeveloperTextFragment::new(memory_prompt));
         }
-        if let Some(collab_instructions) =
-            DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
-        {
-            developer_envelope.push(collab_instructions);
+        if let Some(collab_instructions) = developer_collaboration_mode_text(&collaboration_mode) {
+            developer_envelope.push(DeveloperTextFragment::new(collab_instructions));
         }
         if let Some(realtime_update) = crate::context_manager::updates::build_realtime_update_item(
             reference_context_item.as_ref(),
             previous_turn_settings.as_ref(),
             turn_context,
         ) {
-            developer_envelope.push(realtime_update);
+            developer_envelope.push(DeveloperTextFragment::new(realtime_update));
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
@@ -3103,20 +3105,20 @@ impl Session {
                         personality,
                     )
             {
-                developer_envelope.push(DeveloperInstructions::personality_spec_message(
-                    personality_message,
+                developer_envelope.push(DeveloperTextFragment::new(
+                    developer_personality_spec_text(personality_message),
                 ));
             }
         }
         if turn_context.features.enabled(Feature::Apps) {
-            developer_envelope.push(render_apps_section());
+            developer_envelope.push(DeveloperTextFragment::new(render_apps_section()));
         }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
                 turn_context.config.commit_attribution.as_deref(),
             )
         {
-            developer_envelope.push(commit_message_instruction);
+            developer_envelope.push(DeveloperTextFragment::new(commit_message_instruction));
         }
         if let Some(user_instructions) =
             <UserInstructions as TurnContextDiffFragment>::from_turn_context(
@@ -6647,6 +6649,7 @@ mod tests {
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
     use crate::mcp_connection_manager::ToolInfo;
+    use crate::model_visible_context::ModelVisibleContextFragment;
     use crate::models_manager::model_info;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
@@ -9062,6 +9065,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_settings_update_items_emits_developer_instructions_item_when_changed() {
+        let (session, previous_context) = make_session_and_context().await;
+        let previous_context = Arc::new(previous_context);
+        let mut previous_context_item = previous_context.to_turn_context_item();
+        previous_context_item.developer_instructions = Some("old instructions".to_string());
+        let mut current_context = previous_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+        current_context.developer_instructions = Some("new instructions".to_string());
+
+        let update_items = session
+            .build_settings_update_items(Some(&previous_context_item), &current_context)
+            .await;
+
+        let developer_texts = developer_input_texts(&update_items);
+        assert!(
+            developer_texts.contains(&"new instructions"),
+            "expected updated developer instructions, got {developer_texts:?}"
+        );
+        assert!(
+            !developer_texts.contains(&"old instructions"),
+            "did not expect stale developer instructions, got {developer_texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_settings_update_items_skips_developer_instructions_item_when_unchanged() {
+        let (session, previous_context) = make_session_and_context().await;
+        let previous_context = Arc::new(previous_context);
+        let mut previous_context_item = previous_context.to_turn_context_item();
+        previous_context_item.developer_instructions = Some("same instructions".to_string());
+        let mut current_context = previous_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+        current_context.developer_instructions = Some("same instructions".to_string());
+
+        let update_items = session
+            .build_settings_update_items(Some(&previous_context_item), &current_context)
+            .await;
+
+        let developer_texts = developer_input_texts(&update_items);
+        assert!(
+            !developer_texts.contains(&"same instructions"),
+            "did not expect unchanged developer instructions diff, got {developer_texts:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn build_settings_update_items_emits_realtime_start_when_session_becomes_live() {
         let (session, previous_context) = make_session_and_context().await;
         let previous_context = Arc::new(previous_context);
@@ -9946,8 +10003,9 @@ mod tests {
                 .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
         {
             let msg = {
-                let fragment =
-                    DeveloperInstructions::personality_spec_message(personality_message);
+                let fragment = DeveloperTextFragment::new(developer_personality_spec_text(
+                    personality_message,
+                ));
                 fragment.into_message()
             };
             let insert_at = initial_context

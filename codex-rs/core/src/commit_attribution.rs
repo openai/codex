@@ -1,5 +1,3 @@
-use codex_protocol::models::DeveloperInstructions;
-
 const DEFAULT_ATTRIBUTION_VALUE: &str = "Codex <noreply@openai.com>";
 
 fn build_commit_message_trailer(config_attribution: Option<&str>) -> Option<String> {
@@ -9,11 +7,11 @@ fn build_commit_message_trailer(config_attribution: Option<&str>) -> Option<Stri
 
 pub(crate) fn commit_message_trailer_instruction(
     config_attribution: Option<&str>,
-) -> Option<DeveloperInstructions> {
+) -> Option<String> {
     let trailer = build_commit_message_trailer(config_attribution)?;
-    Some(DeveloperInstructions::new(format!(
+    Some(format!(
         "When you write or edit a git commit message, ensure the message ends with this trailer exactly once:\n{trailer}\n\nRules:\n- Keep existing trailers and append this trailer at the end if missing.\n- Do not duplicate this trailer if it already exists.\n- Keep one blank line between the commit body and trailer block."
-    )))
+    ))
 }
 
 fn resolve_attribution_value(config_attribution: Option<&str>) -> Option<String> {
@@ -71,9 +69,8 @@ mod tests {
     fn instruction_mentions_trailer_and_omits_generated_with() {
         let instruction = commit_message_trailer_instruction(Some("AgentX <agent@example.com>"))
             .expect("instruction expected");
-        let text = instruction.into_text();
-        assert!(text.contains("Co-authored-by: AgentX <agent@example.com>"));
-        assert!(text.contains("exactly once"));
-        assert!(!text.contains("Generated-with"));
+        assert!(instruction.contains("Co-authored-by: AgentX <agent@example.com>"));
+        assert!(instruction.contains("exactly once"));
+        assert!(!instruction.contains("Generated-with"));
     }
 }

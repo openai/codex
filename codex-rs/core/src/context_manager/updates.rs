@@ -12,8 +12,13 @@ use crate::model_visible_context::TurnContextDiffFragment;
 use crate::model_visible_context::TurnContextDiffParams;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::developer_collaboration_mode_text;
+use codex_protocol::models::developer_model_switch_text;
+use codex_protocol::models::developer_permissions_text;
+use codex_protocol::models::developer_personality_spec_text;
+use codex_protocol::models::developer_realtime_end_text;
+use codex_protocol::models::developer_realtime_start_text;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
 use std::marker::PhantomData;
@@ -47,7 +52,7 @@ impl TurnContextDiffFragment for PermissionsUpdateFragment {
         }
 
         Some(Self {
-            text: DeveloperInstructions::from_policy_text(
+            text: developer_permissions_text(
                 turn_context.sandbox_policy.get(),
                 turn_context.approval_policy.value(),
                 context.exec_policy,
@@ -55,6 +60,39 @@ impl TurnContextDiffFragment for PermissionsUpdateFragment {
                 turn_context.features.enabled(Feature::RequestPermissions),
             ),
         })
+    }
+}
+
+struct CustomDeveloperInstructionsUpdateFragment {
+    text: String,
+}
+
+impl ModelVisibleContextFragment for CustomDeveloperInstructionsUpdateFragment {
+    type Role = DeveloperContextRole;
+
+    fn spec(&self) -> ModelVisibleContextFragmentSpec {
+        DEVELOPER_FRAGMENT_SPEC
+    }
+
+    fn render_text(&self) -> String {
+        self.text.clone()
+    }
+}
+
+impl TurnContextDiffFragment for CustomDeveloperInstructionsUpdateFragment {
+    fn diff_from_turn_context_item(
+        previous: &TurnContextItem,
+        turn_context: &TurnContext,
+        _context: &TurnContextDiffParams<'_>,
+    ) -> Option<Self> {
+        if previous.developer_instructions == turn_context.developer_instructions {
+            return None;
+        }
+
+        turn_context
+            .developer_instructions
+            .as_ref()
+            .map(|text| Self { text: text.clone() })
     }
 }
 
@@ -84,9 +122,7 @@ impl TurnContextDiffFragment for CollaborationModeUpdateFragment {
             // If the next mode has empty developer instructions, this returns None and we emit no
             // update, so prior collaboration instructions remain in the prompt history.
             Some(Self {
-                text: DeveloperInstructions::from_collaboration_mode_text(
-                    &turn_context.collaboration_mode,
-                )?,
+                text: developer_collaboration_mode_text(&turn_context.collaboration_mode)?,
             })
         } else {
             None
@@ -117,7 +153,7 @@ impl TurnContextDiffFragment for RealtimeUpdateFragment {
     ) -> Option<Self> {
         if turn_context.realtime_active {
             return Some(Self {
-                text: DeveloperInstructions::realtime_start_text(),
+                text: developer_realtime_start_text(),
             });
         }
 
@@ -126,7 +162,7 @@ impl TurnContextDiffFragment for RealtimeUpdateFragment {
             .and_then(|settings| settings.realtime_active)
             .filter(|realtime_active| *realtime_active)
             .map(|_| Self {
-                text: DeveloperInstructions::realtime_end_text("inactive"),
+                text: developer_realtime_end_text("inactive"),
             })
     }
 
@@ -137,10 +173,10 @@ impl TurnContextDiffFragment for RealtimeUpdateFragment {
     ) -> Option<Self> {
         match (previous.realtime_active, turn_context.realtime_active) {
             (Some(true), false) => Some(Self {
-                text: DeveloperInstructions::realtime_end_text("inactive"),
+                text: developer_realtime_end_text("inactive"),
             }),
             (Some(false), true) => Some(Self {
-                text: DeveloperInstructions::realtime_start_text(),
+                text: developer_realtime_start_text(),
             }),
             (Some(true), true) | (Some(false), false) | (None, false) | (None, true) => None,
         }
@@ -182,7 +218,7 @@ impl TurnContextDiffFragment for PersonalityUpdateFragment {
             let model_info = &turn_context.model_info;
             let personality_message = personality_message_for(model_info, personality)?;
             Some(Self {
-                text: DeveloperInstructions::personality_spec_text(personality_message),
+                text: developer_personality_spec_text(personality_message),
             })
         } else {
             None
@@ -224,7 +260,7 @@ impl TurnContextDiffFragment for ModelInstructionsUpdateFragment {
         }
 
         Some(Self {
-            text: DeveloperInstructions::model_switch_text(model_instructions),
+            text: developer_model_switch_text(model_instructions),
         })
     }
 
@@ -245,7 +281,7 @@ impl TurnContextDiffFragment for ModelInstructionsUpdateFragment {
         }
 
         Some(Self {
-            text: DeveloperInstructions::model_switch_text(model_instructions),
+            text: developer_model_switch_text(model_instructions),
         })
     }
 }
@@ -264,7 +300,7 @@ pub(crate) fn personality_message_for(
 pub(crate) fn build_model_instructions_update_item(
     previous_turn_settings: Option<&PreviousTurnSettings>,
     turn_context: &TurnContext,
-) -> Option<DeveloperInstructions> {
+) -> Option<String> {
     let previous_turn_settings = previous_turn_settings?;
     if previous_turn_settings.model == turn_context.model_info.slug {
         return None;
@@ -277,9 +313,7 @@ pub(crate) fn build_model_instructions_update_item(
         return None;
     }
 
-    Some(DeveloperInstructions::model_switch_message(
-        model_instructions,
-    ))
+    Some(developer_model_switch_text(model_instructions))
 }
 
 fn build_permissions_update_item(
@@ -314,18 +348,18 @@ pub(crate) fn build_realtime_update_item(
     previous: Option<&TurnContextItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
     turn_context: &TurnContext,
-) -> Option<DeveloperInstructions> {
+) -> Option<String> {
     match (
         previous.and_then(|item| item.realtime_active),
         turn_context.realtime_active,
     ) {
-        (Some(true), false) => Some(DeveloperInstructions::realtime_end_message("inactive")),
-        (Some(false), true) | (None, true) => Some(DeveloperInstructions::realtime_start_message()),
+        (Some(true), false) => Some(developer_realtime_end_text("inactive")),
+        (Some(false), true) | (None, true) => Some(developer_realtime_start_text()),
         (Some(true), true) | (Some(false), false) => None,
         (None, false) => previous_turn_settings
             .and_then(|settings| settings.realtime_active)
             .filter(|realtime_active| *realtime_active)
-            .map(|_| DeveloperInstructions::realtime_end_message("inactive")),
+            .map(|_| developer_realtime_end_text("inactive")),
     }
 }
 
@@ -435,6 +469,13 @@ pub(crate) fn build_settings_update_items(
         ModelInstructionsUpdateFragment::from_turn_context(next, context)
             .map(|fragment| fragment.text),
         build_permissions_update_item(previous, next, context),
+        previous
+            .and_then(|previous| {
+                CustomDeveloperInstructionsUpdateFragment::diff_from_turn_context_item(
+                    previous, next, context,
+                )
+            })
+            .map(|fragment| fragment.text),
         build_collaboration_mode_update_item(previous, next, context),
         previous
             .and_then(|previous| {
@@ -480,6 +521,7 @@ mod tests {
     use super::*;
     use crate::model_visible_context::ContextualUserContextRole;
     use crate::model_visible_context::DeveloperContextRole;
+    use crate::model_visible_context::DeveloperTextFragment;
     use crate::model_visible_context::ModelVisibleContextFragmentSpec;
     use codex_protocol::models::ContentItem;
     use pretty_assertions::assert_eq;
@@ -487,8 +529,8 @@ mod tests {
     #[test]
     fn developer_envelope_builder_emits_one_message_in_order() {
         let mut builder = DeveloperEnvelopeBuilder::default();
-        builder.push(DeveloperInstructions::new("first"));
-        builder.push(DeveloperInstructions::new("second"));
+        builder.push(DeveloperTextFragment::new("first"));
+        builder.push(DeveloperTextFragment::new("second"));
 
         let item = builder.build().expect("developer message expected");
         let ResponseItem::Message { role, content, .. } = item else {

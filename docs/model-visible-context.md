@@ -33,7 +33,9 @@ Use the developer envelope for developer-role guidance:
 - subagent roster and subagent notifications
 - other developer-only instructions
 
-`DeveloperInstructions` remains the standard string-backed fragment for most developer text. It already participates in the shared fragment system.
+Use `CustomDeveloperInstructions` only for custom developer override text (for example config/app-server `developer_instructions` values).
+
+For system-generated developer guidance (permissions, collaboration-mode wrappers, realtime notices, personality wrappers, model-switch notices), use typed developer fragments whose text comes from the neutral `developer_*_text` helpers in `codex_protocol::models`.
 
 Use the contextual-user envelope for contextual state or runtime markers that should not count as real user turns:
 
