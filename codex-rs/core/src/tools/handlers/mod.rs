@@ -89,7 +89,7 @@ fn resolve_workdir_base_path(
 }
 
 /// Validates feature/policy constraints for `with_additional_permissions` and
-/// returns normalized absolute paths. Errors if paths are invalid.
+/// normalizes any path-based permissions. Errors if the request is invalid.
 pub(super) fn normalize_and_validate_additional_permissions(
     request_permission_enabled: bool,
     approval_policy: AskForApproval,
@@ -119,14 +119,18 @@ pub(super) fn normalize_and_validate_additional_permissions(
         }
         let Some(additional_permissions) = additional_permissions else {
             return Err(
-                "missing `additional_permissions`; provide `file_system.read` and/or `file_system.write` when using `with_additional_permissions`"
+                "missing `additional_permissions`; provide at least one of `network`, `file_system`, or `macos` when using `with_additional_permissions`"
                     .to_string(),
             );
         };
+        #[cfg(not(target_os = "macos"))]
+        if additional_permissions.macos.is_some() {
+            return Err("`additional_permissions.macos` is only supported on macOS".to_string());
+        }
         let normalized = normalize_additional_permissions(additional_permissions)?;
         if normalized.is_empty() {
             return Err(
-                "`additional_permissions` must include at least one path in `file_system.read` or `file_system.write`"
+                "`additional_permissions` must include at least one requested permission in `network`, `file_system`, or `macos`"
                     .to_string(),
             );
         }
