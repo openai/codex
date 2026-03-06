@@ -56,6 +56,8 @@ use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContex
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
 use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAction;
 use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::PermissionsRequestApprovalParams;
+use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
@@ -99,6 +101,11 @@ use codex_core::review_prompts;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
+use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+use codex_protocol::models::MacOsAutomationPermission as CoreMacOsAutomationPermission;
+use codex_protocol::models::MacOsSeatbeltProfileExtensions as CoreMacOsSeatbeltProfileExtensions;
+use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
+use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -114,6 +121,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use codex_shell_command::parse_command::shlex_join;
@@ -670,6 +678,51 @@ pub(crate) async fn apply_bespoke_event_handling(
                     )
                     .await;
                 });
+            }
+        }
+        EventMsg::RequestPermissions(request) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let permission_guard = thread_watch_manager
+                    .note_permission_requested(&conversation_id.to_string())
+                    .await;
+                let requested_permissions = request.permissions.clone();
+                let params = PermissionsRequestApprovalParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: request.turn_id.clone(),
+                    item_id: request.call_id.clone(),
+                    reason: request.reason,
+                    permissions: request.permissions.into(),
+                };
+                let (_pending_request_id, rx) = outgoing
+                    .send_request(ServerRequestPayload::PermissionsRequestApproval(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_request_permissions_response(
+                        request.call_id,
+                        requested_permissions,
+                        rx,
+                        conversation,
+                        permission_guard,
+                    )
+                    .await;
+                });
+            } else {
+                error!(
+                    "request_permissions is only supported on api v2 (call_id: {})",
+                    request.call_id
+                );
+                let empty = CoreRequestPermissionsResponse {
+                    permissions: Default::default(),
+                };
+                if let Err(err) = conversation
+                    .submit(Op::RequestPermissionsResponse {
+                        id: request.call_id,
+                        response: empty,
+                    })
+                    .await
+                {
+                    error!("failed to submit RequestPermissionsResponse: {err}");
+                }
             }
         }
         EventMsg::DynamicToolCallRequest(request) => {
@@ -2121,6 +2174,174 @@ fn mcp_server_elicitation_response_from_client_result(
     }
 }
 
+async fn on_request_permissions_response(
+    call_id: String,
+    requested_permissions: CorePermissionProfile,
+    receiver: oneshot::Receiver<ClientRequestResult>,
+    conversation: Arc<CodexThread>,
+    request_permissions_guard: ThreadWatchActiveGuard,
+) {
+    let response = receiver.await;
+    drop(request_permissions_guard);
+    let value = match response {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            let empty = CoreRequestPermissionsResponse {
+                permissions: Default::default(),
+            };
+            if let Err(err) = conversation
+                .submit(Op::RequestPermissionsResponse {
+                    id: call_id,
+                    response: empty,
+                })
+                .await
+            {
+                error!("failed to submit RequestPermissionsResponse: {err}");
+            }
+            return;
+        }
+        Err(err) => {
+            error!("request failed: {err:?}");
+            let empty = CoreRequestPermissionsResponse {
+                permissions: Default::default(),
+            };
+            if let Err(err) = conversation
+                .submit(Op::RequestPermissionsResponse {
+                    id: call_id,
+                    response: empty,
+                })
+                .await
+            {
+                error!("failed to submit RequestPermissionsResponse: {err}");
+            }
+            return;
+        }
+    };
+
+    let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(value)
+        .unwrap_or_else(|err| {
+            error!("failed to deserialize PermissionsRequestApprovalResponse: {err}");
+            PermissionsRequestApprovalResponse {
+                permissions: V2AdditionalPermissionProfile {
+                    network: None,
+                    file_system: None,
+                    macos: None,
+                },
+            }
+        });
+    let response = CoreRequestPermissionsResponse {
+        permissions: sanitize_granted_permissions(
+            requested_permissions,
+            response.permissions.into(),
+        ),
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::RequestPermissionsResponse {
+            id: call_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit RequestPermissionsResponse: {err}");
+    }
+}
+
+fn sanitize_granted_permissions(
+    requested: CorePermissionProfile,
+    granted: CorePermissionProfile,
+) -> CorePermissionProfile {
+    let file_system = requested
+        .file_system
+        .map(|requested_file_system| {
+            let granted_file_system = granted.file_system.unwrap_or_default();
+            let read = requested_file_system.read.map(|requested_read| {
+                let granted_read = granted_file_system.read.unwrap_or_default();
+                requested_read
+                    .into_iter()
+                    .filter(|path| granted_read.contains(path))
+                    .collect()
+            });
+            let write = requested_file_system.write.map(|requested_write| {
+                let granted_write = granted_file_system.write.unwrap_or_default();
+                requested_write
+                    .into_iter()
+                    .filter(|path| granted_write.contains(path))
+                    .collect()
+            });
+            CoreFileSystemPermissions { read, write }
+        })
+        .filter(|file_system| !file_system.is_empty());
+    let network = match (requested.network, granted.network) {
+        (
+            Some(CoreNetworkPermissions {
+                enabled: Some(true),
+            }),
+            Some(CoreNetworkPermissions {
+                enabled: Some(true),
+            }),
+        ) => Some(CoreNetworkPermissions {
+            enabled: Some(true),
+        }),
+        _ => None,
+    };
+
+    let macos = match (requested.macos, granted.macos) {
+        (Some(requested_macos), Some(granted_macos)) => {
+            let macos_automation = match (
+                requested_macos.macos_automation,
+                granted_macos.macos_automation,
+            ) {
+                (_, CoreMacOsAutomationPermission::None)
+                | (CoreMacOsAutomationPermission::None, _) => CoreMacOsAutomationPermission::None,
+                (CoreMacOsAutomationPermission::All, granted) => granted,
+                (
+                    CoreMacOsAutomationPermission::BundleIds(requested),
+                    CoreMacOsAutomationPermission::All,
+                ) => CoreMacOsAutomationPermission::BundleIds(requested),
+                (
+                    CoreMacOsAutomationPermission::BundleIds(requested),
+                    CoreMacOsAutomationPermission::BundleIds(granted),
+                ) => {
+                    let bundle_ids = requested
+                        .into_iter()
+                        .filter(|bundle_id| granted.contains(bundle_id))
+                        .collect::<Vec<String>>();
+                    if bundle_ids.is_empty() {
+                        CoreMacOsAutomationPermission::None
+                    } else {
+                        CoreMacOsAutomationPermission::BundleIds(bundle_ids)
+                    }
+                }
+            };
+
+            let macos = CoreMacOsSeatbeltProfileExtensions {
+                macos_preferences: requested_macos
+                    .macos_preferences
+                    .min(granted_macos.macos_preferences),
+                macos_automation,
+                macos_accessibility: requested_macos.macos_accessibility
+                    && granted_macos.macos_accessibility,
+                macos_calendar: requested_macos.macos_calendar && granted_macos.macos_calendar,
+            };
+
+            if macos == CoreMacOsSeatbeltProfileExtensions::default() {
+                None
+            } else {
+                Some(macos)
+            }
+        }
+        _ => None,
+    };
+
+    CorePermissionProfile {
+        network,
+        file_system,
+        macos,
+    }
+}
+
 const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
 
 fn render_review_output_text(output: &ReviewOutputEvent) -> String {
@@ -2469,6 +2690,11 @@ mod tests {
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_protocol::mcp::CallToolResult;
+    use codex_protocol::models::FileSystemPermissions;
+    use codex_protocol::models::MacOsAutomationPermission;
+    use codex_protocol::models::MacOsPreferencesPermission;
+    use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
     use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -2509,6 +2735,40 @@ mod tests {
             map_file_change_approval_decision(FileChangeApprovalDecision::AcceptForSession);
         assert_eq!(decision, ReviewDecision::ApprovedForSession);
         assert_eq!(completion_status, None);
+    }
+
+    #[test]
+    fn sanitize_granted_permissions_collapses_empty_nested_grants() {
+        let requested = PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: Some(Vec::from(["/tmp/requested"
+                    .try_into()
+                    .expect("absolute path")])),
+                write: None,
+            }),
+            macos: Some(MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadWrite,
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                    "com.apple.Notes".to_string(),
+                ]),
+                macos_accessibility: true,
+                macos_calendar: true,
+            }),
+            ..Default::default()
+        };
+        let granted = PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: Some(Vec::new()),
+                write: None,
+            }),
+            macos: Some(MacOsSeatbeltProfileExtensions::default()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            sanitize_granted_permissions(requested, granted),
+            PermissionProfile::default()
+        );
     }
 
     #[test]

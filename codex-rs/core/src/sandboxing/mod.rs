@@ -135,19 +135,29 @@ impl EffectiveSandboxPermissions {
 pub(crate) fn normalize_additional_permissions(
     additional_permissions: PermissionProfile,
 ) -> Result<PermissionProfile, String> {
+    let network = additional_permissions
+        .network
+        .filter(|network| !network.is_empty());
+    let file_system = additional_permissions
+        .file_system
+        .map(|file_system| {
+            let read = file_system
+                .read
+                .map(|paths| normalize_permission_paths(paths, "file_system.read"));
+            let write = file_system
+                .write
+                .map(|paths| normalize_permission_paths(paths, "file_system.write"));
+            FileSystemPermissions { read, write }
+        })
+        .filter(|file_system| !file_system.is_empty());
+    let macos = additional_permissions
+        .macos
+        .filter(|macos| macos != &MacOsSeatbeltProfileExtensions::default());
+
     Ok(PermissionProfile {
-        network: additional_permissions.network,
-        file_system: additional_permissions
-            .file_system
-            .map(|file_system| FileSystemPermissions {
-                read: file_system
-                    .read
-                    .map(|paths| normalize_permission_paths(paths, "file_system.read")),
-                write: file_system
-                    .write
-                    .map(|paths| normalize_permission_paths(paths, "file_system.write")),
-            }),
-        macos: additional_permissions.macos,
+        network,
+        file_system,
+        macos,
     })
 }
 
@@ -555,6 +565,24 @@ mod tests {
                 write: Some(vec![path]),
             })
         );
+    }
+
+    #[test]
+    fn normalize_additional_permissions_drops_empty_nested_profiles() {
+        let permissions = normalize_additional_permissions(PermissionProfile {
+            network: Some(NetworkPermissions { enabled: None }),
+            file_system: Some(FileSystemPermissions {
+                read: None,
+                write: None,
+            }),
+            #[cfg(target_os = "macos")]
+            macos: Some(MacOsSeatbeltProfileExtensions::default()),
+            #[cfg(not(target_os = "macos"))]
+            macos: None,
+        })
+        .expect("permissions");
+
+        assert_eq!(permissions, PermissionProfile::default());
     }
 
     #[cfg(target_os = "macos")]
