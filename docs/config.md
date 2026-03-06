@@ -12,6 +12,18 @@ Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the c
 
 - https://developers.openai.com/codex/config-reference
 
+### Clearing map-valued settings from the CLI
+
+`--config` / `-c` overrides can clear map-valued settings by assigning an explicit empty table.
+
+For example, to disable all configured MCP servers for a single run:
+
+```bash
+codex --config 'mcp_servers={}'
+```
+
+This replacement behavior is generic, so any map-valued config key can be reset the same way.
+
 ## Apps (Connectors)
 
 Use `$` in the composer to insert a ChatGPT connector; the popover lists accessible
