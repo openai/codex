@@ -1,11 +1,14 @@
 ---
 source: core/tests/suite/compact_resume_fork.rs
+assertion_line: 487
 expression: "context_snapshot::format_labeled_requests_snapshot(\"rollback past compaction replay after rollback\",\n&[(\"compaction request\", &requests[1]), (\"before rollback\", &requests[2]),\n(\"after rollback\", &requests[3]),],\n&ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::KindWithTextPrefix\n{ max_chars: 64 }),)"
 ---
 Scenario: rollback past compaction replay after rollback
 
 ## compaction request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
@@ -16,7 +19,9 @@ Scenario: rollback past compaction replay after rollback
 ## before rollback
 00:message/user:hello world
 01:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
 03:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
@@ -25,11 +30,15 @@ Scenario: rollback past compaction replay after rollback
 ## after rollback
 00:message/user:hello world
 01:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
 03:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-04:message/developer:<PERMISSIONS_INSTRUCTIONS>
+04:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
 05:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
