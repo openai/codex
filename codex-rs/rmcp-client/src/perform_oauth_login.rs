@@ -297,9 +297,19 @@ fn callback_bind_host(callback_url: Option<&str>) -> &'static str {
         return "127.0.0.1";
     };
 
-    match parsed.host_str() {
-        Some("localhost" | "127.0.0.1" | "::1") | None => "127.0.0.1",
-        Some(_) => "0.0.0.0",
+    let Some(host) = parsed.host_str() else {
+        return "127.0.0.1";
+    };
+
+    if host.eq_ignore_ascii_case("localhost") {
+        return "127.0.0.1";
+    }
+    let host = host.trim_matches(['[', ']']);
+
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) if ip.is_loopback() => "127.0.0.1",
+        Ok(std::net::IpAddr::V6(ip)) if ip.is_loopback() => "[::1]",
+        Ok(_) | Err(_) => "0.0.0.0",
     }
 }
 
@@ -546,6 +556,7 @@ mod tests {
     use super::DEFAULT_CIMD_REDIRECT_URI_ROOT;
     use super::OAuthCredentialsStoreMode;
     use super::append_query_param;
+    use super::callback_bind_host;
     use super::callback_path_from_redirect_uri;
     use super::client_id_metadata_document_supported;
     use super::parse_oauth_callback;
@@ -577,6 +588,18 @@ mod tests {
         let path = callback_path_from_redirect_uri("https://example.com/oauth/callback")
             .expect("redirect URI should parse");
         assert_eq!(path, "/oauth/callback");
+    }
+
+    #[test]
+    fn callback_bind_host_preserves_ipv6_loopback() {
+        let bind_host = callback_bind_host(Some("http://[::1]:33418/callback"));
+        assert_eq!(bind_host, "[::1]");
+    }
+
+    #[test]
+    fn callback_bind_host_maps_localhost_to_ipv4_loopback() {
+        let bind_host = callback_bind_host(Some("http://localhost:33418/callback"));
+        assert_eq!(bind_host, "127.0.0.1");
     }
 
     #[test]
