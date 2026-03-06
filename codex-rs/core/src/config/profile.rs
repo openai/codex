@@ -10,6 +10,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 
@@ -50,6 +51,7 @@ pub struct ConfigProfile {
     pub tools_web_search: Option<bool>,
     pub tools_view_image: Option<bool>,
     pub web_search: Option<WebSearchMode>,
+    pub web_search_config: Option<WebSearchConfig>,
     pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
     #[serde(default)]
     pub windows: Option<WindowsToml>,

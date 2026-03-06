@@ -116,6 +116,50 @@ pub enum WebSearchMode {
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
+pub enum WebSearchContextSize {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchFilters {
+    pub allowed_domains: Option<Vec<String>>,
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum WebSearchUserLocationType {
+    #[default]
+    Approximate,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchUserLocation {
+    #[serde(default)]
+    pub r#type: WebSearchUserLocationType,
+    pub country: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchConfig {
+    pub filters: Option<WebSearchFilters>,
+    pub user_location: Option<WebSearchUserLocation>,
+    pub search_context_size: Option<WebSearchContextSize>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub enum ServiceTier {
     Fast,
     Flex,

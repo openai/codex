@@ -2635,6 +2635,16 @@
               "type": "null"
             }
           ]
+        },
+        "web_search_config": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
@@ -8655,6 +8665,16 @@
               "type": "null"
             }
           ]
+        },
+        "web_search_config": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
@@ -14586,11 +14606,114 @@
         }
       ]
     },
+    "WebSearchConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchFilters"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "search_context_size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchContextSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_location": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchUserLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "WebSearchContextSize": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "WebSearchFilters": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "WebSearchMode": {
       "enum": [
         "disabled",
         "cached",
         "live"
+      ],
+      "type": "string"
+    },
+    "WebSearchUserLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "city": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "country": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WebSearchUserLocationType"
+            }
+          ],
+          "default": "approximate"
+        }
+      },
+      "type": "object"
+    },
+    "WebSearchUserLocationType": {
+      "enum": [
+        "approximate"
       ],
       "type": "string"
     },

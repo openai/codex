@@ -539,6 +539,9 @@
         "web_search": {
           "$ref": "#/definitions/WebSearchMode"
         },
+        "web_search_config": {
+          "$ref": "#/definitions/WebSearchConfig"
+        },
         "windows": {
           "allOf": [
             {
@@ -1548,11 +1551,78 @@
       ],
       "type": "string"
     },
+    "WebSearchConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "$ref": "#/definitions/WebSearchFilters"
+        },
+        "search_context_size": {
+          "$ref": "#/definitions/WebSearchContextSize"
+        },
+        "user_location": {
+          "$ref": "#/definitions/WebSearchUserLocation"
+        }
+      },
+      "type": "object"
+    },
+    "WebSearchContextSize": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "WebSearchFilters": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "WebSearchMode": {
       "enum": [
         "disabled",
         "cached",
         "live"
+      ],
+      "type": "string"
+    },
+    "WebSearchUserLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "city": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "type": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WebSearchUserLocationType"
+            }
+          ],
+          "default": "approximate"
+        }
+      },
+      "type": "object"
+    },
+    "WebSearchUserLocationType": {
+      "enum": [
+        "approximate"
       ],
       "type": "string"
     },
@@ -2223,6 +2293,14 @@
         }
       ],
       "description": "Controls the web search tool mode: disabled, cached, or live."
+    },
+    "web_search_config": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/WebSearchConfig"
+        }
+      ],
+      "description": "Optional structured configuration for the web search tool."
     },
     "windows": {
       "allOf": [

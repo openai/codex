@@ -744,6 +744,7 @@ impl TurnContext {
             web_search_mode: self.tools_config.web_search_mode,
             session_source: self.session_source.clone(),
         })
+        .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_agent_roles(config.agent_roles.clone());
 
@@ -1119,6 +1120,7 @@ impl Session {
             web_search_mode: Some(per_turn_config.web_search_mode.value()),
             session_source: session_source.clone(),
         })
+        .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_agent_roles(per_turn_config.agent_roles.clone());
 
@@ -4911,6 +4913,7 @@ async fn spawn_review_thread(
         web_search_mode: Some(review_web_search_mode),
         session_source: parent_turn_context.session_source.clone(),
     })
+    .with_web_search_config(None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_agent_roles(config.agent_roles.clone());
 
