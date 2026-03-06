@@ -13,8 +13,8 @@ use crate::metrics::Result as MetricsResult;
 use serde::Serialize;
 use strum_macros::Display;
 
-pub use crate::events::otel_manager::OtelEventMetadata;
-pub use crate::events::otel_manager::OtelManager;
+pub use crate::events::session_telemetry::SessionTelemetry;
+pub use crate::events::session_telemetry::SessionTelemetryMetadata;
 pub use crate::metrics::runtime_metrics::RuntimeMetricTotals;
 pub use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
 pub use crate::metrics::timer::Timer;

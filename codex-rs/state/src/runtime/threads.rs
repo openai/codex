@@ -447,7 +447,7 @@ ON CONFLICT(thread_id, position) DO NOTHING
         &self,
         builder: &ThreadMetadataBuilder,
         items: &[RolloutItem],
-        otel: Option<&OtelManager>,
+        otel: Option<&SessionTelemetry>,
         new_thread_memory_mode: Option<&str>,
         updated_at_override: Option<DateTime<Utc>>,
     ) -> anyhow::Result<()> {

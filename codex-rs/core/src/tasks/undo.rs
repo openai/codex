@@ -45,7 +45,7 @@ impl SessionTask for UndoTask {
         let _ = session
             .session
             .services
-            .otel_manager
+            .session_telemetry
             .counter("codex.task.undo", 1, &[]);
         let sess = session.clone_session();
         sess.send_event(

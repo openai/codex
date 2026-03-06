@@ -98,7 +98,7 @@ pub(crate) async fn execute_user_shell_command(
 ) {
     session
         .services
-        .otel_manager
+        .session_telemetry
         .counter("codex.task.user_shell", 1, &[]);
 
     if mode == UserShellCommandMode::StandaloneTurn {

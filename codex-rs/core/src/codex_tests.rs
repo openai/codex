@@ -1811,13 +1811,13 @@ async fn build_test_config(codex_home: &Path) -> Config {
         .expect("load default test config")
 }
 
-fn otel_manager(
+fn session_telemetry(
     conversation_id: ThreadId,
     config: &Config,
     model_info: &ModelInfo,
     session_source: SessionSource,
-) -> OtelManager {
-    OtelManager::new(
+) -> SessionTelemetry {
+    SessionTelemetry::new(
         conversation_id,
         ModelsManager::get_model_offline_for_tests(config.model.as_deref()).as_str(),
         model_info.slug.as_str(),
@@ -2026,7 +2026,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_configuration.collaboration_mode.model(),
         &per_turn_config,
     );
-    let otel_manager = otel_manager(
+    let session_telemetry = session_telemetry(
         conversation_id,
         config.as_ref(),
         &model_info,
@@ -2068,7 +2068,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: auth_manager.clone(),
-        otel_manager: otel_manager.clone(),
+        session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         execve_session_approvals: RwLock::new(HashMap::new()),
@@ -2100,7 +2100,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
     let turn_context = Session::make_turn_context(
         Some(Arc::clone(&auth_manager)),
-        &otel_manager,
+        &session_telemetry,
         session_configuration.provider.clone(),
         &session_configuration,
         per_turn_config,
@@ -2431,7 +2431,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         session_configuration.collaboration_mode.model(),
         &per_turn_config,
     );
-    let otel_manager = otel_manager(
+    let session_telemetry = session_telemetry(
         conversation_id,
         config.as_ref(),
         &model_info,
@@ -2473,7 +2473,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: Arc::clone(&auth_manager),
-        otel_manager: otel_manager.clone(),
+        session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         execve_session_approvals: RwLock::new(HashMap::new()),
@@ -2505,7 +2505,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
     let turn_context = Arc::new(Session::make_turn_context(
         Some(Arc::clone(&auth_manager)),
-        &otel_manager,
+        &session_telemetry,
         session_configuration.provider.clone(),
         &session_configuration,
         per_turn_config,
