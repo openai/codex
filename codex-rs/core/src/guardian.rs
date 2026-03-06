@@ -469,7 +469,8 @@ mod tests {
 
     #[test]
     fn build_guardian_transcript_keeps_original_numbering() {
-        let entries = [GuardianTranscriptEntry {
+        let entries = [
+            GuardianTranscriptEntry {
                 number: 1,
                 role: "user",
                 is_user: true,
@@ -486,7 +487,8 @@ mod tests {
                 role: "assistant",
                 is_user: false,
                 text: "third".to_string(),
-            }];
+            },
+        ];
 
         let (transcript, omission) =
             build_guardian_transcript(&entries[..2], "session-1", Some("/tmp/rollout.jsonl"));
