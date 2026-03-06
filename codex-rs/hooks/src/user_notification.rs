@@ -121,6 +121,7 @@ mod tests {
     fn legacy_notify_json_matches_historical_wire_shape() -> Result<()> {
         let payload = HookPayload {
             session_id: ThreadId::new(),
+            transcript_path: None,
             cwd: std::path::Path::new("/Users/example/project").to_path_buf(),
             client: Some("codex-tui".to_string()),
             triggered_at: chrono::Utc::now(),

@@ -59,6 +59,7 @@ use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
+use codex_hooks::HookEventLifecycle;
 use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
 use codex_hooks::Hooks;
@@ -1518,9 +1519,7 @@ impl Session {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(HooksConfig {
-                legacy_notify_argv: config.notify.clone(),
-            }),
+            hooks: Hooks::new(hooks_config_from_config(config.as_ref())),
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
@@ -1600,6 +1599,29 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
+        let transcript_path = compute_hook_transcript_path(sess.as_ref()).await;
+        dispatch_nonfatal_lifecycle_hook(
+            sess.as_ref(),
+            HookPayload {
+                session_id: conversation_id,
+                transcript_path,
+                cwd: session_configuration.cwd.clone(),
+                client: session_configuration.app_server_client_name.clone(),
+                triggered_at: chrono::Utc::now(),
+                hook_event: HookEvent::SessionStart {
+                    event: HookEventLifecycle {
+                        previous_session_id: None,
+                        prompt: None,
+                        last_assistant_message: None,
+                        tool_use_id: None,
+                        tool_input: None,
+                        subagent_id: None,
+                        metadata: None,
+                    },
+                },
+            },
+        )
+        .await;
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_file_watcher_listener();
@@ -4812,9 +4834,18 @@ mod handlers {
             i64::try_from(turn_count).unwrap_or(0),
             &[],
         );
+        let cwd = {
+            let state = sess.state.lock().await;
+            state.session_configuration.cwd.clone()
+        };
 
         // Gracefully flush and shutdown rollout recorder on session end so tests
         // that inspect the rollout file do not race with the background writer.
+        let client = {
+            let state = sess.state.lock().await;
+            state.session_configuration.app_server_client_name.clone()
+        };
+        let transcript_path = super::compute_hook_transcript_path(sess.as_ref()).await;
         let recorder_opt = {
             let mut guard = sess.services.rollout.lock().await;
             guard.take()
@@ -4832,6 +4863,28 @@ mod handlers {
             };
             sess.send_event_raw(event).await;
         }
+        super::dispatch_nonfatal_lifecycle_hook(
+            sess.as_ref(),
+            codex_hooks::HookPayload {
+                session_id: sess.conversation_id,
+                transcript_path,
+                cwd,
+                client,
+                triggered_at: chrono::Utc::now(),
+                hook_event: codex_hooks::HookEvent::SessionEnd {
+                    event: codex_hooks::HookEventLifecycle {
+                        previous_session_id: None,
+                        prompt: None,
+                        last_assistant_message: None,
+                        tool_use_id: None,
+                        tool_input: None,
+                        subagent_id: None,
+                        metadata: None,
+                    },
+                },
+            },
+        )
+        .await;
 
         let event = Event {
             id: sub_id,
@@ -5066,6 +5119,55 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
         .collect()
 }
 
+fn hooks_config_from_config(config: &Config) -> HooksConfig {
+    HooksConfig {
+        legacy_notify_argv: config.notify.clone(),
+        session_start_argv: config.hooks.session_start.clone(),
+        user_prompt_submit_argv: config.hooks.user_prompt_submit.clone(),
+        pre_tool_use_argv: config.hooks.pre_tool_use.clone(),
+        post_tool_use_argv: config.hooks.post_tool_use.clone(),
+        stop_argv: config.hooks.stop.clone(),
+        pre_compact_argv: config.hooks.pre_compact.clone(),
+        session_end_argv: config.hooks.session_end.clone(),
+        subagent_start_argv: config.hooks.subagent_start.clone(),
+        subagent_stop_argv: config.hooks.subagent_stop.clone(),
+    }
+}
+
+pub(crate) async fn compute_hook_transcript_path(session: &Session) -> Option<String> {
+    let rollout = session.services.rollout.lock().await;
+    rollout
+        .as_ref()
+        .map(|recorder| recorder.rollout_path().display().to_string())
+}
+
+pub(crate) async fn dispatch_nonfatal_lifecycle_hook(session: &Session, hook_payload: HookPayload) {
+    let hook_event = hook_payload.hook_event.name();
+    let hook_outcomes = session.hooks().dispatch(hook_payload).await;
+    for hook_outcome in hook_outcomes {
+        let hook_name = hook_outcome.hook_name;
+        match hook_outcome.result {
+            HookResult::Success => {}
+            HookResult::FailedContinue(error) => {
+                warn!(
+                    hook_event = %hook_event,
+                    hook_name = %hook_name,
+                    error = %error,
+                    "lifecycle hook failed; continuing"
+                );
+            }
+            HookResult::FailedAbort(error) => {
+                warn!(
+                    hook_event = %hook_event,
+                    hook_name = %hook_name,
+                    error = %error,
+                    "lifecycle hook failed with abort; continuing"
+                );
+            }
+        }
+    }
+}
+
 /// Takes a user message as input and runs a loop where, at each sampling request, the model
 /// replies with either:
 ///
@@ -5100,6 +5202,37 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
+    let prompt = input
+        .iter()
+        .filter_map(|item| match item {
+            UserInput::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let transcript_path = compute_hook_transcript_path(sess.as_ref()).await;
+    dispatch_nonfatal_lifecycle_hook(
+        sess.as_ref(),
+        HookPayload {
+            session_id: sess.conversation_id,
+            transcript_path,
+            cwd: turn_context.cwd.clone(),
+            client: turn_context.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::UserPromptSubmit {
+                event: HookEventLifecycle {
+                    previous_session_id: None,
+                    prompt: (!prompt.is_empty()).then_some(prompt),
+                    last_assistant_message: None,
+                    tool_use_id: None,
+                    tool_input: None,
+                    subagent_id: None,
+                    metadata: None,
+                },
+            },
+        },
+    )
+    .await;
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -5385,11 +5518,38 @@ pub(crate) async fn run_turn(
                 }
 
                 if !needs_follow_up {
+                    let last_assistant_message = sampling_request_last_agent_message.clone();
                     last_agent_message = sampling_request_last_agent_message;
+                    let turn_end_prompt = sampling_request_input_messages.last().cloned();
+                    let transcript_path = compute_hook_transcript_path(sess.as_ref()).await;
+                    dispatch_nonfatal_lifecycle_hook(
+                        sess.as_ref(),
+                        HookPayload {
+                            session_id: sess.conversation_id,
+                            transcript_path,
+                            cwd: turn_context.cwd.clone(),
+                            client: turn_context.app_server_client_name.clone(),
+                            triggered_at: chrono::Utc::now(),
+                            hook_event: HookEvent::Stop {
+                                event: HookEventLifecycle {
+                                    previous_session_id: None,
+                                    prompt: turn_end_prompt,
+                                    last_assistant_message,
+                                    tool_use_id: None,
+                                    tool_input: None,
+                                    subagent_id: None,
+                                    metadata: None,
+                                },
+                            },
+                        },
+                    )
+                    .await;
+                    let transcript_path = compute_hook_transcript_path(sess.as_ref()).await;
                     let hook_outcomes = sess
                         .hooks()
                         .dispatch(HookPayload {
                             session_id: sess.conversation_id,
+                            transcript_path,
                             cwd: turn_context.cwd.clone(),
                             client: turn_context.app_server_client_name.clone(),
                             triggered_at: chrono::Utc::now(),
@@ -5569,6 +5729,29 @@ async fn run_auto_compact(
         )
         .await?;
     }
+    let transcript_path = compute_hook_transcript_path(sess.as_ref()).await;
+    dispatch_nonfatal_lifecycle_hook(
+        sess.as_ref(),
+        HookPayload {
+            session_id: sess.conversation_id,
+            transcript_path,
+            cwd: turn_context.cwd.clone(),
+            client: turn_context.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::PreCompact {
+                event: HookEventLifecycle {
+                    previous_session_id: None,
+                    prompt: Some(turn_context.compact_prompt().to_string()),
+                    last_assistant_message: None,
+                    tool_use_id: None,
+                    tool_input: None,
+                    subagent_id: None,
+                    metadata: None,
+                },
+            },
+        },
+    )
+    .await;
     Ok(())
 }
 
@@ -8923,9 +9106,7 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(HooksConfig {
-                legacy_notify_argv: config.notify.clone(),
-            }),
+            hooks: Hooks::new(hooks_config_from_config(config.as_ref())),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
@@ -9232,6 +9413,48 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn compute_hook_transcript_path_is_none_without_rollout() {
+        let (session, _turn_context) = make_session_and_context().await;
+
+        let transcript_path = compute_hook_transcript_path(&session).await;
+
+        assert_eq!(transcript_path, None);
+    }
+
+    #[tokio::test]
+    async fn compute_hook_transcript_path_prefers_rollout_path_when_available() {
+        let (session, _turn_context) = make_session_and_context().await;
+        let config = {
+            let state = session.state.lock().await;
+            Arc::clone(&state.session_configuration.original_config_do_not_use)
+        };
+        let recorder = RolloutRecorder::new(
+            config.as_ref(),
+            RolloutRecorderParams::new(
+                session.conversation_id,
+                None,
+                SessionSource::Exec,
+                BaseInstructions::default(),
+                Vec::new(),
+                EventPersistenceMode::Limited,
+            ),
+            None,
+            None,
+        )
+        .await
+        .expect("create rollout recorder");
+        let rollout_path = recorder.rollout_path().display().to_string();
+        {
+            let mut rollout = session.services.rollout.lock().await;
+            *rollout = Some(recorder);
+        }
+
+        let transcript_path = compute_hook_transcript_path(&session).await;
+
+        assert_eq!(transcript_path, Some(rollout_path));
+    }
+
     pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> (
@@ -9332,9 +9555,7 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(HooksConfig {
-                legacy_notify_argv: config.notify.clone(),
-            }),
+            hooks: Hooks::new(hooks_config_from_config(config.as_ref())),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,

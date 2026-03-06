@@ -270,6 +270,9 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
+    /// Optional external hook commands keyed by lifecycle event.
+    pub hooks: HooksToml,
+
     /// TUI notifications preference. When set, the TUI will send terminal notifications on
     /// approvals and turn completions when not focused.
     pub tui_notifications: Notifications,
@@ -1005,6 +1008,22 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
         .map_err(|err| std::io::Error::other(format!("failed to persist config.toml: {err}")))
 }
 
+/// Lifecycle hook command config deserialized from `[hooks]` in config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
+pub struct HooksToml {
+    pub session_start: Option<Vec<String>>,
+    pub user_prompt_submit: Option<Vec<String>>,
+    pub pre_tool_use: Option<Vec<String>>,
+    pub post_tool_use: Option<Vec<String>>,
+    pub stop: Option<Vec<String>>,
+    pub pre_compact: Option<Vec<String>>,
+    pub session_end: Option<Vec<String>>,
+    pub subagent_start: Option<Vec<String>>,
+    pub subagent_stop: Option<Vec<String>>,
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -1052,6 +1071,10 @@ pub struct ConfigToml {
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
+
+    /// Optional external hook commands keyed by lifecycle event.
+    #[serde(default)]
+    pub hooks: HooksToml,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -2141,6 +2164,7 @@ impl Config {
             },
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
+            hooks: cfg.hooks,
             user_instructions,
             base_instructions,
             personality,
@@ -5178,6 +5202,7 @@ model_verbosity = "high"
                 enforce_residency: Constrained::allow_any(None),
                 user_instructions: None,
                 notify: None,
+                hooks: HooksToml::default(),
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -5307,6 +5332,7 @@ model_verbosity = "high"
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
             notify: None,
+            hooks: HooksToml::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -5434,6 +5460,7 @@ model_verbosity = "high"
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
             notify: None,
+            hooks: HooksToml::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -5547,6 +5574,7 @@ model_verbosity = "high"
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
             notify: None,
+            hooks: HooksToml::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -6616,6 +6644,59 @@ speaker = "Desk Speakers"
             Some("Desk Speakers")
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod hooks_toml_tests {
+    use super::ConfigToml;
+    use super::HooksToml;
+
+    #[test]
+    fn hooks_toml_uses_claude_style_hook_names() {
+        let toml = r#"
+            [hooks]
+            session_start = ["hooks", "SessionStart"]
+            user_prompt_submit = ["hooks", "UserPromptSubmit"]
+            pre_tool_use = ["hooks", "PreToolUse"]
+            post_tool_use = ["hooks", "PostToolUse"]
+            stop = ["hooks", "Stop"]
+            pre_compact = ["hooks", "PreCompact"]
+            session_end = ["hooks", "SessionEnd"]
+            subagent_start = ["hooks", "SubagentStart"]
+            subagent_stop = ["hooks", "SubagentStop"]
+        "#;
+
+        let parsed: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for hooks");
+
+        assert_eq!(
+            parsed.hooks,
+            HooksToml {
+                session_start: Some(vec!["hooks".to_string(), "SessionStart".to_string()]),
+                user_prompt_submit: Some(vec!["hooks".to_string(), "UserPromptSubmit".to_string()]),
+                pre_tool_use: Some(vec!["hooks".to_string(), "PreToolUse".to_string()]),
+                post_tool_use: Some(vec!["hooks".to_string(), "PostToolUse".to_string()]),
+                stop: Some(vec!["hooks".to_string(), "Stop".to_string()]),
+                pre_compact: Some(vec!["hooks".to_string(), "PreCompact".to_string()]),
+                session_end: Some(vec!["hooks".to_string(), "SessionEnd".to_string()]),
+                subagent_start: Some(vec!["hooks".to_string(), "SubagentStart".to_string()]),
+                subagent_stop: Some(vec!["hooks".to_string(), "SubagentStop".to_string()]),
+            }
+        );
+    }
+
+    #[test]
+    fn hooks_toml_rejects_unlanded_legacy_hook_names() {
+        let toml = r#"
+            [hooks]
+            turn_start = ["hooks", "turn_start"]
+        "#;
+
+        let err =
+            toml::from_str::<ConfigToml>(toml).expect_err("legacy hook names should be rejected");
+
+        assert!(err.to_string().contains("turn_start"));
     }
 }
 

@@ -637,6 +637,67 @@
         }
       ]
     },
+    "HooksToml": {
+      "additionalProperties": false,
+      "description": "Lifecycle hook command config deserialized from `[hooks]` in config.toml.",
+      "properties": {
+        "post_tool_use": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pre_compact": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pre_tool_use": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "session_end": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "session_start": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stop": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subagent_start": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subagent_stop": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "user_prompt_submit": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "MemoriesToml": {
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
@@ -1909,6 +1970,25 @@
       ],
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
+    },
+    "hooks": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HooksToml"
+        }
+      ],
+      "default": {
+        "post_tool_use": null,
+        "pre_compact": null,
+        "pre_tool_use": null,
+        "session_end": null,
+        "session_start": null,
+        "stop": null,
+        "subagent_start": null,
+        "subagent_stop": null,
+        "user_prompt_submit": null
+      },
+      "description": "Optional external hook commands keyed by lifecycle event."
     },
     "instructions": {
       "description": "System instructions.",

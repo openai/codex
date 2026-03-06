@@ -9,6 +9,8 @@ use crate::agent::AgentStatus;
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::codex::compute_hook_transcript_path;
+use crate::codex::dispatch_nonfatal_lifecycle_hook;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::features::Feature;
@@ -20,6 +22,10 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
+use codex_hooks::HookEvent;
+use codex_hooks::HookEventLifecycle;
+use codex_hooks::HookPayload;
+use codex_hooks::HookToolInput;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -136,6 +142,7 @@ mod spawn {
             .filter(|role| !role.is_empty());
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
+        let prompt_for_hook = (!prompt.is_empty()).then_some(prompt.clone());
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
         let max_depth = turn.config.agent_max_depth;
@@ -155,6 +162,31 @@ mod spawn {
                 .into(),
             )
             .await;
+        let transcript_path = compute_hook_transcript_path(session.as_ref()).await;
+        dispatch_nonfatal_lifecycle_hook(
+            session.as_ref(),
+            HookPayload {
+                session_id: session.conversation_id,
+                transcript_path: transcript_path.clone(),
+                cwd: turn.cwd.clone(),
+                client: turn.app_server_client_name.clone(),
+                triggered_at: chrono::Utc::now(),
+                hook_event: HookEvent::SubagentStart {
+                    event: HookEventLifecycle {
+                        previous_session_id: None,
+                        prompt: prompt_for_hook.clone(),
+                        last_assistant_message: None,
+                        tool_use_id: Some(call_id.clone()),
+                        tool_input: Some(HookToolInput::Function {
+                            arguments: arguments.clone(),
+                        }),
+                        subagent_id: None,
+                        metadata: None,
+                    },
+                },
+            },
+        )
+        .await;
         let mut config =
             build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
         apply_role_to_config(&mut config, role_name)
@@ -201,7 +233,7 @@ mod spawn {
             .send_event(
                 &turn,
                 CollabAgentSpawnEndEvent {
-                    call_id,
+                    call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     new_thread_id,
                     new_agent_nickname,
@@ -212,6 +244,30 @@ mod spawn {
                 .into(),
             )
             .await;
+        dispatch_nonfatal_lifecycle_hook(
+            session.as_ref(),
+            HookPayload {
+                session_id: session.conversation_id,
+                transcript_path,
+                cwd: turn.cwd.clone(),
+                client: turn.app_server_client_name.clone(),
+                triggered_at: chrono::Utc::now(),
+                hook_event: HookEvent::SubagentStop {
+                    event: HookEventLifecycle {
+                        previous_session_id: None,
+                        prompt: prompt_for_hook,
+                        last_assistant_message: None,
+                        tool_use_id: Some(call_id.clone()),
+                        tool_input: Some(HookToolInput::Function {
+                            arguments: arguments.clone(),
+                        }),
+                        subagent_id: new_thread_id,
+                        metadata: None,
+                    },
+                },
+            },
+        )
+        .await;
         let new_thread_id = result?;
         let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
         turn.otel_manager

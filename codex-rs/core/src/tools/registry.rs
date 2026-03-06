@@ -4,6 +4,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::client_common::tools::ToolSpec;
+use crate::codex::compute_hook_transcript_path;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
@@ -14,7 +15,8 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
 use codex_hooks::HookEvent;
-use codex_hooks::HookEventAfterToolUse;
+use codex_hooks::HookEventPostToolUse;
+use codex_hooks::HookEventPreToolUse;
 use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
 use codex_hooks::HookToolInput;
@@ -163,6 +165,9 @@ impl ToolRegistry {
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
+        if let Some(err) = dispatch_pre_tool_use_hook(&invocation, is_mutating).await {
+            return Err(err);
+        }
         let output_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
 
@@ -204,7 +209,7 @@ impl ToolRegistry {
             Err(err) => (err.to_string(), false),
         };
         emit_metric_for_tool_read(&invocation, success).await;
-        let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
+        let hook_abort_error = dispatch_post_tool_use_hook(PostToolUseHookDispatch {
             invocation: &invocation,
             output_preview,
             success,
@@ -366,7 +371,7 @@ fn hook_tool_kind(tool_input: &HookToolInput) -> HookToolKind {
     }
 }
 
-struct AfterToolUseHookDispatch<'a> {
+struct PostToolUseHookDispatch<'a> {
     invocation: &'a ToolInvocation,
     output_preview: String,
     success: bool,
@@ -375,22 +380,93 @@ struct AfterToolUseHookDispatch<'a> {
     mutating: bool,
 }
 
-async fn dispatch_after_tool_use_hook(
-    dispatch: AfterToolUseHookDispatch<'_>,
+async fn dispatch_pre_tool_use_hook(
+    invocation: &ToolInvocation,
+    mutating: bool,
 ) -> Option<FunctionCallError> {
-    let AfterToolUseHookDispatch { invocation, .. } = dispatch;
     let session = invocation.session.as_ref();
     let turn = invocation.turn.as_ref();
     let tool_input = HookToolInput::from(&invocation.payload);
+    let transcript_path = compute_hook_transcript_path(session).await;
     let hook_outcomes = session
         .hooks()
         .dispatch(HookPayload {
             session_id: session.conversation_id,
+            transcript_path,
             cwd: turn.cwd.clone(),
             client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
-            hook_event: HookEvent::AfterToolUse {
-                event: HookEventAfterToolUse {
+            hook_event: HookEvent::PreToolUse {
+                event: HookEventPreToolUse {
+                    turn_id: turn.sub_id.clone(),
+                    call_id: invocation.call_id.clone(),
+                    tool_name: invocation.tool_name.clone(),
+                    tool_kind: hook_tool_kind(&tool_input),
+                    tool_input,
+                    mutating: Some(mutating),
+                    sandbox: Some(
+                        sandbox_tag(
+                            &turn.sandbox_policy,
+                            turn.windows_sandbox_level,
+                            turn.features.enabled(Feature::UseLinuxSandboxBwrap),
+                        )
+                        .to_string(),
+                    ),
+                    sandbox_policy: Some(sandbox_policy_tag(&turn.sandbox_policy).to_string()),
+                },
+            },
+        })
+        .await;
+
+    for hook_outcome in hook_outcomes {
+        let hook_name = hook_outcome.hook_name;
+        match hook_outcome.result {
+            HookResult::Success => {}
+            HookResult::FailedContinue(error) => {
+                warn!(
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_name = %hook_name,
+                    error = %error,
+                    "pre_tool_use hook failed; continuing"
+                );
+            }
+            HookResult::FailedAbort(error) => {
+                warn!(
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_name = %hook_name,
+                    error = %error,
+                    "pre_tool_use hook failed; aborting operation"
+                );
+                return Some(FunctionCallError::Fatal(format!(
+                    "pre_tool_use hook '{hook_name}' failed and aborted operation: {error}"
+                )));
+            }
+        }
+    }
+
+    None
+}
+
+async fn dispatch_post_tool_use_hook(
+    dispatch: PostToolUseHookDispatch<'_>,
+) -> Option<FunctionCallError> {
+    let PostToolUseHookDispatch { invocation, .. } = dispatch;
+    let session = invocation.session.as_ref();
+    let turn = invocation.turn.as_ref();
+    let tool_input = HookToolInput::from(&invocation.payload);
+    let transcript_path = compute_hook_transcript_path(session).await;
+    let hook_outcomes = session
+        .hooks()
+        .dispatch(HookPayload {
+            session_id: session.conversation_id,
+            transcript_path,
+            cwd: turn.cwd.clone(),
+            client: turn.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::PostToolUse {
+                event: HookEventPostToolUse {
                     turn_id: turn.sub_id.clone(),
                     call_id: invocation.call_id.clone(),
                     tool_name: invocation.tool_name.clone(),
@@ -423,7 +499,7 @@ async fn dispatch_after_tool_use_hook(
                     tool_name = %invocation.tool_name,
                     hook_name = %hook_name,
                     error = %error,
-                    "after_tool_use hook failed; continuing"
+                    "post_tool_use hook failed; continuing"
                 );
             }
             HookResult::FailedAbort(error) => {
@@ -432,10 +508,10 @@ async fn dispatch_after_tool_use_hook(
                     tool_name = %invocation.tool_name,
                     hook_name = %hook_name,
                     error = %error,
-                    "after_tool_use hook failed; aborting operation"
+                    "post_tool_use hook failed; aborting operation"
                 );
                 return Some(FunctionCallError::Fatal(format!(
-                    "after_tool_use hook '{hook_name}' failed and aborted operation: {error}"
+                    "post_tool_use hook '{hook_name}' failed and aborted operation: {error}"
                 )));
             }
         }
