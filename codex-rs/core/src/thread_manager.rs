@@ -418,10 +418,10 @@ impl ThreadManager {
         )
         .await;
         if let InitialHistory::Forked(items) = &mut history {
-            items.push(RolloutItem::ForkReference(ForkReferenceItem {
+            *items = vec![RolloutItem::ForkReference(ForkReferenceItem {
                 rollout_path: path.clone(),
                 nth_user_message,
-            }));
+            })];
         }
         Box::pin(self.state.spawn_thread(
             config,
