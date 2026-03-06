@@ -10,6 +10,8 @@ use crate::metrics::names::SSE_EVENT_COUNT_METRIC;
 use crate::metrics::names::SSE_EVENT_DURATION_METRIC;
 use crate::metrics::names::TOOL_CALL_COUNT_METRIC;
 use crate::metrics::names::TOOL_CALL_DURATION_METRIC;
+use crate::metrics::names::TURN_TTFM_DURATION_METRIC;
+use crate::metrics::names::TURN_TTFT_DURATION_METRIC;
 use crate::metrics::names::WEBSOCKET_EVENT_COUNT_METRIC;
 use crate::metrics::names::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_COUNT_METRIC;
@@ -49,6 +51,8 @@ pub struct RuntimeMetricsSummary {
     pub responses_api_engine_service_ttft_ms: u64,
     pub responses_api_engine_iapi_tbt_ms: u64,
     pub responses_api_engine_service_tbt_ms: u64,
+    pub turn_ttft_ms: u64,
+    pub turn_ttfm_ms: u64,
 }
 
 impl RuntimeMetricsSummary {
@@ -64,6 +68,8 @@ impl RuntimeMetricsSummary {
             && self.responses_api_engine_service_ttft_ms == 0
             && self.responses_api_engine_iapi_tbt_ms == 0
             && self.responses_api_engine_service_tbt_ms == 0
+            && self.turn_ttft_ms == 0
+            && self.turn_ttfm_ms == 0
     }
 
     pub fn merge(&mut self, other: Self) {
@@ -89,6 +95,12 @@ impl RuntimeMetricsSummary {
         }
         if other.responses_api_engine_service_tbt_ms > 0 {
             self.responses_api_engine_service_tbt_ms = other.responses_api_engine_service_tbt_ms;
+        }
+        if other.turn_ttft_ms > 0 {
+            self.turn_ttft_ms = other.turn_ttft_ms;
+        }
+        if other.turn_ttfm_ms > 0 {
+            self.turn_ttfm_ms = other.turn_ttfm_ms;
         }
     }
 
@@ -137,6 +149,8 @@ impl RuntimeMetricsSummary {
             sum_histogram_ms(snapshot, RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC);
         let responses_api_engine_service_tbt_ms =
             sum_histogram_ms(snapshot, RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC);
+        let turn_ttft_ms = sum_histogram_ms(snapshot, TURN_TTFT_DURATION_METRIC);
+        let turn_ttfm_ms = sum_histogram_ms(snapshot, TURN_TTFM_DURATION_METRIC);
         Self {
             tool_calls,
             api_calls,
@@ -149,6 +163,8 @@ impl RuntimeMetricsSummary {
             responses_api_engine_service_ttft_ms,
             responses_api_engine_iapi_tbt_ms,
             responses_api_engine_service_tbt_ms,
+            turn_ttft_ms,
+            turn_ttfm_ms,
         }
     }
 }

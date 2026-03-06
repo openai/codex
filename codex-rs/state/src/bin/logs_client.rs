@@ -12,13 +12,13 @@ use owo_colors::OwoColorize;
 
 #[derive(Debug, Parser)]
 #[command(name = "codex-state-logs")]
-#[command(about = "Tail Codex logs from the state SQLite DB with simple filters")]
+#[command(about = "Tail Codex logs from the dedicated logs SQLite DB with simple filters")]
 struct Args {
     /// Path to CODEX_HOME. Defaults to $CODEX_HOME or ~/.codex.
     #[arg(long, env = "CODEX_HOME")]
     codex_home: Option<PathBuf>,
 
-    /// Direct path to the SQLite database. Overrides --codex-home.
+    /// Direct path to the logs SQLite database. Overrides --codex-home.
     #[arg(long)]
     db: Option<PathBuf>,
 
@@ -113,7 +113,7 @@ fn resolve_db_path(args: &Args) -> anyhow::Result<PathBuf> {
     }
 
     let codex_home = args.codex_home.clone().unwrap_or_else(default_codex_home);
-    Ok(codex_state::state_db_path(codex_home.as_path()))
+    Ok(codex_state::logs_db_path(codex_home.as_path()))
 }
 
 fn default_codex_home() -> PathBuf {

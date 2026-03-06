@@ -20,3 +20,5 @@ pub(crate) const RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC: &str =
     "codex.responses_api_engine_iapi_tbt.duration_ms";
 pub(crate) const RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC: &str =
     "codex.responses_api_engine_service_tbt.duration_ms";
+pub(crate) const TURN_TTFT_DURATION_METRIC: &str = "codex.turn.ttft.duration_ms";
+pub(crate) const TURN_TTFM_DURATION_METRIC: &str = "codex.turn.ttfm.duration_ms";

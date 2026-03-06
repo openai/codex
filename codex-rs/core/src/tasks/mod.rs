@@ -7,6 +7,7 @@ mod user_shell;
 
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio::select;
@@ -25,6 +26,7 @@ use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
 use crate::event_mapping::parse_turn_item;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
+use crate::protocol::TokenUsage;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;
@@ -131,9 +133,20 @@ impl Session {
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
+        let started_at = Instant::now();
+        turn_context
+            .turn_timing_state
+            .mark_turn_started(started_at)
+            .await;
+        let token_usage_at_turn_start = self.total_token_usage().await.unwrap_or_default();
 
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
+
+        let timer = turn_context
+            .otel_manager
+            .start_timer("codex.turn.e2e_duration_ms", &[])
+            .ok();
 
         let done_clone = Arc::clone(&done);
         let handle = {
@@ -174,11 +187,6 @@ impl Session {
             )
         };
 
-        let timer = turn_context
-            .otel_manager
-            .start_timer("codex.turn.e2e_duration_ms", &[])
-            .ok();
-
         let running_task = RunningTask {
             done,
             handle: Arc::new(AbortOnDropHandle::new(handle)),
@@ -188,7 +196,8 @@ impl Session {
             turn_context: Arc::clone(&turn_context),
             _timer: timer,
         };
-        self.register_new_active_task(running_task).await;
+        self.register_new_active_task(running_task, token_usage_at_turn_start)
+            .await;
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -319,11 +328,16 @@ impl Session {
         self.send_event(turn_context.as_ref(), event).await;
     }
 
-    async fn register_new_active_task(&self, task: RunningTask) {
-        let token_usage_at_turn_start = self.total_token_usage().await.unwrap_or_default();
+    async fn register_new_active_task(
+        &self,
+        task: RunningTask,
+        token_usage_at_turn_start: TokenUsage,
+    ) {
         let mut active = self.active_turn.lock().await;
         let mut turn = ActiveTurn::default();
-        turn.turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start;
+        let mut turn_state = turn.turn_state.lock().await;
+        turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
+        drop(turn_state);
         turn.add_task(task);
         *active = Some(turn);
     }
