@@ -4,14 +4,21 @@ We provide Codex CLI as a standalone, native executable to ensure a zero-depende
 
 ## Installing Codex
 
-Today, the easiest way to install Codex is via `npm`:
+The easiest way to install Codex is with the native installer for your platform:
 
-```shell
-npm i -g @openai/codex
-codex
+```bash
+# Mac + Linux
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
-You can also install via Homebrew (`brew install --cask codex`) or download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
+```powershell
+# Windows
+powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"
+```
+
+Then run `codex`.
+
+If you prefer a package manager, you can also install via npm (`npm install -g @openai/codex`) or Homebrew (`brew install --cask codex`). You can also download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
 
 ## Documentation quickstart
 

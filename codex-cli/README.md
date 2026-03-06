@@ -1,10 +1,11 @@
 <h1 align="center">OpenAI Codex CLI</h1>
 <p align="center">Lightweight coding agent that runs in your terminal</p>
 
-<p align="center"><code>npm i -g @openai/codex</code></p>
+<p align="center"><code>curl -fsSL https://chatgpt.com/codex/install.sh | sh</code><br /><code>powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"</code></p>
 
 > [!IMPORTANT]
-> This is the documentation for the _legacy_ TypeScript implementation of the Codex CLI. It has been superseded by the _Rust_ implementation. See the [README in the root of the Codex repository](https://github.com/openai/codex/blob/main/README.md) for details.
+> This directory contains the npm package entrypoint for Codex. For the primary Codex CLI docs and native installers, see the [README in the root of the Codex repository](https://github.com/openai/codex/blob/main/README.md).
+> If you want to install Codex from npm instead of the native installers, use `npm install -g @openai/codex`.
 
 ![Codex demo GIF using: codex "explain this codebase to me"](../.github/demo.gif)
 
@@ -74,7 +75,7 @@ Help us improve by filing issues or submitting PRs (see the section below for ho
 
 ## Quickstart
 
-Install globally:
+For the primary Codex CLI install docs, use the native installers above or the root README. If you want to install Codex from npm, install it globally with npm:
 
 ```shell
 npm install -g @openai/codex
@@ -284,7 +285,7 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 ## Installation
 
 <details open>
-<summary><strong>From npm (Recommended)</strong></summary>
+<summary><strong>From npm / yarn / bun / pnpm</strong></summary>
 
 ```bash
 npm install -g @openai/codex
