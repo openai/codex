@@ -625,7 +625,8 @@ fn extract_mcp_tool_selection_from_rollout_reads_search_tool_output() {
         ),
     ];
 
-    let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+    let rollout_source = InMemoryRolloutSource::new(rollout_items);
+    let selected = Session::extract_mcp_tool_selection_from_rollout_source(&rollout_source);
     assert_eq!(
         selected,
         Some(vec![
@@ -656,7 +657,8 @@ fn extract_mcp_tool_selection_from_rollout_latest_valid_payload_wins() {
         ),
     ];
 
-    let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+    let rollout_source = InMemoryRolloutSource::new(rollout_items);
+    let selected = Session::extract_mcp_tool_selection_from_rollout_source(&rollout_source);
     assert_eq!(
         selected,
         Some(vec!["mcp__codex_apps__calendar_delete_event".to_string(),])
@@ -692,7 +694,8 @@ fn extract_mcp_tool_selection_from_rollout_ignores_non_search_and_malformed_payl
         ),
     ];
 
-    let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+    let rollout_source = InMemoryRolloutSource::new(rollout_items);
+    let selected = Session::extract_mcp_tool_selection_from_rollout_source(&rollout_source);
     assert_eq!(
         selected,
         Some(vec!["mcp__codex_apps__calendar_list_events".to_string(),])
@@ -705,7 +708,8 @@ fn extract_mcp_tool_selection_from_rollout_returns_none_without_valid_search_out
         SEARCH_TOOL_BM25_TOOL_NAME,
         "search-1",
     )];
-    let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+    let rollout_source = InMemoryRolloutSource::new(rollout_items);
+    let selected = Session::extract_mcp_tool_selection_from_rollout_source(&rollout_source);
     assert_eq!(selected, None);
 }
 
