@@ -106,6 +106,9 @@ impl AgentControl {
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
             .await;
+        let inherited_exec_policy = self
+            .inherited_exec_policy_for_source(&state, session_source.as_ref())
+            .await;
         let session_source = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -188,6 +191,7 @@ impl AgentControl {
                             session_source,
                             false,
                             inherited_shell_snapshot,
+                            inherited_exec_policy,
                         )
                         .await?
                 } else {
@@ -199,6 +203,7 @@ impl AgentControl {
                             false,
                             None,
                             inherited_shell_snapshot,
+                            inherited_exec_policy,
                         )
                         .await?
                 }
@@ -270,6 +275,9 @@ impl AgentControl {
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, Some(&session_source))
             .await;
+        let inherited_exec_policy = self
+            .inherited_exec_policy_for_source(&state, Some(&session_source))
+            .await;
         let rollout_path =
             find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
                 .await?
@@ -282,6 +290,7 @@ impl AgentControl {
                 self.clone(),
                 session_source,
                 inherited_shell_snapshot,
+                inherited_exec_policy,
             )
             .await?;
         reservation.commit(resumed_thread.thread_id);
@@ -484,6 +493,24 @@ impl AgentControl {
 
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
         parent_thread.codex.session.user_shell().shell_snapshot()
+    }
+
+    async fn inherited_exec_policy_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+    ) -> Option<Arc<crate::exec_policy::ExecPolicyManager>> {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return None;
+        };
+
+        let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
+        Some(Arc::clone(
+            &parent_thread.codex.session.services.exec_policy,
+        ))
     }
 }
 #[cfg(test)]
