@@ -84,8 +84,6 @@ use std::io::Read;
 use std::path::PathBuf;
 use supports_color::Stream;
 use tokio::sync::mpsc;
-use tokio::time::Duration;
-use tokio::time::timeout;
 use tracing::Instrument;
 use tracing::error;
 use tracing::field;
@@ -593,24 +591,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let primary_thread_id_for_span = primary_thread_id.to_string();
     let mut error_seen = false;
     let mut buffered_events = VecDeque::new();
-    let session_configured = match await_session_configured_event(
-        &mut client,
-        &config,
-        &primary_thread_id_for_span,
-        &mut error_seen,
-        &mut buffered_events,
-    )
-    .await
-    {
-        Ok(session_configured) => session_configured,
-        Err(err) => {
-            warn!(
-                "failed to receive session configured event for thread {}: {err}; using startup response fallback",
-                primary_thread_id_for_span
-            );
-            fallback_session_configured
-        }
-    };
+    // Use the start/resume response as the authoritative bootstrap payload.
+    // Waiting for a later streamed `SessionConfigured` event adds up to 10s of
+    // avoidable startup latency on the in-process path.
+    let session_configured = fallback_session_configured;
 
     exec_span.record("thread.id", primary_thread_id_for_span.as_str());
 
@@ -946,105 +930,6 @@ where
     })
 }
 
-/// Waits for the authoritative bootstrap `SessionConfigured` event.
-///
-/// `thread/start` and `thread/resume` provide enough data to synthesize a
-/// session configuration, but exec prefers the streamed event when it arrives
-/// in time because that payload is the closest match to main's startup data.
-/// Non-bootstrap events are buffered so the main event loop can process them in
-/// order once startup finishes.
-async fn await_session_configured_event(
-    client: &mut InProcessAppServerClient,
-    config: &Config,
-    thread_id: &str,
-    error_seen: &mut bool,
-    buffered_events: &mut VecDeque<InProcessServerEvent>,
-) -> Result<SessionConfiguredEvent, String> {
-    const SESSION_CONFIGURED_TIMEOUT: Duration = Duration::from_secs(10);
-    let wait_result = timeout(SESSION_CONFIGURED_TIMEOUT, async {
-        loop {
-            let server_event = client.next_event().await;
-            let Some(server_event) = server_event else {
-                return Err("event stream ended before session configured".to_string());
-            };
-
-            match classify_bootstrap_event(server_event, thread_id, buffered_events) {
-                Ok(BootstrapEventAction::HandleServerRequest(request)) => {
-                    handle_server_request(client, request, config, thread_id, error_seen).await;
-                }
-                Ok(BootstrapEventAction::SessionConfigured(session_configured)) => {
-                    return Ok(session_configured);
-                }
-                Ok(BootstrapEventAction::Continue) => {}
-                Err(err) => {
-                    warn!("{err}");
-                }
-            }
-        }
-    })
-    .await;
-
-    match wait_result {
-        Ok(result) => result,
-        Err(_) => Err(format!(
-            "timed out waiting for session configured event after {}s",
-            SESSION_CONFIGURED_TIMEOUT.as_secs()
-        )),
-    }
-}
-
-enum BootstrapEventAction {
-    Continue,
-    HandleServerRequest(ServerRequest),
-    SessionConfigured(SessionConfiguredEvent),
-}
-
-/// Classifies early events seen before exec has finished bootstrap.
-///
-/// The bootstrap phase has two jobs:
-/// - answer server requests that would otherwise stall startup
-/// - capture the matching `SessionConfigured` event for the primary thread
-///
-/// Everything else is buffered and replayed by the main loop so startup does
-/// not reorder or discard early notifications.
-fn classify_bootstrap_event(
-    server_event: InProcessServerEvent,
-    thread_id: &str,
-    buffered_events: &mut VecDeque<InProcessServerEvent>,
-) -> Result<BootstrapEventAction, String> {
-    match &server_event {
-        InProcessServerEvent::ServerRequest(_) => {
-            if let InProcessServerEvent::ServerRequest(request) = server_event {
-                Ok(BootstrapEventAction::HandleServerRequest(request))
-            } else {
-                unreachable!("matched server request variant")
-            }
-        }
-        InProcessServerEvent::ServerNotification(_) | InProcessServerEvent::Lagged { .. } => {
-            buffered_events.push_back(server_event);
-            Ok(BootstrapEventAction::Continue)
-        }
-        InProcessServerEvent::LegacyNotification(notification) => {
-            let event = legacy_notification_to_event(notification.clone());
-            match event {
-                Ok(event) => {
-                    if let EventMsg::SessionConfigured(session_configured) = event.msg
-                        && session_configured.session_id.to_string() == thread_id
-                    {
-                        return Ok(BootstrapEventAction::SessionConfigured(session_configured));
-                    }
-                    buffered_events.push_back(server_event);
-                    Ok(BootstrapEventAction::Continue)
-                }
-                Err(err) => {
-                    buffered_events.push_back(server_event);
-                    Err(err)
-                }
-            }
-        }
-    }
-}
-
 fn session_configured_from_thread_start_response(
     response: &ThreadStartResponse,
 ) -> Result<SessionConfiguredEvent, String> {
@@ -1054,7 +939,7 @@ fn session_configured_from_thread_start_response(
         response.thread.path.clone(),
         response.model.clone(),
         response.model_provider.clone(),
-        response.service_tier.clone(),
+        response.service_tier,
         response.approval_policy.to_core(),
         response.sandbox.to_core(),
         response.cwd.clone(),
@@ -1071,7 +956,7 @@ fn session_configured_from_thread_resume_response(
         response.thread.path.clone(),
         response.model.clone(),
         response.model_provider.clone(),
-        response.service_tier.clone(),
+        response.service_tier,
         response.approval_policy.to_core(),
         response.sandbox.to_core(),
         response.cwd.clone(),
@@ -1655,14 +1540,12 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_app_server_protocol::JSONRPCNotification;
     use codex_otel::set_parent_from_w3c_trace_context;
     use opentelemetry::trace::TraceContextExt;
     use opentelemetry::trace::TraceId;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
-    use serde_json::json;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
     fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
@@ -1830,73 +1713,6 @@ mod tests {
         let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
 
         assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
-    }
-
-    #[test]
-    fn classify_bootstrap_event_buffers_lagged_markers() {
-        let mut buffered_events = VecDeque::new();
-
-        let action = classify_bootstrap_event(
-            InProcessServerEvent::Lagged { skipped: 3 },
-            "thread-1",
-            &mut buffered_events,
-        )
-        .expect("lagged events should be buffered");
-
-        assert!(matches!(action, BootstrapEventAction::Continue));
-        assert_eq!(buffered_events.len(), 1);
-        assert!(matches!(
-            buffered_events.front(),
-            Some(InProcessServerEvent::Lagged { skipped: 3 })
-        ));
-    }
-
-    #[test]
-    fn classify_bootstrap_event_extracts_matching_session_configured() {
-        let mut buffered_events = VecDeque::new();
-        let thread_id = "019cbf93-9ff5-7ac0-ac93-c8a36f0c98d3";
-        let session_configured = session_configured_from_thread_response(
-            thread_id,
-            Some("thread".to_string()),
-            None,
-            "gpt-5".to_string(),
-            "openai".to_string(),
-            None,
-            AskForApproval::Never,
-            codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-            std::env::temp_dir(),
-            None,
-        )
-        .expect("session configured payload should build");
-        let notification = JSONRPCNotification {
-            method: "codex/event/session_configured".to_string(),
-            params: Some(json!({
-                "msg": serde_json::to_value(&session_configured)
-                    .expect("session configured should serialize"),
-            })),
-        };
-
-        let action = classify_bootstrap_event(
-            InProcessServerEvent::LegacyNotification(notification),
-            thread_id,
-            &mut buffered_events,
-        )
-        .expect("matching session configured should decode");
-
-        match action {
-            BootstrapEventAction::SessionConfigured(payload) => {
-                assert_eq!(
-                    payload.session_id.to_string(),
-                    session_configured.session_id.to_string()
-                );
-                assert_eq!(payload.thread_name, session_configured.thread_name);
-                assert_eq!(payload.model, session_configured.model);
-            }
-            BootstrapEventAction::Continue | BootstrapEventAction::HandleServerRequest(_) => {
-                panic!("expected matching session configured event")
-            }
-        }
-        assert!(buffered_events.is_empty());
     }
 
     #[test]
