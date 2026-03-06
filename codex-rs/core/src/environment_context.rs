@@ -133,11 +133,11 @@ impl ModelVisibleContextFragment for EnvironmentContext {
 impl TurnContextDiffFragment for EnvironmentContext {
     fn from_turn_context(
         turn_context: &TurnContext,
-        context: &TurnContextDiffParams<'_>,
+        params: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         Some(Self::new(
             Some(turn_context.cwd.clone()),
-            context.shell.clone(),
+            params.shell.clone(),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
@@ -147,16 +147,16 @@ impl TurnContextDiffFragment for EnvironmentContext {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        context: &TurnContextDiffParams<'_>,
+        params: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         let previous_context = Self::new(
             Some(previous.cwd.clone()),
-            context.shell.clone(),
+            params.shell.clone(),
             previous.current_date.clone(),
             previous.timezone.clone(),
             Self::network_from_turn_context_item(previous),
         );
-        let next_context = Self::from_turn_context(turn_context, context)?;
+        let next_context = Self::from_turn_context(turn_context, params)?;
         if previous_context.equals_except_shell(&next_context) {
             return None;
         }
@@ -176,7 +176,7 @@ impl TurnContextDiffFragment for EnvironmentContext {
 
         Some(Self::new(
             cwd,
-            context.shell.clone(),
+            params.shell.clone(),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             network,

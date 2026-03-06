@@ -195,16 +195,16 @@ impl<'a> TurnContextDiffParams<'a> {
 pub(crate) trait TurnContextDiffFragment: ModelVisibleContextFragment + Sized {
     fn from_turn_context(
         turn_context: &TurnContext,
-        context: &TurnContextDiffParams<'_>,
+        params: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
-        let _ = (turn_context, context);
+        let _ = (turn_context, params);
         None
     }
 
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        context: &TurnContextDiffParams<'_>,
+        params: &TurnContextDiffParams<'_>,
     ) -> Option<Self>;
 }
 
