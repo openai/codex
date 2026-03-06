@@ -247,9 +247,9 @@ Rules:
 - In order to avoid redundant work, you should avoid exploring the same problem that explorers have already covered. Typically, you should trust the explorer results without additional verification. You are still allowed to inspect the code yourself to gain the needed context!
 - You are encouraged to spawn up multiple explorers in parallel when you have multiple distinct questions to ask about the codebase that can be answered independently. This allows you to get more information faster without waiting for one question to finish before asking the next. While waiting for the explorer results, you can continue working on other local tasks that do not depend on those results. This parallelism is a key advantage of delegation, so use it whenever you have multiple questions to ask.
 - Reuse existing explorers for related questions."#.to_string()),
-                        model: Some("gpt-5.3-codex-spark".to_string()),
+                        model: None,
                         config_file: Some("explorer.toml".to_string().parse().unwrap_or_default()),
-                        spawn_mode: Some(AgentRoleSpawnMode::Spawn),
+                        spawn_mode: None,
                         nickname_candidates: None,
                     }
                 ),
@@ -266,8 +266,8 @@ Rules:
 - Treat the prompt as self-contained and do not assume shared context.
 - Prefer direct execution over extended analysis."#.to_string()),
                         config_file: None,
-                        model: Some("gpt-5.3-codex-spark".to_string()),
-                        spawn_mode: Some(AgentRoleSpawnMode::Spawn),
+                        model: None,
+                        spawn_mode: None,
                         nickname_candidates: None,
                     }
                 ),
@@ -301,8 +301,8 @@ Rules:
 - When you wait for the `awaiter` to be done, use the largest possible timeout.
 - Only use `awaiter` for commands that may take time."#.to_string()),
                         config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
-                        model: Some("gpt-5.3-codex-spark".to_string()),
-                        spawn_mode: Some(AgentRoleSpawnMode::Spawn),
+                        model: None,
+                        spawn_mode: None,
                         nickname_candidates: None,
                     }
                 ),
@@ -394,7 +394,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_explorer_role_sets_model_and_adds_session_flags_layer() {
+    async fn apply_explorer_role_adds_session_flags_layer_without_overriding_model() {
         let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
         let before_layers = session_flags_layer_count(&config);
 
@@ -402,7 +402,7 @@ mod tests {
             .await
             .expect("explorer role should apply");
 
-        assert_eq!(config.model.as_deref(), Some("gpt-5.3-codex-spark"));
+        assert_eq!(config.model.as_deref(), None);
         assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Medium));
         assert_eq!(session_flags_layer_count(&config), before_layers + 1);
     }
@@ -429,11 +429,11 @@ mod tests {
         );
         assert_eq!(
             default_spawn_mode_for_role(&config, Some("explorer")),
-            AgentRoleSpawnMode::Spawn
+            AgentRoleSpawnMode::Fork
         );
         assert_eq!(
             default_spawn_mode_for_role(&config, Some("fast-worker")),
-            AgentRoleSpawnMode::Spawn
+            AgentRoleSpawnMode::Fork
         );
         assert_eq!(
             default_spawn_mode_for_role(&config, Some("researcher")),
