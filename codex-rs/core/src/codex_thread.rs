@@ -11,7 +11,7 @@ use crate::protocol::Submission;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::MessageRoleKind;
+use codex_protocol::models::MessageRole;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -102,7 +102,7 @@ impl CodexThread {
         self.codex.session.total_token_usage().await
     }
 
-    pub(crate) async fn inject_message_without_turn(&self, role: MessageRoleKind, message: String) {
+    pub(crate) async fn inject_message_without_turn(&self, role: MessageRole, message: String) {
         let pending_item = ResponseInputItem::Message {
             role: role.into_message_role(),
             content: vec![ContentItem::InputText { text: message }],

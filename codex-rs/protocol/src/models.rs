@@ -218,14 +218,14 @@ pub enum MessagePhase {
 /// Canonical message roles used throughout Codex.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
-pub enum MessageRoleKind {
+pub enum MessageRole {
     User,
     Assistant,
     Developer,
     System,
 }
 
-impl MessageRoleKind {
+impl MessageRole {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::User => "user",

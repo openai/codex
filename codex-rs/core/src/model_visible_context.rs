@@ -13,7 +13,7 @@ use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::CustomDeveloperInstructions;
-use codex_protocol::models::MessageRoleKind;
+use codex_protocol::models::MessageRole;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
@@ -36,19 +36,19 @@ pub(crate) const SUBAGENT_NOTIFICATION_OPEN_TAG: &str = "<subagent_notification>
 pub(crate) const SUBAGENT_NOTIFICATION_CLOSE_TAG: &str = "</subagent_notification>";
 
 pub(crate) trait ModelVisibleContextRole {
-    const MESSAGE_ROLE: MessageRoleKind;
+    const MESSAGE_ROLE: MessageRole;
 }
 
 pub(crate) struct DeveloperContextRole;
 
 impl ModelVisibleContextRole for DeveloperContextRole {
-    const MESSAGE_ROLE: MessageRoleKind = MessageRoleKind::Developer;
+    const MESSAGE_ROLE: MessageRole = MessageRole::Developer;
 }
 
 pub(crate) struct ContextualUserContextRole;
 
 impl ModelVisibleContextRole for ContextualUserContextRole {
-    const MESSAGE_ROLE: MessageRoleKind = MessageRoleKind::User;
+    const MESSAGE_ROLE: MessageRole = MessageRole::User;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
