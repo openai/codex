@@ -11,6 +11,7 @@
 //! 4. Approve only low- and medium-risk actions (`risk_score < 80`).
 
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,7 +24,6 @@ use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -92,6 +92,12 @@ pub(crate) struct GuardianReviewResult {
     pub(crate) approved: bool,
 }
 
+#[derive(Debug)]
+enum GuardianReviewFailure {
+    TimedOut,
+    Failed(anyhow::Error),
+}
+
 /// Transcript entry retained for guardian review after filtering and numbering.
 #[derive(Debug)]
 struct GuardianTranscriptEntry {
@@ -122,21 +128,29 @@ pub(crate) async fn review_sandbox_escalation(
 
     let prompt = build_guardian_prompt(session.as_ref(), retry_reason, planned_action).await;
     let schema = guardian_output_schema();
-    let review = timeout(
+    let cancel_token = CancellationToken::new();
+    let review = run_guardian_subagent_with_timeout(
+        run_guardian_subagent(
+            session.clone(),
+            turn.clone(),
+            prompt,
+            schema,
+            cancel_token.clone(),
+        ),
+        cancel_token,
         GUARDIAN_REVIEW_TIMEOUT,
-        run_guardian_subagent(session.clone(), turn.clone(), prompt, schema),
     )
     .await;
 
     let assessment = match review {
-        Ok(Ok(assessment)) => assessment,
-        Ok(Err(err)) => GuardianAssessment {
+        Ok(assessment) => assessment,
+        Err(GuardianReviewFailure::Failed(err)) => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             risk_score: 100,
             rationale: format!("Guardian review failed: {err}"),
             evidence: vec![],
         },
-        Err(_) => GuardianAssessment {
+        Err(GuardianReviewFailure::TimedOut) => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             risk_score: 100,
             rationale:
@@ -164,6 +178,26 @@ pub(crate) async fn review_sandbox_escalation(
         .await;
 
     GuardianReviewResult { approved }
+}
+
+async fn run_guardian_subagent_with_timeout<F>(
+    review_fut: F,
+    cancel_token: CancellationToken,
+    timeout_duration: Duration,
+) -> Result<GuardianAssessment, GuardianReviewFailure>
+where
+    F: Future<Output = anyhow::Result<GuardianAssessment>>,
+{
+    tokio::select! {
+        review = review_fut => review.map_err(GuardianReviewFailure::Failed),
+        _ = tokio::time::sleep(timeout_duration) => {
+            // Cancel the delegate token before failing closed so the one-shot
+            // subagent tears down its background streams instead of lingering
+            // after the caller has already timed out.
+            cancel_token.cancel();
+            Err(GuardianReviewFailure::TimedOut)
+        }
+    }
 }
 
 /// Adapter used by callsites that already traffic in `ReviewDecision`.
@@ -385,6 +419,7 @@ async fn run_guardian_subagent(
     turn: Arc<TurnContext>,
     prompt: String,
     schema: Value,
+    cancel_token: CancellationToken,
 ) -> anyhow::Result<GuardianAssessment> {
     let live_network_config = match session.services.network_proxy.as_ref() {
         Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
@@ -406,7 +441,7 @@ async fn run_guardian_subagent(
         }],
         session,
         turn,
-        CancellationToken::new(),
+        cancel_token,
         SubAgentSource::Other("guardian".to_string()),
         Some(schema),
         None,
@@ -641,6 +676,30 @@ mod tests {
 
         assert_eq!(parsed.risk_score, 42);
         assert_eq!(parsed.risk_level, GuardianRiskLevel::Medium);
+    }
+
+    #[tokio::test]
+    async fn guardian_timeout_cancels_subagent_token() {
+        let cancel_token = CancellationToken::new();
+        let waiter = tokio::spawn({
+            let cancel_token = cancel_token.clone();
+            async move {
+                cancel_token.cancelled().await;
+            }
+        });
+
+        let result = run_guardian_subagent_with_timeout(
+            std::future::pending::<anyhow::Result<GuardianAssessment>>(),
+            cancel_token,
+            Duration::from_millis(10),
+        )
+        .await;
+
+        assert!(matches!(result, Err(GuardianReviewFailure::TimedOut)));
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("timeout helper should cancel the guardian token")
+            .expect("waiter task should finish cleanly");
     }
 
     #[test]
