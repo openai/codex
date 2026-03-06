@@ -3601,10 +3601,12 @@ impl ChatComposer {
                         format!("{app_count} apps")
                     });
                 }
-                let description = Some(if capability_labels.is_empty() {
-                    "Plugin".to_string()
-                } else {
-                    format!("Plugin · {}", capability_labels.join(" · "))
+                let description = plugin.description.clone().or_else(|| {
+                    Some(if capability_labels.is_empty() {
+                        "Plugin".to_string()
+                    } else {
+                        format!("Plugin · {}", capability_labels.join(" · "))
+                    })
                 });
                 let mut search_terms = vec![plugin_name.to_string(), plugin.config_name.clone()];
                 if plugin.display_name != plugin_name {
@@ -5295,6 +5297,7 @@ mod tests {
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "Sample Plugin".to_string(),
+            description: None,
             has_skills: true,
             mcp_server_names: vec!["sample".to_string()],
             app_connector_ids: Vec::new(),
@@ -5317,6 +5320,10 @@ mod tests {
             composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                 config_name: "sample@test".to_string(),
                 display_name: "Sample Plugin".to_string(),
+                description: Some(
+                    "Plugin that includes the Figma MCP server and Skills for common workflows"
+                        .to_string(),
+                ),
                 has_skills: true,
                 mcp_server_names: vec!["sample".to_string()],
                 app_connector_ids: vec![codex_core::plugins::AppConnectorId(

@@ -140,6 +140,7 @@ mod tests {
         PluginCapabilitySummary {
             config_name: config_name.to_string(),
             display_name: display_name.to_string(),
+            description: None,
             has_skills: true,
             mcp_server_names: Vec::new(),
             app_connector_ids: Vec::new(),

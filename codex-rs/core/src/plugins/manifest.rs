@@ -6,7 +6,8 @@ pub(crate) const PLUGIN_MANIFEST_PATH: &str = ".codex-plugin/plugin.json";
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct PluginManifest {
-    name: String,
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
 }
 
 pub(crate) fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
