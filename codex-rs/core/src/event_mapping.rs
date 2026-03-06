@@ -18,25 +18,25 @@ use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::contextual_user_message::is_additional_context_fragment;
 use crate::contextual_user_message::is_contextual_user_fragment;
+use crate::contextual_user_message::is_ephemeral_context_fragment;
 use crate::web_search::web_search_action_detail;
 
-fn strip_additional_context_prefix(message: &[ContentItem]) -> &[ContentItem] {
+fn strip_ephemeral_context_prefix(message: &[ContentItem]) -> &[ContentItem] {
     let prefix_len = message
         .iter()
-        .take_while(|content_item| is_additional_context_fragment(content_item))
+        .take_while(|content_item| is_ephemeral_context_fragment(content_item))
         .count();
     &message[prefix_len..]
 }
 
 pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
-    let stripped = strip_additional_context_prefix(message);
+    let stripped = strip_ephemeral_context_prefix(message);
     stripped.is_empty() || stripped.iter().any(is_contextual_user_fragment)
 }
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
-    let message = strip_additional_context_prefix(message);
+    let message = strip_ephemeral_context_prefix(message);
     if is_contextual_user_message_content(message) {
         return None;
     }
@@ -383,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn strips_additional_context_prefix_from_user_message() {
+    fn strips_ephemeral_context_prefix_from_user_message() {
         let item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -413,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn drops_user_message_when_only_additional_context_prefix_is_present() {
+    fn drops_user_message_when_only_ephemeral_context_prefix_is_present() {
         let item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),

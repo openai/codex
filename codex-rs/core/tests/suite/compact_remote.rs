@@ -2407,7 +2407,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_replaces_ephemeral_co
     insta::assert_snapshot!(
         "remote_mid_turn_compaction_replaces_ephemeral_context_shapes",
         format_labeled_requests_snapshot(
-            "Remote mid-turn continuation compaction keeps both prior and active additional_context in the compact request, then reinjects only the active turn additional_context into the continuation request.",
+            "Remote mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.",
             &[
                 ("Remote Compaction Request", &compact_request),
                 (

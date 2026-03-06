@@ -9702,7 +9702,7 @@ mod tests {
             user_texts
                 .iter()
                 .any(|text| text.contains("<additional_context_for_this_turn>")),
-            "expected initial context to include an additional_context section, got {user_texts:?}"
+            "expected initial context to include an ephemeral_context section, got {user_texts:?}"
         );
         assert!(
             user_texts
@@ -9870,7 +9870,7 @@ mod tests {
             user_texts
                 .iter()
                 .any(|text| text.contains("<additional_context_for_this_turn>")),
-            "expected steady-state updates to include additional_context, got {user_texts:?}"
+            "expected steady-state updates to include ephemeral_context, got {user_texts:?}"
         );
         assert!(
             user_texts.iter().any(|text| text.contains("src/lib.rs")),

@@ -564,7 +564,7 @@ do things
     }
 
     #[test]
-    fn collect_user_messages_filters_additional_context_entries() {
+    fn collect_user_messages_filters_ephemeral_context_entries() {
         let items = vec![
             ResponseItem::Message {
                 id: None,

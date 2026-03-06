@@ -9,8 +9,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::protocol::ADDITIONAL_CONTEXT_CLOSE_TAG;
-use codex_protocol::protocol::ADDITIONAL_CONTEXT_OPEN_TAG;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::user_input::EphemeralContext;
 
@@ -168,7 +168,7 @@ fn render_ephemeral_context(ephemeral_context: &EphemeralContext) -> String {
     let title = &ephemeral_context.title;
     let text = &ephemeral_context.text;
     format!(
-        "{ADDITIONAL_CONTEXT_OPEN_TAG}\n  <title>{title}</title>\n  <content>\n{text}\n  </content>\n{ADDITIONAL_CONTEXT_CLOSE_TAG}\n\n"
+        "{EPHEMERAL_CONTEXT_OPEN_TAG}\n  <title>{title}</title>\n  <content>\n{text}\n  </content>\n{EPHEMERAL_CONTEXT_CLOSE_TAG}\n\n"
     )
 }
 
@@ -242,7 +242,7 @@ mod tests {
         assert_eq!(sections.len(), 1);
         let section = &sections[0];
         assert!(section.ends_with("\n\n"));
-        assert!(section.contains(ADDITIONAL_CONTEXT_OPEN_TAG));
-        assert!(section.contains(ADDITIONAL_CONTEXT_CLOSE_TAG));
+        assert!(section.contains(EPHEMERAL_CONTEXT_OPEN_TAG));
+        assert!(section.contains(EPHEMERAL_CONTEXT_CLOSE_TAG));
     }
 }

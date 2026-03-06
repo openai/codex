@@ -2803,7 +2803,7 @@ async fn snapshot_request_shape_mid_turn_compaction_replaces_ephemeral_context()
     insta::assert_snapshot!(
         "mid_turn_compaction_replaces_ephemeral_context_shapes",
         format_labeled_requests_snapshot(
-            "Mid-turn continuation compaction keeps both prior and active additional_context in the compact request, then reinjects only the active turn additional_context into the continuation request.",
+            "Mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.",
             &[
                 ("Local Compaction Request", &requests[2]),
                 ("Local Post-Compaction History Layout", &requests[3]),
@@ -3315,7 +3315,7 @@ async fn snapshot_request_shape_pre_turn_compaction_replaces_ephemeral_context()
     insta::assert_snapshot!(
         "pre_turn_compaction_replaces_ephemeral_context_shapes",
         format_labeled_requests_snapshot(
-            "Pre-turn auto-compaction keeps prior turn additional_context in the compact request, but the follow-up request carries only the fresh turn additional_context.",
+            "Pre-turn auto-compaction keeps prior turn ephemeral_context in the compact request, but the follow-up request carries only the fresh turn ephemeral_context.",
             &[
                 ("Local Compaction Request", &requests[2]),
                 ("Local Post-Compaction History Layout", &requests[3]),

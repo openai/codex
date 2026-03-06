@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/compact.rs
-expression: "format_labeled_requests_snapshot(\"Pre-turn auto-compaction keeps prior turn additional_context in the compact request, but the follow-up request carries only the fresh turn additional_context.\",\n&[(\"Local Compaction Request\", &requests[2]),\n(\"Local Post-Compaction History Layout\", &requests[3]),])"
+expression: "format_labeled_requests_snapshot(\"Pre-turn auto-compaction keeps prior turn ephemeral_context in the compact request, but the follow-up request carries only the fresh turn ephemeral_context.\",\n&[(\"Local Compaction Request\", &requests[2]),\n(\"Local Post-Compaction History Layout\", &requests[3]),])"
 ---
-Scenario: Pre-turn auto-compaction keeps prior turn additional_context in the compact request, but the follow-up request carries only the fresh turn additional_context.
+Scenario: Pre-turn auto-compaction keeps prior turn ephemeral_context in the compact request, but the follow-up request carries only the fresh turn ephemeral_context.
 
 ## Local Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>

@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/compact.rs
-expression: "format_labeled_requests_snapshot(\"Mid-turn continuation compaction keeps both prior and active additional_context in the compact request, then reinjects only the active turn additional_context into the continuation request.\",\n&[(\"Local Compaction Request\", &requests[2]),\n(\"Local Post-Compaction History Layout\", &requests[3]),])"
+expression: "format_labeled_requests_snapshot(\"Mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.\",\n&[(\"Local Compaction Request\", &requests[2]),\n(\"Local Post-Compaction History Layout\", &requests[3]),])"
 ---
-Scenario: Mid-turn continuation compaction keeps both prior and active additional_context in the compact request, then reinjects only the active turn additional_context into the continuation request.
+Scenario: Mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.
 
 ## Local Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>

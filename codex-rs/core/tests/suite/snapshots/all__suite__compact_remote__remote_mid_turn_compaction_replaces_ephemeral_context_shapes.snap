@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "format_labeled_requests_snapshot(\"Remote mid-turn continuation compaction keeps both prior and active additional_context in the compact request, then reinjects only the active turn additional_context into the continuation request.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", post_compact_request),])"
+expression: "format_labeled_requests_snapshot(\"Remote mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", post_compact_request),])"
 ---
-Scenario: Remote mid-turn continuation compaction keeps both prior and active additional_context in the compact request, then reinjects only the active turn additional_context into the continuation request.
+Scenario: Remote mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.
 
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
