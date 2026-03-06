@@ -25,6 +25,8 @@ pub(crate) struct PendingInputPreview {
     edit_binding: key_hint::KeyBinding,
 }
 
+const PREVIEW_LINE_LIMIT: usize = 3;
+
 impl PendingInputPreview {
     pub(crate) fn new() -> Self {
         Self {
@@ -41,6 +43,18 @@ impl PendingInputPreview {
         self.edit_binding = binding;
     }
 
+    fn push_truncated_preview_lines(
+        lines: &mut Vec<Line<'static>>,
+        wrapped: Vec<Line<'static>>,
+        overflow_line: Line<'static>,
+    ) {
+        let wrapped_len = wrapped.len();
+        lines.extend(wrapped.into_iter().take(PREVIEW_LINE_LIMIT));
+        if wrapped_len > PREVIEW_LINE_LIMIT {
+            lines.push(overflow_line);
+        }
+    }
+
     fn as_renderable(&self, width: u16) -> Box<dyn Renderable> {
         if (self.pending_steers.is_empty() && self.queued_messages.is_empty()) || width < 4 {
             return Box::new(());
@@ -50,36 +64,26 @@ impl PendingInputPreview {
 
         for steer in &self.pending_steers {
             let wrapped = adaptive_wrap_lines(
-                steer
-                    .lines()
-                    .map(|line| format!("pending steer: {line}").dim()),
+                steer.lines().map(|line| Line::from(line.dim())),
                 RtOptions::new(width as usize)
-                    .initial_indent(Line::from("  ! ".dim()))
+                    .initial_indent(Line::from("  ! pending steer: ".dim()))
                     .subsequent_indent(Line::from("    ")),
             );
-            let len = wrapped.len();
-            for line in wrapped.into_iter().take(3) {
-                lines.push(line);
-            }
-            if len > 3 {
-                lines.push(Line::from("    …".dim()));
-            }
+            Self::push_truncated_preview_lines(&mut lines, wrapped, Line::from("    …".dim()));
         }
 
         for message in &self.queued_messages {
             let wrapped = adaptive_wrap_lines(
-                message.lines().map(|line| line.dim().italic()),
+                message.lines().map(|line| Line::from(line.dim().italic())),
                 RtOptions::new(width as usize)
                     .initial_indent(Line::from("  ↳ ".dim()))
                     .subsequent_indent(Line::from("    ")),
             );
-            let len = wrapped.len();
-            for line in wrapped.into_iter().take(3) {
-                lines.push(line);
-            }
-            if len > 3 {
-                lines.push(Line::from("    …".dim().italic()));
-            }
+            Self::push_truncated_preview_lines(
+                &mut lines,
+                wrapped,
+                Line::from("    …".dim().italic()),
+            );
         }
 
         if !self.queued_messages.is_empty() {
@@ -263,6 +267,22 @@ mod tests {
         queue.render(Rect::new(0, 0, width, height), &mut buf);
         assert_snapshot!(
             "render_pending_steers_above_queued_messages",
+            format!("{buf:?}")
+        );
+    }
+
+    #[test]
+    fn render_multiline_pending_steer_uses_single_prefix_and_truncates() {
+        let mut queue = PendingInputPreview::new();
+        queue
+            .pending_steers
+            .push("First line\nSecond line\nThird line\nFourth line".to_string());
+        let width = 48;
+        let height = queue.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        queue.render(Rect::new(0, 0, width, height), &mut buf);
+        assert_snapshot!(
+            "render_multiline_pending_steer_uses_single_prefix_and_truncates",
             format!("{buf:?}")
         );
     }
