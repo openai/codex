@@ -165,7 +165,7 @@ impl PermissionProfile {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseInputItem {
     Message {
-        role: MessageRole,
+        role: String,
         content: Vec<ContentItem>,
     },
     FunctionCallOutput {
@@ -215,9 +215,6 @@ pub enum MessagePhase {
     FinalAnswer,
 }
 
-/// Wire-level role string used by message items.
-pub type MessageRole = String;
-
 /// Canonical message roles used throughout Codex.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
@@ -238,7 +235,7 @@ impl MessageRoleKind {
         }
     }
 
-    pub fn into_message_role(self) -> MessageRole {
+    pub fn into_message_role(self) -> String {
         self.as_str().to_string()
     }
 }
@@ -250,7 +247,7 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing)]
         #[ts(skip)]
         id: Option<String>,
-        role: MessageRole,
+        role: String,
         content: Vec<ContentItem>,
         // Do not use directly, no available consistently across all providers.
         #[serde(default, skip_serializing_if = "Option::is_none")]
