@@ -89,7 +89,7 @@ where
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 enum PipeStdinMode {
     Piped,
     Null,
