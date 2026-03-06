@@ -195,11 +195,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
-        sandbox_override_for_first_attempt(
-            req.approval_policy,
-            req.sandbox_permissions,
-            &req.exec_approval_requirement,
-        )
+        sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
     }
 }
 

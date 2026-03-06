@@ -206,7 +206,6 @@ pub(crate) enum SandboxOverride {
 }
 
 pub(crate) fn sandbox_override_for_first_attempt(
-    _approval_policy: AskForApproval,
     sandbox_permissions: SandboxPermissions,
     exec_approval_requirement: &ExecApprovalRequirement,
 ) -> SandboxOverride {
@@ -453,7 +452,6 @@ mod tests {
     fn additional_permissions_allow_bypass_sandbox_first_attempt_when_execpolicy_skips() {
         assert_eq!(
             sandbox_override_for_first_attempt(
-                AskForApproval::OnRequest,
                 SandboxPermissions::WithAdditionalPermissions,
                 &ExecApprovalRequirement::Skip {
                     bypass_sandbox: true,
@@ -468,7 +466,6 @@ mod tests {
     fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
         assert_eq!(
             sandbox_override_for_first_attempt(
-                AskForApproval::Guardian,
                 SandboxPermissions::RequireEscalated,
                 &ExecApprovalRequirement::Skip {
                     bypass_sandbox: false,
