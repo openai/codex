@@ -15,6 +15,10 @@ use codex_protocol::models::developer_realtime_start_text;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
 
+// ---------------------------------------------------------------------------
+// Developer update fragments
+// ---------------------------------------------------------------------------
+
 struct PermissionsUpdateFragment {
     text: String,
 }
@@ -276,6 +280,10 @@ impl TurnContextDiffFragment for ModelInstructionsUpdateFragment {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Fragment list assembly
+// ---------------------------------------------------------------------------
+
 pub(super) fn build_developer_update_texts(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
@@ -322,6 +330,10 @@ pub(super) fn build_developer_update_texts(
     .flatten()
     .collect()
 }
+
+// ---------------------------------------------------------------------------
+// Shared helper exports used outside this module
+// ---------------------------------------------------------------------------
 
 pub(crate) fn personality_message_for(
     model_info: &ModelInfo,
