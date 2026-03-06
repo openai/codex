@@ -1,5 +1,6 @@
 ---
-source: tui/src/bottom_pane/queued_user_messages.rs
+source: tui/src/bottom_pane/pending_input_preview.rs
+assertion_line: 301
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
@@ -12,14 +13,14 @@ Buffer {
         "    ⌥ + ↑ edit                          ",
     ],
     styles: [
-        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 4, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 0, y: 0, fg: Green, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 0, fg: Green, bg: Reset, underline: Reset, modifier: ITALIC,
         x: 11, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 4, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 4, y: 1, fg: Green, bg: Reset, underline: Reset, modifier: ITALIC,
         x: 13, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 4, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 4, y: 2, fg: Green, bg: Reset, underline: Reset, modifier: ITALIC,
         x: 13, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 0, y: 3, fg: Green, bg: Reset, underline: Reset, modifier: ITALIC,
         x: 5, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
         x: 14, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,

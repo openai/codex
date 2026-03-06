@@ -30,11 +30,12 @@
 ## D. 编译检查与质量验证
 - [x] `cargo check -p codex-tui` 通过（代码主线）
 - [x] 每轮改动后执行编译检查并中途修复编译错误
-- [-] `cargo test -p codex-tui --lib --no-run`（受 Windows 链接阶段磁盘空间限制，需继续验证）
-- [ ] 运行目标测试集并处理 snapshot 变更
+- [x] `cargo test -p codex-tui --lib --no-run` 通过（切换 `CARGO_TARGET_DIR=G:\codex-rs-target`）
+- [x] 运行目标测试集并处理 snapshot 变更（`pending_input_preview::tests`）
 
 ## E. 提交与汇报
-- [ ] 提交 commit（关联 `#1` `#2` `#3`）
-- [ ] push 分支
-- [ ] 创建 PR（在描述中写明最新需求与已完成项）
-- [ ] 在 issue `#2` / `#3` 追加阶段总结与下一步计划
+- [x] 提交 commit（关联 `#1` `#2` `#3`）
+- [x] push 分支
+- [x] 创建 PR（在描述中写明最新需求与已完成项）
+- [x] 在 issue `#2` / `#3` 追加阶段总结与下一步计划
+- [-] PR 审阅/合并与 issue 收尾关闭
