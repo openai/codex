@@ -1,3 +1,13 @@
+//! Guardian review decides whether a tool may leave the normal sandbox.
+//!
+//! High-level approach:
+//! 1. Reconstruct a compact transcript that preserves user intent and the most
+//!    recent assistant context.
+//! 2. Ask a dedicated guardian subagent to assess the exact planned action and
+//!    return strict JSON.
+//! 3. Fail closed on timeout, execution failure, or malformed output.
+//! 4. Approve only low- and medium-risk actions (`risk_score < 80`).
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,17 +40,23 @@ use codex_protocol::protocol::ReviewDecision;
 
 const GUARDIAN_MODEL: &str = "gpt-5.3-codex";
 const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
+// Leave room for the planned action JSON and policy prompt; the transcript is
+// intentionally only one part of the guardian context window.
 const GUARDIAN_MAX_TRANSCRIPT_TOKENS: usize = 3_500;
+// Always keep some recent non-user context so the reviewer can see what the
+// agent was trying to do immediately before the escalation.
 const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 20;
 
 pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = "Guardian rejected this action due to unacceptable risk. The agent must not attempt to achieve the same outcome via workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or stop and request user input.";
 
+/// Evidence item returned by the guardian subagent.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct GuardianEvidence {
     message: String,
     why: String,
 }
 
+/// Structured output contract that the guardian subagent must satisfy.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct GuardianAssessment {
     risk_level: GuardianRiskLevel,
@@ -49,6 +65,7 @@ pub(crate) struct GuardianAssessment {
     evidence: Vec<GuardianEvidence>,
 }
 
+/// Coarse risk label paired with the numeric `risk_score`.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum GuardianRiskLevel {
@@ -57,17 +74,20 @@ pub(crate) enum GuardianRiskLevel {
     High,
 }
 
+/// Minimal result shape used by the existing approval/escalation pipeline.
 #[derive(Debug, Clone)]
 pub(crate) struct GuardianReviewResult {
     pub(crate) approved: bool,
 }
 
+/// Canonical description of the action the guardian is being asked to review.
 #[derive(Debug, Clone)]
 pub(crate) struct GuardianReviewRequest {
     pub(crate) tool_name: &'static str,
     pub(crate) action: Value,
 }
 
+/// Transcript entry retained for guardian review after filtering and numbering.
 #[derive(Debug)]
 struct GuardianTranscriptEntry {
     number: usize,
@@ -76,6 +96,11 @@ struct GuardianTranscriptEntry {
     text: String,
 }
 
+/// Top-level guardian review entry point for tool retries that need to leave
+/// the current sandbox.
+///
+/// This function always fails closed: any timeout, subagent failure, or parse
+/// failure is treated as a high-risk denial.
 pub(crate) async fn review_sandbox_escalation(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -118,6 +143,8 @@ pub(crate) async fn review_sandbox_escalation(
 
     let approved = assessment.risk_score < 80;
     let verdict = if approved { "approved" } else { "denied" };
+    // Emit a concise warning so the parent turn has an auditable summary of the
+    // guardian decision without needing the full subagent transcript.
     let warning = format!(
         "Guardian {verdict} sandbox escalation ({}/100, {}): {}",
         assessment.risk_score,
@@ -134,6 +161,7 @@ pub(crate) async fn review_sandbox_escalation(
     GuardianReviewResult { approved }
 }
 
+/// Adapter used by callsites that already traffic in `ReviewDecision`.
 pub(crate) async fn review_escalation(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
@@ -164,6 +192,10 @@ pub(crate) async fn review_escalation_with_reason(
     }
 }
 
+/// Builds the guardian prompt from three pieces:
+/// - the policy prompt
+/// - a compact transcript for authorization and local context
+/// - the exact action JSON being proposed for escalation
 async fn build_guardian_prompt(
     session: &Session,
     retry_reason: Option<String>,
@@ -206,6 +238,13 @@ async fn build_guardian_prompt(
     )
 }
 
+/// Keeps all user turns plus a bounded amount of recent assistant context.
+///
+/// The pruning strategy is intentionally simple and reviewable:
+/// - always retain user messages because they carry authorization and intent
+/// - seed the transcript with the most recent entries
+/// - if the transcript is still too large, drop older non-user entries first
+/// - progressively shrink the per-entry truncation cap before giving up
 fn build_guardian_transcript(
     entries: &[GuardianTranscriptEntry],
     session_id: &str,
@@ -219,6 +258,8 @@ fn build_guardian_transcript(
         return ("<no retained transcript entries>".to_string(), Some(note));
     }
 
+    // Preserve all user turns and a slice of recent context so the reviewer can
+    // see both the authorization signal and the immediate lead-up to retry.
     let recent_numbers: BTreeSet<usize> = entries
         .iter()
         .rev()
@@ -231,10 +272,14 @@ fn build_guardian_transcript(
         .map(|entry| entry.number)
         .collect();
 
+    // Start with more generous per-entry truncation, then tighten it if needed
+    // before dropping the transcript entirely.
     for cap in [220usize, 120, 60] {
         while transcript_token_count(entries, &included_numbers, cap)
             > GUARDIAN_MAX_TRANSCRIPT_TOKENS
         {
+            // Drop the oldest non-user context first. User messages remain
+            // sticky because they are the strongest evidence of authorization.
             let Some(number) = entries
                 .iter()
                 .find(|entry| included_numbers.contains(&entry.number) && !entry.is_user)
@@ -297,6 +342,8 @@ fn transcript_token_count(
     ))
 }
 
+/// Retains only human-readable user/assistant message content for guardian
+/// review and skips synthetic contextual scaffolding that would just add noise.
 fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTranscriptEntry> {
     items
         .iter()
@@ -323,6 +370,11 @@ fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTr
         .collect()
 }
 
+/// Runs the guardian as a locked-down one-shot subagent.
+///
+/// The guardian itself should not mutate state, trigger further approvals, or
+/// roam the network, so it is pinned to a read-only sandbox with
+/// `approval_policy = never` and nonessential agent features disabled.
 async fn run_guardian_subagent(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -340,6 +392,9 @@ async fn run_guardian_subagent(
     let _ = guardian_config.features.disable(Feature::WebSearchRequest);
     let _ = guardian_config.features.disable(Feature::WebSearchCached);
 
+    // `run_codex_thread_one_shot` is already the subagent runner used elsewhere
+    // in core. Reusing it here keeps the MVP aligned with the existing review
+    // subagent model instead of introducing a guardian-specific execution path.
     let codex = run_codex_thread_one_shot(
         guardian_config,
         session.services.auth_manager.clone(),
@@ -372,6 +427,8 @@ async fn run_guardian_subagent(
     parse_guardian_assessment(last_agent_message.as_deref())
 }
 
+/// The model is asked for strict JSON, but we still accept a surrounding prose
+/// wrapper so transient formatting drift fails less noisily during dogfooding.
 fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<GuardianAssessment> {
     let Some(text) = text else {
         anyhow::bail!("guardian review completed without an assessment payload");
@@ -388,6 +445,8 @@ fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<GuardianAsses
     anyhow::bail!("guardian assessment was not valid JSON")
 }
 
+/// JSON schema supplied as `final_output_json_schema` to force a structured
+/// final answer from the guardian subagent.
 fn guardian_output_schema() -> Value {
     serde_json::json!({
         "type": "object",
@@ -422,6 +481,10 @@ fn guardian_output_schema() -> Value {
     })
 }
 
+/// Embedded policy prompt for the guardian MVP.
+///
+/// Keeping the policy text local to this file makes the review contract easy to
+/// audit alongside the parsing and approval threshold logic.
 fn guardian_policy_prompt() -> &'static str {
     r#"You are performing a risk assessment of a coding-agent sandbox escalation.
 
