@@ -69,6 +69,7 @@ core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
+    "elicitation",
     "server",
     "transport-streamable-http-server",
 ] }

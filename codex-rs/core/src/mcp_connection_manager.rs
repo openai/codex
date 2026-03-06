@@ -6,6 +6,7 @@
 //! in a single aggregated map using the fully-qualified tool name
 //! `"<server><MCP_TOOL_NAME_DELIMITER><tool>"` as the key.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
@@ -19,6 +20,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::ToolPluginProvenance;
 use crate::mcp::auth::McpAuthStatusEntry;
 use anyhow::Context;
 use anyhow::Result;
@@ -27,6 +29,7 @@ use async_channel::Sender;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
+use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
@@ -79,7 +82,6 @@ use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::connectors::is_connector_id_allowed;
-
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
 ///
@@ -197,6 +199,8 @@ pub(crate) struct ToolInfo {
     pub(crate) tool: Tool,
     pub(crate) connector_id: Option<String>,
     pub(crate) connector_name: Option<String>,
+    #[serde(default)]
+    pub(crate) plugin_display_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,6 +298,27 @@ impl ElicitationRequestManager {
                     });
                 }
 
+                let request = match elicitation {
+                    CreateElicitationRequestParams::FormElicitationParams {
+                        message,
+                        requested_schema,
+                        ..
+                    } => ElicitationRequest::Form {
+                        message,
+                        requested_schema: serde_json::to_value(requested_schema)
+                            .context("failed to serialize MCP elicitation schema")?,
+                    },
+                    CreateElicitationRequestParams::UrlElicitationParams {
+                        message,
+                        url,
+                        elicitation_id,
+                        ..
+                    } => ElicitationRequest::Url {
+                        message,
+                        url,
+                        elicitation_id,
+                    },
+                };
                 let (tx, rx) = oneshot::channel();
                 {
                     let mut lock = elicitation_requests.lock().await;
@@ -312,16 +337,7 @@ impl ElicitationRequestManager {
                                     ProtocolRequestId::Integer(value)
                                 }
                             },
-                            message: match elicitation {
-                                CreateElicitationRequestParams::FormElicitationParams {
-                                    message,
-                                    ..
-                                }
-                                | CreateElicitationRequestParams::UrlElicitationParams {
-                                    message,
-                                    ..
-                                } => message,
-                            },
+                            request,
                         }),
                     })
                     .await;
@@ -391,9 +407,13 @@ struct AsyncManagedClient {
     client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
     startup_snapshot: Option<Vec<ToolInfo>>,
     startup_complete: Arc<AtomicBool>,
+    tool_plugin_provenance: Arc<ToolPluginProvenance>,
 }
 
 impl AsyncManagedClient {
+    // Keep this constructor flat so the startup inputs remain readable at the
+    // single call site instead of introducing a one-off params wrapper.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         server_name: String,
         config: McpServerConfig,
@@ -402,6 +422,7 @@ impl AsyncManagedClient {
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+        tool_plugin_provenance: Arc<ToolPluginProvenance>,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
@@ -458,6 +479,7 @@ impl AsyncManagedClient {
             client,
             startup_snapshot,
             startup_complete,
+            tool_plugin_provenance,
         }
     }
 
@@ -473,14 +495,63 @@ impl AsyncManagedClient {
     }
 
     async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
-        if let Some(startup_tools) = self.startup_snapshot_while_initializing() {
-            return Some(startup_tools);
-        }
+        let annotate_tools = |tools: Vec<ToolInfo>| {
+            let mut tools = tools;
+            for tool in &mut tools {
+                let plugin_names = match tool.connector_id.as_deref() {
+                    Some(connector_id) => self
+                        .tool_plugin_provenance
+                        .plugin_display_names_for_connector_id(connector_id),
+                    None => self
+                        .tool_plugin_provenance
+                        .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
+                };
+                tool.plugin_display_names = plugin_names.to_vec();
 
-        match self.client().await {
-            Ok(client) => Some(client.listed_tools()),
-            Err(_) => self.startup_snapshot.clone(),
-        }
+                if plugin_names.is_empty() {
+                    continue;
+                }
+
+                let plugin_source_note = if plugin_names.len() == 1 {
+                    format!("This tool is part of plugin `{}`.", plugin_names[0])
+                } else {
+                    format!(
+                        "This tool is part of plugins {}.",
+                        plugin_names
+                            .iter()
+                            .map(|plugin_name| format!("`{plugin_name}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                let description = tool
+                    .tool
+                    .description
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("");
+                let annotated_description = if description.is_empty() {
+                    plugin_source_note
+                } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
+                    format!("{description} {plugin_source_note}")
+                } else {
+                    format!("{description}. {plugin_source_note}")
+                };
+                tool.tool.description = Some(Cow::Owned(annotated_description));
+            }
+            tools
+        };
+
+        // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
+        let tools = if let Some(startup_tools) = self.startup_snapshot_while_initializing() {
+            Some(startup_tools)
+        } else {
+            match self.client().await {
+                Ok(client) => Some(client.listed_tools()),
+                Err(_) => self.startup_snapshot.clone(),
+            }
+        };
+        tools.map(annotate_tools)
     }
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
@@ -552,12 +623,14 @@ impl McpConnectionManager {
         initial_sandbox_state: SandboxState,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
+        tool_plugin_provenance: ToolPluginProvenance,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::new(approval_policy.value());
+        let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             if let Some(origin) = transport_origin(&cfg.transport) {
@@ -588,6 +661,7 @@ impl McpConnectionManager {
                 tx_event.clone(),
                 elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
+                Arc::clone(&tool_plugin_provenance),
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
@@ -1495,6 +1569,7 @@ async fn list_tools_for_client_uncached(
                 tool: tool_def,
                 connector_id: tool.connector_id,
                 connector_name,
+                plugin_display_names: Vec::new(),
             }
         })
         .collect();
@@ -1608,6 +1683,7 @@ mod tests {
             },
             connector_id: None,
             connector_name: None,
+            plugin_display_names: Vec::new(),
         }
     }
 
@@ -1991,6 +2067,7 @@ mod tests {
                 client: pending_client,
                 startup_snapshot: Some(startup_tools),
                 startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             },
         );
 
@@ -2016,6 +2093,7 @@ mod tests {
                 client: pending_client,
                 startup_snapshot: None,
                 startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             },
         );
 
@@ -2038,6 +2116,7 @@ mod tests {
                 client: pending_client,
                 startup_snapshot: Some(Vec::new()),
                 startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             },
         );
 
@@ -2069,6 +2148,7 @@ mod tests {
                 client: failed_client,
                 startup_snapshot: Some(startup_tools),
                 startup_complete,
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             },
         );
 

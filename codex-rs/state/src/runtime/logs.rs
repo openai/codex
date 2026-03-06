@@ -288,6 +288,8 @@ WHERE id IN (
     /// Query per-thread feedback logs, capped to the per-thread SQLite retention budget.
     pub async fn query_feedback_logs(&self, thread_id: &str) -> anyhow::Result<Vec<u8>> {
         let max_bytes = LOG_PARTITION_SIZE_LIMIT_BYTES;
+        // TODO(ccunningham): Store rendered span/event fields in SQLite so this
+        // export can match feedback formatting beyond timestamp + level + message.
         let lines = sqlx::query_scalar::<_, String>(
             r#"
 WITH latest_process AS (
@@ -299,12 +301,24 @@ WITH latest_process AS (
 ),
 feedback_logs AS (
     SELECT
-        printf('%5s %s', level, message) || CASE
+        printf(
+            '%s.%06dZ %5s %s',
+            strftime('%Y-%m-%dT%H:%M:%S', ts, 'unixepoch'),
+            ts_nanos / 1000,
+            level,
+            message
+        ) || CASE
             WHEN substr(message, -1, 1) = char(10) THEN ''
             ELSE char(10)
         END AS line,
         length(CAST(
-            printf('%5s %s', level, message) || CASE
+            printf(
+                '%s.%06dZ %5s %s',
+                strftime('%Y-%m-%dT%H:%M:%S', ts, 'unixepoch'),
+                ts_nanos / 1000,
+                level,
+                message
+            ) || CASE
                 WHEN substr(message, -1, 1) = char(10) THEN ''
                 ELSE char(10)
             END AS BLOB
@@ -830,7 +844,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
-            " INFO alpha\n INFO bravo\n INFO charlie\n"
+            "1970-01-01T00:00:01.000000Z  INFO alpha\n1970-01-01T00:00:02.000000Z  INFO bravo\n1970-01-01T00:00:03.000000Z  INFO charlie\n"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -952,7 +966,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
-            " INFO threadless-before\n INFO thread-scoped\n INFO threadless-after\n"
+            "1970-01-01T00:00:01.000000Z  INFO threadless-before\n1970-01-01T00:00:02.000000Z  INFO thread-scoped\n1970-01-01T00:00:03.000000Z  INFO threadless-after\n"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -1026,7 +1040,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
-            " INFO old-process-thread\n INFO new-process-thread\n INFO new-process-threadless\n"
+            "1970-01-01T00:00:02.000000Z  INFO old-process-thread\n1970-01-01T00:00:03.000000Z  INFO new-process-thread\n1970-01-01T00:00:04.000000Z  INFO new-process-threadless\n"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;

@@ -1240,6 +1240,7 @@ impl ChatWidget {
         self.sync_fast_command_enabled();
         self.sync_personality_command_enabled();
         let startup_tooltip_override = self.startup_tooltip_override.take();
+        let show_fast_status = self.should_show_fast_status(event.service_tier);
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -1249,6 +1250,7 @@ impl ChatWidget {
             self.auth_manager
                 .auth_cached()
                 .and_then(|auth| auth.account_plan_type()),
+            show_fast_status,
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -1374,9 +1376,7 @@ impl ChatWidget {
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
-            snapshot
-                .feedback_diagnostics_attachment_text(true)
-                .is_some(),
+            snapshot.feedback_diagnostics(),
         );
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
@@ -2902,7 +2902,7 @@ impl ChatWidget {
             thread_label: None,
             server_name: ev.server_name,
             request_id: ev.id,
-            message: ev.message,
+            message: ev.request.message().to_string(),
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -3382,6 +3382,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
+        widget
+            .bottom_pane
+            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
         widget
     }
@@ -3562,6 +3565,9 @@ impl ChatWidget {
                 ),
         );
         widget.update_collaboration_mode_indicator();
+        widget
+            .bottom_pane
+            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
         widget
     }
@@ -7241,6 +7247,15 @@ impl ChatWidget {
         self.config.service_tier
     }
 
+    pub(crate) fn should_show_fast_status(&self, service_tier: Option<ServiceTier>) -> bool {
+        matches!(service_tier, Some(ServiceTier::Fast))
+            && self
+                .auth_manager
+                .auth_cached()
+                .as_ref()
+                .is_some_and(CodexAuth::is_chatgpt_auth)
+    }
+
     fn fast_mode_enabled(&self) -> bool {
         self.config.features.enabled(Feature::FastMode)
     }
@@ -7575,6 +7590,7 @@ impl ChatWidget {
             DEFAULT_MODEL_DISPLAY_NAME.to_string(),
             placeholder_style,
             None,
+            false,
             config.cwd.clone(),
             CODEX_CLI_VERSION,
         ))

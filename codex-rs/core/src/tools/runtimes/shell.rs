@@ -5,7 +5,8 @@ Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
 #[cfg(unix)]
-mod unix_escalation;
+pub(crate) mod unix_escalation;
+pub(crate) mod zsh_fork_backend;
 
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
@@ -80,7 +81,6 @@ pub(crate) enum ShellRuntimeBackend {
 
 #[derive(Default)]
 pub struct ShellRuntime {
-    #[cfg_attr(not(unix), allow(dead_code))]
     backend: ShellRuntimeBackend,
 }
 
@@ -215,9 +215,8 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             command
         };
 
-        #[cfg(unix)]
         if self.backend == ShellRuntimeBackend::ShellCommandZshFork {
-            match unix_escalation::try_run_zsh_fork(req, attempt, ctx, &command).await? {
+            match zsh_fork_backend::maybe_run_shell_command(req, attempt, ctx, &command).await? {
                 Some(out) => return Ok(out),
                 None => {
                     tracing::warn!(

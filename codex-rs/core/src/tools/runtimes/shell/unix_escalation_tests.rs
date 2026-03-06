@@ -20,6 +20,7 @@ use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxPermissions;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+use crate::skills::SkillMetadata;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::PolicyParser;
@@ -30,6 +31,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::SkillScope;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::ExecResult;
@@ -59,11 +61,26 @@ fn starlark_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+fn test_skill_metadata(permission_profile: Option<PermissionProfile>) -> SkillMetadata {
+    SkillMetadata {
+        name: "skill".to_string(),
+        description: "description".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        permission_profile,
+        path_to_skills_md: PathBuf::from("/tmp/skill/SKILL.md"),
+        scope: SkillScope::User,
+    }
+}
+
 #[test]
 fn extract_shell_script_preserves_login_flag() {
     assert_eq!(
         extract_shell_script(&["/bin/zsh".into(), "-lc".into(), "echo hi".into()]).unwrap(),
         ParsedShellCommand {
+            program: "/bin/zsh".to_string(),
             script: "echo hi".to_string(),
             login: true,
         }
@@ -71,6 +88,7 @@ fn extract_shell_script_preserves_login_flag() {
     assert_eq!(
         extract_shell_script(&["/bin/zsh".into(), "-c".into(), "echo hi".into()]).unwrap(),
         ParsedShellCommand {
+            program: "/bin/zsh".to_string(),
             script: "echo hi".to_string(),
             login: false,
         }
@@ -89,6 +107,7 @@ fn extract_shell_script_supports_wrapped_command_prefixes() {
         ])
         .unwrap(),
         ParsedShellCommand {
+            program: "/bin/zsh".to_string(),
             script: "echo hello".to_string(),
             login: true,
         }
@@ -105,6 +124,7 @@ fn extract_shell_script_supports_wrapped_command_prefixes() {
         ])
         .unwrap(),
         ParsedShellCommand {
+            program: "/bin/zsh".to_string(),
             script: "pwd".to_string(),
             login: false,
         }
@@ -239,6 +259,42 @@ fn shell_request_escalation_execution_is_explicit() {
                 macos_seatbelt_profile_extensions: Some(macos_seatbelt_profile_extensions),
             },
         )),
+    );
+}
+
+#[test]
+fn skill_escalation_execution_uses_additional_permissions() {
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: None,
+            write: Some(vec![
+                AbsolutePathBuf::from_absolute_path("/tmp/output").unwrap(),
+            ]),
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(Some(
+            requested_permissions.clone(),
+        ))),
+        EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
+            requested_permissions,
+        )),
+    );
+}
+
+#[test]
+fn skill_escalation_execution_ignores_empty_permissions() {
+    assert_eq!(
+        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(Some(
+            PermissionProfile::default(),
+        ))),
+        EscalationExecution::TurnDefault,
+    );
+    assert_eq!(
+        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(None)),
+        EscalationExecution::TurnDefault,
     );
 }
 
@@ -520,6 +576,70 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
             .get(2)
             .is_some_and(|policy| policy.contains("(allow user-preference-write)")),
         "expected seatbelt policy to include macOS extension profile: {:?}",
+        prepared.command
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn prepare_escalated_exec_permission_profile_unions_turn_and_requested_macos_extensions() {
+    let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap();
+    let executor = CoreShellCommandExecutor {
+        command: vec!["echo".to_string(), "ok".to_string()],
+        cwd: cwd.to_path_buf(),
+        env: HashMap::new(),
+        network: None,
+        sandbox: SandboxType::None,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        justification: None,
+        arg0: None,
+        sandbox_policy_cwd: cwd.to_path_buf(),
+        macos_seatbelt_profile_extensions: Some(MacOsSeatbeltProfileExtensions {
+            macos_preferences: MacOsPreferencesPermission::ReadOnly,
+            ..Default::default()
+        }),
+        codex_linux_sandbox_exe: None,
+        use_linux_sandbox_bwrap: false,
+    };
+
+    let prepared = executor
+        .prepare_escalated_exec(
+            &AbsolutePathBuf::from_absolute_path("/bin/echo").unwrap(),
+            &["echo".to_string(), "ok".to_string()],
+            &cwd,
+            HashMap::new(),
+            EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
+                PermissionProfile {
+                    macos: Some(MacOsSeatbeltProfileExtensions {
+                        macos_calendar: true,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+        )
+        .await
+        .unwrap();
+
+    let policy = prepared
+        .command
+        .get(2)
+        .expect("seatbelt policy should be present");
+    assert_eq!(
+        prepared.command.first().map(String::as_str),
+        Some(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+    );
+    assert_eq!(prepared.command.get(1).map(String::as_str), Some("-p"));
+    assert!(
+        policy.contains("(allow user-preference-read)"),
+        "expected turn macOS seatbelt extensions to be preserved: {:?}",
+        prepared.command
+    );
+    assert!(
+        policy.contains("(allow mach-lookup (global-name \"com.apple.CalendarAgent\"))"),
+        "expected requested macOS seatbelt extensions to be included: {:?}",
         prepared.command
     );
 }

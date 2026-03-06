@@ -1469,6 +1469,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "inventory",
  "pretty_assertions",
+ "rmcp",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -1548,6 +1549,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "url",
+ "which",
  "wiremock",
  "zip",
 ]
@@ -1985,7 +1987,6 @@ dependencies = [
  "sentry",
  "tracing",
  "tracing-subscriber",
- "url",
 ]
 
 [[package]]
@@ -2212,6 +2213,7 @@ dependencies = [
 name = "codex-package-manager"
 version = "0.0.0"
 dependencies = [
+ "fd-lock",
  "flate2",
  "pretty_assertions",
  "reqwest",

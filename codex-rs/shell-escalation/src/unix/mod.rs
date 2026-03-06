@@ -66,6 +66,7 @@ pub use self::escalate_protocol::EscalateAction;
 pub use self::escalate_protocol::EscalationDecision;
 pub use self::escalate_protocol::EscalationExecution;
 pub use self::escalate_server::EscalateServer;
+pub use self::escalate_server::EscalationSession;
 pub use self::escalate_server::ExecParams;
 pub use self::escalate_server::ExecResult;
 pub use self::escalate_server::PreparedExec;

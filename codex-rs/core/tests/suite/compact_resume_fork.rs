@@ -20,10 +20,15 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses::ResponseMock;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -35,6 +40,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
+const AFTER_ROLLBACK: &str = "AFTER_ROLLBACK";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
@@ -406,6 +412,95 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Scenario: rolling back behind a pre-turn compaction should replay
+/// append-only history from the rollout file and keep earlier compacted
+/// history visible.
+async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Result<()> {
+    if network_disabled() {
+        println!("Skipping test because network is disabled in this sandbox");
+        return Ok(());
+    }
+
+    const EDITED_AFTER_COMPACT: &str = "EDITED_AFTER_COMPACT";
+    const SECOND_REPLY: &str = "SECOND_REPLY";
+
+    let server = MockServer::start().await;
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", SECOND_REPLY),
+        ev_completed("r3"),
+    ]);
+    let sse4 = sse(vec![ev_completed("r4")]);
+
+    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
+
+    let (_home, _config, _manager, base) = start_test_conversation(&server, None).await;
+
+    user_turn(&base, "hello world").await;
+    compact_conversation(&base).await;
+    user_turn(&base, EDITED_AFTER_COMPACT).await;
+
+    base.submit(Op::ThreadRollback { num_turns: 1 })
+        .await
+        .expect("submit thread rollback");
+    let rollback_event =
+        wait_for_event(&base, |ev| matches!(ev, EventMsg::ThreadRolledBack(_))).await;
+    let EventMsg::ThreadRolledBack(rollback_event) = rollback_event else {
+        panic!("expected thread rolled back event");
+    };
+    assert_eq!(rollback_event.num_turns, 1);
+
+    user_turn(&base, AFTER_ROLLBACK).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[1].body_contains_text(SUMMARIZATION_PROMPT));
+    assert!(requests[2].body_contains_text("hello world"));
+    assert!(requests[2].body_contains_text(SUMMARY_TEXT));
+    assert!(requests[2].body_contains_text(EDITED_AFTER_COMPACT));
+    let after_rollback_user_texts = requests[3].message_input_texts("user");
+    let after_rollback_last = after_rollback_user_texts
+        .last()
+        .unwrap_or_else(|| panic!("post-rollback request missing user messages"));
+    assert_eq!(after_rollback_last, AFTER_ROLLBACK);
+    assert!(
+        requests[3].body_contains_text("hello world"),
+        "the first turn should remain visible after rollback behind compaction",
+    );
+    assert!(
+        !requests[3].body_contains_text(EDITED_AFTER_COMPACT),
+        "the edited post-compaction turn should be removed by rollback",
+    );
+    assert!(
+        requests[3].body_contains_text(SUMMARY_TEXT),
+        "compaction summary should remain for the preserved first turn",
+    );
+
+    insta::assert_snapshot!(
+        "rollback_past_compaction_shapes",
+        context_snapshot::format_labeled_requests_snapshot(
+            "rollback past compaction replay after rollback",
+            &[
+                ("compaction request", &requests[1]),
+                ("before rollback", &requests[2]),
+                ("after rollback", &requests[3]),
+            ],
+            &ContextSnapshotOptions::default()
+                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
+        )
+    );
+
+    Ok(())
+}
+
 fn normalize_line_endings(value: &mut Value) {
     match value {
         Value::String(text) => {
@@ -427,10 +522,16 @@ fn normalize_line_endings(value: &mut Value) {
     }
 }
 
-fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
-    let mut bodies = request_log
+fn gather_requests(request_log: &[ResponseMock]) -> Vec<ResponsesRequest> {
+    request_log
         .iter()
         .flat_map(ResponseMock::requests)
+        .collect::<Vec<_>>()
+}
+
+fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
+    let mut bodies = gather_requests(request_log)
+        .into_iter()
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
     bodies.iter_mut().for_each(normalize_line_endings);
