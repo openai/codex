@@ -18,11 +18,8 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::process::ChildTerminator;
-use crate::process::OutputSink;
-use crate::process::OutputStream;
 use crate::process::ProcessHandle;
 use crate::process::SpawnedProcess;
-use crate::process::SpawnedStreamingProcess;
 
 #[cfg(target_os = "linux")]
 use libc;
@@ -75,7 +72,7 @@ fn kill_process(pid: u32) -> io::Result<()> {
     }
 }
 
-async fn read_output_stream<R>(mut reader: R, output_sink: OutputSink, stream: OutputStream)
+async fn read_output_stream<R>(mut reader: R, output_tx: mpsc::Sender<Vec<u8>>)
 where
     R: AsyncRead + Unpin,
 {
@@ -84,7 +81,7 @@ where
         match reader.read(&mut buf).await {
             Ok(0) => break,
             Ok(n) => {
-                output_sink.send(buf[..n].to_vec(), stream).await;
+                let _ = output_tx.send(buf[..n].to_vec()).await;
             }
             Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
@@ -93,20 +90,19 @@ where
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PipeStdinMode {
+enum PipeStdinMode {
     Piped,
     Null,
 }
 
-pub async fn spawn_streaming_process(
+async fn spawn_process_with_stdin_mode(
     program: &str,
     args: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
     arg0: &Option<String>,
     stdin_mode: PipeStdinMode,
-    output_sink: OutputSink,
-) -> Result<SpawnedStreamingProcess> {
+) -> Result<SpawnedProcess> {
     if program.is_empty() {
         anyhow::bail!("missing program for pipe spawn");
     }
@@ -160,7 +156,8 @@ pub async fn spawn_streaming_process(
     let stderr = child.stderr.take();
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
-    let output_tx = output_sink.combined_sender();
+    let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>(128);
+    let (stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(128);
     let writer_handle = if let Some(stdin) = stdin {
         let writer = Arc::new(tokio::sync::Mutex::new(stdin));
         tokio::spawn(async move {
@@ -176,15 +173,15 @@ pub async fn spawn_streaming_process(
     };
 
     let stdout_handle = stdout.map(|stdout| {
-        let output_sink = output_sink.clone();
+        let stdout_tx = stdout_tx.clone();
         tokio::spawn(async move {
-            read_output_stream(BufReader::new(stdout), output_sink, OutputStream::Stdout).await;
+            read_output_stream(BufReader::new(stdout), stdout_tx).await;
         })
     });
     let stderr_handle = stderr.map(|stderr| {
-        let output_sink = output_sink.clone();
+        let stderr_tx = stderr_tx.clone();
         tokio::spawn(async move {
-            read_output_stream(BufReader::new(stderr), output_sink, OutputStream::Stderr).await;
+            read_output_stream(BufReader::new(stderr), stderr_tx).await;
         })
     });
     let mut reader_abort_handles = Vec::new();
@@ -222,7 +219,6 @@ pub async fn spawn_streaming_process(
 
     let handle = ProcessHandle::new(
         writer_tx,
-        output_tx,
         Box::new(PipeChildTerminator {
             #[cfg(windows)]
             pid,
@@ -238,13 +234,15 @@ pub async fn spawn_streaming_process(
         None,
     );
 
-    Ok(SpawnedStreamingProcess {
+    Ok(SpawnedProcess {
         session: handle,
+        stdout_rx,
+        stderr_rx,
         exit_rx,
     })
 }
 
-/// Spawn a process using regular pipes (no PTY), returning handles for stdin, output, and exit.
+/// Spawn a process using regular pipes (no PTY), returning handles for stdin, split output, and exit.
 pub async fn spawn_process(
     program: &str,
     args: &[String],
@@ -252,18 +250,7 @@ pub async fn spawn_process(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
 ) -> Result<SpawnedProcess> {
-    let (output_sink, output_rx) = OutputSink::broadcast_combined();
-    let spawned = spawn_streaming_process(
-        program,
-        args,
-        cwd,
-        env,
-        arg0,
-        PipeStdinMode::Piped,
-        output_sink,
-    )
-    .await?;
-    Ok(spawned.into_spawned_process(output_rx))
+    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Piped).await
 }
 
 /// Spawn a process using regular pipes, but close stdin immediately.
@@ -274,16 +261,5 @@ pub async fn spawn_process_no_stdin(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
 ) -> Result<SpawnedProcess> {
-    let (output_sink, output_rx) = OutputSink::broadcast_combined();
-    let spawned = spawn_streaming_process(
-        program,
-        args,
-        cwd,
-        env,
-        arg0,
-        PipeStdinMode::Null,
-        output_sink,
-    )
-    .await?;
-    Ok(spawned.into_spawned_process(output_rx))
+    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Null).await
 }

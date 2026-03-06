@@ -7,24 +7,22 @@ Lightweight helpers for spawning interactive processes either under a PTY (pseud
 - `spawn_pty_process(program, args, cwd, env, arg0, size)` → `SpawnedProcess`
 - `spawn_pipe_process(program, args, cwd, env, arg0)` → `SpawnedProcess`
 - `spawn_pipe_process_no_stdin(program, args, cwd, env, arg0)` → `SpawnedProcess`
-- `pty::spawn_streaming_process(program, args, cwd, env, arg0, size, output_sink)` → `SpawnedStreamingProcess`
-- `pipe::spawn_streaming_process(program, args, cwd, env, arg0, stdin_mode, output_sink)` → `SpawnedStreamingProcess`
+- `combine_output_receivers(stdout_rx, stderr_rx)` → `broadcast::Receiver<Vec<u8>>`
 - `conpty_supported()` → `bool` (Windows only; always true elsewhere)
 - `TerminalSize { rows, cols }` selects PTY dimensions in character cells.
 - `ProcessHandle` exposes:
   - `writer_sender()` → `mpsc::Sender<Vec<u8>>` (stdin)
-  - `output_receiver()` → `broadcast::Receiver<Vec<u8>>` (stdout/stderr merged)
   - `resize(TerminalSize)`
   - `close_stdin()`
   - `has_exited()`, `exit_code()`, `terminate()`
-- `SpawnedProcess` bundles `session`, `output_rx`, and `exit_rx` (oneshot exit code).
-- `SpawnedStreamingProcess` bundles `session` and `exit_rx`; callers own the output sink/receivers.
+- `SpawnedProcess` bundles `session`, `stdout_rx`, `stderr_rx`, and `exit_rx` (oneshot exit code).
 
 ## Usage examples
 
 ```rust
 use std::collections::HashMap;
 use std::path::Path;
+use codex_utils_pty::combine_output_receivers;
 use codex_utils_pty::spawn_pty_process;
 use codex_utils_pty::TerminalSize;
 
@@ -43,7 +41,7 @@ let writer = spawned.session.writer_sender();
 writer.send(b"exit\n".to_vec()).await?;
 
 // Collect output until the process exits.
-let mut output_rx = spawned.output_rx;
+let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
 let mut collected = Vec::new();
 while let Ok(chunk) = output_rx.try_recv() {
     collected.extend_from_slice(&chunk);

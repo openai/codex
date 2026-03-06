@@ -55,13 +55,9 @@ impl fmt::Debug for PtyHandles {
 /// Handle for driving an interactive process (PTY or pipe).
 pub struct ProcessHandle {
     writer_tx: StdMutex<Option<mpsc::Sender<Vec<u8>>>>,
-    output_tx: Option<broadcast::Sender<Vec<u8>>>,
     killer: StdMutex<Option<Box<dyn ChildTerminator>>>,
-    #[allow(dead_code)]
     reader_handle: StdMutex<Option<JoinHandle<()>>>,
-    #[allow(dead_code)]
     reader_abort_handles: StdMutex<Vec<AbortHandle>>,
-    #[allow(dead_code)]
     writer_handle: StdMutex<Option<JoinHandle<()>>>,
     wait_handle: StdMutex<Option<JoinHandle<()>>>,
     exit_status: Arc<AtomicBool>,
@@ -81,7 +77,6 @@ impl ProcessHandle {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         writer_tx: mpsc::Sender<Vec<u8>>,
-        output_tx: Option<broadcast::Sender<Vec<u8>>>,
         killer: Box<dyn ChildTerminator>,
         reader_handle: JoinHandle<()>,
         reader_abort_handles: Vec<AbortHandle>,
@@ -93,7 +88,6 @@ impl ProcessHandle {
     ) -> Self {
         Self {
             writer_tx: StdMutex::new(Some(writer_tx)),
-            output_tx,
             killer: StdMutex::new(Some(killer)),
             reader_handle: StdMutex::new(Some(reader_handle)),
             reader_abort_handles: StdMutex::new(reader_abort_handles),
@@ -116,18 +110,6 @@ impl ProcessHandle {
         let (writer_tx, writer_rx) = mpsc::channel(1);
         drop(writer_rx);
         writer_tx
-    }
-
-    /// Returns a broadcast receiver that yields stdout/stderr chunks when
-    /// combined output routing is configured.
-    pub fn output_receiver(&self) -> broadcast::Receiver<Vec<u8>> {
-        if let Some(output_tx) = self.output_tx.as_ref() {
-            return output_tx.subscribe();
-        }
-
-        let (output_tx, output_rx) = broadcast::channel(1);
-        drop(output_tx);
-        output_rx
     }
 
     /// True if the child process has exited.
@@ -202,105 +184,46 @@ impl Drop for ProcessHandle {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OutputStream {
-    Stdout,
-    Stderr,
-}
+/// Combine split stdout/stderr receivers into a single broadcast receiver.
+pub fn combine_output_receivers(
+    mut stdout_rx: mpsc::Receiver<Vec<u8>>,
+    mut stderr_rx: mpsc::Receiver<Vec<u8>>,
+) -> broadcast::Receiver<Vec<u8>> {
+    let (combined_tx, combined_rx) = broadcast::channel(256);
+    tokio::spawn(async move {
+        let mut stdout_open = true;
+        let mut stderr_open = true;
 
-#[derive(Clone, Debug)]
-pub enum OutputSink {
-    BroadcastCombined(broadcast::Sender<Vec<u8>>),
-    GuaranteedSeparate {
-        stdout: mpsc::Sender<Vec<u8>>,
-        stderr: mpsc::Sender<Vec<u8>>,
-    },
-}
-
-impl OutputSink {
-    pub fn broadcast_combined() -> (Self, broadcast::Receiver<Vec<u8>>) {
-        let (tx, rx) = broadcast::channel(256);
-        (OutputSink::BroadcastCombined(tx), rx)
-    }
-
-    pub fn guaranteed_separate() -> (Self, mpsc::Receiver<Vec<u8>>, mpsc::Receiver<Vec<u8>>) {
-        let (stdout_tx, stdout_rx) = mpsc::channel(128);
-        let (stderr_tx, stderr_rx) = mpsc::channel(128);
-        (
-            OutputSink::GuaranteedSeparate {
-                stdout: stdout_tx,
-                stderr: stderr_tx,
-            },
-            stdout_rx,
-            stderr_rx,
-        )
-    }
-
-    pub(crate) async fn send(&self, chunk: Vec<u8>, stream: OutputStream) {
-        match self {
-            OutputSink::BroadcastCombined(tx) => {
-                let _ = tx.send(chunk);
+        loop {
+            tokio::select! {
+                stdout = stdout_rx.recv(), if stdout_open => match stdout {
+                    Some(chunk) => {
+                        let _ = combined_tx.send(chunk);
+                    }
+                    None => {
+                        stdout_open = false;
+                    }
+                },
+                stderr = stderr_rx.recv(), if stderr_open => match stderr {
+                    Some(chunk) => {
+                        let _ = combined_tx.send(chunk);
+                    }
+                    None => {
+                        stderr_open = false;
+                    }
+                },
+                else => break,
             }
-            OutputSink::GuaranteedSeparate { stdout, stderr } => match stream {
-                OutputStream::Stdout => {
-                    let _ = stdout.send(chunk).await;
-                }
-                OutputStream::Stderr => {
-                    let _ = stderr.send(chunk).await;
-                }
-            },
         }
-    }
-
-    pub(crate) fn send_blocking(&self, chunk: Vec<u8>, stream: OutputStream) {
-        match self {
-            OutputSink::BroadcastCombined(tx) => {
-                let _ = tx.send(chunk);
-            }
-            OutputSink::GuaranteedSeparate { stdout, stderr } => match stream {
-                OutputStream::Stdout => {
-                    let _ = stdout.blocking_send(chunk);
-                }
-                OutputStream::Stderr => {
-                    let _ = stderr.blocking_send(chunk);
-                }
-            },
-        }
-    }
-
-    pub(crate) fn combined_sender(&self) -> Option<broadcast::Sender<Vec<u8>>> {
-        match self {
-            OutputSink::BroadcastCombined(tx) => Some(tx.clone()),
-            OutputSink::GuaranteedSeparate { .. } => None,
-        }
-    }
+    });
+    combined_rx
 }
 
-/// Return value from explicit streaming spawn helpers (PTY or pipe).
-#[derive(Debug)]
-pub struct SpawnedStreamingProcess {
-    pub session: ProcessHandle,
-    pub exit_rx: oneshot::Receiver<i32>,
-}
-
-impl SpawnedStreamingProcess {
-    pub(crate) fn into_spawned_process(
-        self,
-        output_rx: broadcast::Receiver<Vec<u8>>,
-    ) -> SpawnedProcess {
-        let Self { session, exit_rx } = self;
-        SpawnedProcess {
-            session,
-            output_rx,
-            exit_rx,
-        }
-    }
-}
-
-/// Return value from backwards-compatible spawn helpers (PTY or pipe).
+/// Return value from PTY or pipe spawn helpers.
 #[derive(Debug)]
 pub struct SpawnedProcess {
     pub session: ProcessHandle,
-    pub output_rx: broadcast::Receiver<Vec<u8>>,
+    pub stdout_rx: mpsc::Receiver<Vec<u8>>,
+    pub stderr_rx: mpsc::Receiver<Vec<u8>>,
     pub exit_rx: oneshot::Receiver<i32>,
 }
