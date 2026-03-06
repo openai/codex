@@ -79,7 +79,7 @@ use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecApprovalRequestEvent;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::MacOsPermissions;
+use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::parse_command::ParsedCommand;
@@ -99,6 +99,7 @@ use codex_protocol::request_user_input::RequestUserInputEvent;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
+use tracing::warn;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -308,11 +309,11 @@ fn additional_permission_profile_to_core(
             read: file_system.read,
             write: file_system.write,
         }),
-        macos: value.macos.map(|macos| MacOsPermissions {
-            preferences: macos.preferences,
-            automations: macos.automations,
-            accessibility: macos.accessibility,
-            calendar: macos.calendar,
+        macos: value.macos.map(|macos| MacOsSeatbeltProfileExtensions {
+            macos_preferences: macos.preferences,
+            macos_automation: macos.automations,
+            macos_accessibility: macos.accessibility,
+            macos_calendar: macos.calendar,
         }),
     }
 }
@@ -612,17 +613,24 @@ fn mcp_elicitation_request_to_core(
 ) -> codex_protocol::approvals::ElicitationRequest {
     match request {
         McpServerElicitationRequest::Form {
+            meta,
             message,
             requested_schema,
         } => codex_protocol::approvals::ElicitationRequest::Form {
+            meta,
             message,
-            requested_schema,
+            requested_schema: serde_json::to_value(requested_schema).unwrap_or_else(|err| {
+                warn!("failed to serialize MCP elicitation schema for local adapter: {err}");
+                serde_json::Value::Null
+            }),
         },
         McpServerElicitationRequest::Url {
+            meta,
             message,
             url,
             elicitation_id,
         } => codex_protocol::approvals::ElicitationRequest::Url {
+            meta,
             message,
             url,
             elicitation_id,
@@ -1779,6 +1787,7 @@ async fn process_in_process_command(
             request_id,
             decision,
             content,
+            meta,
         } => {
             let Some(pending_request_id) =
                 pending_server_requests.pop_mcp_elicitation_request_id(&server_name, &request_id)
@@ -1795,6 +1804,7 @@ async fn process_in_process_command(
             let response = McpServerElicitationRequestResponse {
                 action: mcp_elicitation_action_to_protocol(decision),
                 content,
+                meta,
             };
             let result = match serde_json::to_value(response) {
                 Ok(value) => value,
@@ -2139,6 +2149,7 @@ async fn run_in_process_agent_loop(
                                 send_codex_event(
                                     &app_event_tx,
                                     EventMsg::ElicitationRequest(ElicitationRequestEvent {
+                                        turn_id: params.turn_id,
                                         server_name: params.server_name,
                                         id: elicitation_id,
                                         request: mcp_elicitation_request_to_core(params.request),
@@ -3082,6 +3093,7 @@ mod tests {
                 request_id: codex_protocol::mcp::RequestId::Integer(1),
                 decision: codex_protocol::approvals::ElicitationAction::Cancel,
                 content: None,
+                meta: None,
             },
         )
         .await;

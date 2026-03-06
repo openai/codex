@@ -589,7 +589,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         };
 
     let primary_thread_id_for_span = primary_thread_id.to_string();
-    let mut error_seen = false;
     let mut buffered_events = VecDeque::new();
     // Use the start/resume response as the authoritative bootstrap payload.
     // Waiting for a later streamed `SessionConfigured` event adds up to 10s of
@@ -1144,6 +1143,7 @@ async fn handle_server_request(
                 let response = McpServerElicitationRequestResponse {
                     action: McpServerElicitationAction::Cancel,
                     content: None,
+                    meta: None,
                 };
                 match serde_json::to_value(response) {
                     Ok(value) => {
