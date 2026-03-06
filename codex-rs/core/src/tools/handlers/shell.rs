@@ -33,6 +33,7 @@ use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::spec::ShellCommandBackendConfig;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxPermissions;
 
 pub struct ShellHandler;
 
@@ -341,16 +342,14 @@ impl ShellHandler {
         )
         .map_err(FunctionCallError::RespondToModel)?;
 
-        // Approval policy guard for explicit escalation in non-OnRequest modes.
-        if exec_params.sandbox_permissions.requests_sandbox_override()
-            && !matches!(
-                turn.approval_policy.value(),
-                codex_protocol::protocol::AskForApproval::OnRequest
-            )
-        {
+        // Approval policy guard for the sandboxed additional-permissions flow.
+        if exec_params.sandbox_permissions.uses_additional_permissions() && !matches!(
+            turn.approval_policy.value(),
+            codex_protocol::protocol::AskForApproval::OnRequest
+        ) {
             let approval_policy = turn.approval_policy.value();
             return Err(FunctionCallError::RespondToModel(format!(
-                "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
+                "approval policy is {approval_policy:?}; reject command — you should not ask for additional sandbox permissions if the approval policy is {approval_policy:?}"
             )));
         }
 
@@ -395,6 +394,7 @@ impl ShellHandler {
         let req = ShellRequest {
             command: exec_params.command.clone(),
             cwd: exec_params.cwd.clone(),
+            approval_policy: turn.approval_policy.value(),
             timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),
             explicit_env_overrides,
@@ -410,6 +410,14 @@ impl ShellHandler {
             match shell_runtime_backend {
                 Generic => ShellRuntime::new(),
                 backend @ (ShellCommandClassic | ShellCommandZshFork) => {
+                    let backend = if matches!(
+                        turn.approval_policy.value(),
+                        codex_protocol::protocol::AskForApproval::Guardian
+                    ) {
+                        ShellRuntimeBackend::ShellCommandClassic
+                    } else {
+                        backend
+                    };
                     ShellRuntime::for_shell_command(backend)
                 }
             }

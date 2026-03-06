@@ -230,6 +230,13 @@
           "type": "string"
         },
         {
+          "description": "Run tools in the sandbox first. If execution needs to leave the sandbox, an internal guardian reviewer evaluates the risk and either approves or rejects the escalation automatically.",
+          "enum": [
+            "guardian"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "description": "Fine-grained rejection controls for approval prompts.\n\nWhen a field is `true`, prompts of that category are automatically rejected instead of shown to the user.",
           "properties": {
@@ -360,6 +367,9 @@
               "type": "boolean"
             },
             "fast_mode": {
+              "type": "boolean"
+            },
+            "guardian_approval": {
               "type": "boolean"
             },
             "image_detail_original": {
@@ -1829,6 +1839,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "guardian_approval": {
           "type": "boolean"
         },
         "image_detail_original": {

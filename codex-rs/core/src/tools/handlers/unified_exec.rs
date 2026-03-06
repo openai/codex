@@ -171,16 +171,14 @@ impl ToolHandler for UnifiedExecHandler {
                 let request_permission_enabled =
                     session.features().enabled(Feature::RequestPermissions);
 
-                if sandbox_permissions.requests_sandbox_override()
-                    && !matches!(
-                        context.turn.approval_policy.value(),
-                        codex_protocol::protocol::AskForApproval::OnRequest
-                    )
-                {
+                if sandbox_permissions.uses_additional_permissions() && !matches!(
+                    context.turn.approval_policy.value(),
+                    codex_protocol::protocol::AskForApproval::OnRequest
+                ) {
                     let approval_policy = context.turn.approval_policy.value();
                     manager.release_process_id(&process_id).await;
                     return Err(FunctionCallError::RespondToModel(format!(
-                        "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
+                        "approval policy is {approval_policy:?}; reject command — you cannot ask for additional sandbox permissions if the approval policy is {approval_policy:?}"
                     )));
                 }
 

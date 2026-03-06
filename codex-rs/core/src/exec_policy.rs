@@ -112,6 +112,7 @@ pub(crate) fn prompt_is_rejected_by_policy(
         AskForApproval::Never => Some(PROMPT_CONFLICT_REASON),
         AskForApproval::OnFailure => None,
         AskForApproval::OnRequest => None,
+        AskForApproval::Guardian => None,
         AskForApproval::UnlessTrusted => None,
         AskForApproval::Reject(reject_config) => {
             if prompt_is_rule {
@@ -508,15 +509,28 @@ pub fn render_decision_for_unmatched_command(
     // but if the user has explicitly disabled prompts, we must
     // forbid the command.
     if command_might_be_dangerous(command) || runtime_sandbox_provides_safety {
-        return if matches!(approval_policy, AskForApproval::Never) {
-            Decision::Forbidden
-        } else {
-            Decision::Prompt
+        return match approval_policy {
+            AskForApproval::Never => Decision::Forbidden,
+            AskForApproval::Guardian
+                if !runtime_sandbox_provides_safety
+                    && !sandbox_permissions.requires_escalated_permissions()
+                    && matches!(
+                        sandbox_policy,
+                        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+                    ) =>
+            {
+                Decision::Allow
+            }
+            AskForApproval::OnFailure
+            | AskForApproval::OnRequest
+            | AskForApproval::Guardian
+            | AskForApproval::UnlessTrusted
+            | AskForApproval::Reject(_) => Decision::Prompt,
         };
     }
 
     match approval_policy {
-        AskForApproval::Never | AskForApproval::OnFailure => {
+        AskForApproval::Never | AskForApproval::OnFailure | AskForApproval::Guardian => {
             // We allow the command to run, relying on the sandbox for
             // protection.
             Decision::Allow
@@ -538,7 +552,7 @@ pub fn render_decision_for_unmatched_command(
                     // In restricted sandboxes (ReadOnly/WorkspaceWrite), do not prompt for
                     // non‑escalated, non‑dangerous commands — let the sandbox enforce
                     // restrictions (e.g., block network/write) without a user prompt.
-                    if sandbox_permissions.requests_sandbox_override() {
+                    if sandbox_permissions.uses_additional_permissions() {
                         Decision::Prompt
                     } else {
                         Decision::Allow
@@ -553,7 +567,7 @@ pub fn render_decision_for_unmatched_command(
                 Decision::Allow
             }
             SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => {
-                if sandbox_permissions.requests_sandbox_override() {
+                if sandbox_permissions.uses_additional_permissions() {
                     Decision::Prompt
                 } else {
                     Decision::Allow

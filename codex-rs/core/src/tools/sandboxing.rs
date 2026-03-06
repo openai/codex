@@ -111,8 +111,8 @@ where
 
 #[derive(Clone)]
 pub(crate) struct ApprovalCtx<'a> {
-    pub session: &'a Session,
-    pub turn: &'a TurnContext,
+    pub session: &'a Arc<Session>,
+    pub turn: &'a Arc<TurnContext>,
     pub call_id: &'a str,
     pub retry_reason: Option<String>,
     pub network_approval_context: Option<NetworkApprovalContext>,
@@ -167,7 +167,7 @@ pub(crate) fn default_exec_approval_requirement(
     sandbox_policy: &SandboxPolicy,
 ) -> ExecApprovalRequirement {
     let needs_approval = match policy {
-        AskForApproval::Never | AskForApproval::OnFailure => false,
+        AskForApproval::Never | AskForApproval::OnFailure | AskForApproval::Guardian => false,
         AskForApproval::OnRequest | AskForApproval::Reject(_) => !matches!(
             sandbox_policy,
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
@@ -204,12 +204,14 @@ pub(crate) enum SandboxOverride {
 }
 
 pub(crate) fn sandbox_override_for_first_attempt(
+    approval_policy: AskForApproval,
     sandbox_permissions: SandboxPermissions,
     exec_approval_requirement: &ExecApprovalRequirement,
 ) -> SandboxOverride {
     // ExecPolicy `Allow` can intentionally imply full trust (Skip + bypass_sandbox=true),
     // which supersedes `with_additional_permissions` sandboxed execution hints.
-    if sandbox_permissions.requires_escalated_permissions()
+    if (sandbox_permissions.requires_escalated_permissions()
+        && !matches!(approval_policy, AskForApproval::Guardian))
         || matches!(
             exec_approval_requirement,
             ExecApprovalRequirement::Skip {
@@ -261,11 +263,16 @@ pub(crate) trait Approvable<Req> {
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         match policy {
             AskForApproval::OnFailure => true,
+            AskForApproval::Guardian => true,
             AskForApproval::UnlessTrusted => true,
             AskForApproval::Never => false,
             AskForApproval::OnRequest => false,
             AskForApproval::Reject(reject_config) => !reject_config.sandbox_approval,
         }
+    }
+
+    fn guardian_review_payload(&self, _req: &Req) -> Option<serde_json::Value> {
+        None
     }
 
     fn start_approval_async<'a>(
@@ -436,6 +443,7 @@ mod tests {
     fn additional_permissions_allow_bypass_sandbox_first_attempt_when_execpolicy_skips() {
         assert_eq!(
             sandbox_override_for_first_attempt(
+                AskForApproval::OnRequest,
                 SandboxPermissions::WithAdditionalPermissions,
                 &ExecApprovalRequirement::Skip {
                     bypass_sandbox: true,
@@ -443,6 +451,21 @@ mod tests {
                 },
             ),
             SandboxOverride::BypassSandboxFirstAttempt
+        );
+    }
+
+    #[test]
+    fn guardian_keeps_explicit_escalation_in_sandbox_on_first_attempt() {
+        assert_eq!(
+            sandbox_override_for_first_attempt(
+                AskForApproval::Guardian,
+                SandboxPermissions::RequireEscalated,
+                &ExecApprovalRequirement::Skip {
+                    bypass_sandbox: false,
+                    proposed_execpolicy_amendment: None,
+                },
+            ),
+            SandboxOverride::NoOverride
         );
     }
 }

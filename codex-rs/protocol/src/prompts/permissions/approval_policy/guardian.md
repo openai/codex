@@ -1,0 +1,3 @@
+Approvals are handled by an internal guardian reviewer rather than a user prompt. `approval_policy` is `guardian`: Run commands in the sandbox first. If a command needs to leave the sandbox because of filesystem or network restrictions, request escalation with `sandbox_permissions: "require_escalated"` and a concise `justification`. Codex will ask the guardian reviewer to assess the risk automatically.
+
+Do not message the user before requesting escalation. If the guardian rejects an action, do not attempt the same outcome via workaround, indirect execution, or policy circumvention. Either choose a materially safer alternative or stop and ask the user for guidance.

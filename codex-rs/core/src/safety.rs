@@ -43,6 +43,7 @@ pub fn assess_patch_safety(
         AskForApproval::OnFailure
         | AskForApproval::Never
         | AskForApproval::OnRequest
+        | AskForApproval::Guardian
         | AskForApproval::Reject(_) => {
             // Continue to see if this can be auto-approved.
         }
@@ -63,7 +64,7 @@ pub fn assess_patch_safety(
     // possible that paths in the patch are hard links to files outside the
     // writable roots, so we should still run `apply_patch` in a sandbox in that case.
     if is_write_patch_constrained_to_writable_paths(action, file_system_sandbox_policy, cwd)
-        || matches!(policy, AskForApproval::OnFailure)
+        || matches!(policy, AskForApproval::OnFailure | AskForApproval::Guardian)
     {
         if matches!(
             sandbox_policy,

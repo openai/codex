@@ -4547,3 +4547,53 @@ fn test_tui_notification_method() {
         toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
     assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
 }
+
+#[test]
+fn guardian_approval_requires_feature_flag() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+approval_policy = "guardian"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    let codex_home = TempDir::new()?;
+    let err = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )
+    .expect_err("guardian approval should be gated");
+
+    assert_eq!(
+        err.to_string(),
+        "approval_policy `guardian` requires `features.guardian_approval = true`"
+    );
+    Ok(())
+}
+
+#[test]
+fn guardian_approval_is_allowed_when_feature_enabled() -> std::io::Result<()> {
+    let mut features = std::collections::HashMap::new();
+    features.insert("guardian_approval".to_string(), true);
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+approval_policy = "guardian"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let overrides = ConfigOverrides {
+        features: Some(features),
+        ..ConfigOverrides::default()
+    };
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        overrides,
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(config.permissions.approval_policy.value(), AskForApproval::Guardian);
+    Ok(())
+}

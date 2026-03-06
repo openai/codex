@@ -9,6 +9,8 @@ use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecExpiration;
 use crate::features::Feature;
+use crate::guardian::GuardianReviewRequest;
+use crate::guardian::review_escalation;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
@@ -36,6 +38,7 @@ use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -45,6 +48,7 @@ use std::path::PathBuf;
 pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
@@ -114,6 +118,21 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .clone()
             .or_else(|| req.justification.clone());
         Box::pin(async move {
+            if matches!(req.approval_policy, AskForApproval::Guardian) {
+                let request = GuardianReviewRequest {
+                    tool_name: "exec_command",
+                    action: serde_json::json!({
+                        "tool": "exec_command",
+                        "command": command,
+                        "cwd": cwd,
+                        "tty": req.tty,
+                        "sandbox_permissions": req.sandbox_permissions,
+                        "additional_permissions": req.additional_permissions,
+                        "justification": reason,
+                    }),
+                };
+                return review_escalation(session, turn, request).await;
+            }
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 let available_decisions = None;
                 session
@@ -145,7 +164,23 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
-        sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
+        sandbox_override_for_first_attempt(
+            req.approval_policy,
+            req.sandbox_permissions,
+            &req.exec_approval_requirement,
+        )
+    }
+
+    fn guardian_review_payload(&self, req: &UnifiedExecRequest) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "tool": "exec_command",
+            "command": req.command,
+            "cwd": req.cwd,
+            "tty": req.tty,
+            "sandbox_permissions": req.sandbox_permissions,
+            "additional_permissions": req.additional_permissions,
+            "justification": req.justification,
+        }))
     }
 }
 

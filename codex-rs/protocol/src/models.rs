@@ -404,6 +404,8 @@ const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
     include_str!("prompts/permissions/approval_policy/on_request_rule.md");
 const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
     include_str!("prompts/permissions/approval_policy/on_request_rule_request_permission.md");
+const APPROVAL_POLICY_GUARDIAN: &str =
+    include_str!("prompts/permissions/approval_policy/guardian.md");
 
 const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
     include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
@@ -445,6 +447,7 @@ impl DeveloperInstructions {
             AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.to_string(),
             AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.to_string(),
             AskForApproval::OnRequest => on_request_instructions(),
+            AskForApproval::Guardian => APPROVAL_POLICY_GUARDIAN.to_string(),
             AskForApproval::Reject(reject_config) => {
                 let on_request_instructions = on_request_instructions();
                 let sandbox_approval = reject_config.sandbox_approval;

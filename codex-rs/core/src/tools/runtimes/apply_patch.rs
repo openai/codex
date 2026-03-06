@@ -5,6 +5,8 @@
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
 use crate::exec::ExecToolCallOutput;
+use crate::guardian::GuardianReviewRequest;
+use crate::guardian::review_escalation;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -118,6 +120,18 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
         Box::pin(async move {
+            if matches!(turn.approval_policy.value(), AskForApproval::Guardian) {
+                let request = GuardianReviewRequest {
+                    tool_name: "apply_patch",
+                    action: serde_json::json!({
+                        "tool": "apply_patch",
+                        "cwd": req.action.cwd,
+                        "files": req.file_paths,
+                        "change_count": req.changes.len(),
+                    }),
+                };
+                return review_escalation(session, turn, request).await;
+            }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
                     .request_patch_approval(turn, call_id, changes.clone(), Some(reason), None)
@@ -143,6 +157,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         match policy {
             AskForApproval::Never => false,
+            AskForApproval::Guardian => true,
             AskForApproval::Reject(reject_config) => !reject_config.rejects_sandbox_approval(),
             AskForApproval::OnFailure => true,
             AskForApproval::OnRequest => true,

@@ -11,6 +11,8 @@ pub(crate) mod zsh_fork_backend;
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
+use crate::guardian::GuardianReviewRequest;
+use crate::guardian::review_escalation;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -33,6 +35,7 @@ use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -42,6 +45,7 @@ use std::path::PathBuf;
 pub struct ShellRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
     pub timeout_ms: Option<u64>,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
@@ -149,6 +153,20 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
+            if matches!(req.approval_policy, AskForApproval::Guardian) {
+                let request = GuardianReviewRequest {
+                    tool_name: "shell",
+                    action: serde_json::json!({
+                        "tool": "shell",
+                        "command": command,
+                        "cwd": cwd,
+                        "sandbox_permissions": req.sandbox_permissions,
+                        "additional_permissions": req.additional_permissions,
+                        "justification": reason,
+                    }),
+                };
+                return review_escalation(session, turn, request).await;
+            }
             with_cached_approval(&session.services, "shell", keys, move || async move {
                 let available_decisions = None;
                 session
@@ -177,7 +195,22 @@ impl Approvable<ShellRequest> for ShellRuntime {
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
-        sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
+        sandbox_override_for_first_attempt(
+            req.approval_policy,
+            req.sandbox_permissions,
+            &req.exec_approval_requirement,
+        )
+    }
+
+    fn guardian_review_payload(&self, req: &ShellRequest) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "tool": "shell",
+            "command": req.command,
+            "cwd": req.cwd,
+            "sandbox_permissions": req.sandbox_permissions,
+            "additional_permissions": req.additional_permissions,
+            "justification": req.justification,
+        }))
     }
 }
 

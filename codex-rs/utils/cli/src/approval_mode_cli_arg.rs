@@ -21,6 +21,11 @@ pub enum ApprovalModeCliArg {
     /// The model decides when to ask the user for approval.
     OnRequest,
 
+    /// Internal-only mode: run in the sandbox first, then let the guardian
+    /// reviewer decide whether a sandbox escape is acceptable.
+    #[value(hide = true)]
+    Guardian,
+
     /// Never ask for user approval
     /// Execution failures are immediately returned to the model.
     Never,
@@ -32,6 +37,7 @@ impl From<ApprovalModeCliArg> for AskForApproval {
             ApprovalModeCliArg::Untrusted => AskForApproval::UnlessTrusted,
             ApprovalModeCliArg::OnFailure => AskForApproval::OnFailure,
             ApprovalModeCliArg::OnRequest => AskForApproval::OnRequest,
+            ApprovalModeCliArg::Guardian => AskForApproval::Guardian,
             ApprovalModeCliArg::Never => AskForApproval::Never,
         }
     }
