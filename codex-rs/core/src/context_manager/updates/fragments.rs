@@ -276,34 +276,6 @@ impl TurnContextDiffFragment for ModelInstructionsUpdateFragment {
     }
 }
 
-fn build_permissions_update_item(
-    previous: Option<&TurnContextItem>,
-    turn_context: &TurnContext,
-    params: &TurnContextDiffParams<'_>,
-) -> Option<String> {
-    previous
-        .and_then(|previous| {
-            PermissionsUpdateFragment::diff_from_turn_context_item(previous, turn_context, params)
-        })
-        .map(|fragment| fragment.text)
-}
-
-fn build_collaboration_mode_update_item(
-    previous: Option<&TurnContextItem>,
-    turn_context: &TurnContext,
-    params: &TurnContextDiffParams<'_>,
-) -> Option<String> {
-    previous
-        .and_then(|previous| {
-            CollaborationModeUpdateFragment::diff_from_turn_context_item(
-                previous,
-                turn_context,
-                params,
-            )
-        })
-        .map(|fragment| fragment.text)
-}
-
 pub(super) fn build_developer_update_texts(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
@@ -314,7 +286,11 @@ pub(super) fn build_developer_update_texts(
         // any other context diffs on this turn.
         ModelInstructionsUpdateFragment::from_turn_context(next, params)
             .map(|fragment| fragment.text),
-        build_permissions_update_item(previous, next, params),
+        previous
+            .and_then(|previous| {
+                PermissionsUpdateFragment::diff_from_turn_context_item(previous, next, params)
+            })
+            .map(|fragment| fragment.text),
         previous
             .and_then(|previous| {
                 CustomDeveloperInstructionsUpdateFragment::diff_from_turn_context_item(
@@ -322,7 +298,11 @@ pub(super) fn build_developer_update_texts(
                 )
             })
             .map(|fragment| fragment.text),
-        build_collaboration_mode_update_item(previous, next, params),
+        previous
+            .and_then(|previous| {
+                CollaborationModeUpdateFragment::diff_from_turn_context_item(previous, next, params)
+            })
+            .map(|fragment| fragment.text),
         match previous {
             Some(previous) => {
                 RealtimeUpdateFragment::diff_from_turn_context_item(previous, next, params)
