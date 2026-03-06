@@ -408,36 +408,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_spawn_mode_for_role_defaults_to_fork_and_honors_role_overrides() {
+    async fn default_spawn_mode_for_role_defaults_to_spawn_and_honors_role_overrides() {
         let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
         config.agent_roles.insert(
             "researcher".to_string(),
             AgentRoleConfig {
                 description: Some("Research role".to_string()),
-                spawn_mode: Some(AgentRoleSpawnMode::Spawn),
+                spawn_mode: Some(AgentRoleSpawnMode::Fork),
                 ..Default::default()
             },
         );
 
         assert_eq!(
             default_spawn_mode_for_role(&config, None),
-            AgentRoleSpawnMode::Fork
+            AgentRoleSpawnMode::Spawn
         );
         assert_eq!(
             default_spawn_mode_for_role(&config, Some("worker")),
-            AgentRoleSpawnMode::Fork
+            AgentRoleSpawnMode::Spawn
         );
         assert_eq!(
             default_spawn_mode_for_role(&config, Some("explorer")),
-            AgentRoleSpawnMode::Fork
+            AgentRoleSpawnMode::Spawn
         );
         assert_eq!(
             default_spawn_mode_for_role(&config, Some("fast-worker")),
-            AgentRoleSpawnMode::Fork
+            AgentRoleSpawnMode::Spawn
         );
         assert_eq!(
             default_spawn_mode_for_role(&config, Some("researcher")),
-            AgentRoleSpawnMode::Spawn
+            AgentRoleSpawnMode::Fork
         );
     }
 
@@ -918,8 +918,8 @@ enabled = false
         let spec = spawn_tool_spec::build(&user_defined_roles);
 
         assert!(spec.contains("researcher: no description"));
-        assert!(spec.contains("explorer: {\nuser override\nDefault spawn mode: fork\n}"));
-        assert!(spec.contains("default: {\nDefault agent.\nDefault spawn mode: fork\n}"));
+        assert!(spec.contains("explorer: {\nuser override\nDefault spawn mode: spawn\n}"));
+        assert!(spec.contains("default: {\nDefault agent.\nDefault spawn mode: spawn\n}"));
         assert!(!spec.contains("Explorers are fast and authoritative."));
     }
 
@@ -937,10 +937,10 @@ enabled = false
 
         let spec = spawn_tool_spec::build(&user_defined_roles);
         let user_index = spec
-            .find("aaa: {\nfirst\nDefault spawn mode: fork\n}")
+            .find("aaa: {\nfirst\nDefault spawn mode: spawn\n}")
             .expect("find user role");
         let built_in_index = spec
-            .find("default: {\nDefault agent.\nDefault spawn mode: fork\n}")
+            .find("default: {\nDefault agent.\nDefault spawn mode: spawn\n}")
             .expect("find built-in role");
 
         assert!(user_index < built_in_index);
