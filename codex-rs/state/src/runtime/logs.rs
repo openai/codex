@@ -11,7 +11,7 @@ impl StateRuntime {
             return Ok(());
         }
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.logs_pool.begin().await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
             "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, process_uuid, module_path, file, line, estimated_bytes) ",
         );
@@ -281,7 +281,7 @@ WHERE id IN (
     pub(crate) async fn delete_logs_before(&self, cutoff_ts: i64) -> anyhow::Result<u64> {
         let result = sqlx::query("DELETE FROM logs WHERE ts < ?")
             .bind(cutoff_ts)
-            .execute(self.pool.as_ref())
+            .execute(self.logs_pool.as_ref())
             .await?;
         Ok(result.rows_affected())
     }
@@ -303,7 +303,7 @@ WHERE id IN (
 
         let rows = builder
             .build_query_as::<LogRow>()
-            .fetch_all(self.pool.as_ref())
+            .fetch_all(self.logs_pool.as_ref())
             .await?;
         Ok(rows)
     }
@@ -377,7 +377,7 @@ ORDER BY ts ASC, ts_nanos ASC, id ASC
         .bind(thread_id)
         .bind(thread_id)
         .bind(max_bytes)
-        .fetch_all(self.pool.as_ref())
+        .fetch_all(self.logs_pool.as_ref())
         .await?;
 
         Ok(lines.concat().into_bytes())
@@ -388,7 +388,7 @@ ORDER BY ts ASC, ts_nanos ASC, id ASC
         let mut builder =
             QueryBuilder::<Sqlite>::new("SELECT MAX(id) AS max_id FROM logs WHERE 1 = 1");
         push_log_filters(&mut builder, query);
-        let row = builder.build().fetch_one(self.pool.as_ref()).await?;
+        let row = builder.build().fetch_one(self.logs_pool.as_ref()).await?;
         let max_id: Option<i64> = row.try_get("max_id")?;
         Ok(max_id.unwrap_or(0))
     }
@@ -465,7 +465,65 @@ mod tests {
     use super::test_support::unique_temp_dir;
     use crate::LogEntry;
     use crate::LogQuery;
+    use crate::logs_db_path;
+    use crate::state_db_path;
     use pretty_assertions::assert_eq;
+    use sqlx::SqlitePool;
+    use sqlx::sqlite::SqliteConnectOptions;
+    use std::path::Path;
+
+    async fn open_db_pool(path: &Path) -> SqlitePool {
+        SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(false),
+        )
+        .await
+        .expect("open sqlite pool")
+    }
+
+    async fn log_row_count(path: &Path) -> i64 {
+        let pool = open_db_pool(path).await;
+        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM logs")
+            .fetch_one(&pool)
+            .await
+            .expect("count log rows");
+        pool.close().await;
+        count
+    }
+
+    #[tokio::test]
+    async fn insert_logs_use_dedicated_log_database() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .insert_logs(&[LogEntry {
+                ts: 1,
+                ts_nanos: 0,
+                level: "INFO".to_string(),
+                target: "cli".to_string(),
+                message: Some("dedicated-log-db".to_string()),
+                thread_id: Some("thread-1".to_string()),
+                process_uuid: Some("proc-1".to_string()),
+                module_path: Some("mod".to_string()),
+                file: Some("main.rs".to_string()),
+                line: Some(7),
+            }])
+            .await
+            .expect("insert test logs");
+
+        let state_count = log_row_count(state_db_path(codex_home.as_path()).as_path()).await;
+        let logs_count = log_row_count(logs_db_path(codex_home.as_path()).as_path()).await;
+
+        assert_eq!(state_count, 0);
+        assert_eq!(logs_count, 1);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
     #[tokio::test]
     async fn query_logs_with_search_matches_substring() {
         let codex_home = unique_temp_dir();

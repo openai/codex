@@ -6,6 +6,7 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -202,6 +203,56 @@ pub(super) async fn read_response_for_id(
     }
 }
 
+pub(super) async fn read_notification_for_method(
+    stream: &mut WsClient,
+    method: &str,
+) -> Result<JSONRPCNotification> {
+    loop {
+        let message = read_jsonrpc_message(stream).await?;
+        if let JSONRPCMessage::Notification(notification) = message
+            && notification.method == method
+        {
+            return Ok(notification);
+        }
+    }
+}
+
+pub(super) async fn read_response_and_notification_for_method(
+    stream: &mut WsClient,
+    id: i64,
+    method: &str,
+) -> Result<(JSONRPCResponse, JSONRPCNotification)> {
+    let target_id = RequestId::Integer(id);
+    let mut response = None;
+    let mut notification = None;
+
+    while response.is_none() || notification.is_none() {
+        let message = read_jsonrpc_message(stream).await?;
+        match message {
+            JSONRPCMessage::Response(candidate) if candidate.id == target_id => {
+                response = Some(candidate);
+            }
+            JSONRPCMessage::Notification(candidate) if candidate.method == method => {
+                if notification.replace(candidate).is_some() {
+                    bail!(
+                        "received duplicate notification for method `{method}` before completing paired read"
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(response) = response else {
+        bail!("response must be set before returning");
+    };
+    let Some(notification) = notification else {
+        bail!("notification must be set before returning");
+    };
+
+    Ok((response, notification))
+}
+
 async fn read_error_for_id(stream: &mut WsClient, id: i64) -> Result<JSONRPCError> {
     let target_id = RequestId::Integer(id);
     loop {
@@ -237,7 +288,7 @@ async fn read_jsonrpc_message(stream: &mut WsClient) -> Result<JSONRPCMessage> {
     }
 }
 
-async fn assert_no_message(stream: &mut WsClient, wait_for: Duration) -> Result<()> {
+pub(super) async fn assert_no_message(stream: &mut WsClient, wait_for: Duration) -> Result<()> {
     match timeout(wait_for, stream.next()).await {
         Ok(Some(Ok(frame))) => bail!("unexpected frame while waiting for silence: {frame:?}"),
         Ok(Some(Err(err))) => bail!("unexpected websocket read error: {err}"),

@@ -74,6 +74,16 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
             .into(),
     ))));
     manager.record_websocket_event(&ws_timing_response, Duration::from_millis(20));
+    manager.record_duration(
+        "codex.turn.ttft.duration_ms",
+        Duration::from_millis(95),
+        &[],
+    );
+    manager.record_duration(
+        "codex.turn.ttfm.duration_ms",
+        Duration::from_millis(180),
+        &[],
+    );
 
     let summary = manager
         .runtime_metrics_summary()
@@ -105,6 +115,8 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         responses_api_engine_service_ttft_ms: 233,
         responses_api_engine_iapi_tbt_ms: 377,
         responses_api_engine_service_tbt_ms: 399,
+        turn_ttft_ms: 95,
+        turn_ttfm_ms: 180,
     };
     assert_eq!(summary, expected);
 

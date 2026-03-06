@@ -66,6 +66,7 @@ pub struct ConfiguredMarketplacePluginSummary {
 pub struct LoadedPlugin {
     pub config_name: String,
     pub manifest_name: Option<String>,
+    pub manifest_description: Option<String>,
     pub root: AbsolutePathBuf,
     pub enabled: bool,
     pub skill_roots: Vec<PathBuf>,
@@ -84,6 +85,7 @@ impl LoadedPlugin {
 pub struct PluginCapabilitySummary {
     pub config_name: String,
     pub display_name: String,
+    pub description: Option<String>,
     pub has_skills: bool,
     pub mcp_server_names: Vec<String>,
     pub app_connector_ids: Vec<AppConnectorId>,
@@ -104,6 +106,7 @@ impl PluginCapabilitySummary {
                 .manifest_name
                 .clone()
                 .unwrap_or_else(|| plugin.config_name.clone()),
+            description: plugin.manifest_description.clone(),
             has_skills: !plugin.skill_roots.is_empty(),
             mcp_server_names,
             app_connector_ids: plugin.apps.clone(),
@@ -476,6 +479,7 @@ fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) 
     let mut loaded_plugin = LoadedPlugin {
         config_name,
         manifest_name: None,
+        manifest_description: None,
         root,
         enabled: plugin.enabled,
         skill_roots: Vec::new(),
@@ -507,6 +511,7 @@ fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) 
     };
 
     loaded_plugin.manifest_name = Some(plugin_manifest_name(&manifest, plugin_root.as_path()));
+    loaded_plugin.manifest_description = manifest.description;
     loaded_plugin.skill_roots = default_skill_roots(plugin_root.as_path());
     let mut mcp_servers = HashMap::new();
     for mcp_config_path in default_mcp_config_paths(plugin_root.as_path()) {
@@ -752,7 +757,10 @@ mod tests {
 
         write_file(
             &plugin_root.join(".codex-plugin/plugin.json"),
-            r#"{"name":"sample"}"#,
+            r#"{
+  "name": "sample",
+  "description": "Plugin that includes the sample MCP server and Skills"
+}"#,
         );
         write_file(
             &plugin_root.join("skills/sample-search/SKILL.md"),
@@ -792,6 +800,9 @@ mod tests {
             vec![LoadedPlugin {
                 config_name: "sample@test".to_string(),
                 manifest_name: Some("sample".to_string()),
+                manifest_description: Some(
+                    "Plugin that includes the sample MCP server and Skills".to_string(),
+                ),
                 root: AbsolutePathBuf::try_from(plugin_root.clone()).unwrap(),
                 enabled: true,
                 skill_roots: vec![plugin_root.join("skills")],
@@ -817,6 +828,19 @@ mod tests {
                 )]),
                 apps: vec![AppConnectorId("connector_example".to_string())],
                 error: None,
+            }]
+        );
+        assert_eq!(
+            outcome.capability_summaries(),
+            &[PluginCapabilitySummary {
+                config_name: "sample@test".to_string(),
+                display_name: "sample".to_string(),
+                description: Some(
+                    "Plugin that includes the sample MCP server and Skills".to_string(),
+                ),
+                has_skills: true,
+                mcp_server_names: vec!["sample".to_string()],
+                app_connector_ids: vec![AppConnectorId("connector_example".to_string())],
             }]
         );
         assert_eq!(
@@ -862,6 +886,7 @@ mod tests {
             vec![LoadedPlugin {
                 config_name: "sample@test".to_string(),
                 manifest_name: None,
+                manifest_description: None,
                 root: AbsolutePathBuf::try_from(plugin_root).unwrap(),
                 enabled: false,
                 skill_roots: Vec::new(),
@@ -972,6 +997,7 @@ mod tests {
         let plugin = |config_name: &str, dir_name: &str, manifest_name: &str| LoadedPlugin {
             config_name: config_name.to_string(),
             manifest_name: Some(manifest_name.to_string()),
+            manifest_description: None,
             root: AbsolutePathBuf::try_from(codex_home.path().join(dir_name)).unwrap(),
             enabled: true,
             skill_roots: Vec::new(),
@@ -982,6 +1008,7 @@ mod tests {
         let summary = |config_name: &str, display_name: &str| PluginCapabilitySummary {
             config_name: config_name.to_string(),
             display_name: display_name.to_string(),
+            description: None,
             ..PluginCapabilitySummary::default()
         };
         let outcome = PluginLoadOutcome::from_plugins(vec![

@@ -243,9 +243,9 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
 
     codex
         .submit(Op::UserInput {
-            items: vec![codex_protocol::user_input::UserInput::Text {
-                text: "Use @sample for this task.".into(),
-                text_elements: Vec::new(),
+            items: vec![codex_protocol::user_input::UserInput::Mention {
+                name: "sample".into(),
+                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
             }],
             final_output_json_schema: None,
         })
