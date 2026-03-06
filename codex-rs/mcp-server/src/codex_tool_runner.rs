@@ -115,6 +115,7 @@ pub async fn run_codex_tool_session(
             }],
             final_output_json_schema: None,
         },
+        trace: None,
     };
 
     if let Err(e) = thread.submit_with_id(submission).await {
@@ -351,6 +352,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::UserMessage(_)
                     | EventMsg::ShutdownComplete
                     | EventMsg::ViewImageToolCall(_)
+                    | EventMsg::ImageGenerationBegin(_)
+                    | EventMsg::ImageGenerationEnd(_)
                     | EventMsg::RawResponseItem(_)
                     | EventMsg::EnteredReviewMode(_)
                     | EventMsg::ItemStarted(_)

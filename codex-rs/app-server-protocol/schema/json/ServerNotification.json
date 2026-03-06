@@ -201,6 +201,13 @@
         },
         "name": {
           "type": "string"
+        },
+        "pluginDisplayNames": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -1663,6 +1670,10 @@
         }
       ]
     },
+    "SkillsChangedNotification": {
+      "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "type": "object"
+    },
     "SubAgentSource": {
       "oneOf": [
         {
@@ -2423,6 +2434,40 @@
             "type"
           ],
           "title": "ImageViewThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revisedPrompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "imageGeneration"
+              ],
+              "title": "ImageGenerationThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationThreadItem",
           "type": "object"
         },
         {
@@ -3378,6 +3423,26 @@
         "params"
       ],
       "title": "Thread/closedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "skills/changed"
+          ],
+          "title": "Skills/changedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsChangedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Skills/changedNotification",
       "type": "object"
     },
     {

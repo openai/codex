@@ -1,5 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::agent::guards::Guards;
+use crate::agent::role::DEFAULT_ROLE_NAME;
+use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -32,11 +34,28 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
 }
 
-fn agent_nickname_list() -> Vec<&'static str> {
+fn default_agent_nickname_list() -> Vec<&'static str> {
     AGENT_NAMES
         .lines()
         .map(str::trim)
         .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn agent_nickname_candidates(
+    config: &crate::config::Config,
+    role_name: Option<&str>,
+) -> Vec<String> {
+    let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    if let Some(candidates) =
+        resolve_role_config(config, role_name).and_then(|role| role.nickname_candidates.clone())
+    {
+        return candidates;
+    }
+
+    default_agent_nickname_list()
+        .into_iter()
+        .map(ToOwned::to_owned)
         .collect()
 }
 
@@ -94,7 +113,10 @@ impl AgentControl {
                 agent_role,
                 ..
             })) => {
-                let agent_nickname = reservation.reserve_agent_nickname(&agent_nickname_list())?;
+                let candidate_names = agent_nickname_candidates(&config, agent_role.as_deref());
+                let candidate_name_refs: Vec<&str> =
+                    candidate_names.iter().map(String::as_str).collect();
+                let agent_nickname = reservation.reserve_agent_nickname(&candidate_name_refs)?;
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id,
                     depth,
@@ -225,8 +247,12 @@ impl AgentControl {
                 let reserved_agent_nickname = resumed_agent_nickname
                     .as_deref()
                     .map(|agent_nickname| {
+                        let candidate_names =
+                            agent_nickname_candidates(&config, resumed_agent_role.as_deref());
+                        let candidate_name_refs: Vec<&str> =
+                            candidate_names.iter().map(String::as_str).collect();
                         reservation.reserve_agent_nickname_with_preference(
-                            &agent_nickname_list(),
+                            &candidate_name_refs,
                             Some(agent_nickname),
                         )
                     })
@@ -467,6 +493,7 @@ mod tests {
     use crate::CodexThread;
     use crate::ThreadManager;
     use crate::agent::agent_status_from_event;
+    use crate::config::AgentRoleConfig;
     use crate::config::Config;
     use crate::config::ConfigBuilder;
     use crate::config_loader::LoaderOverrides;
@@ -1379,9 +1406,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
+        let mut harness = AgentControlHarness::new().await;
+        harness.config.agent_roles.insert(
+            "researcher".to_string(),
+            AgentRoleConfig {
+                description: Some("Research role".to_string()),
+                config_file: None,
+                nickname_candidates: Some(vec!["Atlas".to_string()]),
+            },
+        );
+        let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+
+        let child_thread_id = harness
+            .control
+            .spawn_agent(
+                harness.config.clone(),
+                text_input("hello child"),
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth: 1,
+                    agent_nickname: None,
+                    agent_role: Some("researcher".to_string()),
+                })),
+            )
+            .await
+            .expect("child spawn should succeed");
+
+        let child_thread = harness
+            .manager
+            .get_thread(child_thread_id)
+            .await
+            .expect("child thread should be registered");
+        let snapshot = child_thread.config_snapshot().await;
+
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) =
+            snapshot.session_source
+        else {
+            panic!("expected thread-spawn sub-agent source");
+        };
+        assert_eq!(agent_nickname, Some("Atlas".to_string()));
+    }
+
+    #[tokio::test]
     async fn resume_thread_subagent_restores_stored_nickname_and_role() {
         let (home, mut config) = test_config().await;
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow sqlite");
         let manager = ThreadManager::with_models_provider_and_home_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),

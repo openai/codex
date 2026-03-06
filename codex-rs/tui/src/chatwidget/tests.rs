@@ -22,6 +22,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+use codex_core::config::types::Notifications;
 #[cfg(target_os = "windows")]
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::RequirementSource;
@@ -44,6 +45,7 @@ use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -70,6 +72,7 @@ use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_protocol::protocol::ExecPolicyAmendment;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupStatus;
@@ -95,6 +98,9 @@ use codex_protocol::protocol::UndoCompletedEvent;
 use codex_protocol::protocol::UndoStartedEvent;
 use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WarningEvent;
+use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -208,6 +214,45 @@ async fn resumed_initial_messages_render_history() {
     assert!(
         text_blob.contains("assistant reply"),
         "expected replayed agent message",
+    );
+}
+
+#[tokio::test]
+async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::AgentMessage(AgentMessageItem {
+                id: "msg-1".to_string(),
+                content: vec![AgentMessageContent::Text {
+                    text: "assistant reply".to_string(),
+                }],
+                phase: None,
+            }),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "assistant reply".to_string(),
+            phase: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected replayed assistant message to render once"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("assistant reply"),
+        "expected replayed assistant message, got {rendered:?}"
     );
 }
 
@@ -1181,7 +1226,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         text_elements: second_elements,
         mention_bindings: Vec::new(),
     });
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     chat.bottom_pane
         .set_composer_text(existing_text, existing_elements, existing_images.clone());
@@ -1251,7 +1296,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
         text_elements: Vec::new(),
         mention_bindings: Vec::new(),
     });
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
@@ -1449,6 +1494,58 @@ async fn entered_review_mode_defaults_to_current_changes_banner() {
     let banner = lines_to_single_string(cells.last().expect("review banner"));
     assert_eq!(banner, ">> Code review started: current changes <<\n");
     assert!(chat.is_review_mode);
+}
+
+#[tokio::test]
+async fn live_agent_message_renders_during_review_mode() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "review-message".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Review progress update".to_string(),
+            phase: None,
+        }),
+    });
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("Review progress update"));
+}
+
+#[tokio::test]
+async fn thread_snapshot_replay_preserves_agent_message_during_review_mode() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_codex_event_replay(Event {
+        id: "review-message".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Review progress update".to_string(),
+            phase: None,
+        }),
+    });
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("Review progress update"));
 }
 
 /// Exiting review restores the pre-review context window indicator.
@@ -1713,6 +1810,7 @@ async fn make_chatwidget_manual(
         current_status_header: String::from("Working"),
         retry_status_header: None,
         pending_status_indicator_restore: false,
+        suppress_queue_autosend: false,
         thread_id: None,
         thread_name: None,
         forked_from: None,
@@ -1720,6 +1818,7 @@ async fn make_chatwidget_manual(
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
+        pending_steers: VecDeque::new(),
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
         pending_notification: None,
@@ -2441,6 +2540,149 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override(
     );
 }
 
+#[test]
+fn plan_mode_prompt_notification_uses_dedicated_type_name() {
+    let notification = Notification::PlanModePrompt {
+        title: PLAN_IMPLEMENTATION_TITLE.to_string(),
+    };
+
+    assert!(notification.allowed_for(&Notifications::Custom(
+        vec!["plan-mode-prompt".to_string(),]
+    )));
+    assert!(!notification.allowed_for(&Notifications::Custom(vec![
+        "approval-requested".to_string(),
+    ])));
+    assert_eq!(
+        notification.display(),
+        format!("Plan mode prompt: {PLAN_IMPLEMENTATION_TITLE}")
+    );
+}
+
+#[test]
+fn user_input_requested_notification_uses_dedicated_type_name() {
+    let notification = Notification::UserInputRequested {
+        question_count: 1,
+        summary: Some("Reasoning scope".to_string()),
+    };
+
+    assert!(notification.allowed_for(&Notifications::Custom(vec![
+        "user-input-requested".to_string(),
+    ])));
+    assert!(!notification.allowed_for(&Notifications::Custom(vec![
+        "approval-requested".to_string(),
+    ])));
+    assert_eq!(
+        notification.display(),
+        "Question requested: Reasoning scope"
+    );
+}
+
+#[tokio::test]
+async fn open_plan_implementation_prompt_sets_pending_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.config.tui_notifications = Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
+
+    chat.open_plan_implementation_prompt();
+
+    assert_matches!(
+        chat.pending_notification,
+        Some(Notification::PlanModePrompt { ref title }) if title == PLAN_IMPLEMENTATION_TITLE
+    );
+}
+
+#[tokio::test]
+async fn open_plan_reasoning_scope_prompt_sets_pending_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.config.tui_notifications = Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
+
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    assert_matches!(
+        chat.pending_notification,
+        Some(Notification::PlanModePrompt { ref title }) if title == PLAN_MODE_REASONING_SCOPE_TITLE
+    );
+}
+
+#[tokio::test]
+async fn agent_turn_complete_does_not_override_pending_plan_mode_prompt_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+
+    chat.open_plan_implementation_prompt();
+    chat.notify(Notification::AgentTurnComplete {
+        response: "done".to_string(),
+    });
+
+    assert_matches!(
+        chat.pending_notification,
+        Some(Notification::PlanModePrompt { ref title }) if title == PLAN_IMPLEMENTATION_TITLE
+    );
+}
+
+#[tokio::test]
+async fn user_input_notification_overrides_pending_agent_turn_complete_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+
+    chat.notify(Notification::AgentTurnComplete {
+        response: "done".to_string(),
+    });
+    chat.handle_request_user_input_now(RequestUserInputEvent {
+        call_id: "call-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        questions: vec![RequestUserInputQuestion {
+            id: "reasoning_scope".to_string(),
+            header: "Reasoning scope".to_string(),
+            question: "Which reasoning scope should I use?".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![RequestUserInputQuestionOption {
+                label: "Plan only".to_string(),
+                description: "Update only Plan mode.".to_string(),
+            }]),
+        }],
+    });
+
+    assert_matches!(
+        chat.pending_notification,
+        Some(Notification::UserInputRequested {
+            question_count: 1,
+            summary: Some(ref summary),
+        }) if summary == "Reasoning scope"
+    );
+}
+
+#[tokio::test]
+async fn handle_request_user_input_sets_pending_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.config.tui_notifications = Notifications::Custom(vec!["user-input-requested".to_string()]);
+
+    chat.handle_request_user_input_now(RequestUserInputEvent {
+        call_id: "call-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        questions: vec![RequestUserInputQuestion {
+            id: "reasoning_scope".to_string(),
+            header: "Reasoning scope".to_string(),
+            question: "Which reasoning scope should I use?".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![RequestUserInputQuestionOption {
+                label: "Plan only".to_string(),
+                description: "Update only Plan mode.".to_string(),
+            }]),
+        }],
+    });
+
+    assert_matches!(
+        chat.pending_notification,
+        Some(Notification::UserInputRequested {
+            question_count: 1,
+            summary: Some(ref summary),
+        }) if summary == "Reasoning scope"
+    );
+}
+
 #[tokio::test]
 async fn plan_reasoning_scope_popup_mentions_selected_reasoning() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
@@ -2750,6 +2992,94 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
     assert!(
         popup.contains(PLAN_IMPLEMENTATION_TITLE),
         "expected plan popup after proposed plan output, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_skips_when_steer_follows_proposed_plan() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.on_task_started();
+    chat.on_plan_item_completed(
+        "- Step 1
+- Step 2
+"
+        .to_string(),
+    );
+    chat.bottom_pane
+        .set_composer_text("Please continue.".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "Please continue.".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    complete_user_message(&mut chat, "user-1", "Please continue.");
+    chat.on_task_complete(None, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no plan popup after a steer follows the plan, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.on_task_started();
+    chat.on_plan_item_completed(
+        "- Initial plan
+"
+        .to_string(),
+    );
+    chat.bottom_pane
+        .set_composer_text("Please revise.".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "Please revise.".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    complete_user_message(&mut chat, "user-1", "Please revise.");
+    chat.on_plan_item_completed(
+        "- Revised plan
+"
+        .to_string(),
+    );
+    chat.on_task_complete(None, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup after a newer plan follows the steer, got {popup:?}"
     );
 }
 
@@ -3064,6 +3394,41 @@ fn complete_assistant_message(
     });
 }
 
+fn pending_steer(text: &str) -> PendingSteer {
+    PendingSteer {
+        user_message: UserMessage::from(text),
+        compare_key: PendingSteerCompareKey {
+            message: text.to_string(),
+            image_count: 0,
+        },
+    }
+}
+
+fn complete_user_message(chat: &mut ChatWidget, item_id: &str, text: &str) {
+    complete_user_message_for_inputs(
+        chat,
+        item_id,
+        vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }],
+    );
+}
+
+fn complete_user_message_for_inputs(chat: &mut ChatWidget, item_id: &str, content: Vec<UserInput>) {
+    chat.handle_codex_event(Event {
+        id: format!("raw-{item_id}"),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::UserMessage(UserMessageItem {
+                id: item_id.to_string(),
+                content,
+            }),
+        }),
+    });
+}
+
 fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) -> ExecCommandBeginEvent {
     begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent)
 }
@@ -3152,6 +3517,31 @@ async fn empty_enter_during_task_does_not_queue() {
 }
 
 #[tokio::test]
+async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::PreventIdleSleep, true);
+
+    chat.restore_thread_input_state(Some(ThreadInputState {
+        composer: None,
+        pending_steers: VecDeque::new(),
+        queued_user_messages: VecDeque::new(),
+        current_collaboration_mode: chat.current_collaboration_mode.clone(),
+        active_collaboration_mask: chat.active_collaboration_mask.clone(),
+        agent_turn_running: true,
+    }));
+
+    assert!(chat.agent_turn_running);
+    assert!(chat.turn_sleep_inhibitor.is_turn_running());
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.restore_thread_input_state(None);
+
+    assert!(!chat.agent_turn_running);
+    assert!(!chat.turn_sleep_inhibitor.is_turn_running());
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.queued_message_edit_binding = crate::key_hint::alt(KeyCode::Up);
@@ -3166,7 +3556,7 @@ async fn alt_up_edits_most_recent_queued_message() {
         .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()));
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     // Press Alt+Up to edit the most recent (last) queued message.
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
@@ -3200,7 +3590,7 @@ async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
         .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()));
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     // Press Shift+Left to edit the most recent (last) queued message.
     chat.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
@@ -3459,8 +3849,8 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
 }
 
 #[tokio::test]
-async fn enter_queues_while_plan_stream_is_active() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+async fn steer_enter_queues_while_plan_stream_is_active() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
@@ -3469,6 +3859,7 @@ async fn enter_queues_while_plan_stream_is_active() {
     chat.set_collaboration_mask(plan_mask);
     chat.on_task_started();
     chat.on_plan_delta("- Step 1".to_string());
+    let _ = drain_insert_history(&mut rx);
 
     chat.bottom_pane
         .set_composer_text("queued submission".to_string(), Vec::new(), Vec::new());
@@ -3480,12 +3871,44 @@ async fn enter_queues_while_plan_stream_is_active() {
         chat.queued_user_messages.front().unwrap().text,
         "queued submission"
     );
-    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(chat.pending_steers.is_empty());
+    assert_no_submit_op(&mut op_rx);
+    assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[tokio::test]
-async fn steer_enter_queues_while_final_answer_stream_is_active() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+async fn steer_enter_uses_pending_steers_while_turn_is_running_without_streaming() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+
+    chat.bottom_pane
+        .set_composer_text("queued while running".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(
+        chat.pending_steers.front().unwrap().user_message.text,
+        "queued while running"
+    );
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    complete_user_message(&mut chat, "user-1", "queued while running");
+
+    assert!(chat.pending_steers.is_empty());
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("queued while running"));
+}
+
+#[tokio::test]
+async fn steer_enter_uses_pending_steers_while_final_answer_stream_is_active() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     // Keep the assistant stream open (no commit tick/finalize) to model the repro window:
@@ -3499,26 +3922,295 @@ async fn steer_enter_queues_while_final_answer_stream_is_active() {
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.pending_steers.front().unwrap().user_message.text,
         "queued while streaming"
     );
-    assert_no_submit_op(&mut op_rx);
-
-    // Once final output ends, the queued input must be submitted automatically.
-    chat.on_task_complete(None, false);
-
-    assert!(chat.queued_user_messages.is_empty());
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { .. } => {}
-        other => panic!("expected Op::UserTurn after stream completion, got {other:?}"),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
     }
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    complete_user_message(&mut chat, "user-1", "queued while streaming");
+
+    assert!(chat.pending_steers.is_empty());
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("queued while streaming"));
+}
+
+#[tokio::test]
+async fn failed_pending_steer_submit_does_not_add_pending_preview() {
+    let (mut chat, mut rx, op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    drop(op_rx);
+
+    chat.bottom_pane.set_composer_text(
+        "queued while streaming".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.pending_steers.is_empty());
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn live_legacy_agent_message_after_item_completed_does_not_duplicate_assistant_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    complete_assistant_message(
+        &mut chat,
+        "msg-live",
+        "hello",
+        Some(MessagePhase::FinalAnswer),
+    );
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("hello"));
+
+    chat.handle_codex_event(Event {
+        id: "legacy-live".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "hello".into(),
+            phase: Some(MessagePhase::FinalAnswer),
+        }),
+    });
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[test]
+fn rendered_user_message_event_from_inputs_matches_flattened_user_message_shape() {
+    let local_image = PathBuf::from("/tmp/local.png");
+    let rendered = ChatWidget::rendered_user_message_event_from_inputs(&[
+        UserInput::Text {
+            text: "hello ".to_string(),
+            text_elements: vec![TextElement::new((0..5).into(), None)],
+        },
+        UserInput::Image {
+            image_url: "https://example.com/remote.png".to_string(),
+        },
+        UserInput::LocalImage {
+            path: local_image.clone(),
+        },
+        UserInput::Skill {
+            name: "demo".to_string(),
+            path: PathBuf::from("/tmp/skill/SKILL.md"),
+        },
+        UserInput::Mention {
+            name: "repo".to_string(),
+            path: "app://repo".to_string(),
+        },
+        UserInput::Text {
+            text: "world".to_string(),
+            text_elements: vec![TextElement::new((0..5).into(), Some("planet".to_string()))],
+        },
+    ]);
+
+    assert_eq!(
+        rendered,
+        ChatWidget::rendered_user_message_event_from_parts(
+            "hello world".to_string(),
+            vec![
+                TextElement::new((0..5).into(), Some("hello".to_string())),
+                TextElement::new((6..11).into(), Some("planet".to_string())),
+            ],
+            vec![local_image],
+            vec!["https://example.com/remote.png".to_string()],
+        )
+    );
+}
+
+#[tokio::test]
+async fn item_completed_only_pops_front_pending_steer() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.pending_steers.push_back(pending_steer("first"));
+    chat.pending_steers.push_back(pending_steer("second"));
+    chat.refresh_pending_input_preview();
+
+    complete_user_message(&mut chat, "user-other", "other");
+
+    assert_eq!(chat.pending_steers.len(), 2);
+    assert_eq!(
+        chat.pending_steers.front().unwrap().user_message.text,
+        "first"
+    );
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("other"));
+
+    complete_user_message(&mut chat, "user-first", "first");
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(
+        chat.pending_steers.front().unwrap().user_message.text,
+        "second"
+    );
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("first"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+
+    let temp = tempdir().expect("tempdir");
+    let image_path = temp.path().join("pending-steer.png");
+    const TINY_PNG_BYTES: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0,
+        1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+    std::fs::write(&image_path, TINY_PNG_BYTES).expect("write image");
+
+    let text = "note".to_string();
+    let text_elements = vec![TextElement::new((0..4).into(), Some("note".to_string()))];
+    chat.submit_user_message(UserMessage {
+        text: text.clone(),
+        local_images: vec![LocalImageAttachment {
+            placeholder: "[Image #1]".to_string(),
+            path: image_path,
+        }],
+        remote_image_urls: Vec::new(),
+        text_elements,
+        mention_bindings: Vec::new(),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    let pending = chat.pending_steers.front().unwrap();
+    assert_eq!(pending.user_message.local_images.len(), 1);
+    assert_eq!(pending.user_message.text_elements.len(), 1);
+    assert_eq!(pending.compare_key.message, text);
+    assert_eq!(pending.compare_key.image_count, 1);
+
+    complete_user_message_for_inputs(
+        &mut chat,
+        "user-1",
+        vec![
+            UserInput::Image {
+                image_url: "data:image/png;base64,placeholder".to_string(),
+            },
+            UserInput::Text {
+                text,
+                text_elements: Vec::new(),
+            },
+        ],
+    );
+
+    assert!(chat.pending_steers.is_empty());
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((
+                cell.message.clone(),
+                cell.text_elements.clone(),
+                cell.local_image_paths.clone(),
+                cell.remote_image_urls.clone(),
+            ));
+            break;
+        }
+    }
+
+    let (stored_message, stored_elements, stored_images, stored_remote_image_urls) =
+        user_cell.expect("expected pending steer user history cell");
+    assert_eq!(stored_message, "note");
+    assert_eq!(
+        stored_elements,
+        vec![TextElement::new((0..4).into(), Some("note".to_string()))]
+    );
+    assert_eq!(stored_images.len(), 1);
+    assert!(stored_images[0].ends_with("pending-steer.png"));
+    assert!(stored_remote_image_urls.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    chat.set_feature_enabled(Feature::Plugins, true);
+    chat.bottom_pane.set_plugin_mentions(Some(vec![
+        codex_core::plugins::PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "Sample Plugin".to_string(),
+            description: None,
+            has_skills: true,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        },
+    ]));
+
+    chat.submit_user_message(UserMessage {
+        text: "$sample".to_string(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        text_elements: Vec::new(),
+        mention_bindings: vec![MentionBinding {
+            mention: "sample".to_string(),
+            path: "plugin://sample@test".to_string(),
+        }],
+    });
+
+    let Op::UserTurn { items, .. } = next_submit_op(&mut op_rx) else {
+        panic!("expected Op::UserTurn");
+    };
+    assert_eq!(
+        items,
+        vec![
+            UserInput::Text {
+                text: "$sample".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Mention {
+                name: "Sample Plugin".to_string(),
+                path: "plugin://sample@test".to_string(),
+            },
+        ]
+    );
 }
 
 #[tokio::test]
 async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     // Simulate "dead mode" repro timing by keeping a final-answer stream active while the
@@ -3532,19 +4224,16 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
         .set_composer_text("second follow-up".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(chat.queued_user_messages.len(), 2);
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.pending_steers.len(), 2);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.pending_steers.front().unwrap().user_message.text,
         "first follow-up"
     );
     assert_eq!(
-        chat.queued_user_messages.back().unwrap().text,
+        chat.pending_steers.back().unwrap().user_message.text,
         "second follow-up"
     );
-    assert_no_submit_op(&mut op_rx);
-
-    // Completion must recover by submitting the oldest queued prompt first.
-    chat.on_task_complete(None, false);
 
     let first_items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,
@@ -3557,17 +4246,6 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
             text_elements: Vec::new(),
         }]
     );
-    assert_eq!(chat.queued_user_messages.len(), 1);
-    assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
-        "second follow-up"
-    );
-
-    // A subsequent turn lifecycle should continue draining remaining queued prompts, proving
-    // the widget did not enter a permanently stuck state.
-    chat.on_task_started();
-    chat.on_task_complete(None, false);
-
     let second_items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,
         other => panic!("expected Op::UserTurn, got {other:?}"),
@@ -3579,7 +4257,208 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
             text_elements: Vec::new(),
         }]
     );
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    complete_user_message(&mut chat, "user-1", "first follow-up");
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(
+        chat.pending_steers.front().unwrap().user_message.text,
+        "second follow-up"
+    );
+    let first_insert = drain_insert_history(&mut rx);
+    assert_eq!(first_insert.len(), 1);
+    assert!(lines_to_single_string(&first_insert[0]).contains("first follow-up"));
+
+    complete_user_message(&mut chat, "user-2", "second follow-up");
+
+    assert!(chat.pending_steers.is_empty());
+    let second_insert = drain_insert_history(&mut rx);
+    assert_eq!(second_insert.len(), 1);
+    assert!(lines_to_single_string(&second_insert[0]).contains("second follow-up"));
+}
+
+#[tokio::test]
+async fn manual_interrupt_restores_pending_steers_to_composer() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.on_agent_message_delta(
+        "Final answer line
+"
+        .to_string(),
+    );
+
+    chat.bottom_pane.set_composer_text(
+        "queued while streaming".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "queued while streaming".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(chat.bottom_pane.composer_text(), "queued while streaming");
+    assert_no_submit_op(&mut op_rx);
+
+    let inserted = drain_insert_history(&mut rx);
+    assert!(
+        inserted
+            .iter()
+            .all(|cell| !lines_to_single_string(cell).contains("queued while streaming"))
+    );
+}
+
+#[tokio::test]
+async fn manual_interrupt_restores_pending_steer_mention_bindings_to_composer() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+
+    let mention_bindings = vec![MentionBinding {
+        mention: "figma".to_string(),
+        path: "/tmp/skills/figma/SKILL.md".to_string(),
+    }];
+    chat.bottom_pane.set_composer_text_with_mention_bindings(
+        "please use $figma".to_string(),
+        vec![TextElement::new(
+            (11..17).into(),
+            Some("$figma".to_string()),
+        )],
+        Vec::new(),
+        mention_bindings.clone(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "please use $figma".to_string(),
+                text_elements: vec![TextElement::new(
+                    (11..17).into(),
+                    Some("$figma".to_string()),
+                )],
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    assert_eq!(chat.bottom_pane.composer_text(), "please use $figma");
+    assert_eq!(chat.bottom_pane.take_mention_bindings(), mention_bindings);
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn manual_interrupt_restores_pending_steers_before_queued_messages() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.on_agent_message_delta(
+        "Final answer line
+"
+        .to_string(),
+    );
+
+    chat.bottom_pane
+        .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("queued draft".to_string()));
+    chat.refresh_pending_input_preview();
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "pending steer".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    assert!(chat.pending_steers.is_empty());
     assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "pending steer
+queued draft"
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn replaced_turn_clears_pending_steers_but_keeps_queued_drafts() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.on_agent_message_delta(
+        "Final answer line
+"
+        .to_string(),
+    );
+
+    chat.bottom_pane
+        .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("queued draft".to_string()));
+    chat.refresh_pending_input_preview();
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "pending steer".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_codex_event(Event {
+        id: "replaced".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Replaced,
+        }),
+    });
+
+    assert!(chat.pending_steers.is_empty());
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "queued draft".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued draft Op::UserTurn, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -3998,13 +4877,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
     begin_unified_exec_startup(&mut chat, "call-wait", "proc-1", "cargo test -p codex-core");
     terminal_interaction(&mut chat, "call-wait-stdin", "proc-1", "");
 
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Final response.".into(),
-            phase: None,
-        }),
-    });
+    complete_assistant_message(&mut chat, "msg-1", "Final response.", None);
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
@@ -4805,7 +5678,7 @@ async fn slash_copy_state_clears_on_thread_rollback() {
 async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_turn_complete() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.handle_codex_event(Event {
+    chat.handle_codex_event_replay(Event {
         id: "turn-1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Legacy final message".into(),
@@ -5236,6 +6109,27 @@ async fn view_image_tool_call_adds_history_cell() {
     assert_snapshot!("local_image_attachment_history_snapshot", combined);
 }
 
+#[tokio::test]
+async fn image_generation_call_adds_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "sub-image-generation".into(),
+        msg: EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
+            call_id: "call-image-generation".into(),
+            status: "completed".into(),
+            revised_prompt: Some("A tiny blue square".into()),
+            result: "Zm9v".into(),
+            saved_path: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single history cell");
+    let combined = lines_to_single_string(&cells[0]);
+    assert_snapshot!("image_generation_call_history_snapshot", combined);
+}
+
 // Snapshot test: interrupting a running exec finalizes the active cell with a red ✗
 // marker (replacing the spinner) and flushes it into history.
 #[tokio::test]
@@ -5427,7 +6321,10 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
 #[tokio::test]
 async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.features.enable(Feature::Apps);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
     chat.bottom_pane.set_connectors_enabled(true);
     let notion_id = "unit_test_apps_popup_refresh_connector_1";
     let linear_id = "unit_test_apps_popup_refresh_connector_2";
@@ -5447,6 +6344,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         false,
@@ -5483,6 +6381,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                     install_url: Some("https://example.test/notion".to_string()),
                     is_accessible: true,
                     is_enabled: true,
+                    plugin_display_names: Vec::new(),
                 },
                 codex_chatgpt::connectors::AppInfo {
                     id: linear_id.to_string(),
@@ -5497,6 +6396,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                     install_url: Some("https://example.test/linear".to_string()),
                     is_accessible: true,
                     is_enabled: true,
+                    plugin_display_names: Vec::new(),
                 },
             ],
         }),
@@ -5517,7 +6417,10 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
 #[tokio::test]
 async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.features.enable(Feature::Apps);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
     chat.bottom_pane.set_connectors_enabled(true);
     let notion_id = "unit_test_apps_refresh_failure_connector_1";
     let linear_id = "unit_test_apps_refresh_failure_connector_2";
@@ -5536,6 +6439,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             install_url: Some("https://example.test/notion".to_string()),
             is_accessible: true,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
         codex_chatgpt::connectors::AppInfo {
             id: linear_id.to_string(),
@@ -5550,6 +6454,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             install_url: Some("https://example.test/linear".to_string()),
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
     ];
     chat.on_connectors_loaded(
@@ -5574,6 +6479,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         false,
@@ -5596,7 +6502,10 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
 #[tokio::test]
 async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetch() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.features.enable(Feature::Apps);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
     chat.bottom_pane.set_connectors_enabled(true);
     chat.connectors_prefetch_in_flight = true;
     chat.connectors_force_refetch_pending = true;
@@ -5614,6 +6523,7 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
         install_url: Some("https://example.test/notion".to_string()),
         is_accessible: true,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }];
     chat.connectors_cache = ConnectorsCacheState::Ready(ConnectorsSnapshot {
         connectors: full_connectors.clone(),
@@ -5632,7 +6542,10 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
 #[tokio::test]
 async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.features.enable(Feature::Apps);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
     chat.bottom_pane.set_connectors_enabled(true);
 
     let full_connectors = vec![
@@ -5649,6 +6562,7 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
             install_url: Some("https://example.test/notion".to_string()),
             is_accessible: true,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
         codex_chatgpt::connectors::AppInfo {
             id: "unit_test_connector_2".to_string(),
@@ -5663,6 +6577,7 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
             install_url: Some("https://example.test/linear".to_string()),
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
     ];
     chat.on_connectors_loaded(
@@ -5689,6 +6604,7 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
                     install_url: Some("https://example.test/notion".to_string()),
                     is_accessible: true,
                     is_enabled: true,
+                    plugin_display_names: Vec::new(),
                 },
                 codex_chatgpt::connectors::AppInfo {
                     id: "connector_openai_hidden".to_string(),
@@ -5703,6 +6619,7 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
                     install_url: Some("https://example.test/hidden-openai".to_string()),
                     is_accessible: true,
                     is_enabled: true,
+                    plugin_display_names: Vec::new(),
                 },
             ],
         }),
@@ -5728,7 +6645,10 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
 #[tokio::test]
 async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.features.enable(Feature::Apps);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
     chat.bottom_pane.set_connectors_enabled(true);
 
     chat.on_connectors_loaded(
@@ -5746,6 +6666,7 @@ async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: false,
+                plugin_display_names: Vec::new(),
             }],
         }),
         true,
@@ -5766,7 +6687,10 @@ async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
 #[tokio::test]
 async fn apps_initial_load_applies_enabled_state_from_config() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.features.enable(Feature::Apps);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
     chat.bottom_pane.set_connectors_enabled(true);
 
     let temp = tempdir().expect("tempdir");
@@ -5796,6 +6720,7 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         true,
@@ -5815,7 +6740,10 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
 #[tokio::test]
 async fn apps_refresh_preserves_toggled_enabled_state() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.features.enable(Feature::Apps);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
     chat.bottom_pane.set_connectors_enabled(true);
 
     chat.on_connectors_loaded(
@@ -5833,6 +6761,7 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         true,
@@ -5854,6 +6783,7 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         true,
@@ -5880,7 +6810,10 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
 #[tokio::test]
 async fn apps_popup_for_not_installed_app_uses_install_only_selected_description() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.features.enable(Feature::Apps);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
     chat.bottom_pane.set_connectors_enabled(true);
 
     chat.on_connectors_loaded(
@@ -5898,6 +6831,7 @@ async fn apps_popup_for_not_installed_app_uses_install_only_selected_description
                 install_url: Some("https://example.test/linear".to_string()),
                 is_accessible: false,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }],
         }),
         true,
@@ -6436,11 +7370,40 @@ async fn feedback_selection_popup_snapshot() {
 async fn feedback_upload_consent_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    // Open the consent popup directly for a chosen category.
-    chat.open_feedback_consent(crate::app_event::FeedbackCategory::Bug);
+    chat.show_selection_view(crate::bottom_pane::feedback_upload_consent_params(
+        chat.app_event_tx.clone(),
+        crate::app_event::FeedbackCategory::Bug,
+        chat.current_rollout_path.clone(),
+        &codex_feedback::feedback_diagnostics::FeedbackDiagnostics::new(vec![
+            codex_feedback::feedback_diagnostics::FeedbackDiagnostic {
+                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                details: vec!["OPENAI_BASE_URL = hello".to_string()],
+            },
+        ]),
+    ));
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("feedback_upload_consent_popup", popup);
+}
+
+#[tokio::test]
+async fn feedback_good_result_consent_popup_includes_connectivity_diagnostics_filename() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.show_selection_view(crate::bottom_pane::feedback_upload_consent_params(
+        chat.app_event_tx.clone(),
+        crate::app_event::FeedbackCategory::GoodResult,
+        chat.current_rollout_path.clone(),
+        &codex_feedback::feedback_diagnostics::FeedbackDiagnostics::new(vec![
+            codex_feedback::feedback_diagnostics::FeedbackDiagnostic {
+                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                details: vec!["OPENAI_BASE_URL = hello".to_string()],
+            },
+        ]),
+    ));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("feedback_good_result_consent_popup", popup);
 }
 
 #[tokio::test]
@@ -6587,6 +7550,26 @@ async fn user_turn_carries_service_tier_after_fast_toggle() {
         } => {}
         other => panic!("expected Op::UserTurn with fast service tier, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn fast_status_indicator_requires_chatgpt_auth() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_service_tier(Some(ServiceTier::Fast));
+
+    assert!(!chat.should_show_fast_status(chat.current_service_tier()));
+
+    set_chatgpt_auth(&mut chat);
+
+    assert!(chat.should_show_fast_status(chat.current_service_tier()));
+}
+
+#[tokio::test]
+async fn fast_status_indicator_is_hidden_when_fast_mode_is_off() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    set_chatgpt_auth(&mut chat);
+
+    assert!(!chat.should_show_fast_status(chat.current_service_tier()));
 }
 
 #[tokio::test]
@@ -7110,7 +8093,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
         .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()));
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
     chat.handle_codex_event(Event {
@@ -7150,7 +8133,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
         .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()));
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
@@ -8395,22 +9378,10 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     });
 
     // First finalized assistant message
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "First message".into(),
-            phase: None,
-        }),
-    });
+    complete_assistant_message(&mut chat, "msg-first", "First message", None);
 
     // Second finalized assistant message in the same turn
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Second message".into(),
-            phase: None,
-        }),
-    });
+    complete_assistant_message(&mut chat, "msg-second", "Second message", None);
 
     // End turn
     chat.handle_codex_event(Event {
@@ -8450,13 +9421,7 @@ async fn final_reasoning_then_message_without_deltas_are_rendered() {
             text: "I will first analyze the request.".into(),
         }),
     });
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Here is the result.".into(),
-            phase: None,
-        }),
-    });
+    complete_assistant_message(&mut chat, "msg-result", "Here is the result.", None);
 
     // Drain history and snapshot the combined visible content.
     let cells = drain_insert_history(&mut rx);
@@ -8600,15 +9565,12 @@ async fn hook_events_render_snapshot() {
 #[tokio::test]
 async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message:
-                "I’m going to search the repo for where “Change Approved” is rendered to update that view."
-                    .into(),
-            phase: None,
-        }),
-    });
+    complete_assistant_message(
+        &mut chat,
+        "msg-search",
+        "I’m going to search the repo for where “Change Approved” is rendered to update that view.",
+        None,
+    );
 
     let command = vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()];
     let parsed_cmd = vec![
@@ -8820,6 +9782,37 @@ async fn chatwidget_tall() {
     })
     .unwrap();
     assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[tokio::test]
+async fn enter_queues_user_messages_while_review_is_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.handle_codex_event(Event {
+        id: "review-1".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: Some("current changes".to_string()),
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.bottom_pane.set_composer_text(
+        "Queued while /review is running.".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "Queued while /review is running."
+    );
+    assert!(chat.pending_steers.is_empty());
+    assert_no_submit_op(&mut op_rx);
+    assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[tokio::test]

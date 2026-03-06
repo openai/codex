@@ -473,11 +473,12 @@ fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
 }
 
-fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
+async fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
     match cmd.subcommand {
         DebugAppServerSubcommand::SendMessageV2(cmd) => {
             let codex_bin = std::env::current_exe()?;
             codex_app_server_test_client::send_message_v2(&codex_bin, &[], cmd.user_message, &None)
+                .await
         }
     }
 }
@@ -755,7 +756,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         },
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
             DebugSubcommand::AppServer(cmd) => {
-                run_debug_app_server_command(cmd)?;
+                run_debug_app_server_command(cmd).await?;
             }
             DebugSubcommand::ClearMemories => {
                 run_debug_clear_memories_command(&root_config_overrides, &interactive).await?;

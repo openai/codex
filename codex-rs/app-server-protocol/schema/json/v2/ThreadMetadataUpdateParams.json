@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadMetadataGitInfoUpdateParams": {
+      "properties": {
+        "branch": {
+          "description": "Omit to leave the stored branch unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "originUrl": {
+          "description": "Omit to leave the stored origin URL unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha": {
+          "description": "Omit to leave the stored commit unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "properties": {
+    "gitInfo": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadMetadataGitInfoUpdateParams"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "threadId"
+  ],
+  "title": "ThreadMetadataUpdateParams",
+  "type": "object"
+}

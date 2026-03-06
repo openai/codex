@@ -181,6 +181,16 @@ pub enum ApplyPatchToolType {
     Function,
 }
 
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema, Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearchToolType {
+    #[default]
+    Text,
+    TextAndImage,
+}
+
 /// Server-provided truncation policy metadata for a model.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -243,8 +253,12 @@ pub struct ModelInfo {
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+    #[serde(default)]
+    pub web_search_tool_type: WebSearchToolType,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
+    #[serde(default)]
+    pub supports_image_detail_original: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
     /// Token threshold for automatic compaction. When omitted, core derives it
@@ -513,8 +527,10 @@ mod tests {
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,
+            web_search_tool_type: WebSearchToolType::Text,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
+            supports_image_detail_original: false,
             context_window: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
@@ -703,6 +719,7 @@ mod tests {
                 "limit": 10000
             },
             "supports_parallel_tool_calls": false,
+            "supports_image_detail_original": false,
             "context_window": null,
             "auto_compact_token_limit": null,
             "effective_context_window_percent": 95,
@@ -713,6 +730,8 @@ mod tests {
         .expect("deserialize model info");
 
         assert_eq!(model.availability_nux, None);
+        assert!(!model.supports_image_detail_original);
+        assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
     }
 
     #[test]

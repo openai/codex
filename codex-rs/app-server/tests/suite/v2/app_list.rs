@@ -97,6 +97,7 @@ async fn list_apps_uses_thread_feature_flag_when_thread_id_is_provided() -> Resu
         install_url: None,
         is_accessible: false,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
     let (server_url, server_handle) =
@@ -199,6 +200,7 @@ async fn list_apps_reports_is_enabled_from_config() -> Result<()> {
         install_url: None,
         is_accessible: false,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
     let (server_url, server_handle) =
@@ -308,6 +310,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             install_url: None,
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
         AppInfo {
             id: "beta".to_string(),
@@ -322,6 +325,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             install_url: None,
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
     ];
 
@@ -370,6 +374,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
         install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
         is_accessible: true,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }];
 
     let first_update = read_app_list_updated_notification(&mut mcp).await?;
@@ -389,6 +394,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
             is_accessible: true,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
         AppInfo {
             id: "alpha".to_string(),
@@ -403,6 +409,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
     ];
 
@@ -443,6 +450,7 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             install_url: None,
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
         AppInfo {
             id: "beta".to_string(),
@@ -457,6 +465,7 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             install_url: None,
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
     ];
 
@@ -516,6 +525,7 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
             is_accessible: true,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
         AppInfo {
             id: "alpha".to_string(),
@@ -530,6 +540,7 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
     ];
 
@@ -564,6 +575,7 @@ async fn list_apps_does_not_emit_empty_interim_updates() -> Result<()> {
         install_url: None,
         is_accessible: false,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }];
     let (server_url, server_handle) = start_apps_server_with_delays(
         connectors.clone(),
@@ -619,6 +631,7 @@ async fn list_apps_does_not_emit_empty_interim_updates() -> Result<()> {
         install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
         is_accessible: false,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }];
 
     let update = read_app_list_updated_notification(&mut mcp).await?;
@@ -653,6 +666,7 @@ async fn list_apps_paginates_results() -> Result<()> {
             install_url: None,
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
         AppInfo {
             id: "beta".to_string(),
@@ -667,6 +681,7 @@ async fn list_apps_paginates_results() -> Result<()> {
             install_url: None,
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
     ];
 
@@ -724,6 +739,7 @@ async fn list_apps_paginates_results() -> Result<()> {
         install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
         is_accessible: true,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }];
 
     assert_eq!(first_page, expected_first);
@@ -767,6 +783,7 @@ async fn list_apps_paginates_results() -> Result<()> {
         install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
         is_accessible: false,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }];
 
     assert_eq!(second_page, expected_second);
@@ -791,6 +808,7 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
         install_url: None,
         is_accessible: false,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
     let (server_url, server_handle) =
@@ -895,6 +913,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
             install_url: None,
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
         AppInfo {
             id: "beta".to_string(),
@@ -909,6 +928,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
             install_url: None,
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         },
     ];
     let initial_tools = vec![connector_tool("beta", "Beta App")?];
@@ -958,6 +978,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
             install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
             is_accessible: true,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         }]
     );
 
@@ -978,6 +999,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             },
             AppInfo {
                 id: "alpha".to_string(),
@@ -992,6 +1014,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
                 is_accessible: false,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             },
         ]
     );
@@ -1021,6 +1044,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
         install_url: None,
         is_accessible: false,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }]);
     server_control.set_tools(Vec::new());
 
@@ -1050,6 +1074,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             },
             AppInfo {
                 id: "alpha".to_string(),
@@ -1064,6 +1089,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
                 install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
                 is_accessible: false,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             },
         ]
     );
@@ -1091,6 +1117,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
         install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
         is_accessible: false,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }];
     let second_update = read_app_list_updated_notification(&mut mcp).await?;
     assert_eq!(second_update.data, expected_final);

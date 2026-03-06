@@ -27,35 +27,32 @@
     "AdditionalMacOsPermissions": {
       "properties": {
         "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "boolean"
         },
         "automations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/MacOsAutomationPermission"
         },
         "calendar": {
+          "type": "boolean"
+        },
+        "preferences": {
+          "$ref": "#/definitions/MacOsPreferencesPermission"
+        }
+      },
+      "required": [
+        "accessibility",
+        "automations",
+        "calendar",
+        "preferences"
+      ],
+      "type": "object"
+    },
+    "AdditionalNetworkPermissions": {
+      "properties": {
+        "enabled": {
           "type": [
             "boolean",
             "null"
-          ]
-        },
-        "preferences": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
-            }
           ]
         }
       },
@@ -84,9 +81,13 @@
           ]
         },
         "network": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -530,6 +531,30 @@
             },
             "method": {
               "enum": [
+                "thread/metadata/update"
+              ],
+              "title": "Thread/metadata/updateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadMetadataUpdateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/metadata/updateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unarchive"
               ],
               "title": "Thread/unarchiveRequestMethod",
@@ -698,6 +723,30 @@
             },
             "method": {
               "enum": [
+                "plugin/list"
+              ],
+              "title": "Plugin/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/remote/list"
               ],
               "title": "Skills/remote/listRequestMethod",
@@ -785,6 +834,30 @@
             "params"
           ],
           "title": "Skills/config/writeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/install"
+              ],
+              "title": "Plugin/installRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginInstallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/installRequest",
           "type": "object"
         },
         {
@@ -1711,6 +1784,58 @@
       "title": "DynamicToolCallResponse",
       "type": "object"
     },
+    "ElicitationRequest": {
+      "oneOf": [
+        {
+          "properties": {
+            "_meta": true,
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "form"
+              ],
+              "type": "string"
+            },
+            "requested_schema": true
+          },
+          "required": [
+            "message",
+            "mode",
+            "requested_schema"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "_meta": true,
+            "elicitation_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "url"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "elicitation_id",
+            "message",
+            "mode",
+            "url"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "EventMsg": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
@@ -2556,6 +2681,66 @@
           "type": "object"
         },
         {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image_generation_begin"
+              ],
+              "title": "ImageGenerationBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "type"
+          ],
+          "title": "ImageGenerationBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image_generation_end"
+              ],
+              "title": "ImageGenerationEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationEndEventMsg",
+          "type": "object"
+        },
+        {
           "description": "Notification that the server is about to execute a command.",
           "properties": {
             "call_id": {
@@ -3077,11 +3262,18 @@
             "id": {
               "$ref": "#/definitions/v2/RequestId"
             },
-            "message": {
-              "type": "string"
+            "request": {
+              "$ref": "#/definitions/ElicitationRequest"
             },
             "server_name": {
               "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this elicitation belongs to, when known.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -3093,7 +3285,7 @@
           },
           "required": [
             "id",
-            "message",
+            "request",
             "server_name",
             "type"
           ],
@@ -3818,58 +4010,6 @@
             "type"
           ],
           "title": "ItemCompletedEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "run": {
-              "$ref": "#/definitions/v2/HookRunSummary"
-            },
-            "turn_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "hook_started"
-              ],
-              "title": "HookStartedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "run",
-            "type"
-          ],
-          "title": "HookStartedEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "run": {
-              "$ref": "#/definitions/v2/HookRunSummary"
-            },
-            "turn_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "hook_completed"
-              ],
-              "title": "HookCompletedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "run",
-            "type"
-          ],
-          "title": "HookCompletedEventMsg",
           "type": "object"
         },
         {
@@ -5114,65 +5254,600 @@
       "title": "JSONRPCResponse",
       "type": "object"
     },
-    "MacOsAutomationValue": {
-      "anyOf": [
+    "MacOsAutomationPermission": {
+      "oneOf": [
         {
-          "type": "boolean"
+          "enum": [
+            "none",
+            "all"
+          ],
+          "type": "string"
         },
         {
-          "items": {
-            "type": "string"
+          "additionalProperties": false,
+          "properties": {
+            "bundle_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
           },
-          "type": "array"
+          "required": [
+            "bundle_ids"
+          ],
+          "title": "BundleIdsMacOsAutomationPermission",
+          "type": "object"
         }
       ]
     },
-    "MacOsPermissions": {
+    "MacOsPreferencesPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
+    "MacOsSeatbeltProfileExtensions": {
       "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_accessibility": {
+          "default": false,
+          "type": "boolean"
         },
-        "automations": {
-          "anyOf": [
+        "macos_automation": {
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsAutomationPermission"
             }
-          ]
+          ],
+          "default": "none"
         },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_calendar": {
+          "default": false,
+          "type": "boolean"
         },
-        "preferences": {
-          "anyOf": [
+        "macos_preferences": {
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsPreferencesPermission"
             }
-          ]
+          ],
+          "default": "read_only"
         }
       },
       "type": "object"
     },
-    "MacOsPreferencesValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
+    "McpElicitationArrayType": {
+      "enum": [
+        "array"
+      ],
+      "type": "string"
+    },
+    "McpElicitationBooleanSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
-        {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationBooleanType"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "McpElicitationBooleanType": {
+      "enum": [
+        "boolean"
+      ],
+      "type": "string"
+    },
+    "McpElicitationConstOption": {
+      "additionalProperties": false,
+      "properties": {
+        "const": {
+          "type": "string"
+        },
+        "title": {
           "type": "string"
         }
+      },
+      "required": [
+        "const",
+        "title"
+      ],
+      "type": "object"
+    },
+    "McpElicitationEnumSchema": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/McpElicitationSingleSelectEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationMultiSelectEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationLegacyTitledEnumSchema"
+        }
       ]
+    },
+    "McpElicitationLegacyTitledEnumSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enum": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enumNames": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationStringType"
+        }
+      },
+      "required": [
+        "enum",
+        "type"
+      ],
+      "type": "object"
+    },
+    "McpElicitationMultiSelectEnumSchema": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/McpElicitationUntitledMultiSelectEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationTitledMultiSelectEnumSchema"
+        }
+      ]
+    },
+    "McpElicitationNumberSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maximum": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "minimum": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationNumberType"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "McpElicitationNumberType": {
+      "enum": [
+        "number",
+        "integer"
+      ],
+      "type": "string"
+    },
+    "McpElicitationObjectType": {
+      "enum": [
+        "object"
+      ],
+      "type": "string"
+    },
+    "McpElicitationPrimitiveSchema": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/McpElicitationEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationStringSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationNumberSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationBooleanSchema"
+        }
+      ]
+    },
+    "McpElicitationSchema": {
+      "additionalProperties": false,
+      "description": "Typed form schema for MCP `elicitation/create` requests.\n\nThis matches the `requestedSchema` shape from the MCP 2025-11-25 `ElicitRequestFormParams` schema.",
+      "properties": {
+        "$schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "properties": {
+          "additionalProperties": {
+            "$ref": "#/definitions/McpElicitationPrimitiveSchema"
+          },
+          "type": "object"
+        },
+        "required": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationObjectType"
+        }
+      },
+      "required": [
+        "properties",
+        "type"
+      ],
+      "type": "object"
+    },
+    "McpElicitationSingleSelectEnumSchema": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/McpElicitationUntitledSingleSelectEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationTitledSingleSelectEnumSchema"
+        }
+      ]
+    },
+    "McpElicitationStringFormat": {
+      "enum": [
+        "email",
+        "uri",
+        "date",
+        "date-time"
+      ],
+      "type": "string"
+    },
+    "McpElicitationStringSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpElicitationStringFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxLength": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minLength": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationStringType"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "McpElicitationStringType": {
+      "enum": [
+        "string"
+      ],
+      "type": "string"
+    },
+    "McpElicitationTitledEnumItems": {
+      "additionalProperties": false,
+      "properties": {
+        "anyOf": {
+          "items": {
+            "$ref": "#/definitions/McpElicitationConstOption"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "anyOf"
+      ],
+      "type": "object"
+    },
+    "McpElicitationTitledMultiSelectEnumSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "items": {
+          "$ref": "#/definitions/McpElicitationTitledEnumItems"
+        },
+        "maxItems": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minItems": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationArrayType"
+        }
+      },
+      "required": [
+        "items",
+        "type"
+      ],
+      "type": "object"
+    },
+    "McpElicitationTitledSingleSelectEnumSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oneOf": {
+          "items": {
+            "$ref": "#/definitions/McpElicitationConstOption"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationStringType"
+        }
+      },
+      "required": [
+        "oneOf",
+        "type"
+      ],
+      "type": "object"
+    },
+    "McpElicitationUntitledEnumItems": {
+      "additionalProperties": false,
+      "properties": {
+        "enum": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationStringType"
+        }
+      },
+      "required": [
+        "enum",
+        "type"
+      ],
+      "type": "object"
+    },
+    "McpElicitationUntitledMultiSelectEnumSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "items": {
+          "$ref": "#/definitions/McpElicitationUntitledEnumItems"
+        },
+        "maxItems": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minItems": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationArrayType"
+        }
+      },
+      "required": [
+        "items",
+        "type"
+      ],
+      "type": "object"
+    },
+    "McpElicitationUntitledSingleSelectEnumSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enum": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationStringType"
+        }
+      },
+      "required": [
+        "enum",
+        "type"
+      ],
+      "type": "object"
     },
     "McpInvocation": {
       "properties": {
@@ -5192,6 +5867,109 @@
         "server",
         "tool"
       ],
+      "type": "object"
+    },
+    "McpServerElicitationAction": {
+      "enum": [
+        "accept",
+        "decline",
+        "cancel"
+      ],
+      "type": "string"
+    },
+    "McpServerElicitationRequestParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "oneOf": [
+        {
+          "properties": {
+            "_meta": true,
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "form"
+              ],
+              "type": "string"
+            },
+            "requestedSchema": {
+              "$ref": "#/definitions/McpElicitationSchema"
+            }
+          },
+          "required": [
+            "message",
+            "mode",
+            "requestedSchema"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "_meta": true,
+            "elicitationId": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "url"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "elicitationId",
+            "message",
+            "mode",
+            "url"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "serverName": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "description": "Active Codex turn when this elicitation was observed, if app-server could correlate one.\n\nThis is nullable because MCP models elicitation as a standalone server-to-client request identified by the MCP server request id. It may be triggered during a turn, but turn context is app-server correlation rather than part of the protocol identity of the elicitation itself.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "serverName",
+        "threadId"
+      ],
+      "title": "McpServerElicitationRequestParams",
+      "type": "object"
+    },
+    "McpServerElicitationRequestResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "_meta": {
+          "description": "Optional client metadata for form-mode action handling."
+        },
+        "action": {
+          "$ref": "#/definitions/McpServerElicitationAction"
+        },
+        "content": {
+          "description": "Structured user input for accepted elicitations, mirroring RMCP `CreateElicitationResult`.\n\nThis is nullable because decline/cancel responses have no content."
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "McpServerElicitationRequestResponse",
       "type": "object"
     },
     "McpStartupFailure": {
@@ -5299,6 +6077,17 @@
         "socks5Udp"
       ],
       "type": "string"
+    },
+    "NetworkPermissions": {
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "NetworkPolicyAmendment": {
       "properties": {
@@ -5448,7 +6237,7 @@
         "macos": {
           "anyOf": [
             {
-              "$ref": "#/definitions/MacOsPermissions"
+              "$ref": "#/definitions/MacOsSeatbeltProfileExtensions"
             },
             {
               "type": "null"
@@ -5456,9 +6245,13 @@
           ]
         },
         "network": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -6071,6 +6864,26 @@
           "properties": {
             "method": {
               "enum": [
+                "skills/changed"
+              ],
+              "title": "Skills/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SkillsChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Skills/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/name/updated"
               ],
               "title": "Thread/name/updatedNotificationMethod",
@@ -6131,26 +6944,6 @@
           "properties": {
             "method": {
               "enum": [
-                "hook/started"
-              ],
-              "title": "Hook/startedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/HookStartedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Hook/startedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
                 "turn/completed"
               ],
               "title": "Turn/completedNotificationMethod",
@@ -6165,26 +6958,6 @@
             "params"
           ],
           "title": "Turn/completedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "hook/completed"
-              ],
-              "title": "Hook/completedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/HookCompletedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Hook/completedNotification",
           "type": "object"
         },
         {
@@ -6913,6 +7686,31 @@
           "type": "object"
         },
         {
+          "description": "Request input for an MCP server elicitation.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "mcpServer/elicitation/request"
+              ],
+              "title": "McpServer/elicitation/requestRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/McpServerElicitationRequestParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "McpServer/elicitation/requestRequest",
+          "type": "object"
+        },
+        {
           "description": "Execute a dynamic tool call on the client.",
           "properties": {
             "id": {
@@ -7016,9 +7814,6 @@
     },
     "SessionNetworkProxyRuntime": {
       "properties": {
-        "admin_addr": {
-          "type": "string"
-        },
         "http_addr": {
           "type": "string"
         },
@@ -7027,7 +7822,6 @@
         }
       },
       "required": [
-        "admin_addr",
         "http_addr",
         "socks_addr"
       ],
@@ -7369,6 +8163,46 @@
             "type"
           ],
           "title": "WebSearchTurnItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "ImageGeneration"
+              ],
+              "title": "ImageGenerationTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationTurnItem",
           "type": "object"
         },
         {
@@ -7726,6 +8560,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "pluginDisplayNames": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -7872,6 +8713,34 @@
         },
         "required": [
           "userPrompt"
+        ],
+        "type": "object"
+      },
+      "AppSummary": {
+        "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "installUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
         ],
         "type": "object"
       },
@@ -9055,6 +9924,15 @@
                 "type": "null"
               }
             ]
+          },
+          "featureRequirements": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -9768,6 +10646,16 @@
           },
           {
             "properties": {
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ImageDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "image_url": {
                 "type": "string"
               },
@@ -9933,187 +10821,14 @@
         ],
         "type": "string"
       },
-      "HookCompletedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "run": {
-            "$ref": "#/definitions/v2/HookRunSummary"
-          },
-          "threadId": {
-            "type": "string"
-          },
-          "turnId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "run",
-          "threadId"
-        ],
-        "title": "HookCompletedNotification",
-        "type": "object"
-      },
-      "HookEventName": {
+      "ImageDetail": {
         "enum": [
-          "sessionStart",
-          "stop"
+          "auto",
+          "low",
+          "high",
+          "original"
         ],
         "type": "string"
-      },
-      "HookExecutionMode": {
-        "enum": [
-          "sync",
-          "async"
-        ],
-        "type": "string"
-      },
-      "HookHandlerType": {
-        "enum": [
-          "command",
-          "prompt",
-          "agent"
-        ],
-        "type": "string"
-      },
-      "HookOutputEntry": {
-        "properties": {
-          "kind": {
-            "$ref": "#/definitions/v2/HookOutputEntryKind"
-          },
-          "text": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "text"
-        ],
-        "type": "object"
-      },
-      "HookOutputEntryKind": {
-        "enum": [
-          "warning",
-          "stop",
-          "feedback",
-          "context",
-          "error"
-        ],
-        "type": "string"
-      },
-      "HookRunStatus": {
-        "enum": [
-          "running",
-          "completed",
-          "failed",
-          "blocked",
-          "stopped"
-        ],
-        "type": "string"
-      },
-      "HookRunSummary": {
-        "properties": {
-          "completedAt": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "displayOrder": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "durationMs": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "entries": {
-            "items": {
-              "$ref": "#/definitions/v2/HookOutputEntry"
-            },
-            "type": "array"
-          },
-          "eventName": {
-            "$ref": "#/definitions/v2/HookEventName"
-          },
-          "executionMode": {
-            "$ref": "#/definitions/v2/HookExecutionMode"
-          },
-          "handlerType": {
-            "$ref": "#/definitions/v2/HookHandlerType"
-          },
-          "id": {
-            "type": "string"
-          },
-          "scope": {
-            "$ref": "#/definitions/v2/HookScope"
-          },
-          "sourcePath": {
-            "type": "string"
-          },
-          "startedAt": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "status": {
-            "$ref": "#/definitions/v2/HookRunStatus"
-          },
-          "statusMessage": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "displayOrder",
-          "entries",
-          "eventName",
-          "executionMode",
-          "handlerType",
-          "id",
-          "scope",
-          "sourcePath",
-          "startedAt",
-          "status"
-        ],
-        "type": "object"
-      },
-      "HookScope": {
-        "enum": [
-          "thread",
-          "turn"
-        ],
-        "type": "string"
-      },
-      "HookStartedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "run": {
-            "$ref": "#/definitions/v2/HookRunSummary"
-          },
-          "threadId": {
-            "type": "string"
-          },
-          "turnId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "run",
-          "threadId"
-        ],
-        "title": "HookStartedNotification",
-        "type": "object"
       },
       "InputModality": {
         "description": "Canonical user-input modality tags advertised by a model.",
@@ -10891,12 +11606,6 @@
               "null"
             ]
           },
-          "dangerouslyAllowNonLoopbackAdmin": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
           "dangerouslyAllowNonLoopbackProxy": {
             "type": [
               "boolean",
@@ -11068,6 +11777,137 @@
           "unknown"
         ],
         "type": "string"
+      },
+      "PluginInstallParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "marketplacePath": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "pluginName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "marketplacePath",
+          "pluginName"
+        ],
+        "title": "PluginInstallParams",
+        "type": "object"
+      },
+      "PluginInstallResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "appsNeedingAuth": {
+            "items": {
+              "$ref": "#/definitions/v2/AppSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "appsNeedingAuth"
+        ],
+        "title": "PluginInstallResponse",
+        "type": "object"
+      },
+      "PluginListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cwds": {
+            "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces are considered.",
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "PluginListParams",
+        "type": "object"
+      },
+      "PluginListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "marketplaces": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginMarketplaceEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "marketplaces"
+        ],
+        "title": "PluginListResponse",
+        "type": "object"
+      },
+      "PluginMarketplaceEntry": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "plugins": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "plugins"
+        ],
+        "type": "object"
+      },
+      "PluginSource": {
+        "oneOf": [
+          {
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "local"
+                ],
+                "title": "LocalPluginSourceType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "type"
+            ],
+            "title": "LocalPluginSource",
+            "type": "object"
+          }
+        ]
+      },
+      "PluginSummary": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/definitions/v2/PluginSource"
+          }
+        },
+        "required": [
+          "enabled",
+          "name",
+          "source"
+        ],
+        "type": "object"
       },
       "ProductSurface": {
         "enum": [
@@ -11935,6 +12775,40 @@
           },
           {
             "properties": {
+              "id": {
+                "type": "string"
+              },
+              "result": {
+                "type": "string"
+              },
+              "revised_prompt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "image_generation_call"
+                ],
+                "title": "ImageGenerationCallResponseItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "result",
+              "status",
+              "type"
+            ],
+            "title": "ImageGenerationCallResponseItem",
+            "type": "object"
+          },
+          {
+            "properties": {
               "ghost_commit": {
                 "$ref": "#/definitions/v2/GhostCommit"
               },
@@ -12174,6 +13048,10 @@
                   "type": "fullAccess"
                 }
               },
+              "networkAccess": {
+                "default": false,
+                "type": "boolean"
+              },
               "type": {
                 "enum": [
                   "readOnly"
@@ -12302,7 +13180,8 @@
       },
       "ServiceTier": {
         "enum": [
-          "fast"
+          "fast",
+          "flex"
         ],
         "type": "string"
       },
@@ -12531,6 +13410,12 @@
           "type",
           "value"
         ],
+        "type": "object"
+      },
+      "SkillsChangedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+        "title": "SkillsChangedNotification",
         "type": "object"
       },
       "SkillsConfigWriteParams": {
@@ -13675,6 +14560,40 @@
               "id": {
                 "type": "string"
               },
+              "result": {
+                "type": "string"
+              },
+              "revisedPrompt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "imageGeneration"
+                ],
+                "title": "ImageGenerationThreadItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "result",
+              "status",
+              "type"
+            ],
+            "title": "ImageGenerationThreadItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
               "review": {
                 "type": "string"
               },
@@ -13883,6 +14802,69 @@
           "data"
         ],
         "title": "ThreadLoadedListResponse",
+        "type": "object"
+      },
+      "ThreadMetadataGitInfoUpdateParams": {
+        "properties": {
+          "branch": {
+            "description": "Omit to leave the stored branch unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "originUrl": {
+            "description": "Omit to leave the stored origin URL unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "description": "Omit to leave the stored commit unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ThreadMetadataUpdateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "gitInfo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadMetadataGitInfoUpdateParams"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadMetadataUpdateParams",
+        "type": "object"
+      },
+      "ThreadMetadataUpdateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "thread": {
+            "$ref": "#/definitions/v2/Thread"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "title": "ThreadMetadataUpdateResponse",
         "type": "object"
       },
       "ThreadNameUpdatedNotification": {
@@ -15389,6 +16371,12 @@
       "WindowsSandboxSetupStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mode": {
             "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
           }

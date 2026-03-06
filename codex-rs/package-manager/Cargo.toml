@@ -1,0 +1,27 @@
+[package]
+name = "codex-package-manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fd-lock = { workspace = true }
+flate2 = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true }
+tar = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "rt", "sync", "time"] }
+url = { workspace = true }
+zip = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt", "rt-multi-thread"] }
+wiremock = { workspace = true }

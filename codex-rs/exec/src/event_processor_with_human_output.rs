@@ -453,6 +453,37 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "🌐 Searched: {detail}");
                 }
             }
+            EventMsg::ImageGenerationBegin(generated) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "image generation started".style(self.magenta),
+                    generated.call_id
+                );
+            }
+            EventMsg::ImageGenerationEnd(generated) => {
+                if !generated.result.is_empty()
+                    && !generated.result.starts_with("data:")
+                    && !generated.result.starts_with("http://")
+                    && !generated.result.starts_with("https://")
+                    && !generated.result.starts_with("file://")
+                {
+                    ts_msg!(
+                        self,
+                        "{} {} {}",
+                        "generated image".style(self.magenta),
+                        generated.call_id,
+                        generated.result.style(self.dimmed)
+                    );
+                } else {
+                    ts_msg!(
+                        self,
+                        "{} {}",
+                        "generated image".style(self.magenta),
+                        generated.call_id
+                    );
+                }
+            }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
                 auto_approved,

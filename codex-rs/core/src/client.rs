@@ -546,7 +546,8 @@ impl ModelClientSession {
             include,
             service_tier: match service_tier {
                 Some(ServiceTier::Fast) => Some("priority".to_string()),
-                _ => None,
+                Some(service_tier) => Some(service_tier.to_string()),
+                None => None,
             },
             prompt_cache_key,
             text,
@@ -566,7 +567,6 @@ impl ModelClientSession {
     ) -> ApiResponsesOptions {
         let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
         let conversation_id = self.client.state.conversation_id.to_string();
-
         ApiResponsesOptions {
             conversation_id: Some(conversation_id),
             session_source: Some(self.client.state.session_source.clone()),
@@ -1305,6 +1305,7 @@ mod tests {
             "apply_patch_tool_type": null,
             "truncation_policy": {"mode": "bytes", "limit": 10000},
             "supports_parallel_tool_calls": false,
+            "supports_image_detail_original": false,
             "context_window": 272000,
             "auto_compact_token_limit": null,
             "experimental_supported_tools": []

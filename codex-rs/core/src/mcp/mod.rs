@@ -26,6 +26,7 @@ use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::SandboxState;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
+use crate::plugins::PluginCapabilitySummary;
 use crate::plugins::PluginsManager;
 
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
@@ -34,6 +35,64 @@ pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 const OPENAI_CONNECTORS_MCP_BASE_URL: &str = "https://api.openai.com";
 const OPENAI_CONNECTORS_MCP_PATH: &str = "/v1/connectors/gateways/flat/mcp";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolPluginProvenance {
+    plugin_display_names_by_connector_id: HashMap<String, Vec<String>>,
+    plugin_display_names_by_mcp_server_name: HashMap<String, Vec<String>>,
+}
+
+impl ToolPluginProvenance {
+    pub fn plugin_display_names_for_connector_id(&self, connector_id: &str) -> &[String] {
+        self.plugin_display_names_by_connector_id
+            .get(connector_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn plugin_display_names_for_mcp_server_name(&self, server_name: &str) -> &[String] {
+        self.plugin_display_names_by_mcp_server_name
+            .get(server_name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn from_capability_summaries(capability_summaries: &[PluginCapabilitySummary]) -> Self {
+        let mut tool_plugin_provenance = Self::default();
+        for plugin in capability_summaries {
+            for connector_id in &plugin.app_connector_ids {
+                tool_plugin_provenance
+                    .plugin_display_names_by_connector_id
+                    .entry(connector_id.0.clone())
+                    .or_default()
+                    .push(plugin.display_name.clone());
+            }
+
+            for server_name in &plugin.mcp_server_names {
+                tool_plugin_provenance
+                    .plugin_display_names_by_mcp_server_name
+                    .entry(server_name.clone())
+                    .or_default()
+                    .push(plugin.display_name.clone());
+            }
+        }
+
+        for plugin_names in tool_plugin_provenance
+            .plugin_display_names_by_connector_id
+            .values_mut()
+            .chain(
+                tool_plugin_provenance
+                    .plugin_display_names_by_mcp_server_name
+                    .values_mut(),
+            )
+        {
+            plugin_names.sort_unstable();
+            plugin_names.dedup();
+        }
+
+        tool_plugin_provenance
+    }
+}
 
 // Legacy vs new MCP gateway
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +241,11 @@ impl McpManager {
     ) -> HashMap<String, McpServerConfig> {
         effective_mcp_servers(config, auth, self.plugins_manager.as_ref())
     }
+
+    pub fn tool_plugin_provenance(&self, config: &Config) -> ToolPluginProvenance {
+        let loaded_plugins = self.plugins_manager.plugins_for_config(config);
+        ToolPluginProvenance::from_capability_summaries(loaded_plugins.capability_summaries())
+    }
 }
 
 fn configured_mcp_servers(
@@ -219,6 +283,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     let auth = auth_manager.auth().await;
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
     let mcp_servers = mcp_manager.effective_servers(config, auth.as_ref());
+    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
         return McpListToolsResponseEvent {
             tools: HashMap::new(),
@@ -251,6 +316,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         sandbox_state,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth.as_ref()),
+        tool_plugin_provenance,
     )
     .await;
 
@@ -407,6 +473,8 @@ mod tests {
     use super::*;
     use crate::config::CONFIG_TOML_FILE;
     use crate::config::ConfigBuilder;
+    use crate::plugins::AppConnectorId;
+    use crate::plugins::PluginCapabilitySummary;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -417,7 +485,7 @@ mod tests {
         fs::write(path, contents).unwrap();
     }
 
-    fn plugin_config_toml(plugin_root: &Path) -> String {
+    fn plugin_config_toml() -> String {
         let mut root = toml::map::Map::new();
 
         let mut features = toml::map::Map::new();
@@ -425,14 +493,10 @@ mod tests {
         root.insert("features".to_string(), Value::Table(features));
 
         let mut plugin = toml::map::Map::new();
-        plugin.insert(
-            "path".to_string(),
-            Value::String(plugin_root.display().to_string()),
-        );
         plugin.insert("enabled".to_string(), Value::Boolean(true));
 
         let mut plugins = toml::map::Map::new();
-        plugins.insert("sample".to_string(), Value::Table(plugin));
+        plugins.insert("sample@test".to_string(), Value::Table(plugin));
         root.insert("plugins".to_string(), Value::Table(plugins));
 
         toml::to_string(&Value::Table(root)).expect("plugin test config should serialize")
@@ -487,6 +551,47 @@ mod tests {
         expected.insert("beta".to_string(), expected_beta);
 
         assert_eq!(group_tools_by_server(&tools), expected);
+    }
+
+    #[test]
+    fn tool_plugin_provenance_collects_app_and_mcp_sources() {
+        let provenance = ToolPluginProvenance::from_capability_summaries(&[
+            PluginCapabilitySummary {
+                display_name: "alpha-plugin".to_string(),
+                app_connector_ids: vec![AppConnectorId("connector_example".to_string())],
+                mcp_server_names: vec!["alpha".to_string()],
+                ..PluginCapabilitySummary::default()
+            },
+            PluginCapabilitySummary {
+                display_name: "beta-plugin".to_string(),
+                app_connector_ids: vec![
+                    AppConnectorId("connector_example".to_string()),
+                    AppConnectorId("connector_gmail".to_string()),
+                ],
+                mcp_server_names: vec!["beta".to_string()],
+                ..PluginCapabilitySummary::default()
+            },
+        ]);
+
+        assert_eq!(
+            provenance,
+            ToolPluginProvenance {
+                plugin_display_names_by_connector_id: HashMap::from([
+                    (
+                        "connector_example".to_string(),
+                        vec!["alpha-plugin".to_string(), "beta-plugin".to_string()],
+                    ),
+                    (
+                        "connector_gmail".to_string(),
+                        vec!["beta-plugin".to_string()],
+                    ),
+                ]),
+                plugin_display_names_by_mcp_server_name: HashMap::from([
+                    ("alpha".to_string(), vec!["alpha-plugin".to_string()]),
+                    ("beta".to_string(), vec!["beta-plugin".to_string()]),
+                ]),
+            }
+        );
     }
 
     #[test]
@@ -570,7 +675,10 @@ mod tests {
     fn codex_apps_mcp_url_uses_openai_connectors_gateway_when_feature_is_enabled() {
         let mut config = crate::config::test_config();
         config.chatgpt_base_url = "https://chatgpt.com".to_string();
-        config.features.enable(Feature::AppsMcpGateway);
+        config
+            .features
+            .enable(Feature::AppsMcpGateway)
+            .expect("test config should allow apps gateway");
 
         assert_eq!(
             codex_apps_mcp_url(&config),
@@ -586,7 +694,10 @@ mod tests {
         let mut servers = with_codex_apps_mcp(HashMap::new(), false, None, &config);
         assert!(!servers.contains_key(CODEX_APPS_MCP_SERVER_NAME));
 
-        config.features.enable(Feature::Apps);
+        config
+            .features
+            .enable(Feature::Apps)
+            .expect("test config should allow apps");
 
         servers = with_codex_apps_mcp(servers, true, None, &config);
         let server = servers
@@ -599,7 +710,10 @@ mod tests {
 
         assert_eq!(url, "https://chatgpt.com/backend-api/wham/apps");
 
-        config.features.enable(Feature::AppsMcpGateway);
+        config
+            .features
+            .enable(Feature::AppsMcpGateway)
+            .expect("test config should allow apps gateway");
         servers = with_codex_apps_mcp(servers, true, None, &config);
         let server = servers
             .get(CODEX_APPS_MCP_SERVER_NAME)
@@ -616,7 +730,10 @@ mod tests {
     #[tokio::test]
     async fn effective_mcp_servers_include_plugins_without_overriding_user_config() {
         let codex_home = tempfile::tempdir().expect("tempdir");
-        let plugin_root = codex_home.path().join("plugin-sample");
+        let plugin_root = codex_home
+            .path()
+            .join("plugins/cache")
+            .join("test/sample/local");
         write_file(
             &plugin_root.join(".codex-plugin/plugin.json"),
             r#"{"name":"sample"}"#,
@@ -638,7 +755,7 @@ mod tests {
         );
         write_file(
             &codex_home.path().join(CONFIG_TOML_FILE),
-            &plugin_config_toml(&plugin_root),
+            &plugin_config_toml(),
         );
 
         let mut config = ConfigBuilder::default()

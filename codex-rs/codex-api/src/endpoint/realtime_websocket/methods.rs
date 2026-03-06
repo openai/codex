@@ -300,7 +300,7 @@ impl RealtimeWebsocketWriter {
                         },
                     },
                     output: SessionAudioOutput {
-                        voice: "mundo".to_string(),
+                        voice: "fathom".to_string(),
                     },
                 },
             },
@@ -793,7 +793,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
-                Value::String("mundo".to_string())
+                Value::String("fathom".to_string())
             );
 
             ws.send(Message::Text(

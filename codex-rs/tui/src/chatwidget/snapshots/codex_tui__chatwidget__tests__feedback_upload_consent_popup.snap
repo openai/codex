@@ -6,6 +6,11 @@ expression: popup
 
   The following files will be sent:
     • codex-logs.log
+    • codex-connectivity-diagnostics.txt
+
+  Connectivity diagnostics
+    - OPENAI_BASE_URL is set and may affect connectivity.
+      - OPENAI_BASE_URL = hello
 
 › 1. Yes  Share the current Codex session logs with the team for
           troubleshooting.

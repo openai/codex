@@ -35,6 +35,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::PluginInstallParams;
+use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ServerRequest;
@@ -44,6 +46,7 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
@@ -100,7 +103,7 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
-        cmd.env("RUST_LOG", "debug");
+        cmd.env("RUST_LOG", "info");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
 
         for (k, v) in env_overrides {
@@ -333,6 +336,15 @@ impl McpProcess {
         self.send_request("thread/name/set", params).await
     }
 
+    /// Send a `thread/metadata/update` JSON-RPC request.
+    pub async fn send_thread_metadata_update_request(
+        &mut self,
+        params: ThreadMetadataUpdateParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/metadata/update", params).await
+    }
+
     /// Send a `thread/unsubscribe` JSON-RPC request.
     pub async fn send_thread_unsubscribe_request(
         &mut self,
@@ -429,6 +441,32 @@ impl McpProcess {
         self.send_request("skills/list", params).await
     }
 
+    /// Send a `plugin/install` JSON-RPC request.
+    pub async fn send_plugin_install_request(
+        &mut self,
+        params: PluginInstallParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("plugin/install", params).await
+    }
+
+    /// Send a `plugin/list` JSON-RPC request.
+    pub async fn send_plugin_list_request(
+        &mut self,
+        params: PluginListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("plugin/list", params).await
+    }
+
+    /// Send a JSON-RPC request with raw params for protocol-level validation tests.
+    pub async fn send_raw_request(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> anyhow::Result<i64> {
+        self.send_request(method, params).await
+    }
     /// Send a `collaborationMode/list` JSON-RPC request.
     pub async fn send_list_collaboration_modes_request(
         &mut self,

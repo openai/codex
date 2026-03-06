@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
@@ -9,10 +10,15 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::anyhow;
 use futures::FutureExt;
+use futures::StreamExt;
 use futures::future::BoxFuture;
+use futures::stream::BoxStream;
 use oauth2::TokenResponse;
+use reqwest::header::ACCEPT;
 use reqwest::header::AUTHORIZATION;
+use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
+use reqwest::header::WWW_AUTHENTICATE;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
 use rmcp::model::ClientNotification;
@@ -21,6 +27,7 @@ use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
 use rmcp::model::CustomNotification;
 use rmcp::model::CustomRequest;
+use rmcp::model::ElicitationAction;
 use rmcp::model::Extensions;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::InitializeResult;
@@ -41,8 +48,16 @@ use rmcp::transport::auth::AuthClient;
 use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::OAuthState;
 use rmcp::transport::child_process::TokioChildProcess;
+use rmcp::transport::streamable_http_client::AuthRequiredError;
+use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use rmcp::transport::streamable_http_client::StreamableHttpError;
+use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
+use sse_stream::Sse;
+use sse_stream::SseStream;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
@@ -60,7 +75,225 @@ use crate::program_resolver;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use crate::utils::create_env_for_mcp_server;
-use crate::utils::run_with_timeout;
+
+const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
+const JSON_MIME_TYPE: &str = "application/json";
+const HEADER_LAST_EVENT_ID: &str = "Last-Event-Id";
+const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
+const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
+
+#[derive(Clone)]
+struct StreamableHttpResponseClient {
+    inner: reqwest::Client,
+}
+
+impl StreamableHttpResponseClient {
+    fn new(inner: reqwest::Client) -> Self {
+        Self { inner }
+    }
+
+    fn reqwest_error(
+        error: reqwest::Error,
+    ) -> StreamableHttpError<StreamableHttpResponseClientError> {
+        StreamableHttpError::Client(StreamableHttpResponseClientError::from(error))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum StreamableHttpResponseClientError {
+    #[error("streamable HTTP session expired with 404 Not Found")]
+    SessionExpired404,
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+}
+
+impl StreamableHttpClient for StreamableHttpResponseClient {
+    type Error = StreamableHttpResponseClientError;
+
+    async fn post_message(
+        &self,
+        uri: Arc<str>,
+        message: rmcp::model::ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_token: Option<String>,
+    ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let mut request = self
+            .inner
+            .post(uri.as_ref())
+            .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "));
+        if let Some(auth_header) = auth_token {
+            request = request.bearer_auth(auth_header);
+        }
+        if let Some(session_id_value) = session_id.as_ref() {
+            request = request.header(HEADER_SESSION_ID, session_id_value.as_ref());
+        }
+
+        let response = request
+            .json(&message)
+            .send()
+            .await
+            .map_err(StreamableHttpResponseClient::reqwest_error)?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND && session_id.is_some() {
+            return Err(StreamableHttpError::Client(
+                StreamableHttpResponseClientError::SessionExpired404,
+            ));
+        }
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED
+            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
+        {
+            let header = header
+                .to_str()
+                .map_err(|_| {
+                    StreamableHttpError::UnexpectedServerResponse(Cow::Borrowed(
+                        "invalid www-authenticate header value",
+                    ))
+                })?
+                .to_string();
+            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
+                www_authenticate_header: header,
+            }));
+        }
+
+        let status = response.status();
+        if matches!(
+            status,
+            reqwest::StatusCode::ACCEPTED | reqwest::StatusCode::NO_CONTENT
+        ) {
+            return Ok(StreamableHttpPostResponse::Accepted);
+        }
+
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let session_id = response
+            .headers()
+            .get(HEADER_SESSION_ID)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+
+        match content_type.as_deref() {
+            Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
+                let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
+                Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
+            }
+            Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
+                let message = response
+                    .json()
+                    .await
+                    .map_err(StreamableHttpResponseClient::reqwest_error)?;
+                Ok(StreamableHttpPostResponse::Json(message, session_id))
+            }
+            _ => {
+                let body = response
+                    .text()
+                    .await
+                    .map_err(StreamableHttpResponseClient::reqwest_error)?;
+                let mut body_preview = body;
+                let body_len = body_preview.len();
+                if body_len > NON_JSON_RESPONSE_BODY_PREVIEW_BYTES {
+                    let mut boundary = NON_JSON_RESPONSE_BODY_PREVIEW_BYTES;
+                    while !body_preview.is_char_boundary(boundary) {
+                        boundary = boundary.saturating_sub(1);
+                    }
+                    body_preview.truncate(boundary);
+                    body_preview.push_str(&format!(
+                        "... (truncated {} bytes)",
+                        body_len.saturating_sub(boundary)
+                    ));
+                }
+
+                let content_type = content_type.unwrap_or_else(|| "missing-content-type".into());
+                Err(StreamableHttpError::UnexpectedContentType(Some(format!(
+                    "{content_type}; body: {body_preview}"
+                ))))
+            }
+        }
+    }
+
+    async fn delete_session(
+        &self,
+        uri: Arc<str>,
+        session: Arc<str>,
+        auth_token: Option<String>,
+    ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
+        let mut request_builder = self.inner.delete(uri.as_ref());
+        if let Some(auth_header) = auth_token {
+            request_builder = request_builder.bearer_auth(auth_header);
+        }
+        let response = request_builder
+            .header(HEADER_SESSION_ID, session.as_ref())
+            .send()
+            .await
+            .map_err(StreamableHttpResponseClient::reqwest_error)?;
+
+        if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+            return Ok(());
+        }
+
+        response
+            .error_for_status()
+            .map_err(StreamableHttpResponseClient::reqwest_error)?;
+        Ok(())
+    }
+
+    async fn get_stream(
+        &self,
+        uri: Arc<str>,
+        session_id: Arc<str>,
+        last_event_id: Option<String>,
+        auth_token: Option<String>,
+    ) -> std::result::Result<
+        BoxStream<'static, std::result::Result<Sse, sse_stream::Error>>,
+        StreamableHttpError<Self::Error>,
+    > {
+        let mut request_builder = self
+            .inner
+            .get(uri.as_ref())
+            .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "))
+            .header(HEADER_SESSION_ID, session_id.as_ref());
+        if let Some(last_event_id) = last_event_id {
+            request_builder = request_builder.header(HEADER_LAST_EVENT_ID, last_event_id);
+        }
+        if let Some(auth_header) = auth_token {
+            request_builder = request_builder.bearer_auth(auth_header);
+        }
+
+        let response = request_builder
+            .send()
+            .await
+            .map_err(StreamableHttpResponseClient::reqwest_error)?;
+        if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+            return Err(StreamableHttpError::ServerDoesNotSupportSse);
+        }
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(StreamableHttpError::Client(
+                StreamableHttpResponseClientError::SessionExpired404,
+            ));
+        }
+
+        let response = response
+            .error_for_status()
+            .map_err(StreamableHttpResponseClient::reqwest_error)?;
+        match response.headers().get(CONTENT_TYPE) {
+            Some(ct)
+                if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes())
+                    || ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {}
+            Some(ct) => {
+                return Err(StreamableHttpError::UnexpectedContentType(Some(
+                    String::from_utf8_lossy(ct.as_bytes()).to_string(),
+                )));
+            }
+            None => {
+                return Err(StreamableHttpError::UnexpectedContentType(None));
+            }
+        }
+
+        let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
+        Ok(event_stream)
+    }
+}
 
 enum PendingTransport {
     ChildProcess {
@@ -68,10 +301,10 @@ enum PendingTransport {
         process_group_guard: Option<ProcessGroupGuard>,
     },
     StreamableHttp {
-        transport: StreamableHttpClientTransport<reqwest::Client>,
+        transport: StreamableHttpClientTransport<StreamableHttpResponseClient>,
     },
     StreamableHttpWithOAuth {
-        transport: StreamableHttpClientTransport<AuthClient<reqwest::Client>>,
+        transport: StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
         oauth_persistor: OAuthPersistor,
     },
 }
@@ -146,8 +379,68 @@ impl Drop for ProcessGroupGuard {
     }
 }
 
+#[derive(Clone)]
+enum TransportRecipe {
+    Stdio {
+        program: OsString,
+        args: Vec<OsString>,
+        env: Option<HashMap<String, String>>,
+        env_vars: Vec<String>,
+        cwd: Option<PathBuf>,
+    },
+    StreamableHttp {
+        server_name: String,
+        url: String,
+        bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
+        store_mode: OAuthCredentialsStoreMode,
+    },
+}
+
+#[derive(Clone)]
+struct InitializeContext {
+    timeout: Option<Duration>,
+    handler: LoggingClientHandler,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ClientOperationError {
+    #[error(transparent)]
+    Service(#[from] rmcp::service::ServiceError),
+    #[error("timed out awaiting {label} after {duration:?}")]
+    Timeout { label: String, duration: Duration },
+}
+
 pub type Elicitation = CreateElicitationRequestParams;
-pub type ElicitationResponse = CreateElicitationResult;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationResponse {
+    pub action: ElicitationAction,
+    pub content: Option<serde_json::Value>,
+    #[serde(rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
+}
+
+impl From<CreateElicitationResult> for ElicitationResponse {
+    fn from(value: CreateElicitationResult) -> Self {
+        Self {
+            action: value.action,
+            content: value.content,
+            meta: None,
+        }
+    }
+}
+
+impl From<ElicitationResponse> for CreateElicitationResult {
+    fn from(value: ElicitationResponse) -> Self {
+        Self {
+            action: value.action,
+            content: value.content,
+        }
+    }
+}
 
 /// Interface for sending elicitation requests to the UI and awaiting a response.
 pub type SendElicitation = Box<
@@ -169,6 +462,9 @@ pub struct ListToolsWithConnectorIdResult {
 /// https://github.com/modelcontextprotocol/rust-sdk
 pub struct RmcpClient {
     state: Mutex<ClientState>,
+    transport_recipe: TransportRecipe,
+    initialize_context: Mutex<Option<InitializeContext>>,
+    session_recovery_lock: Mutex<()>,
 }
 
 impl RmcpClient {
@@ -179,58 +475,24 @@ impl RmcpClient {
         env_vars: &[String],
         cwd: Option<PathBuf>,
     ) -> io::Result<Self> {
-        let program_name = program.to_string_lossy().into_owned();
-
-        // Build environment for program resolution and subprocess
-        let envs = create_env_for_mcp_server(env, env_vars);
-
-        // Resolve program to executable path (platform-specific)
-        let resolved_program = program_resolver::resolve(program, &envs)?;
-
-        let mut command = Command::new(resolved_program);
-        command
-            .kill_on_drop(true)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .env_clear()
-            .envs(envs)
-            .args(&args);
-        #[cfg(unix)]
-        command.process_group(0);
-        if let Some(cwd) = cwd {
-            command.current_dir(cwd);
-        }
-
-        let (transport, stderr) = TokioChildProcess::builder(command)
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let process_group_guard = transport.id().map(ProcessGroupGuard::new);
-
-        if let Some(stderr) = stderr {
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stderr).lines();
-                loop {
-                    match reader.next_line().await {
-                        Ok(Some(line)) => {
-                            info!("MCP server stderr ({program_name}): {line}");
-                        }
-                        Ok(None) => break,
-                        Err(error) => {
-                            warn!("Failed to read MCP server stderr ({program_name}): {error}");
-                            break;
-                        }
-                    }
-                }
-            });
-        }
+        let transport_recipe = TransportRecipe::Stdio {
+            program,
+            args,
+            env,
+            env_vars: env_vars.to_vec(),
+            cwd,
+        };
+        let transport = Self::create_pending_transport(&transport_recipe)
+            .await
+            .map_err(io::Error::other)?;
 
         Ok(Self {
             state: Mutex::new(ClientState::Connecting {
-                transport: Some(PendingTransport::ChildProcess {
-                    transport,
-                    process_group_guard,
-                }),
+                transport: Some(transport),
             }),
+            transport_recipe,
+            initialize_context: Mutex::new(None),
+            session_recovery_lock: Mutex::new(()),
         })
     }
 
@@ -243,77 +505,22 @@ impl RmcpClient {
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
     ) -> Result<Self> {
-        let default_headers = build_default_headers(http_headers, env_http_headers)?;
-
-        let initial_oauth_tokens =
-            if bearer_token.is_none() && !default_headers.contains_key(AUTHORIZATION) {
-                match load_oauth_tokens(server_name, url, store_mode) {
-                    Ok(tokens) => tokens,
-                    Err(err) => {
-                        warn!("failed to read tokens for server `{server_name}`: {err}");
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
-        let transport = if let Some(initial_tokens) = initial_oauth_tokens.clone() {
-            match create_oauth_transport_and_runtime(
-                server_name,
-                url,
-                initial_tokens.clone(),
-                store_mode,
-                default_headers.clone(),
-            )
-            .await
-            {
-                Ok((transport, oauth_persistor)) => PendingTransport::StreamableHttpWithOAuth {
-                    transport,
-                    oauth_persistor,
-                },
-                Err(err)
-                    if err.downcast_ref::<AuthError>().is_some_and(|auth_err| {
-                        matches!(auth_err, AuthError::NoAuthorizationSupport)
-                    }) =>
-                {
-                    let access_token = initial_tokens
-                        .token_response
-                        .0
-                        .access_token()
-                        .secret()
-                        .to_string();
-                    warn!(
-                        "OAuth metadata discovery is unavailable for MCP server `{server_name}`; falling back to stored bearer token authentication"
-                    );
-                    let http_config =
-                        StreamableHttpClientTransportConfig::with_uri(url.to_string())
-                            .auth_header(access_token);
-                    let http_client =
-                        apply_default_headers(reqwest::Client::builder(), &default_headers)
-                            .build()?;
-                    let transport =
-                        StreamableHttpClientTransport::with_client(http_client, http_config);
-                    PendingTransport::StreamableHttp { transport }
-                }
-                Err(err) => return Err(err),
-            }
-        } else {
-            let mut http_config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
-            if let Some(bearer_token) = bearer_token.clone() {
-                http_config = http_config.auth_header(bearer_token);
-            }
-
-            let http_client =
-                apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
-
-            let transport = StreamableHttpClientTransport::with_client(http_client, http_config);
-            PendingTransport::StreamableHttp { transport }
+        let transport_recipe = TransportRecipe::StreamableHttp {
+            server_name: server_name.to_string(),
+            url: url.to_string(),
+            bearer_token,
+            http_headers,
+            env_http_headers,
+            store_mode,
         };
+        let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
             }),
+            transport_recipe,
+            initialize_context: Mutex::new(None),
+            session_recovery_lock: Mutex::new(()),
         })
     }
 
@@ -326,47 +533,20 @@ impl RmcpClient {
         send_elicitation: SendElicitation,
     ) -> Result<InitializeResult> {
         let client_handler = LoggingClientHandler::new(params.clone(), send_elicitation);
-
-        let (transport, oauth_persistor, process_group_guard) = {
+        let pending_transport = {
             let mut guard = self.state.lock().await;
             match &mut *guard {
                 ClientState::Connecting { transport } => match transport.take() {
-                    Some(PendingTransport::ChildProcess {
-                        transport,
-                        process_group_guard,
-                    }) => (
-                        service::serve_client(client_handler.clone(), transport).boxed(),
-                        None,
-                        process_group_guard,
-                    ),
-                    Some(PendingTransport::StreamableHttp { transport }) => (
-                        service::serve_client(client_handler.clone(), transport).boxed(),
-                        None,
-                        None,
-                    ),
-                    Some(PendingTransport::StreamableHttpWithOAuth {
-                        transport,
-                        oauth_persistor,
-                    }) => (
-                        service::serve_client(client_handler.clone(), transport).boxed(),
-                        Some(oauth_persistor),
-                        None,
-                    ),
+                    Some(transport) => transport,
                     None => return Err(anyhow!("client already initializing")),
                 },
                 ClientState::Ready { .. } => return Err(anyhow!("client already initialized")),
             }
         };
 
-        let service = match timeout {
-            Some(duration) => time::timeout(duration, transport)
-                .await
-                .map_err(|_| anyhow!("timed out handshaking with MCP server after {duration:?}"))?
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
-            None => transport
-                .await
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
-        };
+        let (service, oauth_persistor, process_group_guard) =
+            Self::connect_pending_transport(pending_transport, client_handler.clone(), timeout)
+                .await?;
 
         let initialize_result_rmcp = service
             .peer()
@@ -375,10 +555,18 @@ impl RmcpClient {
         let initialize_result = initialize_result_rmcp.clone();
 
         {
+            let mut initialize_context = self.initialize_context.lock().await;
+            *initialize_context = Some(InitializeContext {
+                timeout,
+                handler: client_handler,
+            });
+        }
+
+        {
             let mut guard = self.state.lock().await;
             *guard = ClientState::Ready {
                 _process_group_guard: process_group_guard,
-                service: Arc::new(service),
+                service,
                 oauth: oauth_persistor.clone(),
             };
         }
@@ -398,9 +586,12 @@ impl RmcpClient {
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
         self.refresh_oauth_if_needed().await;
-        let service = self.service().await?;
-        let fut = service.list_tools(params);
-        let result = run_with_timeout(fut, timeout, "tools/list").await?;
+        let result = self
+            .run_service_operation("tools/list", timeout, move |service| {
+                let params = params.clone();
+                async move { service.list_tools(params).await }.boxed()
+            })
+            .await?;
         self.persist_oauth_tokens().await;
         Ok(result)
     }
@@ -411,10 +602,12 @@ impl RmcpClient {
         timeout: Option<Duration>,
     ) -> Result<ListToolsWithConnectorIdResult> {
         self.refresh_oauth_if_needed().await;
-        let service = self.service().await?;
-
-        let fut = service.list_tools(params);
-        let result = run_with_timeout(fut, timeout, "tools/list").await?;
+        let result = self
+            .run_service_operation("tools/list", timeout, move |service| {
+                let params = params.clone();
+                async move { service.list_tools(params).await }.boxed()
+            })
+            .await?;
         let tools = result
             .tools
             .into_iter()
@@ -451,10 +644,12 @@ impl RmcpClient {
         timeout: Option<Duration>,
     ) -> Result<ListResourcesResult> {
         self.refresh_oauth_if_needed().await;
-        let service = self.service().await?;
-
-        let fut = service.list_resources(params);
-        let result = run_with_timeout(fut, timeout, "resources/list").await?;
+        let result = self
+            .run_service_operation("resources/list", timeout, move |service| {
+                let params = params.clone();
+                async move { service.list_resources(params).await }.boxed()
+            })
+            .await?;
         self.persist_oauth_tokens().await;
         Ok(result)
     }
@@ -465,10 +660,12 @@ impl RmcpClient {
         timeout: Option<Duration>,
     ) -> Result<ListResourceTemplatesResult> {
         self.refresh_oauth_if_needed().await;
-        let service = self.service().await?;
-
-        let fut = service.list_resource_templates(params);
-        let result = run_with_timeout(fut, timeout, "resources/templates/list").await?;
+        let result = self
+            .run_service_operation("resources/templates/list", timeout, move |service| {
+                let params = params.clone();
+                async move { service.list_resource_templates(params).await }.boxed()
+            })
+            .await?;
         self.persist_oauth_tokens().await;
         Ok(result)
     }
@@ -479,9 +676,12 @@ impl RmcpClient {
         timeout: Option<Duration>,
     ) -> Result<ReadResourceResult> {
         self.refresh_oauth_if_needed().await;
-        let service = self.service().await?;
-        let fut = service.read_resource(params);
-        let result = run_with_timeout(fut, timeout, "resources/read").await?;
+        let result = self
+            .run_service_operation("resources/read", timeout, move |service| {
+                let params = params.clone();
+                async move { service.read_resource(params).await }.boxed()
+            })
+            .await?;
         self.persist_oauth_tokens().await;
         Ok(result)
     }
@@ -493,7 +693,6 @@ impl RmcpClient {
         timeout: Option<Duration>,
     ) -> Result<CallToolResult> {
         self.refresh_oauth_if_needed().await;
-        let service = self.service().await?;
         let arguments = match arguments {
             Some(Value::Object(map)) => Some(map),
             Some(other) => {
@@ -509,8 +708,12 @@ impl RmcpClient {
             arguments,
             task: None,
         };
-        let fut = service.call_tool(rmcp_params);
-        let result = run_with_timeout(fut, timeout, "tools/call").await?;
+        let result = self
+            .run_service_operation("tools/call", timeout, move |service| {
+                let rmcp_params = rmcp_params.clone();
+                async move { service.call_tool(rmcp_params).await }.boxed()
+            })
+            .await?;
         self.persist_oauth_tokens().await;
         Ok(result)
     }
@@ -520,14 +723,22 @@ impl RmcpClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<()> {
-        let service: Arc<RunningService<RoleClient, LoggingClientHandler>> = self.service().await?;
-        service
-            .send_notification(ClientNotification::CustomNotification(CustomNotification {
-                method: method.to_string(),
-                params,
-                extensions: Extensions::new(),
-            }))
-            .await?;
+        self.refresh_oauth_if_needed().await;
+        self.run_service_operation("notifications/custom", None, move |service| {
+            let params = params.clone();
+            async move {
+                service
+                    .send_notification(ClientNotification::CustomNotification(CustomNotification {
+                        method: method.to_string(),
+                        params,
+                        extensions: Extensions::new(),
+                    }))
+                    .await
+            }
+            .boxed()
+        })
+        .await?;
+        self.persist_oauth_tokens().await;
         Ok(())
     }
 
@@ -536,12 +747,21 @@ impl RmcpClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<ServerResult> {
-        let service: Arc<RunningService<RoleClient, LoggingClientHandler>> = self.service().await?;
-        let response = service
-            .send_request(ClientRequest::CustomRequest(CustomRequest::new(
-                method, params,
-            )))
+        self.refresh_oauth_if_needed().await;
+        let response = self
+            .run_service_operation("requests/custom", None, move |service| {
+                let params = params.clone();
+                async move {
+                    service
+                        .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+                            method, params,
+                        )))
+                        .await
+                }
+                .boxed()
+            })
             .await?;
+        self.persist_oauth_tokens().await;
         Ok(response)
     }
 
@@ -581,6 +801,319 @@ impl RmcpClient {
             warn!("failed to refresh OAuth tokens: {error}");
         }
     }
+
+    async fn create_pending_transport(
+        transport_recipe: &TransportRecipe,
+    ) -> Result<PendingTransport> {
+        match transport_recipe {
+            TransportRecipe::Stdio {
+                program,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => {
+                let program_name = program.to_string_lossy().into_owned();
+                let envs = create_env_for_mcp_server(env.clone(), env_vars);
+                let resolved_program = program_resolver::resolve(program.clone(), &envs)?;
+
+                let mut command = Command::new(resolved_program);
+                command
+                    .kill_on_drop(true)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .env_clear()
+                    .envs(envs)
+                    .args(args);
+                #[cfg(unix)]
+                command.process_group(0);
+                if let Some(cwd) = cwd {
+                    command.current_dir(cwd);
+                }
+
+                let (transport, stderr) = TokioChildProcess::builder(command)
+                    .stderr(Stdio::piped())
+                    .spawn()?;
+                let process_group_guard = transport.id().map(ProcessGroupGuard::new);
+
+                if let Some(stderr) = stderr {
+                    tokio::spawn(async move {
+                        let mut reader = BufReader::new(stderr).lines();
+                        loop {
+                            match reader.next_line().await {
+                                Ok(Some(line)) => {
+                                    info!("MCP server stderr ({program_name}): {line}");
+                                }
+                                Ok(None) => break,
+                                Err(error) => {
+                                    warn!(
+                                        "Failed to read MCP server stderr ({program_name}): {error}"
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                }
+
+                Ok(PendingTransport::ChildProcess {
+                    transport,
+                    process_group_guard,
+                })
+            }
+            TransportRecipe::StreamableHttp {
+                server_name,
+                url,
+                bearer_token,
+                http_headers,
+                env_http_headers,
+                store_mode,
+            } => {
+                let default_headers =
+                    build_default_headers(http_headers.clone(), env_http_headers.clone())?;
+
+                let initial_oauth_tokens =
+                    if bearer_token.is_none() && !default_headers.contains_key(AUTHORIZATION) {
+                        match load_oauth_tokens(server_name, url, *store_mode) {
+                            Ok(tokens) => tokens,
+                            Err(err) => {
+                                warn!("failed to read tokens for server `{server_name}`: {err}");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                if let Some(initial_tokens) = initial_oauth_tokens.clone() {
+                    match create_oauth_transport_and_runtime(
+                        server_name,
+                        url,
+                        initial_tokens.clone(),
+                        *store_mode,
+                        default_headers.clone(),
+                    )
+                    .await
+                    {
+                        Ok((transport, oauth_persistor)) => {
+                            Ok(PendingTransport::StreamableHttpWithOAuth {
+                                transport,
+                                oauth_persistor,
+                            })
+                        }
+                        Err(err)
+                            if err.downcast_ref::<AuthError>().is_some_and(|auth_err| {
+                                matches!(auth_err, AuthError::NoAuthorizationSupport)
+                            }) =>
+                        {
+                            let access_token = initial_tokens
+                                .token_response
+                                .0
+                                .access_token()
+                                .secret()
+                                .to_string();
+                            warn!(
+                                "OAuth metadata discovery is unavailable for MCP server `{server_name}`; falling back to stored bearer token authentication"
+                            );
+                            let http_config =
+                                StreamableHttpClientTransportConfig::with_uri(url.clone())
+                                    .auth_header(access_token);
+                            let http_client =
+                                apply_default_headers(reqwest::Client::builder(), &default_headers)
+                                    .build()?;
+                            let transport = StreamableHttpClientTransport::with_client(
+                                StreamableHttpResponseClient::new(http_client),
+                                http_config,
+                            );
+                            Ok(PendingTransport::StreamableHttp { transport })
+                        }
+                        Err(err) => Err(err),
+                    }
+                } else {
+                    let mut http_config =
+                        StreamableHttpClientTransportConfig::with_uri(url.clone());
+                    if let Some(bearer_token) = bearer_token.clone() {
+                        http_config = http_config.auth_header(bearer_token);
+                    }
+
+                    let http_client =
+                        apply_default_headers(reqwest::Client::builder(), &default_headers)
+                            .build()?;
+
+                    let transport = StreamableHttpClientTransport::with_client(
+                        StreamableHttpResponseClient::new(http_client),
+                        http_config,
+                    );
+                    Ok(PendingTransport::StreamableHttp { transport })
+                }
+            }
+        }
+    }
+
+    async fn connect_pending_transport(
+        pending_transport: PendingTransport,
+        client_handler: LoggingClientHandler,
+        timeout: Option<Duration>,
+    ) -> Result<(
+        Arc<RunningService<RoleClient, LoggingClientHandler>>,
+        Option<OAuthPersistor>,
+        Option<ProcessGroupGuard>,
+    )> {
+        let (transport, oauth_persistor, process_group_guard) = match pending_transport {
+            PendingTransport::ChildProcess {
+                transport,
+                process_group_guard,
+            } => (
+                service::serve_client(client_handler, transport).boxed(),
+                None,
+                process_group_guard,
+            ),
+            PendingTransport::StreamableHttp { transport } => (
+                service::serve_client(client_handler, transport).boxed(),
+                None,
+                None,
+            ),
+            PendingTransport::StreamableHttpWithOAuth {
+                transport,
+                oauth_persistor,
+            } => (
+                service::serve_client(client_handler, transport).boxed(),
+                Some(oauth_persistor),
+                None,
+            ),
+        };
+
+        let service = match timeout {
+            Some(duration) => time::timeout(duration, transport)
+                .await
+                .map_err(|_| anyhow!("timed out handshaking with MCP server after {duration:?}"))?
+                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
+            None => transport
+                .await
+                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
+        };
+
+        Ok((Arc::new(service), oauth_persistor, process_group_guard))
+    }
+
+    async fn run_service_operation<T, F, Fut>(
+        &self,
+        label: &str,
+        timeout: Option<Duration>,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: Fn(Arc<RunningService<RoleClient, LoggingClientHandler>>) -> Fut,
+        Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
+    {
+        let service = self.service().await?;
+        match Self::run_service_operation_once(Arc::clone(&service), label, timeout, &operation)
+            .await
+        {
+            Ok(result) => Ok(result),
+            Err(error) if Self::is_session_expired_404(&error) => {
+                self.reinitialize_after_session_expiry(&service).await?;
+                let recovered_service = self.service().await?;
+                Self::run_service_operation_once(recovered_service, label, timeout, &operation)
+                    .await
+                    .map_err(Into::into)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    async fn run_service_operation_once<T, F, Fut>(
+        service: Arc<RunningService<RoleClient, LoggingClientHandler>>,
+        label: &str,
+        timeout: Option<Duration>,
+        operation: &F,
+    ) -> std::result::Result<T, ClientOperationError>
+    where
+        F: Fn(Arc<RunningService<RoleClient, LoggingClientHandler>>) -> Fut,
+        Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
+    {
+        match timeout {
+            Some(duration) => time::timeout(duration, operation(service))
+                .await
+                .map_err(|_| ClientOperationError::Timeout {
+                    label: label.to_string(),
+                    duration,
+                })?
+                .map_err(ClientOperationError::from),
+            None => operation(service).await.map_err(ClientOperationError::from),
+        }
+    }
+
+    fn is_session_expired_404(error: &ClientOperationError) -> bool {
+        let ClientOperationError::Service(rmcp::service::ServiceError::TransportSend(error)) =
+            error
+        else {
+            return false;
+        };
+
+        error
+            .error
+            .downcast_ref::<StreamableHttpError<StreamableHttpResponseClientError>>()
+            .is_some_and(|error| {
+                matches!(
+                    error,
+                    StreamableHttpError::Client(
+                        StreamableHttpResponseClientError::SessionExpired404
+                    )
+                )
+            })
+    }
+
+    async fn reinitialize_after_session_expiry(
+        &self,
+        failed_service: &Arc<RunningService<RoleClient, LoggingClientHandler>>,
+    ) -> Result<()> {
+        let _recovery_guard = self.session_recovery_lock.lock().await;
+
+        {
+            let guard = self.state.lock().await;
+            match &*guard {
+                ClientState::Ready { service, .. } if !Arc::ptr_eq(service, failed_service) => {
+                    return Ok(());
+                }
+                ClientState::Ready { .. } => {}
+                ClientState::Connecting { .. } => {
+                    return Err(anyhow!("MCP client not initialized"));
+                }
+            }
+        }
+
+        let initialize_context = self
+            .initialize_context
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow!("MCP client cannot recover before initialize succeeds"))?;
+        let pending_transport = Self::create_pending_transport(&self.transport_recipe).await?;
+        let (service, oauth_persistor, process_group_guard) = Self::connect_pending_transport(
+            pending_transport,
+            initialize_context.handler,
+            initialize_context.timeout,
+        )
+        .await?;
+
+        {
+            let mut guard = self.state.lock().await;
+            *guard = ClientState::Ready {
+                _process_group_guard: process_group_guard,
+                service,
+                oauth: oauth_persistor.clone(),
+            };
+        }
+
+        if let Some(runtime) = oauth_persistor
+            && let Err(error) = runtime.persist_if_needed().await
+        {
+            warn!("failed to persist OAuth tokens after session recovery: {error}");
+        }
+
+        Ok(())
+    }
 }
 
 async fn create_oauth_transport_and_runtime(
@@ -590,7 +1123,7 @@ async fn create_oauth_transport_and_runtime(
     credentials_store: OAuthCredentialsStoreMode,
     default_headers: HeaderMap,
 ) -> Result<(
-    StreamableHttpClientTransport<AuthClient<reqwest::Client>>,
+    StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
     OAuthPersistor,
 )> {
     let http_client =
@@ -612,7 +1145,7 @@ async fn create_oauth_transport_and_runtime(
         }
     };
 
-    let auth_client = AuthClient::new(http_client, manager);
+    let auth_client = AuthClient::new(StreamableHttpResponseClient::new(http_client), manager);
     let auth_manager = auth_client.auth_manager.clone();
 
     let transport = StreamableHttpClientTransport::with_client(

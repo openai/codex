@@ -18,6 +18,7 @@ use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
 use codex_windows_sandbox::protect_workspace_agents_dir;
 use codex_windows_sandbox::protect_workspace_codex_dir;
+use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
@@ -245,6 +246,8 @@ fn lock_sandbox_dir(
     real_user: &str,
     sandbox_group_sid: &[u8],
     sandbox_group_access_mode: i32,
+    sandbox_group_mask: u32,
+    real_user_mask: u32,
     _log: &mut File,
 ) -> Result<()> {
     std::fs::create_dir_all(dir)?;
@@ -254,7 +257,7 @@ fn lock_sandbox_dir(
     let entries = [
         (
             sandbox_group_sid.to_vec(),
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            sandbox_group_mask,
             sandbox_group_access_mode,
         ),
         (
@@ -267,11 +270,7 @@ fn lock_sandbox_dir(
             FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
             GRANT_ACCESS,
         ),
-        (
-            real_sid,
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-            GRANT_ACCESS,
-        ),
+        (real_sid, real_user_mask, GRANT_ACCESS),
     ];
     unsafe {
         let mut eas: Vec<EXPLICIT_ACCESS_W> = Vec::new();
@@ -740,6 +739,25 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     });
 
+    lock_sandbox_dir(
+        &sandbox_bin_dir(&payload.codex_home),
+        &payload.real_user,
+        &sandbox_group_sid,
+        GRANT_ACCESS,
+        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+        log,
+    )
+    .map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSandboxLockFailed,
+            format!(
+                "lock sandbox bin dir {} failed: {err}",
+                sandbox_bin_dir(&payload.codex_home).display()
+            ),
+        ))
+    })?;
+
     if refresh_only {
         log_line(
             log,
@@ -756,6 +774,8 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             &payload.real_user,
             &sandbox_group_sid,
             GRANT_ACCESS,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
             log,
         )
         .map_err(|err| {
@@ -772,6 +792,8 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             &payload.real_user,
             &sandbox_group_sid,
             DENY_ACCESS,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
             log,
         )
         .map_err(|err| {

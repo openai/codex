@@ -146,11 +146,6 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
         constraints.dangerously_allow_non_loopback_proxy =
             Some(dangerously_allow_non_loopback_proxy);
     }
-    if let Some(dangerously_allow_non_loopback_admin) = network.dangerously_allow_non_loopback_admin
-    {
-        constraints.dangerously_allow_non_loopback_admin =
-            Some(dangerously_allow_non_loopback_admin);
-    }
     if let Some(dangerously_allow_all_unix_sockets) = network.dangerously_allow_all_unix_sockets {
         constraints.dangerously_allow_all_unix_sockets = Some(dangerously_allow_all_unix_sockets);
     }

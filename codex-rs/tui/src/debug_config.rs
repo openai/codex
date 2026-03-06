@@ -27,7 +27,6 @@ pub(crate) fn new_debug_config_output(
         let SessionNetworkProxyRuntime {
             http_addr,
             socks_addr,
-            admin_addr,
         } = proxy;
         let all_proxy = session_all_proxy_url(
             http_addr,
@@ -40,7 +39,6 @@ pub(crate) fn new_debug_config_output(
         );
         lines.push(format!("    - HTTP_PROXY  = http://{http_addr}").into());
         lines.push(format!("    - ALL_PROXY   = {all_proxy}").into());
-        lines.push(format!("    - ADMIN_PROXY = http://{admin_addr}").into());
     }
 
     PlainHistoryCell::new(lines)
@@ -331,7 +329,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         socks_port,
         allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy,
-        dangerously_allow_non_loopback_admin,
         dangerously_allow_all_unix_sockets,
         allowed_domains,
         denied_domains,
@@ -354,11 +351,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     if let Some(dangerously_allow_non_loopback_proxy) = dangerously_allow_non_loopback_proxy {
         parts.push(format!(
             "dangerously_allow_non_loopback_proxy={dangerously_allow_non_loopback_proxy}"
-        ));
-    }
-    if let Some(dangerously_allow_non_loopback_admin) = dangerously_allow_non_loopback_admin {
-        parts.push(format!(
-            "dangerously_allow_non_loopback_admin={dangerously_allow_non_loopback_admin}"
         ));
     }
     if let Some(dangerously_allow_all_unix_sockets) = dangerously_allow_all_unix_sockets {
@@ -527,6 +519,7 @@ mod tests {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
+            feature_requirements: None,
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
                 McpServerRequirement {
@@ -652,6 +645,7 @@ approval_policy = "never"
             allowed_approval_policies: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
+            feature_requirements: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,

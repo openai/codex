@@ -6,11 +6,13 @@ sandbox placement and transformation of portable CommandSpec into a
 ready‑to‑spawn environment.
 */
 
+pub(crate) mod macos_permissions;
+
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
-use crate::exec::execute_exec_env;
+use crate::exec::execute_exec_request;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args;
 use crate::protocol::SandboxPolicy;
@@ -25,12 +27,13 @@ use crate::tools::sandboxing::SandboxablePreference;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
-#[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use dunce::canonicalize;
+use macos_permissions::merge_macos_seatbelt_profile_extensions;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -97,21 +100,54 @@ pub(crate) enum SandboxTransformError {
     SeatbeltUnavailable,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EffectiveSandboxPermissions {
+    pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
+}
+
+impl EffectiveSandboxPermissions {
+    pub(crate) fn new(
+        sandbox_policy: &SandboxPolicy,
+        macos_seatbelt_profile_extensions: Option<&MacOsSeatbeltProfileExtensions>,
+        additional_permissions: Option<&PermissionProfile>,
+    ) -> Self {
+        let Some(additional_permissions) = additional_permissions else {
+            return Self {
+                sandbox_policy: sandbox_policy.clone(),
+                macos_seatbelt_profile_extensions: macos_seatbelt_profile_extensions.cloned(),
+            };
+        };
+
+        Self {
+            sandbox_policy: sandbox_policy_with_additional_permissions(
+                sandbox_policy,
+                additional_permissions,
+            ),
+            macos_seatbelt_profile_extensions: merge_macos_seatbelt_profile_extensions(
+                macos_seatbelt_profile_extensions,
+                additional_permissions.macos.as_ref(),
+            ),
+        }
+    }
+}
+
 pub(crate) fn normalize_additional_permissions(
     additional_permissions: PermissionProfile,
 ) -> Result<PermissionProfile, String> {
-    let Some(file_system) = additional_permissions.file_system else {
-        return Ok(PermissionProfile::default());
-    };
-    let read = file_system
-        .read
-        .map(|paths| normalize_permission_paths(paths, "file_system.read"));
-    let write = file_system
-        .write
-        .map(|paths| normalize_permission_paths(paths, "file_system.write"));
     Ok(PermissionProfile {
-        file_system: Some(FileSystemPermissions { read, write }),
-        ..Default::default()
+        network: additional_permissions.network,
+        file_system: additional_permissions
+            .file_system
+            .map(|file_system| FileSystemPermissions {
+                read: file_system
+                    .read
+                    .map(|paths| normalize_permission_paths(paths, "file_system.read")),
+                write: file_system
+                    .write
+                    .map(|paths| normalize_permission_paths(paths, "file_system.write")),
+            }),
+        macos: additional_permissions.macos,
     })
 }
 
@@ -123,9 +159,7 @@ fn normalize_permission_paths(
     let mut seen = HashSet::new();
 
     for path in paths {
-        let canonicalized = path
-            .as_path()
-            .canonicalize()
+        let canonicalized = canonicalize(path.as_path())
             .ok()
             .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
             .unwrap_or(path);
@@ -189,17 +223,29 @@ fn merge_read_only_access_with_additional_reads(
     }
 }
 
+fn merge_network_access(
+    base_network_access: bool,
+    additional_permissions: &PermissionProfile,
+) -> bool {
+    base_network_access
+        || additional_permissions
+            .network
+            .as_ref()
+            .and_then(|network| network.enabled)
+            .unwrap_or(false)
+}
+
 fn sandbox_policy_with_additional_permissions(
     sandbox_policy: &SandboxPolicy,
     additional_permissions: &PermissionProfile,
-) -> Result<SandboxPolicy, SandboxTransformError> {
+) -> SandboxPolicy {
     if additional_permissions.is_empty() {
-        return Ok(sandbox_policy.clone());
+        return sandbox_policy.clone();
     }
 
     let (extra_reads, extra_writes) = additional_permission_roots(additional_permissions);
 
-    let policy = match sandbox_policy {
+    match sandbox_policy {
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             sandbox_policy.clone()
         }
@@ -218,15 +264,19 @@ fn sandbox_policy_with_additional_permissions(
                     read_only_access,
                     extra_reads,
                 ),
-                network_access: *network_access,
+                network_access: merge_network_access(*network_access, additional_permissions),
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             }
         }
-        SandboxPolicy::ReadOnly { access } => {
+        SandboxPolicy::ReadOnly {
+            access,
+            network_access,
+        } => {
             if extra_writes.is_empty() {
                 SandboxPolicy::ReadOnly {
                     access: merge_read_only_access_with_additional_reads(access, extra_reads),
+                    network_access: merge_network_access(*network_access, additional_permissions),
                 }
             } else {
                 // todo(dylan) - for now, this grants more access than the request. We should restrict this,
@@ -238,15 +288,13 @@ fn sandbox_policy_with_additional_permissions(
                         access,
                         extra_reads,
                     ),
-                    network_access: false,
+                    network_access: merge_network_access(*network_access, additional_permissions),
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
                 }
             }
         }
-    };
-
-    Ok(policy)
+    }
 }
 
 #[derive(Default)]
@@ -310,14 +358,18 @@ impl SandboxManager {
             use_linux_sandbox_bwrap,
             windows_sandbox_level,
         } = request;
-        let effective_policy =
-            if let Some(additional_permissions) = spec.additional_permissions.take() {
-                sandbox_policy_with_additional_permissions(policy, &additional_permissions)?
-            } else {
-                policy.clone()
-            };
+        #[cfg(not(target_os = "macos"))]
+        let macos_seatbelt_profile_extensions = None;
+        let effective_permissions = EffectiveSandboxPermissions::new(
+            policy,
+            macos_seatbelt_profile_extensions,
+            spec.additional_permissions.as_ref(),
+        );
         let mut env = spec.env;
-        if !effective_policy.has_full_network_access() {
+        if !effective_permissions
+            .sandbox_policy
+            .has_full_network_access()
+        {
             env.insert(
                 CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
                 "1".to_string(),
@@ -336,11 +388,13 @@ impl SandboxManager {
                 seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
                 let mut args = create_seatbelt_command_args_with_extensions(
                     command.clone(),
-                    &effective_policy,
+                    &effective_permissions.sandbox_policy,
                     sandbox_policy_cwd,
                     enforce_managed_network,
                     network,
-                    macos_seatbelt_profile_extensions,
+                    effective_permissions
+                        .macos_seatbelt_profile_extensions
+                        .as_ref(),
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
@@ -355,7 +409,7 @@ impl SandboxManager {
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
                 let mut args = create_linux_sandbox_command_args(
                     command.clone(),
-                    &effective_policy,
+                    &effective_permissions.sandbox_policy,
                     sandbox_policy_cwd,
                     use_linux_sandbox_bwrap,
                     allow_proxy_network,
@@ -390,7 +444,7 @@ impl SandboxManager {
             sandbox,
             windows_sandbox_level,
             sandbox_permissions: spec.sandbox_permissions,
-            sandbox_policy: effective_policy,
+            sandbox_policy: effective_permissions.sandbox_policy,
             justification: spec.justification,
             arg0: arg0_override,
         })
@@ -402,21 +456,47 @@ impl SandboxManager {
 }
 
 pub async fn execute_env(
-    env: ExecRequest,
+    exec_request: ExecRequest,
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
-    let effective_policy = env.sandbox_policy.clone();
-    execute_exec_env(env, &effective_policy, stdout_stream).await
+    let effective_policy = exec_request.sandbox_policy.clone();
+    execute_exec_request(exec_request, &effective_policy, stdout_stream, None).await
+}
+
+pub async fn execute_exec_request_with_after_spawn(
+    exec_request: ExecRequest,
+    stdout_stream: Option<StdoutStream>,
+    after_spawn: Option<Box<dyn FnOnce() + Send>>,
+) -> crate::error::Result<ExecToolCallOutput> {
+    let effective_policy = exec_request.sandbox_policy.clone();
+    execute_exec_request(exec_request, &effective_policy, stdout_stream, after_spawn).await
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    use super::EffectiveSandboxPermissions;
     use super::SandboxManager;
+    use super::normalize_additional_permissions;
+    use super::sandbox_policy_with_additional_permissions;
     use crate::exec::SandboxType;
+    use crate::protocol::ReadOnlyAccess;
     use crate::protocol::SandboxPolicy;
     use crate::tools::sandboxing::SandboxablePreference;
     use codex_protocol::config_types::WindowsSandboxLevel;
+    use codex_protocol::models::FileSystemPermissions;
+    #[cfg(target_os = "macos")]
+    use codex_protocol::models::MacOsAutomationPermission;
+    #[cfg(target_os = "macos")]
+    use codex_protocol::models::MacOsPreferencesPermission;
+    #[cfg(target_os = "macos")]
+    use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+    use codex_protocol::models::NetworkPermissions;
+    use codex_protocol::models::PermissionProfile;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use dunce::canonicalize;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[test]
     fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
@@ -441,5 +521,162 @@ mod tests {
             true,
         );
         assert_eq!(sandbox, expected);
+    }
+
+    #[test]
+    fn normalize_additional_permissions_preserves_network() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let path = AbsolutePathBuf::from_absolute_path(
+            canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+        )
+        .expect("absolute temp dir");
+        let permissions = normalize_additional_permissions(PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![path.clone()]),
+                write: Some(vec![path.clone()]),
+            }),
+            ..Default::default()
+        })
+        .expect("permissions");
+
+        assert_eq!(
+            permissions.network,
+            Some(NetworkPermissions {
+                enabled: Some(true),
+            })
+        );
+        assert_eq!(
+            permissions.file_system,
+            Some(FileSystemPermissions {
+                read: Some(vec![path.clone()]),
+                write: Some(vec![path]),
+            })
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn normalize_additional_permissions_preserves_macos_permissions() {
+        let permissions = normalize_additional_permissions(PermissionProfile {
+            macos: Some(MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadWrite,
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                    "com.apple.Notes".to_string(),
+                ]),
+                macos_accessibility: true,
+                macos_calendar: true,
+            }),
+            ..Default::default()
+        })
+        .expect("permissions");
+
+        assert_eq!(
+            permissions.macos,
+            Some(MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadWrite,
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                    "com.apple.Notes".to_string(),
+                ]),
+                macos_accessibility: true,
+                macos_calendar: true,
+            })
+        );
+    }
+
+    #[test]
+    fn read_only_additional_permissions_can_enable_network_without_writes() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let path = AbsolutePathBuf::from_absolute_path(
+            canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+        )
+        .expect("absolute temp dir");
+        let policy = sandbox_policy_with_additional_permissions(
+            &SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: vec![path.clone()],
+                },
+                network_access: false,
+            },
+            &PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![path.clone()]),
+                    write: Some(Vec::new()),
+                }),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            policy,
+            SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: vec![path],
+                },
+                network_access: true,
+            }
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn effective_permissions_merge_macos_extensions_with_additional_permissions() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let path = AbsolutePathBuf::from_absolute_path(
+            canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+        )
+        .expect("absolute temp dir");
+        let effective_permissions = EffectiveSandboxPermissions::new(
+            &SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: vec![path.clone()],
+                },
+                network_access: false,
+            },
+            Some(&MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadOnly,
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                    "com.apple.Calendar".to_string(),
+                ]),
+                macos_accessibility: false,
+                macos_calendar: false,
+            }),
+            Some(&PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![path]),
+                    write: Some(Vec::new()),
+                }),
+                macos: Some(MacOsSeatbeltProfileExtensions {
+                    macos_preferences: MacOsPreferencesPermission::ReadWrite,
+                    macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                        "com.apple.Notes".to_string(),
+                    ]),
+                    macos_accessibility: true,
+                    macos_calendar: true,
+                }),
+                ..Default::default()
+            }),
+        );
+
+        assert_eq!(
+            effective_permissions.macos_seatbelt_profile_extensions,
+            Some(MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadWrite,
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                    "com.apple.Calendar".to_string(),
+                    "com.apple.Notes".to_string(),
+                ]),
+                macos_accessibility: true,
+                macos_calendar: true,
+            })
+        );
     }
 }

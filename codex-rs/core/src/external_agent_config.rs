@@ -7,6 +7,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
+const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.detect";
+const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentConfigDetectOptions {
     pub include_home: bool,
@@ -74,13 +77,28 @@ impl ExternalAgentConfigService {
         for migration_item in migration_items {
             match migration_item.item_type {
                 ExternalAgentConfigMigrationItemType::Config => {
-                    self.import_config(migration_item.cwd.as_deref())?
+                    self.import_config(migration_item.cwd.as_deref())?;
+                    emit_migration_metric(
+                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                        ExternalAgentConfigMigrationItemType::Config,
+                        None,
+                    );
                 }
                 ExternalAgentConfigMigrationItemType::Skills => {
-                    self.import_skills(migration_item.cwd.as_deref())?
+                    let skills_count = self.import_skills(migration_item.cwd.as_deref())?;
+                    emit_migration_metric(
+                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                        ExternalAgentConfigMigrationItemType::Skills,
+                        Some(skills_count),
+                    );
                 }
                 ExternalAgentConfigMigrationItemType::AgentsMd => {
-                    self.import_agents_md(migration_item.cwd.as_deref())?
+                    self.import_agents_md(migration_item.cwd.as_deref())?;
+                    emit_migration_metric(
+                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                        ExternalAgentConfigMigrationItemType::AgentsMd,
+                        None,
+                    );
                 }
                 ExternalAgentConfigMigrationItemType::McpServerConfig => {}
             }
@@ -126,12 +144,17 @@ impl ExternalAgentConfigService {
                     items.push(ExternalAgentConfigMigrationItem {
                         item_type: ExternalAgentConfigMigrationItemType::Config,
                         description: format!(
-                            "Migrate {} into {}.",
+                            "Migrate {} into {}",
                             source_settings.display(),
                             target_config.display()
                         ),
                         cwd: cwd.clone(),
                     });
+                    emit_migration_metric(
+                        EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+                        ExternalAgentConfigMigrationItemType::Config,
+                        None,
+                    );
                 }
             }
         }
@@ -144,41 +167,51 @@ impl ExternalAgentConfigService {
             || self.home_target_skills_dir(),
             |repo_root| repo_root.join(".agents").join("skills"),
         );
-        let source_skill_names = collect_subdirectory_names(&source_skills)?;
-        let target_skill_names = collect_subdirectory_names(&target_skills)?;
-        if source_skill_names
-            .iter()
-            .any(|skill_name| !target_skill_names.contains(skill_name))
-        {
+        let skills_count = count_missing_subdirectories(&source_skills, &target_skills)?;
+        if skills_count > 0 {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Skills,
                 description: format!(
-                    "Copy skill folders from {} to {}.",
+                    "Copy skill folders from {} to {}",
                     source_skills.display(),
                     target_skills.display()
                 ),
                 cwd: cwd.clone(),
             });
+            emit_migration_metric(
+                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+                ExternalAgentConfigMigrationItemType::Skills,
+                Some(skills_count),
+            );
         }
 
-        let source_agents_md = repo_root.map_or_else(
-            || self.claude_home.join("CLAUDE.md"),
-            |repo_root| repo_root.join("CLAUDE.md"),
-        );
+        let source_agents_md = if let Some(repo_root) = repo_root {
+            find_repo_agents_md_source(repo_root)?
+        } else {
+            let path = self.claude_home.join("CLAUDE.md");
+            is_non_empty_text_file(&path)?.then_some(path)
+        };
         let target_agents_md = repo_root.map_or_else(
             || self.codex_home.join("AGENTS.md"),
             |repo_root| repo_root.join("AGENTS.md"),
         );
-        if source_agents_md.is_file() && is_missing_or_empty_text_file(&target_agents_md)? {
+        if let Some(source_agents_md) = source_agents_md
+            && is_missing_or_empty_text_file(&target_agents_md)?
+        {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: format!(
-                    "Import {} to {}.",
+                    "Import {} to {}",
                     source_agents_md.display(),
                     target_agents_md.display()
                 ),
                 cwd,
             });
+            emit_migration_metric(
+                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+                ExternalAgentConfigMigrationItemType::AgentsMd,
+                None,
+            );
         }
 
         Ok(())
@@ -243,14 +276,14 @@ impl ExternalAgentConfigService {
         Ok(())
     }
 
-    fn import_skills(&self, cwd: Option<&Path>) -> io::Result<()> {
+    fn import_skills(&self, cwd: Option<&Path>) -> io::Result<usize> {
         let (source_skills, target_skills) = if let Some(repo_root) = find_repo_root(cwd)? {
             (
                 repo_root.join(".claude").join("skills"),
                 repo_root.join(".agents").join("skills"),
             )
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
-            return Ok(());
+            return Ok(0);
         } else {
             (
                 self.claude_home.join("skills"),
@@ -258,10 +291,11 @@ impl ExternalAgentConfigService {
             )
         };
         if !source_skills.is_dir() {
-            return Ok(());
+            return Ok(0);
         }
 
         fs::create_dir_all(&target_skills)?;
+        let mut copied_count = 0usize;
 
         for entry in fs::read_dir(&source_skills)? {
             let entry = entry?;
@@ -276,14 +310,18 @@ impl ExternalAgentConfigService {
             }
 
             copy_dir_recursive(&entry.path(), &target)?;
+            copied_count += 1;
         }
 
-        Ok(())
+        Ok(copied_count)
     }
 
     fn import_agents_md(&self, cwd: Option<&Path>) -> io::Result<()> {
         let (source_agents_md, target_agents_md) = if let Some(repo_root) = find_repo_root(cwd)? {
-            (repo_root.join("CLAUDE.md"), repo_root.join("AGENTS.md"))
+            let Some(source_agents_md) = find_repo_agents_md_source(&repo_root)? else {
+                return Ok(());
+            };
+            (source_agents_md, repo_root.join("AGENTS.md"))
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
             return Ok(());
         } else {
@@ -292,7 +330,9 @@ impl ExternalAgentConfigService {
                 self.codex_home.join("AGENTS.md"),
             )
         };
-        if !source_agents_md.is_file() || !is_missing_or_empty_text_file(&target_agents_md)? {
+        if !is_non_empty_text_file(&source_agents_md)?
+            || !is_missing_or_empty_text_file(&target_agents_md)?
+        {
             return Ok(());
         }
 
@@ -365,6 +405,15 @@ fn collect_subdirectory_names(path: &Path) -> io::Result<HashSet<OsString>> {
     Ok(names)
 }
 
+fn count_missing_subdirectories(source: &Path, target: &Path) -> io::Result<usize> {
+    let source_names = collect_subdirectory_names(source)?;
+    let target_names = collect_subdirectory_names(target)?;
+    Ok(source_names
+        .iter()
+        .filter(|name| !target_names.contains(*name))
+        .count())
+}
+
 fn is_missing_or_empty_text_file(path: &Path) -> io::Result<bool> {
     if !path.exists() {
         return Ok(true);
@@ -374,6 +423,27 @@ fn is_missing_or_empty_text_file(path: &Path) -> io::Result<bool> {
     }
 
     Ok(fs::read_to_string(path)?.trim().is_empty())
+}
+
+fn is_non_empty_text_file(path: &Path) -> io::Result<bool> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+
+    Ok(!fs::read_to_string(path)?.trim().is_empty())
+}
+
+fn find_repo_agents_md_source(repo_root: &Path) -> io::Result<Option<PathBuf>> {
+    for candidate in [
+        repo_root.join("CLAUDE.md"),
+        repo_root.join(".claude").join("CLAUDE.md"),
+    ] {
+        if is_non_empty_text_file(&candidate)? {
+            return Ok(Some(candidate));
+        }
+    }
+
+    Ok(None)
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
@@ -487,7 +557,7 @@ fn build_config_from_external(settings: &JsonValue) -> io::Result<TomlValue> {
         shell_policy.insert("inherit".to_string(), TomlValue::String("core".to_string()));
         shell_policy.insert(
             "set".to_string(),
-            TomlValue::Table(json_object_to_toml_table(env)?),
+            TomlValue::Table(json_object_to_env_toml_table(env)),
         );
         root.insert(
             "shell_environment_policy".to_string(),
@@ -511,36 +581,25 @@ fn build_config_from_external(settings: &JsonValue) -> io::Result<TomlValue> {
     Ok(TomlValue::Table(root))
 }
 
-fn json_object_to_toml_table(
+fn json_object_to_env_toml_table(
     object: &serde_json::Map<String, JsonValue>,
-) -> io::Result<toml::map::Map<String, TomlValue>> {
+) -> toml::map::Map<String, TomlValue> {
     let mut table = toml::map::Map::new();
     for (key, value) in object {
-        table.insert(key.clone(), json_to_toml_value(value)?);
+        if let Some(value) = json_env_value_to_string(value) {
+            table.insert(key.clone(), TomlValue::String(value));
+        }
     }
-    Ok(table)
+    table
 }
 
-fn json_to_toml_value(value: &JsonValue) -> io::Result<TomlValue> {
+fn json_env_value_to_string(value: &JsonValue) -> Option<String> {
     match value {
-        JsonValue::Null => Ok(TomlValue::String("null".to_string())),
-        JsonValue::Bool(v) => Ok(TomlValue::Boolean(*v)),
-        JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                return Ok(TomlValue::Integer(i));
-            }
-            if let Some(f) = n.as_f64() {
-                return Ok(TomlValue::Float(f));
-            }
-            Err(invalid_data_error("unsupported JSON number"))
-        }
-        JsonValue::String(v) => Ok(TomlValue::String(v.clone())),
-        JsonValue::Array(values) => values
-            .iter()
-            .map(json_to_toml_value)
-            .collect::<io::Result<Vec<_>>>()
-            .map(TomlValue::Array),
-        JsonValue::Object(map) => json_object_to_toml_table(map).map(TomlValue::Table),
+        JsonValue::String(value) => Some(value.clone()),
+        JsonValue::Null => None,
+        JsonValue::Bool(value) => Some(value.to_string()),
+        JsonValue::Number(value) => Some(value.to_string()),
+        JsonValue::Array(_) | JsonValue::Object(_) => None,
     }
 }
 
@@ -576,7 +635,7 @@ fn merge_missing_toml_values(existing: &mut TomlValue, incoming: &TomlValue) -> 
 fn write_toml_file(path: &Path, value: &TomlValue) -> io::Result<()> {
     let serialized = toml::to_string_pretty(value)
         .map_err(|err| invalid_data_error(format!("failed to serialize config.toml: {err}")))?;
-    fs::write(path, format!("{serialized}\n"))
+    fs::write(path, format!("{}\n", serialized.trim_end()))
 }
 
 fn is_empty_toml_table(value: &TomlValue) -> bool {
@@ -593,6 +652,39 @@ fn is_empty_toml_table(value: &TomlValue) -> bool {
 
 fn invalid_data_error(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+fn migration_metric_tags(
+    item_type: ExternalAgentConfigMigrationItemType,
+    skills_count: Option<usize>,
+) -> Vec<(&'static str, String)> {
+    let migration_type = match item_type {
+        ExternalAgentConfigMigrationItemType::Config => "config",
+        ExternalAgentConfigMigrationItemType::Skills => "skills",
+        ExternalAgentConfigMigrationItemType::AgentsMd => "agents_md",
+        ExternalAgentConfigMigrationItemType::McpServerConfig => "mcp_server_config",
+    };
+    let mut tags = vec![("migration_type", migration_type.to_string())];
+    if item_type == ExternalAgentConfigMigrationItemType::Skills {
+        tags.push(("skills_count", skills_count.unwrap_or(0).to_string()));
+    }
+    tags
+}
+
+fn emit_migration_metric(
+    metric_name: &str,
+    item_type: ExternalAgentConfigMigrationItemType,
+    skills_count: Option<usize>,
+) {
+    let Some(metrics) = codex_otel::metrics::global() else {
+        return;
+    };
+    let tags = migration_metric_tags(item_type, skills_count);
+    let tag_refs = tags
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect::<Vec<_>>();
+    let _ = metrics.counter(metric_name, 1, &tag_refs);
 }
 
 #[cfg(test)]
@@ -638,7 +730,7 @@ mod tests {
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Config,
                 description: format!(
-                    "Migrate {} into {}.",
+                    "Migrate {} into {}",
                     claude_home.join("settings.json").display(),
                     codex_home.join("config.toml").display()
                 ),
@@ -647,7 +739,7 @@ mod tests {
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Skills,
                 description: format!(
-                    "Copy skill folders from {} to {}.",
+                    "Copy skill folders from {} to {}",
                     claude_home.join("skills").display(),
                     agents_skills.display()
                 ),
@@ -656,7 +748,7 @@ mod tests {
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: format!(
-                    "Import {} to {}.",
+                    "Import {} to {}",
                     claude_home.join("CLAUDE.md").display(),
                     codex_home.join("AGENTS.md").display()
                 ),
@@ -687,7 +779,7 @@ mod tests {
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: format!(
-                    "Import {} to {}.",
+                    "Import {} to {}",
                     repo_root.join("CLAUDE.md").display(),
                     repo_root.join("AGENTS.md").display(),
                 ),
@@ -696,7 +788,7 @@ mod tests {
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: format!(
-                    "Import {} to {}.",
+                    "Import {} to {}",
                     repo_root.join("CLAUDE.md").display(),
                     repo_root.join("AGENTS.md").display(),
                 ),
@@ -717,7 +809,7 @@ mod tests {
         fs::create_dir_all(claude_home.join("skills").join("skill-a")).expect("create skills");
         fs::write(
             claude_home.join("settings.json"),
-            r#"{"model":"claude","permissions":{"ask":["git push"]},"env":{"FOO":"bar"},"sandbox":{"enabled":true,"network":{"allowLocalBinding":true}}}"#,
+            r#"{"model":"claude","permissions":{"ask":["git push"]},"env":{"FOO":"bar","CI":false,"MAX_RETRIES":3,"MY_TEAM":"codex","IGNORED":null,"LIST":["a","b"],"MAP":{"x":1}},"sandbox":{"enabled":true,"network":{"allowLocalBinding":true}}}"#,
         )
         .expect("write settings");
         fs::write(
@@ -752,23 +844,10 @@ mod tests {
             "Codex guidance"
         );
 
-        let parsed_config: TomlValue = toml::from_str(
-            &fs::read_to_string(codex_home.join("config.toml")).expect("read config"),
-        )
-        .expect("parse config");
-        let expected_config: TomlValue = toml::from_str(
-            r#"
-            sandbox_mode = "workspace-write"
-
-            [shell_environment_policy]
-            inherit = "core"
-
-            [shell_environment_policy.set]
-            FOO = "bar"
-            "#,
-        )
-        .expect("parse expected");
-        assert_eq!(parsed_config, expected_config);
+        assert_eq!(
+            fs::read_to_string(codex_home.join("config.toml")).expect("read config"),
+            "sandbox_mode = \"workspace-write\"\n\n[shell_environment_policy]\ninherit = \"core\"\n\n[shell_environment_policy.set]\nCI = \"false\"\nFOO = \"bar\"\nMAX_RETRIES = \"3\"\nMY_TEAM = \"codex\"\n"
+        );
         assert_eq!(
             fs::read_to_string(agents_skills.join("skill-a").join("SKILL.md"))
                 .expect("read copied skill"),
@@ -916,5 +995,95 @@ mod tests {
             fs::read_to_string(repo_root.join("AGENTS.md")).expect("read target"),
             "Codex guidance"
         );
+    }
+
+    #[test]
+    fn detect_repo_prefers_non_empty_dot_claude_agents_source() {
+        let root = TempDir::new().expect("create tempdir");
+        let repo_root = root.path().join("repo");
+        fs::create_dir_all(repo_root.join(".git")).expect("create git");
+        fs::create_dir_all(repo_root.join(".claude")).expect("create dot claude");
+        fs::write(repo_root.join("CLAUDE.md"), " \n\t").expect("write empty root source");
+        fs::write(
+            repo_root.join(".claude").join("CLAUDE.md"),
+            "Claude code guidance",
+        )
+        .expect("write dot claude source");
+
+        let items = service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
+            .detect(ExternalAgentConfigDetectOptions {
+                include_home: false,
+                cwds: Some(vec![repo_root.clone()]),
+            })
+            .expect("detect");
+
+        assert_eq!(
+            items,
+            vec![ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+                description: format!(
+                    "Import {} to {}",
+                    repo_root.join(".claude").join("CLAUDE.md").display(),
+                    repo_root.join("AGENTS.md").display(),
+                ),
+                cwd: Some(repo_root),
+            }]
+        );
+    }
+
+    #[test]
+    fn import_repo_uses_non_empty_dot_claude_agents_source() {
+        let root = TempDir::new().expect("create tempdir");
+        let repo_root = root.path().join("repo");
+        fs::create_dir_all(repo_root.join(".git")).expect("create git");
+        fs::create_dir_all(repo_root.join(".claude")).expect("create dot claude");
+        fs::write(repo_root.join("CLAUDE.md"), "").expect("write empty root source");
+        fs::write(
+            repo_root.join(".claude").join("CLAUDE.md"),
+            "Claude code guidance",
+        )
+        .expect("write dot claude source");
+
+        service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
+            .import(vec![ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+                description: String::new(),
+                cwd: Some(repo_root.clone()),
+            }])
+            .expect("import");
+
+        assert_eq!(
+            fs::read_to_string(repo_root.join("AGENTS.md")).expect("read target"),
+            "Codex guidance"
+        );
+    }
+
+    #[test]
+    fn migration_metric_tags_for_skills_include_skills_count() {
+        assert_eq!(
+            migration_metric_tags(ExternalAgentConfigMigrationItemType::Skills, Some(3)),
+            vec![
+                ("migration_type", "skills".to_string()),
+                ("skills_count", "3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn import_skills_returns_only_new_skill_directory_count() {
+        let (_root, claude_home, codex_home) = fixture_paths();
+        let agents_skills = codex_home
+            .parent()
+            .map(|parent| parent.join(".agents").join("skills"))
+            .unwrap_or_else(|| PathBuf::from(".agents").join("skills"));
+        fs::create_dir_all(claude_home.join("skills").join("skill-a")).expect("create source a");
+        fs::create_dir_all(claude_home.join("skills").join("skill-b")).expect("create source b");
+        fs::create_dir_all(agents_skills.join("skill-a")).expect("create existing target");
+
+        let copied_count = service_for_paths(claude_home, codex_home)
+            .import_skills(None)
+            .expect("import skills");
+
+        assert_eq!(copied_count, 1);
     }
 }

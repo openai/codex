@@ -739,6 +739,24 @@ pub fn ev_web_search_call_done(id: &str, status: &str, query: &str) -> Value {
     })
 }
 
+pub fn ev_image_generation_call(
+    id: &str,
+    status: &str,
+    revised_prompt: &str,
+    result: &str,
+) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "image_generation_call",
+            "id": id,
+            "status": status,
+            "revised_prompt": revised_prompt,
+            "result": result,
+        }
+    })
+}
+
 pub fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
     serde_json::json!({
         "type": "response.output_item.done",

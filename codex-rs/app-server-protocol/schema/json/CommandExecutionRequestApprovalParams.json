@@ -31,35 +31,32 @@
     "AdditionalMacOsPermissions": {
       "properties": {
         "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "boolean"
         },
         "automations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/MacOsAutomationPermission"
         },
         "calendar": {
+          "type": "boolean"
+        },
+        "preferences": {
+          "$ref": "#/definitions/MacOsPreferencesPermission"
+        }
+      },
+      "required": [
+        "accessibility",
+        "automations",
+        "calendar",
+        "preferences"
+      ],
+      "type": "object"
+    },
+    "AdditionalNetworkPermissions": {
+      "properties": {
+        "enabled": {
           "type": [
             "boolean",
             "null"
-          ]
-        },
-        "preferences": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
-            }
           ]
         }
       },
@@ -88,9 +85,13 @@
           ]
         },
         "network": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -285,28 +286,40 @@
         }
       ]
     },
-    "MacOsAutomationValue": {
-      "anyOf": [
+    "MacOsAutomationPermission": {
+      "oneOf": [
         {
-          "type": "boolean"
+          "enum": [
+            "none",
+            "all"
+          ],
+          "type": "string"
         },
         {
-          "items": {
-            "type": "string"
+          "additionalProperties": false,
+          "properties": {
+            "bundle_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
           },
-          "type": "array"
+          "required": [
+            "bundle_ids"
+          ],
+          "title": "BundleIdsMacOsAutomationPermission",
+          "type": "object"
         }
       ]
     },
-    "MacOsPreferencesValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "string"
-        }
-      ]
+    "MacOsPreferencesPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
     },
     "NetworkApprovalContext": {
       "properties": {
