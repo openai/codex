@@ -5299,6 +5299,13 @@ impl ChatWidget {
                 format_tokens_compact(self.status_line_total_usage().output_tokens)
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
+            StatusLineItem::FastMode => Some(
+                if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                    "Fast on".to_string()
+                } else {
+                    "Fast off".to_string()
+                },
+            ),
         }
     }
 
