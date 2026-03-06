@@ -170,18 +170,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             &req.exec_approval_requirement,
         )
     }
-
-    fn guardian_review_payload(&self, req: &UnifiedExecRequest) -> Option<serde_json::Value> {
-        Some(serde_json::json!({
-            "tool": "exec_command",
-            "command": req.command,
-            "cwd": req.cwd,
-            "tty": req.tty,
-            "sandbox_permissions": req.sandbox_permissions,
-            "additional_permissions": req.additional_permissions,
-            "justification": req.justification,
-        }))
-    }
 }
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {

@@ -271,10 +271,6 @@ pub(crate) trait Approvable<Req> {
         }
     }
 
-    fn guardian_review_payload(&self, _req: &Req) -> Option<serde_json::Value> {
-        None
-    }
-
     fn start_approval_async<'a>(
         &'a mut self,
         req: &'a Req,

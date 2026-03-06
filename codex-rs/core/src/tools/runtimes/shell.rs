@@ -201,17 +201,6 @@ impl Approvable<ShellRequest> for ShellRuntime {
             &req.exec_approval_requirement,
         )
     }
-
-    fn guardian_review_payload(&self, req: &ShellRequest) -> Option<serde_json::Value> {
-        Some(serde_json::json!({
-            "tool": "shell",
-            "command": req.command,
-            "cwd": req.cwd,
-            "sandbox_permissions": req.sandbox_permissions,
-            "additional_permissions": req.additional_permissions,
-            "justification": req.justification,
-        }))
-    }
 }
 
 impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {

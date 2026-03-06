@@ -60,7 +60,6 @@ pub(crate) enum GuardianRiskLevel {
 #[derive(Debug, Clone)]
 pub(crate) struct GuardianReviewResult {
     pub(crate) approved: bool,
-    pub(crate) assessment: GuardianAssessment,
 }
 
 #[derive(Debug, Clone)]
@@ -132,10 +131,7 @@ pub(crate) async fn review_sandbox_escalation(
         )
         .await;
 
-    GuardianReviewResult {
-        approved,
-        assessment,
-    }
+    GuardianReviewResult { approved }
 }
 
 pub(crate) async fn review_escalation(
