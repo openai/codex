@@ -129,7 +129,7 @@ async fn record_stage1_output_usage_for_completed_item(
         return;
     }
 
-    if let Some(db) = state_db::get_state_db(turn_context.config.as_ref(), None).await {
+    if let Some(db) = state_db::get_state_db(turn_context.config.as_ref()).await {
         let _ = db.record_stage1_output_usage(&thread_ids).await;
     }
 }

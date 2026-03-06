@@ -434,7 +434,6 @@ ON CONFLICT(thread_id, position) DO NOTHING
         &self,
         builder: &ThreadMetadataBuilder,
         items: &[RolloutItem],
-        otel: Option<&OtelManager>,
         new_thread_memory_mode: Option<&str>,
     ) -> anyhow::Result<()> {
         if items.is_empty() {
@@ -462,20 +461,12 @@ ON CONFLICT(thread_id, position) DO NOTHING
         } else {
             self.upsert_thread(&metadata).await
         };
-        if let Err(err) = upsert_result {
-            if let Some(otel) = otel {
-                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "apply_rollout_items")]);
-            }
-            return Err(err);
-        }
+        upsert_result?;
         if let Some(memory_mode) = extract_memory_mode(items)
             && let Err(err) = self
                 .set_thread_memory_mode(builder.id, memory_mode.as_str())
                 .await
         {
-            if let Some(otel) = otel {
-                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "set_thread_memory_mode")]);
-            }
             return Err(err);
         }
         let dynamic_tools = extract_dynamic_tools(items);
@@ -484,9 +475,6 @@ ON CONFLICT(thread_id, position) DO NOTHING
                 .persist_dynamic_tools(builder.id, dynamic_tools.as_deref())
                 .await
         {
-            if let Some(otel) = otel {
-                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "persist_dynamic_tools")]);
-            }
             return Err(err);
         }
         Ok(())
@@ -659,7 +647,7 @@ mod tests {
     #[tokio::test]
     async fn upsert_thread_keeps_creation_memory_mode_for_existing_rows() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("state db should initialize");
         let thread_id =
@@ -697,7 +685,7 @@ mod tests {
     #[tokio::test]
     async fn apply_rollout_items_restores_memory_mode_from_session_meta() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("state db should initialize");
         let thread_id =
@@ -735,7 +723,7 @@ mod tests {
         })];
 
         runtime
-            .apply_rollout_items(&builder, &items, None, None)
+            .apply_rollout_items(&builder, &items, None)
             .await
             .expect("apply_rollout_items should succeed");
 
@@ -749,7 +737,7 @@ mod tests {
     #[tokio::test]
     async fn apply_rollout_items_preserves_existing_git_branch_and_fills_missing_git_fields() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("state db should initialize");
         let thread_id =
@@ -793,7 +781,7 @@ mod tests {
         })];
 
         runtime
-            .apply_rollout_items(&builder, &items, None, None)
+            .apply_rollout_items(&builder, &items, None)
             .await
             .expect("apply_rollout_items should succeed");
 
@@ -813,7 +801,7 @@ mod tests {
     #[tokio::test]
     async fn update_thread_git_info_preserves_newer_non_git_metadata() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("state db should initialize");
         let thread_id =
@@ -872,7 +860,7 @@ mod tests {
     #[tokio::test]
     async fn insert_thread_if_absent_preserves_existing_metadata() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("state db should initialize");
         let thread_id =
@@ -917,7 +905,7 @@ mod tests {
     #[tokio::test]
     async fn update_thread_git_info_can_clear_fields() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("state db should initialize");
         let thread_id =

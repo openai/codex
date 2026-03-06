@@ -53,7 +53,6 @@ pub const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
 pub const STATE_DB_FILENAME: &str = "state";
 pub const STATE_DB_VERSION: u32 = 5;
 
-const METRIC_DB_INIT: &str = "codex.db.init";
 /// Errors encountered during DB operations. Tags: [stage]
 pub const DB_ERROR_METRIC: &str = "codex.db.error";
 /// Metrics on backfill process. Tags: [status]

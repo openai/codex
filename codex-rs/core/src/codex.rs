@@ -448,7 +448,7 @@ impl Codex {
             };
             match thread_id {
                 Some(thread_id) => {
-                    let state_db_ctx = state_db::get_state_db(&config, None).await;
+                    let state_db_ctx = state_db::get_state_db(&config).await;
                     state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
                         .await
                 }
@@ -1251,7 +1251,7 @@ impl Session {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>((None, None))
             } else {
-                let state_db_ctx = state_db::init_if_enabled(&config, None).await;
+                let state_db_ctx = state_db::init(&config).await;
                 let rollout_recorder = RolloutRecorder::new(
                     &config,
                     rollout_params,

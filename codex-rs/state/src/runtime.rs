@@ -5,11 +5,9 @@ use crate::AgentJobItemCreateParams;
 use crate::AgentJobItemStatus;
 use crate::AgentJobProgress;
 use crate::AgentJobStatus;
-use crate::DB_ERROR_METRIC;
 use crate::LogEntry;
 use crate::LogQuery;
 use crate::LogRow;
-use crate::METRIC_DB_INIT;
 use crate::STATE_DB_FILENAME;
 use crate::STATE_DB_VERSION;
 use crate::SortKey;
@@ -25,7 +23,6 @@ use crate::model::datetime_to_epoch_seconds;
 use crate::paths::file_modified_time_utc;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
@@ -73,36 +70,22 @@ impl StateRuntime {
     /// Initialize the state runtime using the provided Codex home and default provider.
     ///
     /// This opens (and migrates) the SQLite database at `codex_home/state.sqlite`.
-    pub async fn init(
-        codex_home: PathBuf,
-        default_provider: String,
-        otel: Option<OtelManager>,
-    ) -> anyhow::Result<Arc<Self>> {
+    pub async fn init(codex_home: PathBuf, default_provider: String) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&codex_home).await?;
         remove_legacy_state_files(&codex_home).await;
         let state_path = state_db_path(codex_home.as_path());
-        let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
         let pool = match open_sqlite(&state_path).await {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open state db at {}: {err}", state_path.display());
-                if let Some(otel) = otel.as_ref() {
-                    otel.counter(METRIC_DB_INIT, 1, &[("status", "open_error")]);
-                }
                 return Err(err);
             }
         };
-        if let Some(otel) = otel.as_ref() {
-            otel.counter(METRIC_DB_INIT, 1, &[("status", "opened")]);
-        }
         let runtime = Arc::new(Self {
             pool,
             codex_home,
             default_provider,
         });
-        if !existed && let Some(otel) = otel.as_ref() {
-            otel.counter(METRIC_DB_INIT, 1, &[("status", "created")]);
-        }
         Ok(runtime)
     }
 
