@@ -1116,8 +1116,7 @@ fn legacy_notification_to_event(notification: JSONRPCNotification) -> Result<Eve
     let normalized_method = normalize_legacy_notification_method(&method).to_string();
     let serde_json::Value::Object(object) = value else {
         return Err(format!(
-            "legacy notification `{}` params were not an object",
-            method
+            "legacy notification `{method}` params were not an object"
         ));
     };
     let mut event_payload = if let Some(serde_json::Value::Object(msg_payload)) = object.get("msg")
