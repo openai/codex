@@ -1,7 +1,8 @@
 use crate::TelemetryAuthMode;
 use crate::ToolDecisionSource;
-use crate::events::shared::log::log_event;
-use crate::events::shared::trace::trace_event;
+use crate::events::shared::log_and_trace_event;
+use crate::events::shared::log_event;
+use crate::events::shared::trace_event;
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
@@ -50,18 +51,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::time::error::Elapsed;
 use tracing::Span;
-
-macro_rules! log_and_trace_event {
-    (
-        $self:expr,
-        common: { $($common:tt)* },
-        log: { $($log:tt)* },
-        trace: { $($trace:tt)* },
-    ) => {{
-        log_event!($self, $($common)* $($log)*);
-        trace_event!($self, $($common)* $($trace)*);
-    }};
-}
 
 const SSE_UNKNOWN_KIND: &str = "unknown";
 const WEBSOCKET_UNKNOWN_KIND: &str = "unknown";
