@@ -168,7 +168,7 @@ fn render_ephemeral_context(ephemeral_context: &EphemeralContext) -> String {
     let title = &ephemeral_context.title;
     let text = &ephemeral_context.text;
     format!(
-        "{ADDITIONAL_CONTEXT_OPEN_TAG}\n  <title>{title}</title>\n  <content>\n{text}\n  </content>\n{ADDITIONAL_CONTEXT_CLOSE_TAG}"
+        "{ADDITIONAL_CONTEXT_OPEN_TAG}\n  <title>{title}</title>\n  <content>\n{text}\n  </content>\n{ADDITIONAL_CONTEXT_CLOSE_TAG}\n\n"
     )
 }
 
@@ -226,4 +226,23 @@ pub(crate) fn build_settings_update_items(
         items.push(contextual_user_message);
     }
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn render_ephemeral_context_appends_two_trailing_newlines() {
+        let sections = build_ephemeral_context_sections(&[EphemeralContext {
+            title: "Context from my editor".to_string(),
+            text: "## Active file: src/main.rs".to_string(),
+        }]);
+        assert_eq!(sections.len(), 1);
+        let section = &sections[0];
+        assert!(section.ends_with("\n\n"));
+        assert!(section.contains(ADDITIONAL_CONTEXT_OPEN_TAG));
+        assert!(section.contains(ADDITIONAL_CONTEXT_CLOSE_TAG));
+    }
 }
