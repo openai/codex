@@ -9,6 +9,7 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerRequest;
 use codex_core::AuthManager;
 use codex_core::default_client::build_reqwest_client;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;
 use owo_colors::OwoColorize;
@@ -97,6 +98,7 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
 pub enum AppServerTransport {
     Stdio,
     WebSocket { bind_address: SocketAddr },
+    Headless,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -1246,6 +1248,10 @@ async fn load_remote_control_auth(
     })
 }
 
+pub(crate) async fn validate_remote_control_auth(auth_manager: &AuthManager) -> IoResult<()> {
+    load_remote_control_auth(auth_manager).await.map(|_| ())
+}
+
 async fn enroll_remote_control_server(
     remote_control_target: &RemoteControlTarget,
     auth: &RemoteControlConnectionAuth,
@@ -1351,6 +1357,8 @@ async fn connect_remote_control_websocket(
     auth_manager: &AuthManager,
     enrollment: &mut Option<RemoteControlEnrollment>,
 ) -> IoResult<WebSocketStream<MaybeTlsStream<TcpStream>>> {
+    ensure_rustls_crypto_provider();
+
     if remote_control_target.enroll_url.is_none() {
         return connect_async(remote_control_target.websocket_url.as_str())
             .await
@@ -1638,6 +1646,20 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "unsupported --listen URL `http://127.0.0.1:1234`; expected `stdio://` or `ws://IP:PORT`"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_remote_control_auth_rejects_api_key_auth() {
+        let auth_manager = auth_manager_from_auth(CodexAuth::from_api_key("sk-test"));
+
+        let err = validate_remote_control_auth(auth_manager.as_ref())
+            .await
+            .expect_err("API key auth should be rejected");
+
+        assert_eq!(
+            err.to_string(),
+            "remote control requires ChatGPT authentication; API key auth is not supported"
         );
     }
 

@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -30,6 +31,7 @@ use crate::transport::route_outgoing_envelope;
 use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
+use crate::transport::validate_remote_control_auth;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -79,6 +81,37 @@ const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
 enum LogFormat {
     Default,
     Json,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TransportRuntimeMode {
+    single_client_mode: bool,
+    shutdown_when_no_connections: bool,
+    graceful_ctrl_c_restart_enabled: bool,
+    ctrl_c_shutdown_enabled: bool,
+}
+
+fn transport_runtime_mode(transport: AppServerTransport) -> TransportRuntimeMode {
+    match transport {
+        AppServerTransport::Stdio => TransportRuntimeMode {
+            single_client_mode: true,
+            shutdown_when_no_connections: true,
+            graceful_ctrl_c_restart_enabled: false,
+            ctrl_c_shutdown_enabled: false,
+        },
+        AppServerTransport::WebSocket { .. } => TransportRuntimeMode {
+            single_client_mode: false,
+            shutdown_when_no_connections: false,
+            graceful_ctrl_c_restart_enabled: true,
+            ctrl_c_shutdown_enabled: false,
+        },
+        AppServerTransport::Headless => TransportRuntimeMode {
+            single_client_mode: false,
+            shutdown_when_no_connections: false,
+            graceful_ctrl_c_restart_enabled: false,
+            ctrl_c_shutdown_enabled: true,
+        },
+    }
 }
 
 type StderrLogLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
@@ -464,12 +497,12 @@ pub async fn run_main_with_transport(
 
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
+    let runtime_mode = transport_runtime_mode(transport);
 
-    let single_client_mode = match transport {
+    match transport {
         AppServerTransport::Stdio => {
             start_stdio_connection(transport_event_tx.clone(), &mut transport_accept_handles)
                 .await?;
-            true
         }
         AppServerTransport::WebSocket { bind_address } => {
             let accept_handle = start_websocket_acceptor(
@@ -479,11 +512,12 @@ pub async fn run_main_with_transport(
             )
             .await?;
             transport_accept_handles.push(accept_handle);
-            false
         }
-    };
-    let shutdown_when_no_connections = single_client_mode;
-    let graceful_ctrl_c_restart_enabled = !single_client_mode;
+        AppServerTransport::Headless => {}
+    }
+    let single_client_mode = runtime_mode.single_client_mode;
+    let shutdown_when_no_connections = runtime_mode.shutdown_when_no_connections;
+    let graceful_ctrl_c_restart_enabled = runtime_mode.graceful_ctrl_c_restart_enabled;
 
     let auth_manager = AuthManager::shared(
         config.codex_home.clone(),
@@ -493,6 +527,20 @@ pub async fn run_main_with_transport(
     auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
 
     let remote_control_url = config.experimental_app_server_remote_control_url.clone();
+    if matches!(transport, AppServerTransport::Headless) {
+        let remote_control_url = remote_control_url.as_deref().ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "headless app-server transport requires a remote control URL",
+            )
+        })?;
+        validate_remote_control_auth(auth_manager.as_ref()).await?;
+        info!("starting codexd remote-control daemon using `{remote_control_url}`");
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(stderr, "codexd remote-control daemon");
+        let _ = writeln!(stderr, "  control server: {remote_control_url}");
+        let _ = writeln!(stderr, "  auth: ChatGPT");
+    }
     if let Some(remote_control_url) = remote_control_url {
         let accept_handle = start_remote_control(
             remote_control_url,
@@ -601,6 +649,17 @@ pub async fn run_main_with_transport(
                 }
 
                 tokio::select! {
+                    ctrl_c_result = tokio::signal::ctrl_c(), if runtime_mode.ctrl_c_shutdown_enabled => {
+                        if let Err(err) = ctrl_c_result {
+                            warn!("failed to listen for Ctrl-C during daemon shutdown: {err}");
+                        }
+                        info!("received Ctrl-C; shutting down codexd remote-control daemon");
+                        transport_shutdown_token.cancel();
+                        let _ = outbound_control_tx
+                            .send(OutboundControlEvent::DisconnectAll)
+                            .await;
+                        break;
+                    }
                     ctrl_c_result = tokio::signal::ctrl_c(), if graceful_ctrl_c_restart_enabled && !shutdown_state.forced() => {
                         if let Err(err) = ctrl_c_result {
                             warn!("failed to listen for Ctrl-C during graceful restart drain: {err}");
@@ -786,6 +845,9 @@ pub async fn run_main_with_transport(
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
+    use super::TransportRuntimeMode;
+    use super::transport_runtime_mode;
+    use crate::AppServerTransport;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -801,5 +863,18 @@ mod tests {
         assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
+    }
+
+    #[test]
+    fn headless_transport_runtime_mode_uses_daemon_shutdown_behavior() {
+        assert_eq!(
+            transport_runtime_mode(AppServerTransport::Headless),
+            TransportRuntimeMode {
+                single_client_mode: false,
+                shutdown_when_no_connections: false,
+                graceful_ctrl_c_restart_enabled: false,
+                ctrl_c_shutdown_enabled: true,
+            }
+        );
     }
 }

@@ -2,6 +2,8 @@
 
 `codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
 
+For remote-control-only deployments, use `codexd`. It runs the same app-server runtime in a headless daemon mode, connects outbound to the ChatGPT remote control server using ChatGPT auth, and does not expose a local stdio or websocket transport.
+
 ## Table of Contents
 
 - [Protocol](#protocol)
