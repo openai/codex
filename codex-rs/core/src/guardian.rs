@@ -38,7 +38,7 @@ use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
 use codex_protocol::protocol::ReviewDecision;
 
-const GUARDIAN_MODEL: &str = "gpt-5.3-codex";
+const GUARDIAN_MODEL: &str = "gpt-5.4";
 const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
 // Leave room for the planned action JSON and policy prompt; the transcript is
 // intentionally only one part of the guardian context window.
