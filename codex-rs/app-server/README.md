@@ -405,7 +405,9 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 - `{"type":"image","url":"https://…png"}`
 - `{"type":"localImage","path":"/tmp/screenshot.png"}`
 
-You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
+You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` is the exception: it applies only to the current turn.
+
+When `outputSchema` is set, Codex asks the model for a strict JSON final answer matching that schema. This constrains only the final assistant message for the turn. It does not affect tool-call arguments or outputs, and it does not persist as the default for later turns.
 
 ```json
 { "method": "turn/start", "id": 30, "params": {

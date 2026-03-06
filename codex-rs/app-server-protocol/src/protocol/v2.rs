@@ -3230,7 +3230,12 @@ pub struct TurnStartParams {
     /// Override the personality for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
-    /// Optional JSON Schema used to constrain the final assistant message for this turn.
+    /// Optional JSON Schema used to constrain the final assistant message for
+    /// this turn.
+    ///
+    /// When set, Codex requests a strict JSON response matching this schema.
+    /// This applies only to the final assistant message for the current turn;
+    /// it does not constrain tool calls or become the default for later turns.
     #[ts(optional = nullable)]
     pub output_schema: Option<JsonValue>,
 

@@ -429,7 +429,12 @@ pub struct SendUserTurnParams {
     pub service_tier: Option<Option<ServiceTier>>,
     pub effort: Option<ReasoningEffort>,
     pub summary: ReasoningSummary,
-    /// Optional JSON Schema used to constrain the final assistant message for this turn.
+    /// Optional JSON Schema used to constrain the final assistant message for
+    /// this turn.
+    ///
+    /// When set, Codex requests a strict JSON response matching this schema.
+    /// This applies only to the final assistant message for the current turn.
+    /// It does not constrain tool calls or become the default for later turns.
     pub output_schema: Option<serde_json::Value>,
 }
 
