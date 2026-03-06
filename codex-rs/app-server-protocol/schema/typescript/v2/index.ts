@@ -152,6 +152,7 @@ export type { PatchChangeKind } from "./PatchChangeKind";
 export type { PlanDeltaNotification } from "./PlanDeltaNotification";
 export type { PluginInstallParams } from "./PluginInstallParams";
 export type { PluginInstallResponse } from "./PluginInstallResponse";
+export type { PluginInterface } from "./PluginInterface";
 export type { PluginListParams } from "./PluginListParams";
 export type { PluginListResponse } from "./PluginListResponse";
 export type { PluginMarketplaceEntry } from "./PluginMarketplaceEntry";

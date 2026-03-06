@@ -2577,7 +2577,7 @@ pub struct SkillsListEntry {
 #[ts(export_to = "v2/")]
 pub struct PluginMarketplaceEntry {
     pub name: String,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub plugins: Vec<PluginSummary>,
 }
 
@@ -2585,9 +2585,32 @@ pub struct PluginMarketplaceEntry {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginSummary {
+    pub id: String,
     pub name: String,
     pub source: PluginSource,
+    pub installed: bool,
     pub enabled: bool,
+    pub interface: Option<PluginInterface>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginInterface {
+    pub display_name: Option<String>,
+    pub short_description: Option<String>,
+    pub long_description: Option<String>,
+    pub developer_name: Option<String>,
+    pub category: Option<String>,
+    pub capabilities: Vec<String>,
+    pub website_url: Option<String>,
+    pub privacy_policy_url: Option<String>,
+    pub terms_of_service_url: Option<String>,
+    pub default_prompt: Option<String>,
+    pub brand_color: Option<String>,
+    pub composer_icon: Option<AbsolutePathBuf>,
+    pub logo: Option<AbsolutePathBuf>,
+    pub screenshots: Vec<AbsolutePathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2597,7 +2620,7 @@ pub struct PluginSummary {
 pub enum PluginSource {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    Local { path: PathBuf },
+    Local { path: AbsolutePathBuf },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
