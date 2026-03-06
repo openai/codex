@@ -5,6 +5,7 @@ use crate::features::Feature;
 use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::DEVELOPER_FRAGMENT_SPEC;
 use crate::model_visible_context::DeveloperContextRole;
+use crate::model_visible_context::DeveloperTextFragment;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::ModelVisibleContextFragmentSpec;
 use crate::model_visible_context::ModelVisibleContextRole;
@@ -22,6 +23,8 @@ use codex_protocol::models::developer_realtime_start_text;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
 use std::marker::PhantomData;
+
+const MODEL_VISIBLE_FRAGMENT_SEPARATOR: &str = "\n\n";
 
 struct PermissionsUpdateFragment {
     text: String,
@@ -389,7 +392,13 @@ impl<R: ModelVisibleContextRole> ModelVisibleContextEnvelopeBuilder<R> {
     }
 
     fn push_fragment(&mut self, fragment: impl ModelVisibleContextFragment<Role = R>) {
-        self.content.push(fragment.into_content_item());
+        if let Some(ContentItem::InputText { text }) = self.content.last_mut()
+            && !text.ends_with(MODEL_VISIBLE_FRAGMENT_SEPARATOR)
+        {
+            text.push_str(MODEL_VISIBLE_FRAGMENT_SEPARATOR);
+        }
+        let content_item = fragment.into_content_item();
+        self.content.push(content_item);
     }
 
     fn build(self) -> Option<ResponseItem> {
@@ -488,10 +497,7 @@ pub(crate) fn build_settings_update_items(
     .into_iter()
     .flatten()
     {
-        developer_envelope
-            .0
-            .content
-            .push(ContentItem::InputText { text: fragment });
+        developer_envelope.push(DeveloperTextFragment::new(fragment));
     }
     let mut contextual_user_envelope = ContextualUserEnvelopeBuilder::default();
     for fragment in [
@@ -542,7 +548,7 @@ mod tests {
             content,
             vec![
                 ContentItem::InputText {
-                    text: "first".to_string()
+                    text: "first\n\n".to_string()
                 },
                 ContentItem::InputText {
                     text: "second".to_string()
@@ -601,7 +607,7 @@ mod tests {
             content,
             vec![
                 ContentItem::InputText {
-                    text: "first".to_string()
+                    text: "first\n\n".to_string()
                 },
                 ContentItem::InputText {
                     text: "second".to_string()
@@ -626,7 +632,7 @@ mod tests {
             content,
             vec![
                 ContentItem::InputText {
-                    text: "first".to_string()
+                    text: "first\n\n".to_string()
                 },
                 ContentItem::InputText {
                     text: "second".to_string()

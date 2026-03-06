@@ -6,6 +6,7 @@ Codex injects model-visible context through two envelopes:
 - the contextual-user envelope, rendered as a single `user` message whose contents are contextual state rather than real user intent
 
 Both envelopes use the same internal fragment contract in `codex-rs/core`.
+Envelope builders normalize text fragment boundaries by inserting `\n\n` between adjacent text content items, so fragments do not run together in the model-visible token stream.
 
 ## Blessed path
 
