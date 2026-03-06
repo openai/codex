@@ -867,34 +867,6 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
     Ok(())
 }
 
-#[test]
-fn profile_legacy_toggles_override_base() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut profiles = HashMap::new();
-    profiles.insert(
-        "work".to_string(),
-        ConfigProfile {
-            tools_web_search: Some(false),
-            ..Default::default()
-        },
-    );
-    let cfg = ConfigToml {
-        profiles,
-        profile: Some("work".to_string()),
-        ..Default::default()
-    };
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
-    )?;
-
-    assert!(!config.features.enabled(Feature::WebSearchRequest));
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn project_profile_overrides_user_profile() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -2712,6 +2684,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+            web_search_config: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
@@ -2841,6 +2814,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+        web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -2968,6 +2942,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+        web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -3081,6 +3056,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+        web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
