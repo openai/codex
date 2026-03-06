@@ -118,7 +118,7 @@
           "type": "string"
         },
         {
-          "description": "Run tools in the sandbox first. If execution needs to leave the sandbox, an internal guardian reviewer evaluates the risk and either approves or rejects the escalation automatically.",
+          "description": "Run tools in the sandbox first. If execution needs to leave the sandbox, a guardian subagent evaluates the risk and either approves or rejects the escalation automatically.",
           "enum": [
             "guardian"
           ],
