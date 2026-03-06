@@ -243,10 +243,14 @@ pub(super) async fn read_response_and_notification_for_method(
         }
     }
 
-    Ok((
-        response.expect("response must be set before returning"),
-        notification.expect("notification must be set before returning"),
-    ))
+    let Some(response) = response else {
+        bail!("response must be set before returning");
+    };
+    let Some(notification) = notification else {
+        bail!("notification must be set before returning");
+    };
+
+    Ok((response, notification))
 }
 
 async fn read_error_for_id(stream: &mut WsClient, id: i64) -> Result<JSONRPCError> {
