@@ -6,6 +6,14 @@ use ts_rs::TS;
 /// Conservative cap so one user message cannot monopolize a large context window.
 pub const MAX_USER_INPUT_TEXT_CHARS: usize = 1 << 20;
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, TS, JsonSchema)]
+pub struct EphemeralContext {
+    /// Human-readable title for turn-scoped model-visible context.
+    pub title: String,
+    /// Free-form text payload for turn-scoped model-visible context.
+    pub text: String,
+}
+
 /// User input
 #[non_exhaustive]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS, JsonSchema)]

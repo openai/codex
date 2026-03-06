@@ -2,6 +2,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_OPEN_TAG;
 
 pub(crate) const AGENTS_MD_START_MARKER: &str = "# AGENTS.md instructions for ";
 pub(crate) const AGENTS_MD_END_MARKER: &str = "</INSTRUCTIONS>";
@@ -13,6 +15,8 @@ pub(crate) const TURN_ABORTED_OPEN_TAG: &str = "<turn_aborted>";
 pub(crate) const TURN_ABORTED_CLOSE_TAG: &str = "</turn_aborted>";
 pub(crate) const SUBAGENT_NOTIFICATION_OPEN_TAG: &str = "<subagent_notification>";
 pub(crate) const SUBAGENT_NOTIFICATION_CLOSE_TAG: &str = "</subagent_notification>";
+pub(crate) const EPHEMERAL_CONTEXT_OPEN_MARKER: &str = EPHEMERAL_CONTEXT_OPEN_TAG;
+pub(crate) const EPHEMERAL_CONTEXT_CLOSE_MARKER: &str = EPHEMERAL_CONTEXT_CLOSE_TAG;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ContextualUserFragmentDefinition {
@@ -84,6 +88,11 @@ pub(crate) const SUBAGENT_NOTIFICATION_FRAGMENT: ContextualUserFragmentDefinitio
         SUBAGENT_NOTIFICATION_OPEN_TAG,
         SUBAGENT_NOTIFICATION_CLOSE_TAG,
     );
+pub(crate) const EPHEMERAL_CONTEXT_FRAGMENT: ContextualUserFragmentDefinition =
+    ContextualUserFragmentDefinition::new(
+        EPHEMERAL_CONTEXT_OPEN_MARKER,
+        EPHEMERAL_CONTEXT_CLOSE_MARKER,
+    );
 
 const CONTEXTUAL_USER_FRAGMENTS: &[ContextualUserFragmentDefinition] = &[
     AGENTS_MD_FRAGMENT,
@@ -92,6 +101,7 @@ const CONTEXTUAL_USER_FRAGMENTS: &[ContextualUserFragmentDefinition] = &[
     USER_SHELL_COMMAND_FRAGMENT,
     TURN_ABORTED_FRAGMENT,
     SUBAGENT_NOTIFICATION_FRAGMENT,
+    EPHEMERAL_CONTEXT_FRAGMENT,
 ];
 
 pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
@@ -101,6 +111,13 @@ pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
     CONTEXTUAL_USER_FRAGMENTS
         .iter()
         .any(|definition| definition.matches_text(text))
+}
+
+pub(crate) fn is_ephemeral_context_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+    EPHEMERAL_CONTEXT_FRAGMENT.matches_text(text)
 }
 
 #[cfg(test)]
@@ -128,6 +145,13 @@ mod tests {
             SUBAGENT_NOTIFICATION_FRAGMENT
                 .matches_text("<SUBAGENT_NOTIFICATION>{}</subagent_notification>")
         );
+    }
+
+    #[test]
+    fn detects_ephemeral_context_fragment() {
+        assert!(is_contextual_user_fragment(&ContentItem::InputText {
+            text: "<additional_context_for_this_turn>\n<title>Context from my editor</title>\n</additional_context_for_this_turn>".to_string(),
+        }));
     }
 
     #[test]

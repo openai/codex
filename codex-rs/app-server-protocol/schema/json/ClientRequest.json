@@ -355,6 +355,23 @@
       ],
       "type": "object"
     },
+    "EphemeralContext": {
+      "properties": {
+        "text": {
+          "description": "Free-form text payload for turn-scoped model-visible context.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Human-readable title for turn-scoped model-visible context.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "title"
+      ],
+      "type": "object"
+    },
     "ExperimentalFeatureListParams": {
       "properties": {
         "cursor": {
@@ -2563,6 +2580,16 @@
             }
           ],
           "description": "Override the reasoning effort for this turn and subsequent turns."
+        },
+        "ephemeralContext": {
+          "description": "Additional context for the current turn, such as editor or IDE state. This context is not re-injected automatically after compaction, so clients should send a fresh snapshot on each turn instead of expecting it to carry forward automatically.",
+          "items": {
+            "$ref": "#/definitions/EphemeralContext"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "input": {
           "items": {

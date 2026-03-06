@@ -8,10 +8,17 @@ import type { ReasoningSummary } from "../ReasoningSummary";
 import type { ServiceTier } from "../ServiceTier";
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { AskForApproval } from "./AskForApproval";
+import type { EphemeralContext } from "./EphemeralContext";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
 
 export type TurnStartParams = {threadId: string, input: Array<UserInput>, /**
+ * Additional context for the current turn, such as editor or IDE state.
+ * This context is not re-injected automatically after compaction, so
+ * clients should send a fresh snapshot on each turn instead of expecting
+ * it to carry forward automatically.
+ */
+ephemeralContext?: Array<EphemeralContext> | null, /**
  * Override the working directory for this turn and subsequent turns.
  */
 cwd?: string | null, /**

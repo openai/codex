@@ -1,0 +1,29 @@
+---
+source: core/tests/suite/compact.rs
+expression: "format_labeled_requests_snapshot(\"Mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.\",\n&[(\"Local Compaction Request\", &requests[2]),\n(\"Local Post-Compaction History Layout\", &requests[3]),])"
+---
+Scenario: Mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.
+
+## Local Compaction Request
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:<additional_context_for_this_turn>\n  <title>Context from my edi...
+03:message/user:SETUP_USER
+04:message/assistant:FIRST_REPLY
+05:message/user:<additional_context_for_this_turn>\n  <title>Context from my edi...
+06:message/user:function call limit push
+07:function_call/test_tool
+08:function_call_output:unsupported call: test_tool
+09:message/user:<SUMMARIZATION_PROMPT>
+
+## Local Post-Compaction History Layout
+00:message/user:SETUP_USER
+01:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/user[3]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [03] <additional_context_for_this_turn>\n  <title>Context from my edi...
+03:message/user:function call limit push
+04:message/user:<COMPACTION_SUMMARY>\nAUTO_SUMMARY

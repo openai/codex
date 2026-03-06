@@ -276,6 +276,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -635,6 +636,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -683,6 +685,7 @@ async fn includes_base_instructions_override_in_request() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -734,6 +737,7 @@ async fn chatgpt_auth_sends_correct_request() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -836,6 +840,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -872,6 +877,7 @@ async fn includes_user_instructions_message_in_request() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -961,6 +967,7 @@ async fn includes_apps_guidance_as_developer_message_when_enabled() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1051,6 +1058,7 @@ async fn skills_append_to_instructions() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1108,6 +1116,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1150,6 +1159,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1190,6 +1200,7 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1301,6 +1312,7 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1415,6 +1427,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1471,6 +1484,7 @@ async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Res
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1507,6 +1521,7 @@ async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1552,6 +1567,7 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1596,6 +1612,7 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1645,6 +1662,7 @@ async fn includes_developer_instructions_message_in_request() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1926,6 +1944,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2091,6 +2110,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2165,6 +2185,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
                 text: "seed turn".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2177,6 +2198,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
                 text: "trigger context window".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2259,6 +2281,7 @@ async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Res
                 text: "trigger incomplete".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2356,6 +2379,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2440,6 +2464,7 @@ async fn env_var_overrides_loaded_auth() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2501,6 +2526,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
                 text: "U1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2514,6 +2540,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
                 text: "U2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2527,6 +2554,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
                 text: "U3".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await

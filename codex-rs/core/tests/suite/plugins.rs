@@ -187,6 +187,7 @@ async fn plugin_skills_append_to_instructions() -> Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -247,6 +248,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
                 text: "Use @sample for this task.".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;

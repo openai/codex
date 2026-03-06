@@ -9,13 +9,16 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::user_input::EphemeralContext;
 
-fn build_environment_update_item(
+fn build_environment_update_section(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
     shell: &Shell,
-) -> Option<ResponseItem> {
+) -> Option<String> {
     let prev = previous?;
     let prev_context = EnvironmentContext::from_turn_context_item(prev, shell);
     let next_context = EnvironmentContext::from_turn_context(next, shell);
@@ -23,9 +26,7 @@ fn build_environment_update_item(
         return None;
     }
 
-    Some(ResponseItem::from(
-        EnvironmentContext::diff_from_turn_context_item(prev, next, shell),
-    ))
+    Some(EnvironmentContext::diff_from_turn_context_item(prev, next, shell).serialize_to_xml())
 }
 
 fn build_permissions_update_item(
@@ -154,6 +155,23 @@ pub(crate) fn build_contextual_user_message(text_sections: Vec<String>) -> Optio
     build_text_message("user", text_sections)
 }
 
+pub(crate) fn build_ephemeral_context_sections(
+    ephemeral_context: &[EphemeralContext],
+) -> Vec<String> {
+    ephemeral_context
+        .iter()
+        .map(render_ephemeral_context)
+        .collect()
+}
+
+fn render_ephemeral_context(ephemeral_context: &EphemeralContext) -> String {
+    let title = &ephemeral_context.title;
+    let text = &ephemeral_context.text;
+    format!(
+        "{EPHEMERAL_CONTEXT_OPEN_TAG}\n  <title>{title}</title>\n  <content>\n{text}\n  </content>\n{EPHEMERAL_CONTEXT_CLOSE_TAG}\n\n"
+    )
+}
+
 fn build_text_message(role: &str, text_sections: Vec<String>) -> Option<ResponseItem> {
     if text_sections.is_empty() {
         return None;
@@ -181,7 +199,11 @@ pub(crate) fn build_settings_update_items(
     exec_policy: &Policy,
     personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
-    let contextual_user_message = build_environment_update_item(previous, next, shell);
+    let mut contextual_user_sections = Vec::new();
+    if let Some(environment_update) = build_environment_update_section(previous, next, shell) {
+        contextual_user_sections.push(environment_update);
+    }
+    contextual_user_sections.extend(build_ephemeral_context_sections(&next.ephemeral_context));
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
@@ -200,8 +222,27 @@ pub(crate) fn build_settings_update_items(
     if let Some(developer_message) = build_developer_update_item(developer_update_sections) {
         items.push(developer_message);
     }
-    if let Some(contextual_user_message) = contextual_user_message {
+    if let Some(contextual_user_message) = build_contextual_user_message(contextual_user_sections) {
         items.push(contextual_user_message);
     }
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn render_ephemeral_context_appends_two_trailing_newlines() {
+        let sections = build_ephemeral_context_sections(&[EphemeralContext {
+            title: "Context from my editor".to_string(),
+            text: "## Active file: src/main.rs".to_string(),
+        }]);
+        assert_eq!(sections.len(), 1);
+        let section = &sections[0];
+        assert!(section.ends_with("\n\n"));
+        assert!(section.contains(EPHEMERAL_CONTEXT_OPEN_TAG));
+        assert!(section.contains(EPHEMERAL_CONTEXT_CLOSE_TAG));
+    }
 }

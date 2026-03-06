@@ -305,6 +305,7 @@ impl AgentControl {
                 agent_id,
                 Op::UserInput {
                     items,
+                    ephemeral_context: Vec::new(),
                     final_output_json_schema: None,
                 },
             )
@@ -824,6 +825,7 @@ mod tests {
                     text: "hello from tests".to_string(),
                     text_elements: Vec::new(),
                 }],
+                ephemeral_context: Vec::new(),
                 final_output_json_schema: None,
             },
         );
@@ -855,6 +857,7 @@ mod tests {
                     text: "spawned".to_string(),
                     text_elements: Vec::new(),
                 }],
+                ephemeral_context: Vec::new(),
                 final_output_json_schema: None,
             },
         );
@@ -930,6 +933,7 @@ mod tests {
                     text: "child task".to_string(),
                     text_elements: Vec::new(),
                 }],
+                ephemeral_context: Vec::new(),
                 final_output_json_schema: None,
             },
         );
