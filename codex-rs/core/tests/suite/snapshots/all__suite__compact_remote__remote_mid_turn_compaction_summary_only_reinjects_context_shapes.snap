@@ -5,7 +5,9 @@ expression: "format_labeled_requests_snapshot(\"Remote mid-turn compaction where
 Scenario: Remote mid-turn compaction where compact output has only a compaction item: continuation layout reinjects context before that compaction item.
 
 ## Remote Compaction Request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
@@ -14,7 +16,9 @@ Scenario: Remote mid-turn compaction where compact output has only a compaction 
 04:function_call_output:unsupported call: test_tool
 
 ## Remote Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>

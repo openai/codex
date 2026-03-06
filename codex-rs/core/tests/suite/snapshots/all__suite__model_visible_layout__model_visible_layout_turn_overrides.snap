@@ -5,7 +5,9 @@ expression: "format_labeled_requests_snapshot(\"Second turn changes cwd, approva
 Scenario: Second turn changes cwd, approval policy, and personality while keeping model constant.
 
 ## First Request (Baseline)
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a multi-agent Codex session. Until you...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
@@ -13,7 +15,9 @@ Scenario: Second turn changes cwd, approval policy, and personality while keepin
 03:message/user:first turn
 
 ## Second Request (Turn Overrides)
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] # You are the Root Agent\n\nYou are the **root agent** in a multi-agent Codex session. Until you...
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
