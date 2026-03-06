@@ -1,7 +1,7 @@
 use crate::instructions::PluginInstructions;
 use crate::plugins::PluginCapabilitySummary;
 
-pub(crate) fn render_plugin_instructions(
+pub(crate) fn render_plugins_instructions(
     plugins: &[PluginCapabilitySummary],
 ) -> Option<PluginInstructions> {
     if plugins.is_empty() {
@@ -41,7 +41,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn render_plugin_instructions_returns_none_for_empty_plugins() {
-        assert_eq!(render_plugin_instructions(&[]), None);
+    fn render_plugins_instructions_returns_none_for_empty_plugins() {
+        assert_eq!(render_plugins_instructions(&[]), None);
     }
 }
