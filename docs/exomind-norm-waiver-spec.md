@@ -3,10 +3,13 @@
 Waivers are used to suppress block/warn findings for known exceptions with expiry.
 
 ## File Location
+
 - Default CI example: `docs/exomind-norm-waivers.json`
 
 ## Supported Shapes
+
 1. Wrapped form:
+
 ```json
 {
   "waivers": [
@@ -22,6 +25,7 @@ Waivers are used to suppress block/warn findings for known exceptions with expir
 ```
 
 2. List form:
+
 ```json
 [
   {
@@ -35,6 +39,7 @@ Waivers are used to suppress block/warn findings for known exceptions with expir
 ```
 
 ## Target Values
+
 - Rule-scoped:
   - `rule:<rule_id>`
 - Warning-scoped:
@@ -43,6 +48,7 @@ Waivers are used to suppress block/warn findings for known exceptions with expir
   - `conflict:<ruleA>|<ruleB>` (sorted pair)
 
 ## Required Fields
+
 - `waiver_id`
 - `owner`
 - `expiry` (ISO date, `YYYY-MM-DD`)
@@ -50,5 +56,6 @@ Waivers are used to suppress block/warn findings for known exceptions with expir
 - `target` (or backward-compatible `rule_id`)
 
 ## Expiry Semantics
+
 - Expired waivers are ignored and listed in governance reports.
 - Active waivers are applied at report-time and runtime checks.

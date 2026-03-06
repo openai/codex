@@ -17,6 +17,9 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
+    # This workflow uses large macOS runners and full-workspace Bazel targets.
+    # Keep it upstream-only so fork CI does not fail on unavailable runner pools.
+    if: ${{ github.repository == 'openai/codex' }}
     strategy:
       fail-fast: false
       matrix:
