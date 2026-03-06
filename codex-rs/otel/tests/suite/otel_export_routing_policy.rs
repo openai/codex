@@ -183,6 +183,90 @@ fn otel_export_routing_policy_routes_user_prompt_log_and_trace_events() {
     assert!(!prompt_trace_attrs.contains_key("prompt"));
     assert!(!prompt_trace_attrs.contains_key("user.email"));
     assert!(!prompt_trace_attrs.contains_key("user.account_id"));
+}
+
+#[test]
+fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
+    let log_exporter = InMemoryLogExporter::default();
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(log_exporter.clone())
+        .build();
+    let span_exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(span_exporter.clone())
+        .build();
+    let tracer = tracer_provider.tracer("sink-split-test");
+
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            )
+            .with_filter(filter_fn(OtelProvider::log_export_filter)),
+        )
+        .with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(OtelProvider::trace_export_filter)),
+        );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        let manager = OtelManager::new(
+            ThreadId::new(),
+            "gpt-5.1",
+            "gpt-5.1",
+            Some("account-id".to_string()),
+            Some("engineer@example.com".to_string()),
+            Some(TelemetryAuthMode::ApiKey),
+            "codex_exec".to_string(),
+            true,
+            "tty".to_string(),
+            SessionSource::Cli,
+        );
+        let root_span = tracing::info_span!("root");
+        let _root_guard = root_span.enter();
+        manager.tool_result_with_tags(
+            "shell",
+            "call-1",
+            "secret arguments",
+            std::time::Duration::from_millis(42),
+            true,
+            "secret output\nsecond line",
+            &[],
+            Some("internal-mcp"),
+            Some("stdio"),
+        );
+    });
+
+    logger_provider.force_flush().expect("flush logs");
+    tracer_provider.force_flush().expect("flush traces");
+
+    let logs = log_exporter.get_emitted_logs().expect("log export");
+    assert!(
+        logs.iter()
+            .all(|log| { log.record.target().map(Cow::as_ref) == Some("codex_otel.log_only") })
+    );
+
+    let tool_log = find_log_by_event_name(&logs, "codex.tool_result");
+    let tool_log_attrs = log_attributes(&tool_log.record);
+    assert_eq!(
+        tool_log_attrs.get("arguments").map(String::as_str),
+        Some("secret arguments")
+    );
+    assert_eq!(
+        tool_log_attrs.get("output").map(String::as_str),
+        Some("secret output\nsecond line")
+    );
+    assert_eq!(
+        tool_log_attrs.get("mcp_server").map(String::as_str),
+        Some("internal-mcp")
+    );
+
+    let spans = span_exporter.get_finished_spans().expect("span export");
+    assert_eq!(spans.len(), 1);
+    let span_events = &spans[0].events.events;
+    assert_eq!(span_events.len(), 1);
 
     let tool_trace_event = find_span_event_by_name_attr(span_events, "codex.tool_result");
     let tool_trace_attrs = span_event_attributes(tool_trace_event);
