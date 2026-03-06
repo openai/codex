@@ -102,7 +102,7 @@ impl ToolsConfig {
             features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
         let include_image_gen_tool =
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
-        let include_agent_jobs = include_collab_tools && features.enabled(Feature::Sqlite);
+        let include_agent_jobs = include_collab_tools;
         let request_permission_enabled = features.enabled(Feature::RequestPermissions);
         let shell_command_backend =
             if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {

@@ -438,9 +438,7 @@ impl Codex {
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
-        let persisted_tools = if dynamic_tools.is_empty()
-            && config.features.enabled(Feature::Sqlite)
-        {
+        let persisted_tools = if dynamic_tools.is_empty() {
             let thread_id = match &conversation_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
                 InitialHistory::Forked(_) => conversation_history.forked_from_id(),
@@ -1251,7 +1249,7 @@ impl Session {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>((None, None))
             } else {
-                let state_db_ctx = state_db::init_if_enabled(&config, None).await;
+                let state_db_ctx = state_db::init(&config, None).await;
                 let rollout_recorder = RolloutRecorder::new(
                     &config,
                     rollout_params,
