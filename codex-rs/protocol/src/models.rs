@@ -188,6 +188,7 @@ impl TryFrom<MacOsAutomationPermissionDe> for MacOsAutomationPermission {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(default)]
 pub struct MacOsSeatbeltProfileExtensions {
     pub macos_preferences: MacOsPreferencesPermission,
     pub macos_automation: MacOsAutomationPermission,
@@ -1448,6 +1449,27 @@ mod tests {
                     macos_accessibility: true,
                     macos_calendar: true,
                 }),
+            }
+        );
+    }
+
+    #[test]
+    fn macos_seatbelt_profile_extensions_deserializes_missing_fields_to_defaults() {
+        let permissions =
+            serde_json::from_value::<MacOsSeatbeltProfileExtensions>(serde_json::json!({
+                "macos_automation": ["com.apple.Notes"]
+            }))
+            .expect("deserialize macos permissions");
+
+        assert_eq!(
+            permissions,
+            MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadOnly,
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                    "com.apple.Notes".to_string(),
+                ]),
+                macos_accessibility: false,
+                macos_calendar: false,
             }
         );
     }

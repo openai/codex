@@ -5277,24 +5277,30 @@
     "MacOsSeatbeltProfileExtensions": {
       "properties": {
         "macos_accessibility": {
+          "default": false,
           "type": "boolean"
         },
         "macos_automation": {
-          "$ref": "#/definitions/MacOsAutomationPermission"
+          "allOf": [
+            {
+              "$ref": "#/definitions/MacOsAutomationPermission"
+            }
+          ],
+          "default": "none"
         },
         "macos_calendar": {
+          "default": false,
           "type": "boolean"
         },
         "macos_preferences": {
-          "$ref": "#/definitions/MacOsPreferencesPermission"
+          "allOf": [
+            {
+              "$ref": "#/definitions/MacOsPreferencesPermission"
+            }
+          ],
+          "default": "read_only"
         }
       },
-      "required": [
-        "macos_accessibility",
-        "macos_automation",
-        "macos_calendar",
-        "macos_preferences"
-      ],
       "type": "object"
     },
     "McpInvocation": {
