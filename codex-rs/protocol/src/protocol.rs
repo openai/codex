@@ -497,9 +497,8 @@ pub enum AskForApproval {
     #[default]
     OnRequest,
 
-    /// Run tools in the sandbox first. If execution needs to leave the
-    /// sandbox, a guardian subagent evaluates the risk and either approves or
-    /// rejects the escalation automatically.
+    /// Mirror `OnRequest` approval semantics, but route approval prompts to a
+    /// guardian subagent instead of the user.
     Guardian,
 
     /// Fine-grained rejection controls for approval prompts.

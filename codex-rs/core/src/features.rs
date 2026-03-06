@@ -62,7 +62,9 @@ impl Stage {
 
     pub fn experimental_announcement(self) -> Option<&'static str> {
         match self {
-            Stage::Experimental { announcement, .. } if announcement.is_empty() => None,
+            Stage::Experimental {
+                announcement: "", ..
+            } => None,
             Stage::Experimental { announcement, .. } => Some(announcement),
             _ => None,
         }
@@ -145,7 +147,7 @@ pub enum Feature {
     Steer,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
-    /// Enable the internal guardian approval mode.
+    /// Enable guardian subagent approvals.
     GuardianApproval,
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
@@ -701,7 +703,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "guardian_approval",
         stage: Stage::Experimental {
             name: "Guardian approvals",
-            menu_description: "Let a guardian subagent review approval prompts for sandbox escapes and blocked network access instead of asking you directly. Try `codex -a guardian -s workspace-write`.",
+            menu_description: "Let a guardian subagent review approval prompts that would otherwise be shown to you, including sandbox escapes and blocked network access. Try `codex -a guardian -s workspace-write`.",
             announcement: "",
         },
         default_enabled: false,
@@ -911,7 +913,7 @@ mod tests {
         assert_eq!(
             stage.experimental_menu_description().map(str::to_owned),
             Some(
-                "Let a guardian subagent review approval prompts for sandbox escapes and blocked network access instead of asking you directly. Try `codex -a guardian -s workspace-write`.".to_string()
+                "Let a guardian subagent review approval prompts that would otherwise be shown to you, including sandbox escapes and blocked network access. Try `codex -a guardian -s workspace-write`.".to_string()
             )
         );
         assert_eq!(stage.experimental_announcement(), None);

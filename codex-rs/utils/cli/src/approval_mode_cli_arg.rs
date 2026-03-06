@@ -21,8 +21,8 @@ pub enum ApprovalModeCliArg {
     /// The model decides when to ask the user for approval.
     OnRequest,
 
-    /// Run in the sandbox first, then let the guardian
-    /// reviewer decide whether a sandbox escape is acceptable.
+    /// Mirror `on-request`, but route approval prompts to a guardian
+    /// reviewer instead of the user.
     Guardian,
 
     /// Never ask for user approval

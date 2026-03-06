@@ -123,9 +123,12 @@ pub(super) fn normalize_and_validate_additional_permissions(
     }
 
     if uses_additional_permissions {
-        if !matches!(approval_policy, AskForApproval::OnRequest) {
+        if !matches!(
+            approval_policy,
+            AskForApproval::OnRequest | AskForApproval::Guardian
+        ) {
             return Err(format!(
-                "approval policy is {approval_policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest"
+                "approval policy is {approval_policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest or Guardian"
             ));
         }
         let Some(additional_permissions) = additional_permissions else {
