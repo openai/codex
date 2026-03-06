@@ -61,6 +61,7 @@ mv "${tmp_path}" "${payload_path}""#,
                 text: "hello world".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;

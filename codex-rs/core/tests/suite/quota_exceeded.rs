@@ -45,6 +45,7 @@ async fn quota_exceeded_emits_single_error_event() -> Result<()> {
                 text: "quota?".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await

@@ -10,6 +10,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::user_input::EphemeralContext;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -175,6 +176,85 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_model_visible_layout_ephemeral_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "turn one complete"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "turn two complete"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let test = test_codex()
+        .with_model("gpt-5.2-codex")
+        .build(&server)
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn with editor context".into(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: vec![EphemeralContext {
+                title: "Context from my editor".to_string(),
+                text: "## Active file: src/one.rs".to_string(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "second turn with refreshed editor context".into(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: vec![EphemeralContext {
+                title: "Context from my editor".to_string(),
+                text: "## Active file: src/two.rs".to_string(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2, "expected two requests");
+    insta::assert_snapshot!(
+        "model_visible_layout_ephemeral_context",
+        format_labeled_requests_snapshot(
+            "Turns resend fresh ephemeral editor context while keeping it outside durable turn-state diffs.",
+            &[
+                ("First Request (With Editor Context)", &requests[0]),
+                ("Second Request (Refreshed Editor Context)", &requests[1]),
+            ]
+        )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Diff `user_instructions` and emit updates when AGENTS.md content changes
 // (for example after cwd changes), then update this test to assert refreshed AGENTS content.
 async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> Result<()> {
@@ -317,6 +397,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                 text: "seed resume history".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -415,6 +496,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
                 text: "seed resume history".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -459,6 +541,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
                 text: "first resumed turn after model override".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;

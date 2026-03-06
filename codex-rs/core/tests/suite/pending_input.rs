@@ -103,6 +103,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
                 text: "first prompt".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -119,6 +120,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
                 text: "second prompt".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await

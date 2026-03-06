@@ -716,6 +716,7 @@ async fn review_history_surfaces_in_parent_session() {
                 text: followup.clone(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await

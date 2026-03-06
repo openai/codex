@@ -403,10 +403,18 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
 
+`ephemeralContext` is separate from `input`. Use it for extra context for the current turn, such as IDE/editor state. This context is not re-injected automatically after compaction, so clients should send a fresh snapshot on each turn instead of expecting it to carry forward automatically.
+
 ```json
 { "method": "turn/start", "id": 30, "params": {
     "threadId": "thr_123",
     "input": [ { "type": "text", "text": "Run tests" } ],
+    "ephemeralContext": [
+        {
+            "title": "Context from my editor",
+            "text": "## Active file: src/main.rs"
+        }
+    ],
     // Below are optional config overrides
     "cwd": "/Users/me/project",
     "approvalPolicy": "unlessTrusted",

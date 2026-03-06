@@ -113,6 +113,7 @@ pub async fn run_codex_tool_session(
                 // MCP tool prompts are plain text with no UI element ranges.
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         },
         trace: None,
@@ -160,6 +161,7 @@ pub async fn run_codex_tool_session_reply(
                 // MCP tool prompts are plain text with no UI element ranges.
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await

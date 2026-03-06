@@ -42,6 +42,7 @@ use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::request_user_input::RequestUserInputResponse;
+use crate::user_input::EphemeralContext;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
@@ -69,6 +70,8 @@ pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
 pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
 pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
+pub const ADDITIONAL_CONTEXT_OPEN_TAG: &str = "<additional_context>";
+pub const ADDITIONAL_CONTEXT_CLOSE_TAG: &str = "</additional_context>";
 pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
 pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
@@ -191,6 +194,10 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
+        /// Turn-scoped context that is visible to the model but is not part of
+        /// the durable turn baseline.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        ephemeral_context: Vec<EphemeralContext>,
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
@@ -3389,6 +3396,7 @@ mod tests {
     fn user_input_serialization_omits_final_output_json_schema_when_none() -> Result<()> {
         let op = Op::UserInput {
             items: Vec::new(),
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         };
 
@@ -3406,6 +3414,7 @@ mod tests {
             op,
             Op::UserInput {
                 items: Vec::new(),
+                ephemeral_context: Vec::new(),
                 final_output_json_schema: None,
             }
         );
@@ -3425,6 +3434,7 @@ mod tests {
         });
         let op = Op::UserInput {
             items: Vec::new(),
+            ephemeral_context: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
         };
 
@@ -3435,6 +3445,33 @@ mod tests {
                 "type": "user_input",
                 "items": [],
                 "final_output_json_schema": schema,
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_serialization_includes_ephemeral_context_when_present() -> Result<()> {
+        let op = Op::UserInput {
+            items: Vec::new(),
+            ephemeral_context: vec![EphemeralContext {
+                title: "Context from my editor".to_string(),
+                text: "## Active file: src/main.rs".to_string(),
+            }],
+            final_output_json_schema: None,
+        };
+
+        let json_op = serde_json::to_value(op)?;
+        assert_eq!(
+            json_op,
+            json!({
+                "type": "user_input",
+                "items": [],
+                "ephemeral_context": [{
+                    "title": "Context from my editor",
+                    "text": "## Active file: src/main.rs",
+                }],
             })
         );
 
