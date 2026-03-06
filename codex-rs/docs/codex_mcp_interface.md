@@ -91,8 +91,6 @@ Fetch the built-in collaboration mode presets with `collaborationMode/list`. Thi
 
 When sending `turn/start` with `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 
-The top-level `developerInstructions` request field is a custom developer override and takes precedence over `~/.codex/config.toml` `developer_instructions` for the thread session.
-
 ## Event stream
 
 While a conversation runs, the server sends notifications:
