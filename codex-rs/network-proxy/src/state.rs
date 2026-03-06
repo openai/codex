@@ -3,6 +3,7 @@ use crate::config::NetworkProxyConfig;
 use crate::mitm::MitmState;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
+use crate::policy::is_global_wildcard_domain_pattern;
 use crate::runtime::ConfigState;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -293,10 +294,13 @@ fn validate_domain_patterns(
     field_name: &'static str,
     patterns: &[String],
 ) -> Result<(), NetworkProxyConstraintError> {
-    if patterns.iter().any(|pattern| pattern.trim() == "*") {
+    if let Some(pattern) = patterns
+        .iter()
+        .find(|pattern| is_global_wildcard_domain_pattern(pattern))
+    {
         return Err(NetworkProxyConstraintError::InvalidValue {
             field_name,
-            candidate: "\"*\"".to_string(),
+            candidate: pattern.trim().to_string(),
             allowed: "exact hosts or scoped wildcards like *.example.com or **.example.com"
                 .to_string(),
         });

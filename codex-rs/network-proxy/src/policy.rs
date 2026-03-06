@@ -144,12 +144,19 @@ fn normalize_pattern(pattern: &str) -> String {
     }
 }
 
+pub(crate) fn is_global_wildcard_domain_pattern(pattern: &str) -> bool {
+    let normalized = normalize_pattern(pattern);
+    expand_domain_pattern(&normalized)
+        .iter()
+        .any(|candidate| candidate == "*")
+}
+
 pub(crate) fn compile_globset(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     let mut seen = HashSet::new();
     for pattern in patterns {
         ensure!(
-            pattern.trim() != "*",
+            !is_global_wildcard_domain_pattern(pattern),
             "unsupported global wildcard domain pattern \"*\"; use exact hosts or scoped wildcards like *.example.com or **.example.com"
         );
         let pattern = normalize_pattern(pattern);

@@ -1190,6 +1190,44 @@ mod tests {
     }
 
     #[test]
+    fn validate_policy_against_constraints_rejects_bracketed_global_wildcard_in_managed_allowlist()
+    {
+        let constraints = NetworkProxyConstraints {
+            allowed_domains: Some(vec!["[*]".to_string()]),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                allowed_domains: vec!["api.example.com".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_rejects_double_wildcard_bracketed_global_wildcard_in_managed_allowlist()
+     {
+        let constraints = NetworkProxyConstraints {
+            allowed_domains: Some(vec!["**.[*]".to_string()]),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                allowed_domains: vec!["api.example.com".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
     fn validate_policy_against_constraints_requires_managed_denied_domains_entries() {
         let constraints = NetworkProxyConstraints {
             denied_domains: Some(vec!["evil.com".to_string()]),
@@ -1346,6 +1384,18 @@ mod tests {
     }
 
     #[test]
+    fn compile_globset_rejects_bracketed_global_wildcard() {
+        let patterns = vec!["[*]".to_string()];
+        assert!(compile_globset(&patterns).is_err());
+    }
+
+    #[test]
+    fn compile_globset_rejects_double_wildcard_bracketed_global_wildcard() {
+        let patterns = vec!["**.[*]".to_string()];
+        assert!(compile_globset(&patterns).is_err());
+    }
+
+    #[test]
     fn compile_globset_dedupes_patterns_without_changing_behavior() {
         let patterns = vec!["example.com".to_string(), "example.com".to_string()];
         let set = compile_globset(&patterns).unwrap();
@@ -1374,12 +1424,39 @@ mod tests {
     }
 
     #[test]
+    fn build_config_state_rejects_bracketed_global_wildcard_allowed_domains() {
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                allowed_domains: vec!["[*]".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(build_config_state(config, NetworkProxyConstraints::default()).is_err());
+    }
+
+    #[test]
     fn build_config_state_rejects_global_wildcard_denied_domains() {
         let config = NetworkProxyConfig {
             network: NetworkProxySettings {
                 enabled: true,
                 allowed_domains: vec!["example.com".to_string()],
                 denied_domains: vec!["*".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(build_config_state(config, NetworkProxyConstraints::default()).is_err());
+    }
+
+    #[test]
+    fn build_config_state_rejects_bracketed_global_wildcard_denied_domains() {
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                allowed_domains: vec!["example.com".to_string()],
+                denied_domains: vec!["[*]".to_string()],
                 ..NetworkProxySettings::default()
             },
         };
