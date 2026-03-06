@@ -1129,7 +1129,7 @@ pub struct ConfigToml {
 
     /// User-defined model aliases that can override model context settings.
     #[serde(default)]
-    pub custom_models: HashMap<String, CustomModelToml>,
+    pub custom_models: Vec<CustomModelToml>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
@@ -1355,6 +1355,8 @@ pub struct CustomModelConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct CustomModelToml {
+    /// User-facing alias shown in the model picker.
+    pub name: String,
     /// Provider-facing model slug used on API requests.
     pub model: String,
     /// Optional context window override applied when this alias is selected.
@@ -1890,20 +1892,24 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
-        let custom_models = cfg
-            .custom_models
-            .into_iter()
-            .map(|(alias, custom)| {
-                (
-                    alias,
-                    CustomModelConfig {
-                        model: custom.model,
-                        model_context_window: custom.model_context_window,
-                        model_auto_compact_token_limit: custom.model_auto_compact_token_limit,
-                    },
-                )
-            })
-            .collect();
+        let mut custom_models = HashMap::new();
+        for custom in cfg.custom_models {
+            let alias = custom.name;
+            if custom_models.contains_key(&alias) {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("duplicate custom model alias: {alias}"),
+                ));
+            }
+            custom_models.insert(
+                alias,
+                CustomModelConfig {
+                    model: custom.model,
+                    model_context_window: custom.model_context_window,
+                    model_auto_compact_token_limit: custom.model_auto_compact_token_limit,
+                },
+            );
+        }
 
         let model_provider_id = model_provider
             .or(config_profile.model_provider)
@@ -5104,14 +5110,12 @@ nickname_candidates = ["Hypatia", "Noether"]
     fn config_loads_custom_models() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
-            custom_models: HashMap::from([(
-                "gpt-5.4 1m".to_string(),
-                CustomModelToml {
-                    model: "gpt-5.4".to_string(),
-                    model_context_window: Some(1_000_000),
-                    model_auto_compact_token_limit: Some(900_000),
-                },
-            )]),
+            custom_models: vec![CustomModelToml {
+                name: "gpt-5.4 1m".to_string(),
+                model: "gpt-5.4".to_string(),
+                model_context_window: Some(1_000_000),
+                model_auto_compact_token_limit: Some(900_000),
+            }],
             ..Default::default()
         };
 
@@ -5131,6 +5135,41 @@ nickname_candidates = ["Hypatia", "Noether"]
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn config_rejects_duplicate_custom_model_aliases() {
+        let codex_home = TempDir::new().expect("create temp dir");
+        let cfg = ConfigToml {
+            custom_models: vec![
+                CustomModelToml {
+                    name: "gpt-5.4 1m".to_string(),
+                    model: "gpt-5.4".to_string(),
+                    model_context_window: Some(1_000_000),
+                    model_auto_compact_token_limit: Some(900_000),
+                },
+                CustomModelToml {
+                    name: "gpt-5.4 1m".to_string(),
+                    model: "gpt-5.4-mini".to_string(),
+                    model_context_window: None,
+                    model_auto_compact_token_limit: None,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let err = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect_err("duplicate aliases should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("duplicate custom model alias: gpt-5.4 1m"),
+            "unexpected error: {err}"
+        );
     }
 
     fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
