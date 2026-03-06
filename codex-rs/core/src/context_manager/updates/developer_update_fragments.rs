@@ -1,5 +1,6 @@
-//! Developer-envelope model-visible fragments used by steady-state settings
-//! updates (`build_settings_update_items`).
+//! Developer-envelope model-visible fragments and helper functions used by
+//! settings-update assembly (`build_settings_update_items`) and initial-context
+//! assembly.
 //!
 //! This module owns the turn-context diffing logic for developer-role context
 //! updates (permissions, collaboration mode, realtime, personality, and model
