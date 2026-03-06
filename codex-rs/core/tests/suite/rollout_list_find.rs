@@ -238,3 +238,38 @@ async fn find_unarchives_archived_rollout_file_by_id() {
         .unwrap();
     assert_eq!(archived_found, None);
 }
+
+#[tokio::test]
+async fn find_does_not_move_unrelated_file_for_stale_archived_db_path() {
+    let home = TempDir::new().unwrap();
+    let requested_id = Uuid::new_v4();
+    let requested_thread_id = ThreadId::from_string(&requested_id.to_string()).unwrap();
+    let unrelated_id = Uuid::new_v4();
+    let unrelated_active_path = write_minimal_rollout_with_id(home.path(), unrelated_id);
+
+    upsert_thread_metadata(
+        home.path(),
+        requested_thread_id,
+        unrelated_active_path.clone(),
+    )
+    .await;
+    let runtime = StateRuntime::init(home.path().to_path_buf(), "test-provider".to_string(), None)
+        .await
+        .unwrap();
+    runtime.mark_backfill_complete(None).await.unwrap();
+    runtime
+        .mark_archived(
+            requested_thread_id,
+            unrelated_active_path.as_path(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+    let found = find_thread_path_by_id_str(home.path(), &requested_id.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(found, None);
+    assert!(unrelated_active_path.exists());
+}

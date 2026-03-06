@@ -1248,11 +1248,23 @@ async fn try_unarchive_thread_path_by_id_str(
     codex_home: &Path,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
+    let Ok(requested_id) = Uuid::parse_str(id_str) else {
+        return Ok(None);
+    };
     let Some(archived_path) =
         find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await?
     else {
         return Ok(None);
     };
+    let archived_root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+    if archived_path.strip_prefix(&archived_root).is_err() {
+        tracing::error!(
+            "archived rollout candidate for thread {id_str} is not under {}: {}",
+            archived_root.display(),
+            archived_path.display()
+        );
+        return Ok(None);
+    }
 
     let Some(file_name) = archived_path.file_name().map(OsStr::to_owned) else {
         tracing::error!(
@@ -1261,6 +1273,21 @@ async fn try_unarchive_thread_path_by_id_str(
         );
         return Ok(None);
     };
+    let file_name_str = file_name.to_string_lossy();
+    let Some((_created_at, file_id)) = parse_timestamp_uuid_from_filename(&file_name_str) else {
+        tracing::error!(
+            "archived rollout path for thread {id_str} has invalid rollout filename: {}",
+            archived_path.display()
+        );
+        return Ok(None);
+    };
+    if file_id != requested_id {
+        tracing::error!(
+            "archived rollout path for thread {id_str} has mismatched rollout filename: {}",
+            archived_path.display()
+        );
+        return Ok(None);
+    }
     let Some((year, month, day)) = rollout_date_parts(&file_name) else {
         tracing::error!(
             "archived rollout path for thread {id_str} missing filename timestamp: {}",
