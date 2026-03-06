@@ -103,10 +103,14 @@ async fn spawn_process_with_stdin_mode(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
     stdin_mode: PipeStdinMode,
+    inherited_fds: &[i32],
 ) -> Result<SpawnedProcess> {
     if program.is_empty() {
         anyhow::bail!("missing program for pipe spawn");
     }
+
+    #[cfg(not(unix))]
+    let _ = inherited_fds;
 
     let mut command = Command::new(program);
     #[cfg(unix)]
@@ -116,11 +120,14 @@ async fn spawn_process_with_stdin_mode(
     #[cfg(target_os = "linux")]
     let parent_pid = unsafe { libc::getpid() };
     #[cfg(unix)]
+    let inherited_fds = inherited_fds.to_vec();
+    #[cfg(unix)]
     unsafe {
         command.pre_exec(move || {
             crate::process_group::detach_from_tty()?;
             #[cfg(target_os = "linux")]
             crate::process_group::set_parent_death_signal(parent_pid)?;
+            crate::pty::close_random_fds_except(&inherited_fds);
             Ok(())
         });
     }
@@ -253,7 +260,7 @@ pub async fn spawn_process(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
 ) -> Result<SpawnedProcess> {
-    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Piped).await
+    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Piped, &[]).await
 }
 
 /// Spawn a process using regular pipes, but close stdin immediately.
@@ -264,5 +271,27 @@ pub async fn spawn_process_no_stdin(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
 ) -> Result<SpawnedProcess> {
-    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Null).await
+    spawn_process_no_stdin_with_inherited_fds(program, args, cwd, env, arg0, &[]).await
+}
+
+/// Spawn a process using regular pipes, close stdin immediately, and preserve
+/// selected inherited file descriptors across exec on Unix.
+pub async fn spawn_process_no_stdin_with_inherited_fds(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+    inherited_fds: &[i32],
+) -> Result<SpawnedProcess> {
+    spawn_process_with_stdin_mode(
+        program,
+        args,
+        cwd,
+        env,
+        arg0,
+        PipeStdinMode::Null,
+        inherited_fds,
+    )
+    .await
 }

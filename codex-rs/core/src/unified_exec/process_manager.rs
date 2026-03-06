@@ -535,23 +535,26 @@ impl UnifiedExecProcessManager {
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
+        let inherited_fds = spawn_lifecycle.inherited_fds();
 
         let spawn_result = if tty {
-            codex_utils_pty::pty::spawn_process(
+            codex_utils_pty::pty::spawn_process_with_inherited_fds(
                 program,
                 args,
                 env.cwd.as_path(),
                 &env.env,
                 &env.arg0,
+                &inherited_fds,
             )
             .await
         } else {
-            codex_utils_pty::pipe::spawn_process_no_stdin(
+            codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
                 program,
                 args,
                 env.cwd.as_path(),
                 &env.env,
                 &env.arg0,
+                &inherited_fds,
             )
             .await
         };

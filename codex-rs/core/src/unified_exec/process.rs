@@ -25,6 +25,10 @@ use super::UnifiedExecError;
 use super::head_tail_buffer::HeadTailBuffer;
 
 pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
+    fn inherited_fds(&self) -> Vec<i32> {
+        Vec::new()
+    }
+
     fn after_spawn(&mut self) {}
 }
 

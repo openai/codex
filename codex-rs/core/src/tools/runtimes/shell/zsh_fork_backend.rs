@@ -48,12 +48,23 @@ mod imp {
     use crate::unified_exec::SpawnLifecycle;
     use codex_shell_escalation::EscalationSession;
 
+    const ESCALATE_SOCKET_ENV_VAR: &str = "CODEX_ESCALATE_SOCKET";
+
     #[derive(Debug)]
     struct ZshForkSpawnLifecycle {
         escalation_session: EscalationSession,
     }
 
     impl SpawnLifecycle for ZshForkSpawnLifecycle {
+        fn inherited_fds(&self) -> Vec<i32> {
+            self.escalation_session
+                .env()
+                .get(ESCALATE_SOCKET_ENV_VAR)
+                .and_then(|fd| fd.parse().ok())
+                .into_iter()
+                .collect()
+        }
+
         fn after_spawn(&mut self) {
             self.escalation_session.close_client_socket();
         }

@@ -3,6 +3,10 @@ use std::path::Path;
 
 use pretty_assertions::assert_eq;
 
+#[cfg(unix)]
+use crate::pipe::spawn_process_no_stdin_with_inherited_fds;
+#[cfg(unix)]
+use crate::pty::spawn_process_with_inherited_fds;
 use crate::spawn_pipe_process;
 use crate::spawn_pty_process;
 
@@ -183,16 +187,26 @@ async fn wait_for_marker_pid(
         collected.extend_from_slice(&chunk);
 
         let text = String::from_utf8_lossy(&collected);
-        if let Some(marker_idx) = text.find(marker) {
-            let suffix = &text[marker_idx + marker.len()..];
-            let digits: String = suffix
+        let mut offset = 0;
+        while let Some(pos) = text[offset..].find(marker) {
+            let marker_start = offset + pos;
+            let suffix = &text[marker_start + marker.len()..];
+            let digits_len = suffix
                 .chars()
-                .skip_while(|ch| !ch.is_ascii_digit())
                 .take_while(char::is_ascii_digit)
-                .collect();
-            if !digits.is_empty() {
-                return Ok(digits.parse()?);
+                .map(char::len_utf8)
+                .sum::<usize>();
+            if digits_len == 0 {
+                offset = marker_start + marker.len();
+                continue;
             }
+
+            let pid_str = &suffix[..digits_len];
+            let trailing = &suffix[digits_len..];
+            if trailing.is_empty() {
+                break;
+            }
+            return Ok(pid_str.parse()?);
         }
     }
 }
@@ -441,6 +455,214 @@ async fn pty_terminate_kills_background_children_in_same_process_group() -> anyh
         exited,
         "background child pid {bg_pid} survived PTY terminate()"
     );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_spawn_can_preserve_inherited_fds() -> anyhow::Result<()> {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+
+    let mut fds = [0; 2];
+    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    let mut read_end = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+
+    let mut env_map: HashMap<String, String> = std::env::vars().collect();
+    env_map.insert(
+        "PRESERVED_FD".to_string(),
+        write_end.as_raw_fd().to_string(),
+    );
+
+    let script = "printf __preserved__ >\"/dev/fd/$PRESERVED_FD\"";
+    let spawned = spawn_process_with_inherited_fds(
+        "/bin/sh",
+        &["-c".to_string(), script.to_string()],
+        Path::new("."),
+        &env_map,
+        &None,
+        &[write_end.as_raw_fd()],
+    )
+    .await?;
+
+    drop(write_end);
+
+    let (_, code) = collect_output_until_exit(spawned.output_rx, spawned.exit_rx, 2_000).await;
+    assert_eq!(code, 0, "expected preserved-fd PTY child to exit cleanly");
+
+    let mut pipe_output = String::new();
+    read_end.read_to_string(&mut pipe_output)?;
+    assert_eq!(pipe_output, "__preserved__");
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_preserving_inherited_fds_keeps_python_repl_running() -> anyhow::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+
+    let Some(python) = find_python() else {
+        eprintln!(
+            "python not found; skipping pty_preserving_inherited_fds_keeps_python_repl_running"
+        );
+        return Ok(());
+    };
+
+    let mut fds = [0; 2];
+    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    let read_end = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    let preserved_fd = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+
+    let mut env_map: HashMap<String, String> = std::env::vars().collect();
+    env_map.insert(
+        "PRESERVED_FD".to_string(),
+        preserved_fd.as_raw_fd().to_string(),
+    );
+
+    let spawned = spawn_process_with_inherited_fds(
+        &python,
+        &[],
+        Path::new("."),
+        &env_map,
+        &None,
+        &[preserved_fd.as_raw_fd()],
+    )
+    .await?;
+    drop(read_end);
+    drop(preserved_fd);
+
+    let writer = spawned.session.writer_sender();
+    let mut output_rx = spawned.output_rx;
+    let newline = "\n";
+    let mut output = wait_for_python_repl_ready(&writer, &mut output_rx, 5_000, newline).await?;
+    let marker = "__codex_preserved_py_pid:";
+    writer
+        .send(format!("import os; print('{marker}' + str(os.getpid())){newline}").into_bytes())
+        .await?;
+
+    let python_pid = match wait_for_marker_pid(&mut output_rx, marker, 2_000).await {
+        Ok(pid) => pid,
+        Err(err) => {
+            spawned.session.terminate();
+            return Err(err);
+        }
+    };
+    assert!(
+        process_exists(python_pid)?,
+        "expected python pid {python_pid} to stay alive after prompt output"
+    );
+
+    writer.send(format!("exit(){newline}").into_bytes()).await?;
+    let (remaining_output, code) =
+        collect_output_until_exit(output_rx, spawned.exit_rx, 5_000).await;
+    output.extend_from_slice(&remaining_output);
+
+    assert_eq!(code, 0, "expected python to exit cleanly");
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_spawn_with_inherited_fds_reports_exec_failures() -> anyhow::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+
+    let mut fds = [0; 2];
+    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    let read_end = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let spawn_result = spawn_process_with_inherited_fds(
+        "/definitely/missing/command",
+        &[],
+        Path::new("."),
+        &env_map,
+        &None,
+        &[write_end.as_raw_fd()],
+    )
+    .await;
+
+    drop(read_end);
+    drop(write_end);
+
+    let err = match spawn_result {
+        Ok(spawned) => {
+            spawned.session.terminate();
+            anyhow::bail!("missing executable unexpectedly spawned");
+        }
+        Err(err) => err,
+    };
+    let err_text = err.to_string();
+    assert!(
+        err_text.contains("No such file")
+            || err_text.contains("not found")
+            || err_text.contains("os error 2"),
+        "expected spawn error for missing executable, got: {err_text}",
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_spawn_no_stdin_can_preserve_inherited_fds() -> anyhow::Result<()> {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+
+    let mut fds = [0; 2];
+    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    let mut read_end = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+
+    let mut env_map: HashMap<String, String> = std::env::vars().collect();
+    env_map.insert(
+        "PRESERVED_FD".to_string(),
+        write_end.as_raw_fd().to_string(),
+    );
+
+    let script = "printf __pipe_preserved__ >\"/dev/fd/$PRESERVED_FD\"";
+    let spawned = spawn_process_no_stdin_with_inherited_fds(
+        "/bin/sh",
+        &["-c".to_string(), script.to_string()],
+        Path::new("."),
+        &env_map,
+        &None,
+        &[write_end.as_raw_fd()],
+    )
+    .await?;
+
+    drop(write_end);
+
+    let (_, code) = collect_output_until_exit(spawned.output_rx, spawned.exit_rx, 2_000).await;
+    assert_eq!(code, 0, "expected preserved-fd pipe child to exit cleanly");
+
+    let mut pipe_output = String::new();
+    read_end.read_to_string(&mut pipe_output)?;
+    assert_eq!(pipe_output, "__pipe_preserved__");
 
     Ok(())
 }

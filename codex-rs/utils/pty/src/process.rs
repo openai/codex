@@ -4,8 +4,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
-use portable_pty::MasterPty;
-use portable_pty::SlavePty;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -16,9 +14,13 @@ pub(crate) trait ChildTerminator: Send + Sync {
     fn kill(&mut self) -> io::Result<()>;
 }
 
+pub(crate) trait PtyHandleKeepAlive: Send {}
+
+impl<T: Send> PtyHandleKeepAlive for T {}
+
 pub struct PtyHandles {
-    pub _slave: Option<Box<dyn SlavePty + Send>>,
-    pub _master: Box<dyn MasterPty + Send>,
+    pub(crate) _slave: Option<Box<dyn PtyHandleKeepAlive>>,
+    pub(crate) _master: Box<dyn PtyHandleKeepAlive>,
 }
 
 impl fmt::Debug for PtyHandles {

@@ -1,6 +1,18 @@
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::fs::File;
 use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
+#[cfg(unix)]
+use std::os::fd::RawFd;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::Path;
+#[cfg(unix)]
+use std::process::Command as StdCommand;
+#[cfg(unix)]
+use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -60,6 +72,18 @@ impl ChildTerminator for PtyChildTerminator {
     }
 }
 
+#[cfg(unix)]
+struct RawPidTerminator {
+    process_group_id: u32,
+}
+
+#[cfg(unix)]
+impl ChildTerminator for RawPidTerminator {
+    fn kill(&mut self) -> std::io::Result<()> {
+        crate::process_group::kill_process_group(self.process_group_id)
+    }
+}
+
 fn platform_native_pty_system() -> Box<dyn portable_pty::PtySystem + Send> {
     #[cfg(windows)]
     {
@@ -80,10 +104,41 @@ pub async fn spawn_process(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
 ) -> Result<SpawnedProcess> {
+    spawn_process_with_inherited_fds(program, args, cwd, env, arg0, &[]).await
+}
+
+/// Spawn a process attached to a PTY, preserving any inherited file
+/// descriptors listed in `inherited_fds` across exec on Unix.
+pub async fn spawn_process_with_inherited_fds(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+    inherited_fds: &[i32],
+) -> Result<SpawnedProcess> {
     if program.is_empty() {
         anyhow::bail!("missing program for PTY spawn");
     }
 
+    #[cfg(not(unix))]
+    let _ = inherited_fds;
+
+    #[cfg(unix)]
+    if !inherited_fds.is_empty() {
+        return spawn_process_preserving_fds(program, args, cwd, env, arg0, inherited_fds).await;
+    }
+
+    spawn_process_portable(program, args, cwd, env, arg0).await
+}
+
+async fn spawn_process_portable(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+) -> Result<SpawnedProcess> {
     let pty_system = platform_native_pty_system();
     let pair = pty_system.openpty(PtySize {
         rows: 24,
@@ -167,11 +222,11 @@ pub async fn spawn_process(
 
     let handles = PtyHandles {
         _slave: if cfg!(windows) {
-            Some(pair.slave)
+            Some(Box::new(pair.slave))
         } else {
             None
         },
-        _master: pair.master,
+        _master: Box::new(pair.master),
     };
 
     let (handle, output_rx) = ProcessHandle::new(
@@ -197,4 +252,225 @@ pub async fn spawn_process(
         output_rx,
         exit_rx,
     })
+}
+
+#[cfg(unix)]
+async fn spawn_process_preserving_fds(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+    inherited_fds: &[RawFd],
+) -> Result<SpawnedProcess> {
+    let (master, slave) = open_unix_pty()?;
+    let mut command = StdCommand::new(program);
+    if let Some(arg0) = arg0 {
+        command.arg0(arg0);
+    }
+    command.current_dir(cwd);
+    command.env_clear();
+    for arg in args {
+        command.arg(arg);
+    }
+    for (key, value) in env {
+        command.env(key, value);
+    }
+
+    let stdin = slave.try_clone()?;
+    let stdout = slave.try_clone()?;
+    let stderr = slave.try_clone()?;
+    let inherited_fds = inherited_fds.to_vec();
+
+    unsafe {
+        command
+            .stdin(Stdio::from(stdin))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .pre_exec(move || {
+                for signo in &[
+                    libc::SIGCHLD,
+                    libc::SIGHUP,
+                    libc::SIGINT,
+                    libc::SIGQUIT,
+                    libc::SIGTERM,
+                    libc::SIGALRM,
+                ] {
+                    libc::signal(*signo, libc::SIG_DFL);
+                }
+
+                let empty_set: libc::sigset_t = std::mem::zeroed();
+                libc::sigprocmask(libc::SIG_SETMASK, &empty_set, std::ptr::null_mut());
+
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                #[allow(clippy::cast_lossless)]
+                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                close_random_fds_except(&inherited_fds);
+                Ok(())
+            });
+    }
+
+    let mut child = command.spawn()?;
+    drop(slave);
+    let process_group_id = child.id();
+
+    let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
+    let (output_tx, _) = broadcast::channel::<Vec<u8>>(256);
+    let initial_output_rx = output_tx.subscribe();
+
+    let mut reader = master.try_clone()?;
+    let output_tx_clone = output_tx.clone();
+    let reader_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
+        let mut buf = [0u8; 8_192];
+        loop {
+            match std::io::Read::read(&mut reader, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let _ = output_tx_clone.send(buf[..n].to_vec());
+                }
+                Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let writer = Arc::new(tokio::sync::Mutex::new(master.try_clone()?));
+    let writer_handle: JoinHandle<()> = tokio::spawn({
+        let writer = Arc::clone(&writer);
+        async move {
+            while let Some(bytes) = writer_rx.recv().await {
+                let mut guard = writer.lock().await;
+                use std::io::Write;
+                let _ = guard.write_all(&bytes);
+                let _ = guard.flush();
+            }
+        }
+    });
+
+    let (exit_tx, exit_rx) = oneshot::channel::<i32>();
+    let exit_status = Arc::new(AtomicBool::new(false));
+    let wait_exit_status = Arc::clone(&exit_status);
+    let exit_code = Arc::new(StdMutex::new(None));
+    let wait_exit_code = Arc::clone(&exit_code);
+    let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
+        let code = match child.wait() {
+            Ok(status) => status.code().unwrap_or(-1),
+            Err(_) => -1,
+        };
+        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut guard) = wait_exit_code.lock() {
+            *guard = Some(code);
+        }
+        let _ = exit_tx.send(code);
+    });
+
+    let handles = PtyHandles {
+        _slave: None,
+        _master: Box::new(master),
+    };
+
+    let (handle, output_rx) = ProcessHandle::new(
+        writer_tx,
+        output_tx,
+        initial_output_rx,
+        Box::new(RawPidTerminator { process_group_id }),
+        reader_handle,
+        Vec::new(),
+        writer_handle,
+        wait_handle,
+        exit_status,
+        exit_code,
+        Some(handles),
+    );
+
+    Ok(SpawnedProcess {
+        session: handle,
+        output_rx,
+        exit_rx,
+    })
+}
+
+#[cfg(unix)]
+fn open_unix_pty() -> Result<(File, File)> {
+    let mut master: RawFd = -1;
+    let mut slave: RawFd = -1;
+    let mut size = libc::winsize {
+        ws_row: 24,
+        ws_col: 80,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let winp = std::ptr::addr_of_mut!(size);
+
+    let result = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            winp,
+        )
+    };
+    if result != 0 {
+        anyhow::bail!("failed to openpty: {:?}", std::io::Error::last_os_error());
+    }
+
+    set_cloexec(master)?;
+    set_cloexec(slave)?;
+
+    Ok(unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) })
+}
+
+#[cfg(unix)]
+fn set_cloexec(fd: RawFd) -> std::io::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let result = unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(crate) fn close_random_fds_except(preserved_fds: &[RawFd]) {
+    if let Ok(dir) = std::fs::read_dir("/dev/fd") {
+        let mut fds = Vec::new();
+        for entry in dir {
+            let num = entry
+                .ok()
+                .map(|entry| entry.file_name())
+                .and_then(|name| name.into_string().ok())
+                .and_then(|name| name.parse::<RawFd>().ok());
+            if let Some(num) = num {
+                if num <= 2 || preserved_fds.contains(&num) {
+                    continue;
+                }
+                // Keep CLOEXEC descriptors open so std::process can still use
+                // its internal exec-error pipe to report spawn failures.
+                let flags = unsafe { libc::fcntl(num, libc::F_GETFD) };
+                if flags == -1 || flags & libc::FD_CLOEXEC != 0 {
+                    continue;
+                }
+                fds.push(num);
+            }
+        }
+        for fd in fds {
+            unsafe {
+                libc::close(fd);
+            }
+        }
+    }
 }
