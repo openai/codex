@@ -404,9 +404,10 @@ mod tests {
     async fn handle_non_tool_response_item_strips_citations_from_assistant_message() {
         let item = assistant_output_text("hello<oai-mem-citation>doc1</oai-mem-citation> world");
 
-        let turn_item = handle_non_tool_response_item(&item, false, None)
-            .await
-            .expect("assistant message should parse");
+        let turn_item =
+            handle_non_tool_response_item(&item, false, Some(std::path::Path::new(".")))
+                .await
+                .expect("assistant message should parse");
 
         let TurnItem::AgentMessage(agent_message) = turn_item else {
             panic!("expected agent message");
