@@ -1,24 +1,32 @@
 #![allow(clippy::expect_used)]
 
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::compact::SUMMARY_PREFIX;
+use codex_core::config::Constrained;
+use codex_core::features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -75,6 +83,22 @@ fn format_labeled_requests_snapshot(
     )
 }
 
+fn format_labeled_requests_snapshot_with_normalized_exec_output(
+    scenario: &str,
+    sections: &[(&str, &responses::ResponsesRequest)],
+) -> String {
+    format_labeled_requests_snapshot(scenario, sections)
+        .lines()
+        .map(|line| {
+            line.split_once("function_call_output:").map_or_else(
+                || line.to_string(),
+                |(prefix, _)| format!("{prefix}function_call_output:<UNIFIED_EXEC_OUTPUT>"),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn compacted_summary_only_output(summary: &str) -> Vec<ResponseItem> {
     vec![ResponseItem::Compaction {
         encrypted_content: summary_with_prefix(summary),
@@ -93,7 +117,7 @@ fn remote_realtime_test_codex_builder(
 }
 
 async fn start_remote_realtime_server() -> responses::WebSocketTestServer {
-    start_websocket_server(vec![vec![
+    let scripted_connection = vec![
         vec![json!({
             "type": "session.updated",
             "session": { "id": "sess_remote_compact", "instructions": "backend prompt" }
@@ -108,7 +132,12 @@ async fn start_remote_realtime_server() -> responses::WebSocketTestServer {
         vec![],
         vec![],
         vec![],
-    ]])
+    ];
+    start_websocket_server(vec![
+        scripted_connection.clone(),
+        scripted_connection.clone(),
+        scripted_connection,
+    ])
     .await
 }
 
@@ -149,6 +178,61 @@ async fn close_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
     Ok(())
 }
 
+fn read_rollout_lines(path: &Path) -> Result<Vec<RolloutLine>> {
+    Ok(fs::read_to_string(path)?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .collect())
+}
+
+fn first_turn_context_items(path: &Path) -> Result<Vec<TurnContextItem>> {
+    let rollout_lines = read_rollout_lines(path)?;
+    let turn_id = rollout_lines
+        .iter()
+        .find_map(|line| match &line.item {
+            RolloutItem::TurnContext(ctx) => ctx.turn_id.clone(),
+            _ => None,
+        })
+        .expect("rollout should include a turn context item");
+
+    Ok(rollout_lines
+        .into_iter()
+        .filter_map(|line| match line.item {
+            RolloutItem::TurnContext(ctx) if ctx.turn_id.as_deref() == Some(turn_id.as_str()) => {
+                Some(ctx)
+            }
+            _ => None,
+        })
+        .collect())
+}
+
+async fn expect_exec_approval(
+    codex: &codex_core::CodexThread,
+    expected_command: &str,
+) -> ExecApprovalRequestEvent {
+    let event = wait_for_event(codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+
+    match event {
+        EventMsg::ExecApprovalRequest(approval) => {
+            let last_arg = approval
+                .command
+                .last()
+                .map(String::as_str)
+                .unwrap_or_default();
+            assert_eq!(last_arg, expected_command);
+            approval
+        }
+        EventMsg::TurnComplete(_) => panic!("expected approval request before completion"),
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
 fn assert_request_contains_realtime_start(request: &responses::ResponsesRequest) {
     let body = request.body_json().to_string();
     assert!(
@@ -171,6 +255,36 @@ fn assert_request_contains_realtime_end(request: &responses::ResponsesRequest) {
         body.contains("Reason: inactive"),
         "expected request to use realtime end instructions"
     );
+}
+
+fn assert_request_omits_realtime_update(request: &responses::ResponsesRequest) {
+    let body = request.body_json().to_string();
+    assert!(
+        !body.contains("<realtime_conversation>"),
+        "did not expect request to contain realtime instructions"
+    );
+}
+
+fn realtime_end_message_count(request: &responses::ResponsesRequest) -> usize {
+    request
+        .message_input_texts("developer")
+        .iter()
+        .filter(|text| text.contains("Reason: inactive"))
+        .count()
+}
+
+fn ev_exec_command_call_requiring_approval(call_id: &str, command: &str) -> serde_json::Value {
+    responses::ev_function_call(
+        call_id,
+        "exec_command",
+        &serde_json::to_string(&json!({
+            "cmd": command,
+            "yield_time_ms": 1_000_u64,
+            "sandbox_permissions": codex_protocol::models::SandboxPermissions::RequireEscalated,
+            "justification": "Need to continue the paused turn"
+        }))
+        .expect("serialize exec_command arguments"),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1865,6 +1979,393 @@ async fn snapshot_request_shape_remote_compact_resume_restates_realtime_end() ->
             "After remote manual /compact and resume, the first resumed turn rebuilds history from the compaction item and restates realtime-end instructions from reconstructed previous-turn settings.",
             &[
                 ("Remote Compaction Request", &compact_request),
+                ("Remote Post-Resume History Layout", after_resume_request),
+            ]
+        )
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_mid_turn_realtime_end() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let realtime_server = start_remote_realtime_server().await;
+    let mut builder = remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
+        let _ = config.features.enable(Feature::RequestPermissions);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.permissions.sandbox_policy =
+            Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    });
+    let test = builder.build(&server).await?;
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let shell_command = "printf mid-turn-realtime-end";
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                ev_exec_command_call_requiring_approval(
+                    "call-remote-mid-turn-realtime-end",
+                    shell_command,
+                ),
+                responses::ev_completed("r1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_MID_TURN_REALTIME_ENDED_REPLY"),
+                responses::ev_completed("r2"),
+            ]),
+        ],
+    )
+    .await;
+
+    start_realtime_conversation(test.codex.as_ref()).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let approval = expect_exec_approval(test.codex.as_ref(), shell_command).await;
+    close_realtime_conversation(test.codex.as_ref()).await?;
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    let turn_context_items = first_turn_context_items(&rollout_path)?;
+    assert_eq!(
+        turn_context_items.len(),
+        2,
+        "expected two same-turn context snapshots"
+    );
+    assert_eq!(
+        turn_context_items
+            .last()
+            .and_then(|item| item.realtime_active),
+        Some(false)
+    );
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let first_request = &requests[0];
+    let second_request = &requests[1];
+    assert_request_contains_realtime_end(second_request);
+
+    insta::assert_snapshot!(
+        "remote_mid_turn_realtime_end_shapes",
+        format_labeled_requests_snapshot_with_normalized_exec_output(
+            "Realtime closes while the turn is paused on exec approval. The continuation request in the same turn emits the realtime-ended developer update, and the rollout persists a later same-turn TurnContext snapshot with realtime inactive.",
+            &[
+                ("First Request Before Realtime Close", first_request),
+                (
+                    "Same-Turn Continuation After Realtime Close",
+                    second_request
+                ),
+            ]
+        )
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_resume_after_same_turn_realtime_end_uses_latest_turn_context_item()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let realtime_server = start_remote_realtime_server().await;
+    let mut builder = remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
+        let _ = config.features.enable(Feature::RequestPermissions);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.permissions.sandbox_policy =
+            Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    });
+    let initial = builder.build(&server).await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let shell_command = "printf mid-turn-realtime-end";
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                ev_exec_command_call_requiring_approval(
+                    "call-remote-resume-mid-turn-realtime-end",
+                    shell_command,
+                ),
+                responses::ev_completed("r1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_MID_TURN_REALTIME_ENDED_REPLY"),
+                responses::ev_completed("r2"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m3", "REMOTE_AFTER_RESUME_REPLY"),
+                responses::ev_completed("r3"),
+            ]),
+        ],
+    )
+    .await;
+
+    start_realtime_conversation(initial.codex.as_ref()).await?;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let approval = expect_exec_approval(initial.codex.as_ref(), shell_command).await;
+    close_realtime_conversation(initial.codex.as_ref()).await?;
+    initial
+        .codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    initial.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&initial.codex, |ev| {
+        matches!(ev, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let turn_context_items = first_turn_context_items(&rollout_path)?;
+    assert_eq!(
+        turn_context_items.len(),
+        2,
+        "expected two same-turn context snapshots"
+    );
+    assert_eq!(
+        turn_context_items
+            .last()
+            .and_then(|item| item.realtime_active),
+        Some(false)
+    );
+
+    let mut resume_builder =
+        remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
+            let _ = config.features.enable(Feature::RequestPermissions);
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.permissions.sandbox_policy =
+                Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+        });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3, "expected three model requests");
+
+    let second_request = &requests[1];
+    let after_resume_request = &requests[2];
+    assert_request_contains_realtime_end(second_request);
+    assert_eq!(
+        realtime_end_message_count(after_resume_request),
+        1,
+        "expected resume to preserve exactly one historical realtime-ended message without emitting a duplicate update"
+    );
+
+    insta::assert_snapshot!(
+        "remote_resume_after_same_turn_realtime_end_uses_latest_turn_context_item_shapes",
+        format_labeled_requests_snapshot_with_normalized_exec_output(
+            "A same-turn realtime-ended update is recorded before the turn completes. On resume, replay should use the later inactive TurnContext snapshot from that same turn and preserve that historical ended message exactly once instead of emitting a duplicate update.",
+            &[
+                (
+                    "Same-Turn Continuation After Realtime Close",
+                    second_request
+                ),
+                ("Remote Post-Resume History Layout", after_resume_request),
+            ]
+        )
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_compact_resume_after_same_turn_realtime_end_uses_latest_turn_context_item()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let realtime_server = start_remote_realtime_server().await;
+    let mut builder = remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
+        let _ = config.features.enable(Feature::RequestPermissions);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.permissions.sandbox_policy =
+            Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    });
+    let initial = builder.build(&server).await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let shell_command = "printf mid-turn-realtime-end";
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                ev_exec_command_call_requiring_approval(
+                    "call-remote-compact-resume-mid-turn-realtime-end",
+                    shell_command,
+                ),
+                responses::ev_completed("r1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_MID_TURN_REALTIME_ENDED_REPLY"),
+                responses::ev_completed("r2"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m3", "REMOTE_AFTER_RESUME_REPLY"),
+                responses::ev_completed("r3"),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_json_once(
+        &server,
+        serde_json::json!({
+            "output": compacted_summary_only_output(
+                "REMOTE_RESUME_LATEST_TURN_CONTEXT_SUMMARY"
+            )
+        }),
+    )
+    .await;
+
+    start_realtime_conversation(initial.codex.as_ref()).await?;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let approval = expect_exec_approval(initial.codex.as_ref(), shell_command).await;
+    close_realtime_conversation(initial.codex.as_ref()).await?;
+    initial
+        .codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    initial.codex.submit(Op::Compact).await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    initial.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&initial.codex, |ev| {
+        matches!(ev, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let turn_context_items = first_turn_context_items(&rollout_path)?;
+    assert_eq!(
+        turn_context_items.len(),
+        2,
+        "expected two same-turn context snapshots"
+    );
+    assert_eq!(
+        turn_context_items
+            .last()
+            .and_then(|item| item.realtime_active),
+        Some(false)
+    );
+
+    let mut resume_builder =
+        remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
+            let _ = config.features.enable(Feature::RequestPermissions);
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.permissions.sandbox_policy =
+                Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+        });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3, "expected three model requests");
+
+    let second_request = &requests[1];
+    let after_resume_request = &requests[2];
+    assert_request_contains_realtime_end(second_request);
+    assert_request_omits_realtime_update(after_resume_request);
+
+    insta::assert_snapshot!(
+        "remote_compact_resume_after_same_turn_realtime_end_uses_latest_turn_context_item_shapes",
+        format_labeled_requests_snapshot_with_normalized_exec_output(
+            "A same-turn realtime-ended update is recorded before manual /compact. After compact and resume, replay should still use the later inactive TurnContext snapshot from that same turn and avoid re-emitting a stale realtime-ended developer update.",
+            &[
+                (
+                    "Same-Turn Continuation After Realtime Close",
+                    second_request
+                ),
                 ("Remote Post-Resume History Layout", after_resume_request),
             ]
         )

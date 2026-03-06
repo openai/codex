@@ -170,10 +170,15 @@ impl Session {
                         active_segment.turn_id.as_deref(),
                         ctx.turn_id.as_deref(),
                     ) {
-                        active_segment.previous_turn_settings = Some(PreviousTurnSettings {
-                            model: ctx.model.clone(),
-                            realtime_active: ctx.realtime_active,
-                        });
+                        // Reverse replay walks newest-to-oldest, so the first surviving
+                        // `TurnContextItem` we see for this turn segment is the newest
+                        // surviving context snapshot for the turn.
+                        if active_segment.previous_turn_settings.is_none() {
+                            active_segment.previous_turn_settings = Some(PreviousTurnSettings {
+                                model: ctx.model.clone(),
+                                realtime_active: ctx.realtime_active,
+                            });
+                        }
                         if matches!(
                             active_segment.reference_context_item,
                             TurnReferenceContextItem::NeverSet

@@ -1,0 +1,25 @@
+---
+source: core/tests/suite/compact_remote.rs
+assertion_line: 2070
+expression: "format_labeled_requests_snapshot_with_normalized_exec_output(\"Realtime closes while the turn is paused on exec approval. The continuation request in the same turn emits the realtime-ended developer update, and the rollout persists a later same-turn TurnContext snapshot with realtime inactive.\",\n&[(\"First Request Before Realtime Close\", first_request),\n(\"Same-Turn Continuation After Realtime Close\", second_request),])"
+---
+Scenario: Realtime closes while the turn is paused on exec approval. The continuation request in the same turn emits the realtime-ended developer update, and the rollout persists a later same-turn TurnContext snapshot with realtime inactive.
+
+## First Request Before Realtime Close
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/developer:<realtime_conversation>\nRealtime conversation started.\n\nYou a...
+03:message/user:USER_ONE
+
+## Same-Turn Continuation After Realtime Close
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/developer:<realtime_conversation>\nRealtime conversation started.\n\nYou a...
+03:message/user:USER_ONE
+04:function_call/exec_command
+05:function_call_output:<UNIFIED_EXEC_OUTPUT>
+06:message/developer:<realtime_conversation>\nRealtime conversation ended.\n\nSubsequ...

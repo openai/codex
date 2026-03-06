@@ -627,6 +627,7 @@ pub(crate) struct Session {
     tx_event: Sender<Event>,
     agent_status: watch::Sender<AgentStatus>,
     state: Mutex<SessionState>,
+    session_configuration_update_lock: Mutex<()>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: ManagedFeatures,
@@ -782,6 +783,47 @@ impl TurnContext {
             js_repl: Arc::clone(&self.js_repl),
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
+            turn_skills: self.turn_skills.clone(),
+        }
+    }
+
+    pub(crate) fn with_realtime_active(&self, realtime_active: bool) -> Self {
+        Self {
+            sub_id: self.sub_id.clone(),
+            trace_id: self.trace_id.clone(),
+            realtime_active,
+            config: Arc::clone(&self.config),
+            auth_manager: self.auth_manager.clone(),
+            model_info: self.model_info.clone(),
+            otel_manager: self.otel_manager.clone(),
+            provider: self.provider.clone(),
+            reasoning_effort: self.reasoning_effort,
+            reasoning_summary: self.reasoning_summary,
+            session_source: self.session_source.clone(),
+            cwd: self.cwd.clone(),
+            current_date: self.current_date.clone(),
+            timezone: self.timezone.clone(),
+            app_server_client_name: self.app_server_client_name.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            compact_prompt: self.compact_prompt.clone(),
+            user_instructions: self.user_instructions.clone(),
+            collaboration_mode: self.collaboration_mode.clone(),
+            personality: self.personality,
+            approval_policy: self.approval_policy.clone(),
+            sandbox_policy: self.sandbox_policy.clone(),
+            network: self.network.clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            shell_environment_policy: self.shell_environment_policy.clone(),
+            tools_config: self.tools_config.clone(),
+            features: self.features.clone(),
+            ghost_snapshot: self.ghost_snapshot.clone(),
+            final_output_json_schema: self.final_output_json_schema.clone(),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::clone(&self.tool_call_gate),
+            truncation_policy: self.truncation_policy,
+            js_repl: Arc::clone(&self.js_repl),
+            dynamic_tools: self.dynamic_tools.clone(),
+            turn_metadata_state: Arc::clone(&self.turn_metadata_state),
             turn_skills: self.turn_skills.clone(),
         }
     }
@@ -1561,6 +1603,7 @@ impl Session {
             tx_event: tx_event.clone(),
             agent_status,
             state: Mutex::new(state),
+            session_configuration_update_lock: Mutex::new(()),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
@@ -2021,6 +2064,25 @@ impl Session {
         state.set_previous_turn_settings(previous_turn_settings);
     }
 
+    async fn set_previous_turn_settings_from_turn_context(&self, turn_context: &TurnContext) {
+        self.set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        }))
+        .await;
+    }
+
+    async fn maybe_advance_previous_turn_settings_for_compaction(
+        &self,
+        turn_context: &TurnContext,
+        initial_context_injection: InitialContextInjection,
+    ) {
+        if initial_context_injection == InitialContextInjection::BeforeLastUserMessage {
+            self.set_previous_turn_settings_from_turn_context(turn_context)
+                .await;
+        }
+    }
+
     fn maybe_refresh_shell_snapshot_for_cwd(
         &self,
         previous_cwd: &Path,
@@ -2057,31 +2119,77 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let mut state = self.state.lock().await;
-
-        match state.session_configuration.apply(&updates) {
-            Ok(updated) => {
-                let previous_cwd = state.session_configuration.cwd.clone();
-                let next_cwd = updated.cwd.clone();
-                let codex_home = updated.codex_home.clone();
-                let session_source = updated.session_source.clone();
-                state.session_configuration = updated;
-                drop(state);
-
-                self.maybe_refresh_shell_snapshot_for_cwd(
-                    &previous_cwd,
-                    &next_cwd,
-                    &codex_home,
-                    &session_source,
-                );
-
-                Ok(())
+        let _session_configuration_update_guard =
+            self.session_configuration_update_lock.lock().await;
+        let (
+            session_configuration,
+            previous_cwd,
+            sandbox_policy_changed,
+            approval_policy,
+            codex_home,
+            session_source,
+        ) = {
+            let mut state = self.state.lock().await;
+            match state.session_configuration.apply(&updates) {
+                Ok(updated) => {
+                    let previous_cwd = state.session_configuration.cwd.clone();
+                    let sandbox_policy_changed =
+                        state.session_configuration.sandbox_policy != updated.sandbox_policy;
+                    let approval_policy = updated.approval_policy.clone();
+                    let codex_home = updated.codex_home.clone();
+                    let session_source = updated.session_source.clone();
+                    state.session_configuration = updated.clone();
+                    (
+                        updated,
+                        previous_cwd,
+                        sandbox_policy_changed,
+                        approval_policy,
+                        codex_home,
+                        session_source,
+                    )
+                }
+                Err(err) => {
+                    warn!("rejected session settings update: {err}");
+                    return Err(err);
+                }
             }
-            Err(err) => {
-                warn!("rejected session settings update: {err}");
-                Err(err)
+        };
+
+        self.maybe_refresh_shell_snapshot_for_cwd(
+            &previous_cwd,
+            &session_configuration.cwd,
+            &codex_home,
+            &session_source,
+        );
+        self.services
+            .mcp_connection_manager
+            .read()
+            .await
+            .set_approval_policy(&approval_policy);
+
+        if sandbox_policy_changed {
+            let per_turn_config = Self::build_per_turn_config(&session_configuration);
+            let sandbox_state = SandboxState {
+                sandbox_policy: per_turn_config.permissions.sandbox_policy.get().clone(),
+                codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
+                sandbox_cwd: per_turn_config.cwd.clone(),
+                use_linux_sandbox_bwrap: per_turn_config
+                    .features
+                    .enabled(Feature::UseLinuxSandboxBwrap),
+            };
+            if let Err(err) = self
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .notify_sandbox_state_change(&sandbox_state)
+                .await
+            {
+                warn!("Failed to notify sandbox state change to MCP servers: {err:#}");
             }
         }
+
+        Ok(())
     }
 
     pub(crate) async fn new_turn_with_sub_id(
@@ -2217,6 +2325,136 @@ impl Session {
         let turn_context = Arc::new(turn_context);
         turn_context.turn_metadata_state.spawn_git_enrichment_task();
         turn_context
+    }
+
+    async fn build_updated_turn_context(
+        &self,
+        current_turn_context: &TurnContext,
+        session_configuration: &SessionConfiguration,
+    ) -> Arc<TurnContext> {
+        let per_turn_config = Self::build_per_turn_config(session_configuration);
+        let model_info = self
+            .services
+            .models_manager
+            .get_model_info(
+                session_configuration.collaboration_mode.model(),
+                &per_turn_config,
+            )
+            .await;
+        let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
+        let reasoning_summary = session_configuration
+            .model_reasoning_summary
+            .unwrap_or(model_info.default_reasoning_summary);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &per_turn_config.features,
+            web_search_mode: Some(per_turn_config.web_search_mode.value()),
+            session_source: current_turn_context.session_source.clone(),
+        })
+        .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
+        .with_agent_roles(per_turn_config.agent_roles.clone());
+        let turn_metadata_state = Arc::new(TurnMetadataState::new(
+            current_turn_context.sub_id.clone(),
+            session_configuration.cwd.clone(),
+            session_configuration.sandbox_policy.get(),
+            session_configuration.windows_sandbox_level,
+            per_turn_config
+                .features
+                .enabled(Feature::UseLinuxSandboxBwrap),
+        ));
+
+        Arc::new(TurnContext {
+            sub_id: current_turn_context.sub_id.clone(),
+            trace_id: current_turn_context.trace_id.clone(),
+            realtime_active: current_turn_context.realtime_active,
+            config: Arc::new(per_turn_config.clone()),
+            auth_manager: current_turn_context.auth_manager.clone(),
+            model_info: model_info.clone(),
+            otel_manager: self.services.otel_manager.clone().with_model(
+                session_configuration.collaboration_mode.model(),
+                model_info.slug.as_str(),
+            ),
+            provider: session_configuration.provider.clone(),
+            reasoning_effort,
+            reasoning_summary,
+            session_source: current_turn_context.session_source.clone(),
+            cwd: session_configuration.cwd.clone(),
+            current_date: current_turn_context.current_date.clone(),
+            timezone: current_turn_context.timezone.clone(),
+            app_server_client_name: session_configuration.app_server_client_name.clone(),
+            developer_instructions: session_configuration.developer_instructions.clone(),
+            compact_prompt: session_configuration.compact_prompt.clone(),
+            user_instructions: session_configuration.user_instructions.clone(),
+            collaboration_mode: session_configuration.collaboration_mode.clone(),
+            personality: session_configuration.personality,
+            approval_policy: session_configuration.approval_policy.clone(),
+            sandbox_policy: session_configuration.sandbox_policy.clone(),
+            network: current_turn_context.network.clone(),
+            windows_sandbox_level: session_configuration.windows_sandbox_level,
+            shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
+            tools_config,
+            features: per_turn_config.features.clone(),
+            ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
+            final_output_json_schema: current_turn_context.final_output_json_schema.clone(),
+            codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::clone(&current_turn_context.tool_call_gate),
+            truncation_policy: model_info.truncation_policy.into(),
+            js_repl: Arc::clone(&current_turn_context.js_repl),
+            dynamic_tools: session_configuration.dynamic_tools.clone(),
+            turn_metadata_state,
+            turn_skills: current_turn_context.turn_skills.clone(),
+        })
+    }
+
+    async fn refresh_current_active_turn_context_from_session_configuration(&self) {
+        const MAX_CONTEXT_REFRESH_ATTEMPTS: usize = 3;
+        for attempt in 0..MAX_CONTEXT_REFRESH_ATTEMPTS {
+            let Some(current_turn_context) = self.current_active_turn_context().await else {
+                return;
+            };
+            let session_configuration = {
+                let state = self.state.lock().await;
+                state.session_configuration.clone()
+            };
+            let realtime_active = self.conversation.running_state().await.is_some();
+            let next_turn_context = self
+                .build_updated_turn_context(current_turn_context.as_ref(), &session_configuration)
+                .await;
+            let next_turn_context = if next_turn_context.realtime_active == realtime_active {
+                next_turn_context
+            } else {
+                Arc::new(next_turn_context.with_realtime_active(realtime_active))
+            };
+            if self
+                .set_current_active_turn_context(Some(&current_turn_context), next_turn_context)
+                .await
+            {
+                return;
+            }
+
+            if attempt + 1 == MAX_CONTEXT_REFRESH_ATTEMPTS {
+                warn!(
+                    "failed to refresh active turn context from session configuration after {} attempts",
+                    MAX_CONTEXT_REFRESH_ATTEMPTS
+                );
+            }
+        }
+    }
+
+    pub(crate) async fn refresh_current_active_turn_context_from_realtime_state(&self) {
+        let Some(current_turn_context) = self.current_active_turn_context().await else {
+            return;
+        };
+        let realtime_active = self.conversation.running_state().await.is_some();
+        if current_turn_context.realtime_active == realtime_active {
+            return;
+        }
+
+        let next_turn_context =
+            Arc::new(current_turn_context.with_realtime_active(realtime_active));
+        let _ = self
+            .set_current_active_turn_context(Some(&current_turn_context), next_turn_context)
+            .await;
     }
 
     pub(crate) async fn maybe_emit_unknown_model_warning_for_turn(&self, tc: &TurnContext) {
@@ -2386,9 +2624,22 @@ impl Session {
         };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
+        let effective_previous_turn_settings = if reference_context_item
+            .and_then(|item| item.turn_id.as_deref())
+            == Some(current_context.sub_id.as_str())
+        {
+            reference_context_item.map(|item| PreviousTurnSettings {
+                model: item.model.clone(),
+                realtime_active: item
+                    .realtime_active
+                    .or(previous_turn_settings.and_then(|settings| settings.realtime_active)),
+            })
+        } else {
+            previous_turn_settings
+        };
         crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
-            previous_turn_settings.as_ref(),
+            effective_previous_turn_settings.as_ref(),
             current_context,
             shell.as_ref(),
             exec_policy.as_ref(),
@@ -2523,19 +2774,78 @@ impl Session {
 
     pub(crate) async fn turn_context_for_sub_id(&self, sub_id: &str) -> Option<Arc<TurnContext>> {
         let active = self.active_turn.lock().await;
-        active
-            .as_ref()
-            .and_then(|turn| turn.tasks.get(sub_id))
-            .map(|task| Arc::clone(&task.turn_context))
+        active.as_ref().and_then(|turn| {
+            turn.tasks.get(sub_id).map(|task| {
+                turn.current_turn_context
+                    .clone()
+                    .unwrap_or_else(|| Arc::clone(&task.initial_turn_context))
+            })
+        })
+    }
+
+    pub(crate) async fn current_active_turn_context(&self) -> Option<Arc<TurnContext>> {
+        let active = self.active_turn.lock().await;
+        let turn = active.as_ref()?;
+        turn.current_turn_context.clone().or_else(|| {
+            turn.tasks
+                .first()
+                .map(|(_, task)| Arc::clone(&task.initial_turn_context))
+        })
+    }
+
+    async fn set_current_active_turn_context(
+        &self,
+        expected_current_turn_context: Option<&Arc<TurnContext>>,
+        turn_context: Arc<TurnContext>,
+    ) -> bool {
+        let mut active = self.active_turn.lock().await;
+        let Some(turn) = active.as_mut() else {
+            return false;
+        };
+        if !turn.tasks.contains_key(&turn_context.sub_id) {
+            return false;
+        }
+        if let Some(expected_current_turn_context) = expected_current_turn_context {
+            let Some(current_turn_context) = turn.current_turn_context.clone().or_else(|| {
+                turn.tasks
+                    .first()
+                    .map(|(_, task)| Arc::clone(&task.initial_turn_context))
+            }) else {
+                return false;
+            };
+            if !Arc::ptr_eq(&current_turn_context, expected_current_turn_context) {
+                return false;
+            }
+        }
+        let previous_turn_metadata_state =
+            turn.current_turn_context
+                .as_ref()
+                .and_then(|previous_turn_context| {
+                    (!Arc::ptr_eq(
+                        &previous_turn_context.turn_metadata_state,
+                        &turn_context.turn_metadata_state,
+                    ))
+                    .then(|| Arc::clone(&previous_turn_context.turn_metadata_state))
+                });
+        turn_context.turn_metadata_state.spawn_git_enrichment_task();
+        turn.current_turn_context = Some(turn_context);
+        drop(active);
+        if let Some(previous_turn_metadata_state) = previous_turn_metadata_state {
+            previous_turn_metadata_state.cancel_git_enrichment_task();
+        }
+        true
     }
 
     async fn active_turn_context_and_cancellation_token(
         &self,
     ) -> Option<(Arc<TurnContext>, CancellationToken)> {
         let active = self.active_turn.lock().await;
-        let (_, task) = active.as_ref()?.tasks.first()?;
+        let turn = active.as_ref()?;
+        let (_, task) = turn.tasks.first()?;
         Some((
-            Arc::clone(&task.turn_context),
+            turn.current_turn_context
+                .clone()
+                .unwrap_or_else(|| Arc::clone(&task.initial_turn_context)),
             task.cancellation_token.child_token(),
         ))
     }
@@ -3274,8 +3584,23 @@ impl Session {
         state.reference_context_item()
     }
 
-    /// Persist the latest turn context snapshot for the first real user turn and for
-    /// steady-state turns that emit model-visible context updates.
+    async fn maybe_record_context_updates_for_turn(&self, turn_context: &TurnContext) {
+        let current_context_item = turn_context.to_turn_context_item();
+        let reference_context_item = {
+            let state = self.state.lock().await;
+            state.reference_context_item()
+        };
+        if reference_context_item.as_ref() == Some(&current_context_item) {
+            return;
+        }
+
+        self.record_context_updates_and_set_reference_context_item(turn_context)
+            .await;
+        self.set_previous_turn_settings_from_turn_context(turn_context)
+            .await;
+    }
+
+    /// Persist the latest turn context snapshot whenever committed model-visible context changes.
     ///
     /// When the reference snapshot is missing, this injects full initial context. Otherwise, it
     /// emits only settings diff items.
@@ -3308,8 +3633,9 @@ impl Session {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
         }
-        // Persist one `TurnContextItem` per real user turn so resume/lazy replay can recover the
-        // latest durable baseline even when this turn emitted no model-visible context diffs.
+        // Persist one `TurnContextItem` per committed model-visible context update so resume/lazy
+        // replay can recover the latest durable baseline even when this update emitted no
+        // model-visible context diffs.
         self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
             .await;
 
@@ -4108,7 +4434,11 @@ mod handlers {
                 }),
             })
             .await;
+            return;
         }
+
+        sess.refresh_current_active_turn_context_from_session_configuration()
+            .await;
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
@@ -5091,9 +5421,6 @@ pub(crate) async fn run_turn(
         return None;
     }
 
-    let model_info = turn_context.model_info.clone();
-    let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
-
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
         model_context_window: turn_context.model_context_window(),
@@ -5114,7 +5441,7 @@ pub(crate) async fn run_turn(
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
 
-    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+    sess.maybe_record_context_updates_for_turn(turn_context.as_ref())
         .await;
 
     let loaded_plugins = sess
@@ -5259,11 +5586,8 @@ pub(crate) async fn run_turn(
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
     // model/realtime injections.
-    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-        model: turn_context.model_info.slug.clone(),
-        realtime_active: Some(turn_context.realtime_active),
-    }))
-    .await;
+    sess.set_previous_turn_settings_from_turn_context(turn_context.as_ref())
+        .await;
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -5286,8 +5610,55 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut client_session_model_slug = turn_context.model_info.slug.clone();
+    let initial_turn_context = Arc::clone(&turn_context);
+    let mut should_check_pre_request_compaction = false;
 
     loop {
+        let turn_context = sess
+            .current_active_turn_context()
+            .await
+            .unwrap_or_else(|| Arc::clone(&initial_turn_context));
+        let auto_compact_limit = turn_context
+            .model_info
+            .auto_compact_token_limit()
+            .unwrap_or(i64::MAX);
+        if should_check_pre_request_compaction {
+            let total_usage_tokens = sess.get_total_token_usage().await;
+            let token_limit_reached = total_usage_tokens >= auto_compact_limit;
+            let estimated_token_count = sess.get_estimated_token_count(turn_context.as_ref()).await;
+            trace!(
+                turn_id = %turn_context.sub_id,
+                total_usage_tokens,
+                estimated_token_count = ?estimated_token_count,
+                auto_compact_limit,
+                token_limit_reached,
+                "pre sampling token usage"
+            );
+            should_check_pre_request_compaction = false;
+            if token_limit_reached {
+                if run_auto_compact(
+                    &sess,
+                    &turn_context,
+                    InitialContextInjection::BeforeLastUserMessage,
+                )
+                .await
+                .is_err()
+                {
+                    return None;
+                }
+                continue;
+            }
+        }
+
+        if client_session_model_slug != turn_context.model_info.slug {
+            client_session = sess.services.model_client.new_session();
+            client_session_model_slug = turn_context.model_info.slug.clone();
+            server_model_warning_emitted_for_turn = false;
+        }
+        sess.maybe_record_context_updates_for_turn(turn_context.as_ref())
+            .await;
+
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
@@ -5354,8 +5725,6 @@ pub(crate) async fn run_turn(
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
                 let total_usage_tokens = sess.get_total_token_usage().await;
-                let token_limit_reached = total_usage_tokens >= auto_compact_limit;
-
                 let estimated_token_count =
                     sess.get_estimated_token_count(turn_context.as_ref()).await;
 
@@ -5364,25 +5733,10 @@ pub(crate) async fn run_turn(
                     total_usage_tokens,
                     estimated_token_count = ?estimated_token_count,
                     auto_compact_limit,
-                    token_limit_reached,
                     needs_follow_up,
                     "post sampling token usage"
                 );
-
-                // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if token_limit_reached && needs_follow_up {
-                    if run_auto_compact(
-                        &sess,
-                        &turn_context,
-                        InitialContextInjection::BeforeLastUserMessage,
-                    )
-                    .await
-                    .is_err()
-                    {
-                        return None;
-                    }
-                    continue;
-                }
+                should_check_pre_request_compaction = needs_follow_up;
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
@@ -5569,6 +5923,11 @@ async fn run_auto_compact(
         )
         .await?;
     }
+    sess.maybe_advance_previous_turn_settings_for_compaction(
+        turn_context.as_ref(),
+        initial_context_injection,
+    )
+    .await;
     Ok(())
 }
 
@@ -6930,6 +7289,7 @@ mod tests {
     use serde::Deserialize;
     use serde_json::json;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::Arc;
     use std::sync::Once;
     use std::time::Duration as StdDuration;
@@ -7008,6 +7368,12 @@ mod tests {
             is_enabled: true,
             plugin_display_names: Vec::new(),
         }
+    }
+
+    fn install_blocking_turn_metadata_task(turn_metadata_state: &TurnMetadataState) {
+        turn_metadata_state.replace_enrichment_task_for_test(tokio::spawn(async {
+            sleep(Duration::from_secs(60)).await;
+        }));
     }
 
     #[test]
@@ -8980,6 +9346,7 @@ mod tests {
             tx_event,
             agent_status: agent_status_tx,
             state: Mutex::new(state),
+            session_configuration_update_lock: Mutex::new(()),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
@@ -9149,7 +9516,7 @@ mod tests {
             async fn run(
                 self: Arc<Self>,
                 _session: Arc<SessionTaskContext>,
-                _ctx: Arc<TurnContext>,
+                _initial_turn_context: Arc<TurnContext>,
                 _input: Vec<UserInput>,
                 _cancellation_token: CancellationToken,
             ) -> Option<String> {
@@ -9389,6 +9756,7 @@ mod tests {
             tx_event,
             agent_status: agent_status_tx,
             state: Mutex::new(state),
+            session_configuration_update_lock: Mutex::new(()),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
@@ -9502,6 +9870,615 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
         assert_eq!(sess.previous_turn_settings().await, None);
+    }
+
+    #[tokio::test]
+    async fn override_turn_context_updates_active_turn_context() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+        let next_model = if tc.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+        let next_cwd = PathBuf::from("/tmp/updated-turn-context");
+
+        handlers::override_turn_context(
+            sess.as_ref(),
+            "override".to_string(),
+            SessionSettingsUpdate {
+                cwd: Some(next_cwd.clone()),
+                collaboration_mode: Some(tc.collaboration_mode.with_updates(
+                    Some(next_model.to_string()),
+                    None,
+                    None,
+                )),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let updated = sess
+            .current_active_turn_context()
+            .await
+            .expect("updated active turn context");
+        assert_eq!(updated.cwd, next_cwd);
+        assert_eq!(updated.model_info.slug, next_model);
+        assert_eq!(updated.collaboration_mode.model(), next_model);
+        assert!(Arc::ptr_eq(&updated.tool_call_gate, &tc.tool_call_gate));
+    }
+
+    #[tokio::test]
+    async fn update_settings_waits_for_session_configuration_update_lock() {
+        let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+        let initial_approval_policy = {
+            let state = sess.state.lock().await;
+            state.session_configuration.approval_policy.value()
+        };
+        let updated_approval_policy = match initial_approval_policy {
+            AskForApproval::OnFailure => AskForApproval::Never,
+            _ => AskForApproval::OnFailure,
+        };
+
+        let session_configuration_update_guard =
+            sess.session_configuration_update_lock.lock().await;
+        let update_task = {
+            let sess = Arc::clone(&sess);
+            tokio::spawn(async move {
+                sess.update_settings(SessionSettingsUpdate {
+                    approval_policy: Some(updated_approval_policy),
+                    ..Default::default()
+                })
+                .await
+                .expect("settings update should succeed");
+            })
+        };
+
+        tokio::task::yield_now().await;
+        sleep(Duration::from_millis(50)).await;
+        let approval_policy_while_guard_held = {
+            let state = sess.state.lock().await;
+            state.session_configuration.approval_policy.value()
+        };
+        assert_eq!(approval_policy_while_guard_held, initial_approval_policy);
+
+        drop(session_configuration_update_guard);
+        update_task
+            .await
+            .expect("settings update task should finish");
+
+        let final_approval_policy = {
+            let state = sess.state.lock().await;
+            state.session_configuration.approval_policy.value()
+        };
+        assert_eq!(final_approval_policy, updated_approval_policy);
+    }
+
+    #[tokio::test]
+    async fn build_updated_turn_context_does_not_spawn_metadata_task_before_install() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let session_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+
+        let refreshed_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &session_configuration)
+            .await;
+
+        assert!(
+            !refreshed_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "refreshed context should not spawn git enrichment until installation succeeds"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_current_active_turn_context_spawns_metadata_task_on_success() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+        let mut session_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let repo_path = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&repo_path).expect("create repo directory");
+        let git_init_status = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo_path)
+            .status()
+            .expect("run git init");
+        assert!(git_init_status.success(), "git init should succeed");
+        session_configuration.cwd = repo_path;
+        let refreshed_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &session_configuration)
+            .await;
+
+        assert!(
+            sess.set_current_active_turn_context(None, Arc::clone(&refreshed_turn_context))
+                .await
+        );
+        assert!(
+            refreshed_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "successful installation should start git enrichment for the refreshed context"
+        );
+    }
+
+    #[tokio::test]
+    async fn override_turn_context_cancels_superseded_turn_metadata_task() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+        install_blocking_turn_metadata_task(&tc.turn_metadata_state);
+
+        let next_model = if tc.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+
+        handlers::override_turn_context(
+            sess.as_ref(),
+            "override".to_string(),
+            SessionSettingsUpdate {
+                collaboration_mode: Some(tc.collaboration_mode.with_updates(
+                    Some(next_model.to_string()),
+                    None,
+                    None,
+                )),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert!(
+            !tc.turn_metadata_state.has_enrichment_task_for_test(),
+            "superseded turn metadata task should be canceled"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_current_active_turn_context_rejects_stale_turn_refresh() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+        let session_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let stale_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &session_configuration)
+            .await;
+        let replacement_turn_context = sess
+            .new_default_turn_with_sub_id("replacement".into())
+            .await;
+
+        *sess.active_turn.lock().await = Some(crate::state::ActiveTurn {
+            current_turn_context: Some(Arc::clone(&replacement_turn_context)),
+            tasks: indexmap::IndexMap::from([(
+                replacement_turn_context.sub_id.clone(),
+                crate::state::RunningTask {
+                    done: Arc::new(tokio::sync::Notify::new()),
+                    kind: TaskKind::Regular,
+                    task: Arc::new(NeverEndingTask {
+                        kind: TaskKind::Regular,
+                        listen_to_cancellation_token: true,
+                    }),
+                    cancellation_token: CancellationToken::new(),
+                    handle: Arc::new(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+                        async {},
+                    ))),
+                    initial_turn_context: Arc::clone(&replacement_turn_context),
+                    _timer: None,
+                },
+            )]),
+            ..Default::default()
+        });
+
+        assert!(
+            !sess
+                .set_current_active_turn_context(None, Arc::clone(&stale_turn_context))
+                .await
+        );
+
+        let active_turn_context = sess
+            .current_active_turn_context()
+            .await
+            .expect("replacement turn context should remain installed");
+        assert_eq!(active_turn_context.sub_id, replacement_turn_context.sub_id);
+        assert_eq!(
+            active_turn_context.model_info.slug,
+            replacement_turn_context.model_info.slug
+        );
+        assert!(
+            !stale_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "stale refresh should not spawn git enrichment"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_current_active_turn_context_rejects_older_same_turn_refresh() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+        let mut older_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let mut newer_configuration = older_configuration.clone();
+        let older_model = if tc.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+        let newer_model = if older_model == "gpt-5" {
+            "gpt-5.1"
+        } else {
+            "gpt-5"
+        };
+        older_configuration.collaboration_mode = older_configuration
+            .collaboration_mode
+            .with_updates(Some(older_model.to_string()), None, None);
+        newer_configuration.collaboration_mode = newer_configuration
+            .collaboration_mode
+            .with_updates(Some(newer_model.to_string()), None, None);
+
+        let older_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &older_configuration)
+            .await;
+        let newer_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &newer_configuration)
+            .await;
+
+        assert!(
+            sess.set_current_active_turn_context(Some(&tc), Arc::clone(&newer_turn_context))
+                .await
+        );
+        assert!(
+            !sess
+                .set_current_active_turn_context(Some(&tc), Arc::clone(&older_turn_context))
+                .await
+        );
+
+        let active_turn_context = sess
+            .current_active_turn_context()
+            .await
+            .expect("newer turn context should remain installed");
+        assert_eq!(active_turn_context.sub_id, tc.sub_id);
+        assert_eq!(active_turn_context.model_info.slug, newer_model);
+        assert!(
+            !older_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "rejected stale same-turn refresh should not spawn git enrichment"
+        );
+    }
+
+    #[tokio::test]
+    async fn on_task_finished_cancels_refreshed_current_turn_context_metadata_task() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let session_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let refreshed_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &session_configuration)
+            .await;
+        install_blocking_turn_metadata_task(&refreshed_turn_context.turn_metadata_state);
+
+        *sess.active_turn.lock().await = Some(crate::state::ActiveTurn {
+            current_turn_context: Some(Arc::clone(&refreshed_turn_context)),
+            tasks: indexmap::IndexMap::from([(
+                tc.sub_id.clone(),
+                crate::state::RunningTask {
+                    done: Arc::new(tokio::sync::Notify::new()),
+                    kind: TaskKind::Regular,
+                    task: Arc::new(NeverEndingTask {
+                        kind: TaskKind::Regular,
+                        listen_to_cancellation_token: true,
+                    }),
+                    cancellation_token: CancellationToken::new(),
+                    handle: Arc::new(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+                        async {},
+                    ))),
+                    initial_turn_context: Arc::clone(&tc),
+                    _timer: None,
+                },
+            )]),
+            ..Default::default()
+        });
+
+        sess.on_task_finished(Arc::clone(&tc), None).await;
+
+        assert!(
+            !refreshed_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "refreshed active turn metadata task should be canceled when the turn finishes"
+        );
+        assert!(
+            sess.active_turn.lock().await.is_none(),
+            "finished task should clear the active turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn abort_all_tasks_cancels_refreshed_current_turn_context_metadata_task() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+        let session_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let refreshed_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &session_configuration)
+            .await;
+        install_blocking_turn_metadata_task(&refreshed_turn_context.turn_metadata_state);
+        assert!(
+            sess.set_current_active_turn_context(None, Arc::clone(&refreshed_turn_context))
+                .await
+        );
+
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+        assert!(
+            !refreshed_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "refreshed active turn metadata task should be canceled when the turn aborts"
+        );
+        assert!(
+            sess.active_turn.lock().await.is_none(),
+            "aborted task should clear the active turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn maybe_record_context_updates_for_turn_updates_previous_turn_settings_for_mid_turn_realtime_change()
+     {
+        let (session, previous_context) = make_session_and_context().await;
+        {
+            let mut state = session.state.lock().await;
+            state.set_reference_context_item(Some(previous_context.to_turn_context_item()));
+        }
+        session
+            .set_previous_turn_settings_from_turn_context(&previous_context)
+            .await;
+
+        let mut current_context = previous_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+        current_context.realtime_active = true;
+
+        session
+            .maybe_record_context_updates_for_turn(&current_context)
+            .await;
+
+        assert_eq!(
+            session.previous_turn_settings().await,
+            Some(PreviousTurnSettings {
+                model: current_context.model_info.slug.clone(),
+                realtime_active: Some(true),
+            })
+        );
+        assert_eq!(
+            session.reference_context_item().await,
+            Some(current_context.to_turn_context_item())
+        );
+    }
+
+    #[tokio::test]
+    async fn maybe_record_context_updates_for_turn_noops_when_reference_matches() {
+        let (session, turn_context) = make_session_and_context().await;
+        {
+            let mut state = session.state.lock().await;
+            state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
+        }
+        session
+            .set_previous_turn_settings_from_turn_context(&turn_context)
+            .await;
+
+        session
+            .maybe_record_context_updates_for_turn(&turn_context)
+            .await;
+
+        assert_eq!(
+            session.clone_history().await.raw_items().to_vec(),
+            Vec::new()
+        );
+        assert_eq!(
+            session.reference_context_item().await,
+            Some(turn_context.to_turn_context_item())
+        );
+        assert_eq!(
+            session.previous_turn_settings().await,
+            Some(PreviousTurnSettings {
+                model: turn_context.model_info.slug.clone(),
+                realtime_active: Some(turn_context.realtime_active),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn mid_turn_compaction_advances_previous_turn_settings_for_model_change() {
+        let (session, previous_context) = make_session_and_context().await;
+        session
+            .set_previous_turn_settings_from_turn_context(&previous_context)
+            .await;
+
+        let next_model = if previous_context.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+        let current_context = previous_context
+            .with_model(next_model.to_string(), &session.services.models_manager)
+            .await;
+
+        session
+            .maybe_advance_previous_turn_settings_for_compaction(
+                &current_context,
+                InitialContextInjection::BeforeLastUserMessage,
+            )
+            .await;
+
+        let next_turn_context = current_context
+            .with_model(next_model.to_string(), &session.services.models_manager)
+            .await;
+        let initial_context = session.build_initial_context(&next_turn_context).await;
+        let developer_text = initial_context
+            .iter()
+            .find_map(|item| match item {
+                ResponseItem::Message { role, content, .. } if role == "developer" => {
+                    let [ContentItem::InputText { text }, ..] = content.as_slice() else {
+                        return None;
+                    };
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .expect("developer message");
+        assert!(
+            !developer_text.contains("<model_switch>"),
+            "next turn should not emit a stale model switch after mid-turn compaction committed the new model baseline"
+        );
+        assert_eq!(
+            session.previous_turn_settings().await,
+            Some(PreviousTurnSettings {
+                model: next_model.to_string(),
+                realtime_active: Some(current_context.realtime_active),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn pre_turn_compaction_does_not_advance_previous_turn_settings_for_model_change() {
+        let (session, previous_context) = make_session_and_context().await;
+        session
+            .set_previous_turn_settings_from_turn_context(&previous_context)
+            .await;
+
+        let next_model = if previous_context.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+        let current_context = previous_context
+            .with_model(next_model.to_string(), &session.services.models_manager)
+            .await;
+
+        session
+            .maybe_advance_previous_turn_settings_for_compaction(
+                &current_context,
+                InitialContextInjection::DoNotInject,
+            )
+            .await;
+
+        let initial_context = session.build_initial_context(&current_context).await;
+        let developer_text = initial_context
+            .iter()
+            .find_map(|item| match item {
+                ResponseItem::Message { role, content, .. } if role == "developer" => {
+                    let [ContentItem::InputText { text }, ..] = content.as_slice() else {
+                        return None;
+                    };
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .expect("developer message");
+        assert!(
+            developer_text.contains("<model_switch>"),
+            "pre-turn compaction should not suppress the incoming model switch"
+        );
+        assert_eq!(
+            session.previous_turn_settings().await,
+            Some(PreviousTurnSettings {
+                model: previous_context.model_info.slug.clone(),
+                realtime_active: Some(previous_context.realtime_active),
+            })
+        );
     }
 
     #[tokio::test]
@@ -9816,14 +10793,6 @@ mod tests {
     async fn record_context_updates_and_set_reference_context_item_persists_baseline_without_emitting_diffs()
      {
         let (session, previous_context) = make_session_and_context().await;
-        let next_model = if previous_context.model_info.slug == "gpt-5.1" {
-            "gpt-5"
-        } else {
-            "gpt-5.1"
-        };
-        let turn_context = previous_context
-            .with_model(next_model.to_string(), &session.services.models_manager)
-            .await;
         let previous_context_item = previous_context.to_turn_context_item();
         {
             let mut state = session.state.lock().await;
@@ -9852,12 +10821,12 @@ mod tests {
         }
 
         let update_items = session
-            .build_settings_update_items(Some(&previous_context_item), &turn_context)
+            .build_settings_update_items(Some(&previous_context_item), &previous_context)
             .await;
         assert_eq!(update_items, Vec::new());
 
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context)
+            .record_context_updates_and_set_reference_context_item(&previous_context)
             .await;
 
         assert_eq!(
@@ -9867,7 +10836,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(session.reference_context_item().await)
                 .expect("serialize current context item"),
-            serde_json::to_value(Some(turn_context.to_turn_context_item()))
+            serde_json::to_value(Some(previous_context.to_turn_context_item()))
                 .expect("serialize expected context item")
         );
         session.ensure_rollout_materialized().await;
@@ -9886,7 +10855,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(persisted_turn_context)
                 .expect("serialize persisted turn context item"),
-            serde_json::to_value(Some(turn_context.to_turn_context_item()))
+            serde_json::to_value(Some(previous_context.to_turn_context_item()))
                 .expect("serialize expected turn context item")
         );
     }
@@ -9912,6 +10881,46 @@ mod tests {
             panic!("expected developer text");
         };
         assert!(text.contains("<model_switch>"));
+    }
+
+    #[tokio::test]
+    async fn build_settings_update_items_uses_reference_context_model_for_switch_back() {
+        let (session, previous_context) = make_session_and_context().await;
+        let next_model = if previous_context.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+        let switched_context = previous_context
+            .with_model(next_model.to_string(), &session.services.models_manager)
+            .await;
+        let switched_back_context = switched_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+
+        let update_items = session
+            .build_settings_update_items(
+                Some(&switched_context.to_turn_context_item()),
+                &switched_back_context,
+            )
+            .await;
+
+        let developer_text = update_items
+            .iter()
+            .find_map(|item| match item {
+                ResponseItem::Message { role, content, .. } if role == "developer" => {
+                    content.iter().find_map(|content| match content {
+                        ContentItem::InputText { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .expect("developer update item");
+        assert!(developer_text.contains("<model_switch>"));
     }
 
     #[tokio::test]
@@ -10043,7 +11052,7 @@ mod tests {
         async fn run(
             self: Arc<Self>,
             _session: Arc<SessionTaskContext>,
-            _ctx: Arc<TurnContext>,
+            _initial_turn_context: Arc<TurnContext>,
             _input: Vec<UserInput>,
             cancellation_token: CancellationToken,
         ) -> Option<String> {

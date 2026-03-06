@@ -39,18 +39,18 @@ impl SessionTask for GhostSnapshotTask {
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
-        ctx: Arc<TurnContext>,
+        initial_turn_context: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         tokio::task::spawn(async move {
             let token = self.token;
-            let warnings_enabled = !ctx.ghost_snapshot.disable_warnings;
+            let warnings_enabled = !initial_turn_context.ghost_snapshot.disable_warnings;
             // Channel used to signal when the snapshot work has finished so the
             // timeout warning task can exit early without sending a warning.
             let (snapshot_done_tx, snapshot_done_rx) = oneshot::channel::<()>();
             if warnings_enabled {
-                let ctx_for_warning = ctx.clone();
+                let initial_turn_context_for_warning = initial_turn_context.clone();
                 let cancellation_token_for_warning = cancellation_token.clone();
                 let session_for_warning = session.clone();
                 // Fire a generic warning if the snapshot is still running after
@@ -61,7 +61,7 @@ impl SessionTask for GhostSnapshotTask {
                         _ = tokio::time::sleep(SNAPSHOT_WARNING_THRESHOLD) => {
                             session_for_warning.session
                                 .send_event(
-                                    &ctx_for_warning,
+                                    &initial_turn_context_for_warning,
                                     EventMsg::Warning(WarningEvent {
                                         message: "Repository snapshot is taking longer than expected. Large untracked or ignored files can slow snapshots; consider adding large files or directories to .gitignore or disabling `undo` in your config.".to_string()
                                     }),
@@ -76,12 +76,12 @@ impl SessionTask for GhostSnapshotTask {
                 drop(snapshot_done_rx);
             }
 
-            let ctx_for_task = ctx.clone();
+            let initial_turn_context_for_task = initial_turn_context.clone();
             let cancelled = tokio::select! {
                 _ = cancellation_token.cancelled() => true,
                 _ = async {
-                    let repo_path = ctx_for_task.cwd.clone();
-                    let ghost_snapshot = ctx_for_task.ghost_snapshot.clone();
+                    let repo_path = initial_turn_context_for_task.cwd.clone();
+                    let ghost_snapshot = initial_turn_context_for_task.ghost_snapshot.clone();
                     let ghost_snapshot_for_commit = ghost_snapshot.clone();
                     // Required to run in a dedicated blocking pool.
                     match tokio::task::spawn_blocking(move || {
@@ -102,7 +102,7 @@ impl SessionTask for GhostSnapshotTask {
                                     session
                                         .session
                                         .send_event(
-                                            &ctx_for_task,
+                                            &initial_turn_context_for_task,
                                             EventMsg::Warning(WarningEvent { message }),
                                         )
                                         .await;
@@ -110,7 +110,7 @@ impl SessionTask for GhostSnapshotTask {
                             }
                             session
                                 .session
-                                .record_conversation_items(&ctx, &[ResponseItem::GhostSnapshot {
+                                .record_conversation_items(&initial_turn_context, &[ResponseItem::GhostSnapshot {
                                     ghost_commit: ghost_commit.clone(),
                                 }])
                                 .await;
@@ -118,26 +118,26 @@ impl SessionTask for GhostSnapshotTask {
                         }
                         Ok(Err(err)) => match err {
                             GitToolingError::NotAGitRepository { .. } => info!(
-                                sub_id = ctx_for_task.sub_id.as_str(),
+                                sub_id = initial_turn_context_for_task.sub_id.as_str(),
                                 "skipping ghost snapshot because current directory is not a Git repository"
                             ),
                             _ => {
                                 warn!(
-                                    sub_id = ctx_for_task.sub_id.as_str(),
+                                    sub_id = initial_turn_context_for_task.sub_id.as_str(),
                                     "failed to capture ghost snapshot: {err}"
                                 );
                             }
                         },
                         Err(err) => {
                             warn!(
-                                sub_id = ctx_for_task.sub_id.as_str(),
+                                sub_id = initial_turn_context_for_task.sub_id.as_str(),
                                 "ghost snapshot task panicked: {err}"
                             );
                             let message =
                                 format!("Snapshots disabled after ghost snapshot panic: {err}.");
                             session
                                 .session
-                                .notify_background_event(&ctx_for_task, message)
+                                .notify_background_event(&initial_turn_context_for_task, message)
                                 .await;
                         }
                     }
@@ -150,7 +150,7 @@ impl SessionTask for GhostSnapshotTask {
                 info!("ghost snapshot task cancelled");
             }
 
-            match ctx.tool_call_gate.mark_ready(token).await {
+            match initial_turn_context.tool_call_gate.mark_ready(token).await {
                 Ok(true) => info!("ghost snapshot gate marked ready"),
                 Ok(false) => warn!("ghost snapshot gate already ready"),
                 Err(err) => warn!("failed to mark ghost snapshot ready: {err}"),

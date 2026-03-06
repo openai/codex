@@ -1,0 +1,31 @@
+---
+source: core/tests/suite/compact_remote.rs
+assertion_line: 2198
+expression: "format_labeled_requests_snapshot_with_normalized_exec_output(\"A same-turn realtime-ended update is recorded before the turn completes. On resume, replay should use the later inactive TurnContext snapshot from that same turn and preserve that historical ended message exactly once instead of emitting a duplicate update.\",\n&[(\"Same-Turn Continuation After Realtime Close\", second_request),\n(\"Remote Post-Resume History Layout\", after_resume_request),])"
+---
+Scenario: A same-turn realtime-ended update is recorded before the turn completes. On resume, replay should use the later inactive TurnContext snapshot from that same turn and preserve that historical ended message exactly once instead of emitting a duplicate update.
+
+## Same-Turn Continuation After Realtime Close
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/developer:<realtime_conversation>\nRealtime conversation started.\n\nYou a...
+03:message/user:USER_ONE
+04:function_call/exec_command
+05:function_call_output:<UNIFIED_EXEC_OUTPUT>
+06:message/developer:<realtime_conversation>\nRealtime conversation ended.\n\nSubsequ...
+
+## Remote Post-Resume History Layout
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/developer:<realtime_conversation>\nRealtime conversation started.\n\nYou a...
+03:message/user:USER_ONE
+04:function_call/exec_command
+05:function_call_output:<UNIFIED_EXEC_OUTPUT>
+06:message/developer:<realtime_conversation>\nRealtime conversation ended.\n\nSubsequ...
+07:message/assistant:REMOTE_MID_TURN_REALTIME_ENDED_REPLY
+08:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+09:message/user:USER_TWO

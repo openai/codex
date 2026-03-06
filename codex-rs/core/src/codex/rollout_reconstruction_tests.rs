@@ -836,6 +836,129 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
 }
 
 #[tokio::test]
+async fn record_initial_history_resumed_prefers_latest_turn_context_item_within_single_turn() {
+    let (session, turn_context) = make_session_and_context().await;
+    let mut earlier_context_item = turn_context.to_turn_context_item();
+    earlier_context_item.realtime_active = Some(true);
+    let mut latest_context_item = earlier_context_item.clone();
+    latest_context_item.realtime_active = Some(false);
+    let turn_id = earlier_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+
+    let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "seed".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(earlier_context_item),
+        RolloutItem::TurnContext(latest_context_item.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id,
+                last_agent_message: None,
+            },
+        )),
+    ];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+
+    assert_eq!(
+        session.previous_turn_settings().await,
+        Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(false),
+        })
+    );
+    assert_eq!(
+        session.reference_context_item().await,
+        Some(latest_context_item)
+    );
+}
+
+#[tokio::test]
+async fn record_initial_history_resumed_compaction_reestablishes_latest_turn_context_item_within_single_turn()
+ {
+    let (session, turn_context) = make_session_and_context().await;
+    let mut earlier_context_item = turn_context.to_turn_context_item();
+    earlier_context_item.realtime_active = Some(true);
+    let mut latest_context_item = earlier_context_item.clone();
+    latest_context_item.realtime_active = Some(false);
+    let turn_id = earlier_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+
+    let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "seed".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(earlier_context_item),
+        RolloutItem::Compacted(CompactedItem {
+            message: String::new(),
+            replacement_history: Some(Vec::new()),
+        }),
+        RolloutItem::TurnContext(latest_context_item.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id,
+                last_agent_message: None,
+            },
+        )),
+    ];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+
+    assert_eq!(
+        session.previous_turn_settings().await,
+        Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(false),
+        })
+    );
+    assert_eq!(
+        session.reference_context_item().await,
+        Some(latest_context_item)
+    );
+}
+
+#[tokio::test]
 async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_turn_for_compaction_accounting()
  {
     let (session, turn_context) = make_session_and_context().await;

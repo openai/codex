@@ -73,13 +73,13 @@ impl SessionTask for UserShellCommandTask {
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
-        turn_context: Arc<TurnContext>,
+        initial_turn_context: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         execute_user_shell_command(
             session.clone_session(),
-            turn_context,
+            initial_turn_context,
             self.command.clone(),
             cancellation_token,
             UserShellCommandMode::StandaloneTurn,

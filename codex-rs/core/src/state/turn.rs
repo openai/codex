@@ -22,6 +22,7 @@ use crate::tasks::SessionTask;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
+    pub(crate) current_turn_context: Option<Arc<TurnContext>>,
     pub(crate) tasks: IndexMap<String, RunningTask>,
     pub(crate) turn_state: Arc<Mutex<TurnState>>,
 }
@@ -29,6 +30,7 @@ pub(crate) struct ActiveTurn {
 impl Default for ActiveTurn {
     fn default() -> Self {
         Self {
+            current_turn_context: None,
             tasks: IndexMap::new(),
             turn_state: Arc::new(Mutex::new(TurnState::default())),
         }
@@ -48,14 +50,15 @@ pub(crate) struct RunningTask {
     pub(crate) task: Arc<dyn SessionTask>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) handle: Arc<AbortOnDropHandle<()>>,
-    pub(crate) turn_context: Arc<TurnContext>,
+    pub(crate) initial_turn_context: Arc<TurnContext>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
 }
 
 impl ActiveTurn {
     pub(crate) fn add_task(&mut self, task: RunningTask) {
-        let sub_id = task.turn_context.sub_id.clone();
+        self.current_turn_context = Some(Arc::clone(&task.initial_turn_context));
+        let sub_id = task.initial_turn_context.sub_id.clone();
         self.tasks.insert(sub_id, task);
     }
 

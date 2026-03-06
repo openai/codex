@@ -248,14 +248,6 @@ impl NetworkApprovalService {
             .await;
     }
 
-    async fn active_turn_context(session: &Session) -> Option<Arc<crate::codex::TurnContext>> {
-        let active_turn = session.active_turn.lock().await;
-        active_turn
-            .as_ref()
-            .and_then(|turn| turn.tasks.first())
-            .map(|(_, task)| Arc::clone(&task.turn_context))
-    }
-
     fn format_network_target(protocol: &str, host: &str, port: u16) -> String {
         format!("{protocol}://{host}:{port}")
     }
@@ -303,7 +295,7 @@ impl NetworkApprovalService {
             format!("Network access to \"{target}\" was blocked by policy.");
         let prompt_reason = format!("{} is not in the allowed_domains", request.host);
 
-        let Some(turn_context) = Self::active_turn_context(session).await else {
+        let Some(turn_context) = session.current_active_turn_context().await else {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;
             pending_approvals.remove(&key);
@@ -555,9 +547,43 @@ pub(crate) async fn finish_deferred_network_approval(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::make_session_and_context_with_rx;
+    use crate::state::ActiveTurn;
+    use crate::state::RunningTask;
+    use crate::state::TaskKind;
+    use crate::tasks::SessionTask;
+    use crate::tasks::SessionTaskContext;
     use codex_network_proxy::BlockedRequestArgs;
     use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
+    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
+    use tokio_util::task::AbortOnDropHandle;
+
+    #[derive(Clone, Copy)]
+    struct NoopTask;
+
+    #[async_trait::async_trait]
+    impl SessionTask for NoopTask {
+        fn kind(&self) -> TaskKind {
+            TaskKind::Regular
+        }
+
+        fn span_name(&self) -> &'static str {
+            "network_approval_test_noop_task"
+        }
+
+        async fn run(
+            self: Arc<Self>,
+            _session: Arc<SessionTaskContext>,
+            _initial_turn_context: Arc<crate::codex::TurnContext>,
+            _input: Vec<UserInput>,
+            _cancellation_token: CancellationToken,
+        ) -> Option<String> {
+            None
+        }
+    }
 
     #[tokio::test]
     async fn pending_approvals_are_deduped_per_host_protocol_and_port() {
@@ -696,5 +722,45 @@ mod tests {
 
         assert_eq!(service.take_call_outcome("registration-1").await, None);
         assert_eq!(service.take_call_outcome("registration-2").await, None);
+    }
+
+    #[tokio::test]
+    async fn active_turn_context_prefers_refreshed_current_turn_context_over_task_snapshot() {
+        let (session, original_turn_context, _rx) = make_session_and_context_with_rx().await;
+        let next_model = if original_turn_context.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+        let refreshed_turn_context = Arc::new(
+            original_turn_context
+                .with_model(next_model.to_string(), &session.services.models_manager)
+                .await,
+        );
+        let handle = tokio::spawn(async {});
+
+        *session.active_turn.lock().await = Some(ActiveTurn {
+            current_turn_context: Some(Arc::clone(&refreshed_turn_context)),
+            tasks: IndexMap::from([(
+                original_turn_context.sub_id.clone(),
+                RunningTask {
+                    done: Arc::new(Notify::new()),
+                    kind: TaskKind::Regular,
+                    task: Arc::new(NoopTask),
+                    cancellation_token: CancellationToken::new(),
+                    handle: Arc::new(AbortOnDropHandle::new(handle)),
+                    initial_turn_context: Arc::clone(&original_turn_context),
+                    _timer: None,
+                },
+            )]),
+            ..Default::default()
+        });
+
+        let active_turn_context = session
+            .current_active_turn_context()
+            .await
+            .expect("active turn context");
+
+        assert!(Arc::ptr_eq(&active_turn_context, &refreshed_turn_context));
     }
 }

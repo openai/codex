@@ -38,7 +38,7 @@ impl SessionTask for UndoTask {
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
-        ctx: Arc<TurnContext>,
+        initial_turn_context: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
@@ -49,7 +49,7 @@ impl SessionTask for UndoTask {
             .counter("codex.task.undo", 1, &[]);
         let sess = session.clone_session();
         sess.send_event(
-            ctx.as_ref(),
+            initial_turn_context.as_ref(),
             EventMsg::UndoStarted(UndoStartedEvent {
                 message: Some("Undo in progress...".to_string()),
             }),
@@ -58,7 +58,7 @@ impl SessionTask for UndoTask {
 
         if cancellation_token.is_cancelled() {
             sess.send_event(
-                ctx.as_ref(),
+                initial_turn_context.as_ref(),
                 EventMsg::UndoCompleted(UndoCompletedEvent {
                     success: false,
                     message: Some("Undo cancelled.".to_string()),
@@ -88,14 +88,17 @@ impl SessionTask for UndoTask {
                 })
         else {
             completed.message = Some("No ghost snapshot available to undo.".to_string());
-            sess.send_event(ctx.as_ref(), EventMsg::UndoCompleted(completed))
-                .await;
+            sess.send_event(
+                initial_turn_context.as_ref(),
+                EventMsg::UndoCompleted(completed),
+            )
+            .await;
             return None;
         };
 
         let commit_id = ghost_commit.id().to_string();
-        let repo_path = ctx.cwd.clone();
-        let ghost_snapshot = ctx.ghost_snapshot.clone();
+        let repo_path = initial_turn_context.cwd.clone();
+        let ghost_snapshot = initial_turn_context.ghost_snapshot.clone();
         let restore_result = tokio::task::spawn_blocking(move || {
             let options = RestoreGhostCommitOptions::new(&repo_path).ghost_snapshot(ghost_snapshot);
             restore_ghost_commit_with_options(&options, &ghost_commit)
@@ -124,8 +127,11 @@ impl SessionTask for UndoTask {
             }
         }
 
-        sess.send_event(ctx.as_ref(), EventMsg::UndoCompleted(completed))
-            .await;
+        sess.send_event(
+            initial_turn_context.as_ref(),
+            EventMsg::UndoCompleted(completed),
+        )
+        .await;
         None
     }
 }

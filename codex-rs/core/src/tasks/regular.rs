@@ -75,7 +75,7 @@ impl SessionTask for RegularTask {
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
-        ctx: Arc<TurnContext>,
+        initial_turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
@@ -85,7 +85,7 @@ impl SessionTask for RegularTask {
         let prewarmed_client_session = self.take_prewarmed_session().await;
         run_turn(
             sess,
-            ctx,
+            initial_turn_context,
             input,
             prewarmed_client_session,
             cancellation_token,

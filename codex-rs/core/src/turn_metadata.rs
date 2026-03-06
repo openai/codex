@@ -220,6 +220,25 @@ impl TurnMetadataState {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn replace_enrichment_task_for_test(&self, handle: JoinHandle<()>) {
+        let mut task_guard = self
+            .enrichment_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = task_guard.replace(handle) {
+            existing.abort();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_enrichment_task_for_test(&self) -> bool {
+        self.enrichment_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+    }
+
     async fn fetch_workspace_git_metadata(&self) -> WorkspaceGitMetadata {
         let (latest_git_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
             get_head_commit_hash(&self.cwd),
