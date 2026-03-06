@@ -511,6 +511,10 @@ pub fn render_decision_for_unmatched_command(
     if command_might_be_dangerous(command) || runtime_sandbox_provides_safety {
         return match approval_policy {
             AskForApproval::Never => Decision::Forbidden,
+            // Under guardian, allow the first attempt to run inside the real
+            // restricted sandbox. Guardian review is only needed if execution
+            // later has to leave ReadOnly/WorkspaceWrite, and explicit
+            // `require_escalated` requests are handled elsewhere.
             AskForApproval::Guardian
                 if !runtime_sandbox_provides_safety
                     && !sandbox_permissions.requires_escalated_permissions()
