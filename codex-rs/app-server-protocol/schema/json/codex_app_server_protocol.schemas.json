@@ -1836,6 +1836,13 @@
         }
       ]
     },
+    "EscalationStatus": {
+      "enum": [
+        "approved",
+        "rejected"
+      ],
+      "type": "string"
+    },
     "EventMsg": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
@@ -8024,6 +8031,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/UserMessageMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "UserMessage"
@@ -8226,6 +8243,90 @@
           "type": "object"
         }
       ]
+    },
+    "UserMessageMetadata": {
+      "properties": {
+        "escalation_status": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EscalationStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "is_plan_mode": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "is_tool_call_escalated": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "personality": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserMessagePersonality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sandbox_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserMessageSandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_message_type": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserMessageType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "UserMessagePersonality": {
+      "enum": [
+        "friendly",
+        "pragmatic"
+      ],
+      "type": "string"
+    },
+    "UserMessageSandboxPolicy": {
+      "enum": [
+        "read_only",
+        "sandbox",
+        "full_access"
+      ],
+      "type": "string"
+    },
+    "UserMessageType": {
+      "enum": [
+        "prompt",
+        "prompt_steering",
+        "prompt_queued",
+        "prompt_with_ide_context",
+        "agents_md_default",
+        "agents_md_custom",
+        "environment_context"
+      ],
+      "type": "string"
     },
     "W3cTraceContext": {
       "properties": {

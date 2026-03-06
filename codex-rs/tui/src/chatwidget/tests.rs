@@ -3424,6 +3424,7 @@ fn complete_user_message_for_inputs(chat: &mut ChatWidget, item_id: &str, conten
             item: TurnItem::UserMessage(UserMessageItem {
                 id: item_id.to_string(),
                 content,
+                metadata: None,
             }),
         }),
     });

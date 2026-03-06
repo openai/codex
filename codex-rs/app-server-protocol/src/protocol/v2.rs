@@ -5317,6 +5317,7 @@ mod tests {
                     path: "app://demo-app".to_string(),
                 },
             ],
+            metadata: None,
         });
 
         assert_eq!(

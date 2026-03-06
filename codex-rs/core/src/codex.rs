@@ -82,6 +82,10 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::items::UserMessageMetadata;
+use codex_protocol::items::UserMessagePersonality;
+use codex_protocol::items::UserMessageSandboxPolicy;
+use codex_protocol::items::UserMessageType;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
@@ -156,6 +160,8 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::contextual_user_message::AGENTS_MD_FRAGMENT;
+use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -172,6 +178,114 @@ pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
     ExpectedTurnMismatch { expected: String, actual: String },
     EmptyInput,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UserMessageItemSource {
+    Prompt,
+    PromptQueued,
+    PromptSteering,
+}
+
+impl From<PendingInputSource> for UserMessageItemSource {
+    fn from(value: PendingInputSource) -> Self {
+        match value {
+            PendingInputSource::Queued => Self::PromptQueued,
+            PendingInputSource::Steering => Self::PromptSteering,
+        }
+    }
+}
+
+fn sandbox_policy_item_metadata(policy: &SandboxPolicy) -> UserMessageSandboxPolicy {
+    match policy {
+        SandboxPolicy::ReadOnly { .. } => UserMessageSandboxPolicy::ReadOnly,
+        SandboxPolicy::WorkspaceWrite { .. } => UserMessageSandboxPolicy::Sandbox,
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+            UserMessageSandboxPolicy::FullAccess
+        }
+    }
+}
+
+fn personality_item_metadata(personality: Option<Personality>) -> Option<UserMessagePersonality> {
+    match personality {
+        Some(Personality::Friendly) => Some(UserMessagePersonality::Friendly),
+        Some(Personality::Pragmatic) => Some(UserMessagePersonality::Pragmatic),
+        Some(Personality::None) | None => None,
+    }
+}
+
+// POC limitation: `prompt_with_ide_context` is heuristic. We only detect it when
+// IDE context survives into `UserInput` markers (text elements, skills, mentions).
+// If upstream clients flatten IDE context into plain text, this will be classified as
+// a regular prompt until richer source tagging is wired through.
+fn is_ide_context_user_input(input: &[UserInput]) -> bool {
+    input.iter().any(|entry| match entry {
+        UserInput::Text { text_elements, .. } => !text_elements.is_empty(),
+        UserInput::Skill { .. } | UserInput::Mention { .. } => true,
+        UserInput::Image { .. } | UserInput::LocalImage { .. } => false,
+        _ => false,
+    })
+}
+
+fn is_agents_md_message(input: &[UserInput]) -> bool {
+    input.iter().any(|entry| match entry {
+        UserInput::Text { text, .. } => AGENTS_MD_FRAGMENT.matches_text(text),
+        UserInput::Image { .. }
+        | UserInput::LocalImage { .. }
+        | UserInput::Skill { .. }
+        | UserInput::Mention { .. } => false,
+        _ => false,
+    })
+}
+
+fn is_environment_context_message(input: &[UserInput]) -> bool {
+    input.iter().any(|entry| match entry {
+        UserInput::Text { text, .. } => ENVIRONMENT_CONTEXT_FRAGMENT.matches_text(text),
+        UserInput::Image { .. }
+        | UserInput::LocalImage { .. }
+        | UserInput::Skill { .. }
+        | UserInput::Mention { .. } => false,
+        _ => false,
+    })
+}
+
+fn user_message_type_metadata(
+    input: &[UserInput],
+    source: UserMessageItemSource,
+) -> UserMessageType {
+    if is_environment_context_message(input) {
+        return UserMessageType::EnvironmentContext;
+    }
+    if is_agents_md_message(input) {
+        // POC note: we can reliably detect AGENTS.md payloads, but not yet distinguish
+        // between default and custom sources in all call paths.
+        return UserMessageType::AgentsMdCustom;
+    }
+    if is_ide_context_user_input(input) {
+        return UserMessageType::PromptWithIdeContext;
+    }
+    match source {
+        UserMessageItemSource::Prompt => UserMessageType::Prompt,
+        UserMessageItemSource::PromptQueued => UserMessageType::PromptQueued,
+        UserMessageItemSource::PromptSteering => UserMessageType::PromptSteering,
+    }
+}
+
+fn build_user_message_metadata(
+    turn_context: &TurnContext,
+    input: &[UserInput],
+    source: UserMessageItemSource,
+) -> UserMessageMetadata {
+    UserMessageMetadata {
+        is_plan_mode: Some(turn_context.collaboration_mode.mode == ModeKind::Plan),
+        is_tool_call_escalated: None,
+        escalation_status: None,
+        sandbox_policy: Some(sandbox_policy_item_metadata(
+            turn_context.sandbox_policy.get(),
+        )),
+        user_message_type: Some(user_message_type_metadata(input, source)),
+        personality: personality_item_metadata(turn_context.personality),
+    }
 }
 
 /// Notes from the previous real user turn.
@@ -269,6 +383,8 @@ use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
+use crate::state::PendingInputItem;
+use crate::state::PendingInputSource;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
@@ -3442,13 +3558,16 @@ impl Session {
         turn_context: &TurnContext,
         input: &[UserInput],
         response_item: ResponseItem,
+        source: UserMessageItemSource,
     ) {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
-        let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
+        let metadata = build_user_message_metadata(turn_context, input, source);
+        let turn_item =
+            TurnItem::UserMessage(UserMessageItem::new_with_metadata(input, Some(metadata)));
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
         self.ensure_rollout_materialized().await;
@@ -3542,7 +3661,7 @@ impl Session {
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input.into());
+        turn_state.push_pending_input(input.into(), PendingInputSource::Steering);
         Ok(active_turn_id.clone())
     }
 
@@ -3556,7 +3675,7 @@ impl Session {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
                 for item in input {
-                    ts.push_pending_input(item);
+                    ts.push_pending_input(item, PendingInputSource::Queued);
                 }
                 Ok(())
             }
@@ -3564,7 +3683,7 @@ impl Session {
         }
     }
 
-    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+    pub async fn get_pending_input(&self) -> Vec<PendingInputItem> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
@@ -5254,8 +5373,13 @@ pub(crate) async fn run_turn(
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-        .await;
+    sess.record_user_prompt_and_emit_turn_item(
+        turn_context.as_ref(),
+        &input,
+        response_item,
+        UserMessageItemSource::Prompt,
+    )
+    .await;
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
     // model/realtime injections.
@@ -5295,17 +5419,23 @@ pub(crate) async fn run_turn(
             .get_pending_input()
             .await
             .into_iter()
-            .map(ResponseItem::from)
-            .collect::<Vec<ResponseItem>>();
+            .map(|pending| {
+                (
+                    UserMessageItemSource::from(pending.source),
+                    ResponseItem::from(pending.input),
+                )
+            })
+            .collect::<Vec<(UserMessageItemSource, ResponseItem)>>();
 
         if !pending_response_items.is_empty() {
-            for response_item in pending_response_items {
+            for (source, response_item) in pending_response_items {
                 if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
                     // todo(aibrahim): move pending input to be UserInput only to keep TextElements. context: https://github.com/openai/codex/pull/10656#discussion_r2765522480
                     sess.record_user_prompt_and_emit_turn_item(
                         turn_context.as_ref(),
                         &user_message.content,
                         response_item,
+                        source,
                     )
                     .await;
                 } else {
@@ -10179,30 +10309,70 @@ mod tests {
             .await
             .expect("expected item started event")
             .expect("channel open");
-        assert!(matches!(
-            second.msg,
-            EventMsg::ItemStarted(ItemStartedEvent {
-                item: TurnItem::UserMessage(UserMessageItem { content, .. }),
-                ..
-            }) if content == vec![UserInput::Text {
+        let EventMsg::ItemStarted(ItemStartedEvent {
+            item:
+                TurnItem::UserMessage(UserMessageItem {
+                    content,
+                    metadata: Some(metadata),
+                    ..
+                }),
+            ..
+        }) = second.msg
+        else {
+            panic!("expected started user message item");
+        };
+        assert_eq!(
+            content,
+            vec![UserInput::Text {
                 text: "late pending input".to_string(),
                 text_elements: Vec::new(),
             }]
+        );
+        assert_eq!(
+            metadata.user_message_type,
+            Some(UserMessageType::PromptQueued)
+        );
+        assert_eq!(metadata.is_plan_mode, Some(false));
+        assert!(matches!(
+            metadata.sandbox_policy,
+            Some(UserMessageSandboxPolicy::ReadOnly)
+                | Some(UserMessageSandboxPolicy::Sandbox)
+                | Some(UserMessageSandboxPolicy::FullAccess)
         ));
 
         let third = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
             .await
             .expect("expected item completed event")
             .expect("channel open");
-        assert!(matches!(
-            third.msg,
-            EventMsg::ItemCompleted(ItemCompletedEvent {
-                item: TurnItem::UserMessage(UserMessageItem { content, .. }),
-                ..
-            }) if content == vec![UserInput::Text {
+        let EventMsg::ItemCompleted(ItemCompletedEvent {
+            item:
+                TurnItem::UserMessage(UserMessageItem {
+                    content,
+                    metadata: Some(metadata),
+                    ..
+                }),
+            ..
+        }) = third.msg
+        else {
+            panic!("expected completed user message item");
+        };
+        assert_eq!(
+            content,
+            vec![UserInput::Text {
                 text: "late pending input".to_string(),
                 text_elements: Vec::new(),
             }]
+        );
+        assert_eq!(
+            metadata.user_message_type,
+            Some(UserMessageType::PromptQueued)
+        );
+        assert_eq!(metadata.is_plan_mode, Some(false));
+        assert!(matches!(
+            metadata.sandbox_policy,
+            Some(UserMessageSandboxPolicy::ReadOnly)
+                | Some(UserMessageSandboxPolicy::Sandbox)
+                | Some(UserMessageSandboxPolicy::FullAccess)
         ));
 
         let fourth = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
@@ -10233,6 +10403,67 @@ mod tests {
                 last_agent_message: None,
             }) if turn_id == tc.sub_id
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn task_finish_marks_steer_input_as_prompt_steering_metadata() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        while rx.try_recv().is_ok() {}
+
+        let steer_turn_id = sess
+            .steer_input(
+                vec![UserInput::Text {
+                    text: "steered input".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                Some(tc.sub_id.as_str()),
+            )
+            .await
+            .expect("steer input should enqueue while task is active");
+        assert_eq!(steer_turn_id, tc.sub_id);
+
+        sess.on_task_finished(Arc::clone(&tc), None).await;
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("expected raw response item event")
+            .expect("channel open");
+        assert!(matches!(first.msg, EventMsg::RawResponseItem(_)));
+
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("expected item started event")
+            .expect("channel open");
+        let EventMsg::ItemStarted(ItemStartedEvent {
+            item:
+                TurnItem::UserMessage(UserMessageItem {
+                    metadata: Some(metadata),
+                    ..
+                }),
+            ..
+        }) = second.msg
+        else {
+            panic!("expected started user message item");
+        };
+        assert_eq!(
+            metadata.user_message_type,
+            Some(UserMessageType::PromptSteering)
+        );
+        assert_eq!(metadata.is_plan_mode, Some(false));
     }
 
     #[tokio::test]

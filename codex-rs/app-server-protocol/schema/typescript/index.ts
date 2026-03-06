@@ -51,6 +51,7 @@ export type { DynamicToolCallResponseEvent } from "./DynamicToolCallResponseEven
 export type { ElicitationRequest } from "./ElicitationRequest";
 export type { ElicitationRequestEvent } from "./ElicitationRequestEvent";
 export type { ErrorEvent } from "./ErrorEvent";
+export type { EscalationStatus } from "./EscalationStatus";
 export type { EventMsg } from "./EventMsg";
 export type { ExecApprovalRequestEvent } from "./ExecApprovalRequestEvent";
 export type { ExecCommandApprovalParams } from "./ExecCommandApprovalParams";
@@ -206,6 +207,10 @@ export type { UpdatePlanArgs } from "./UpdatePlanArgs";
 export type { UserInput } from "./UserInput";
 export type { UserMessageEvent } from "./UserMessageEvent";
 export type { UserMessageItem } from "./UserMessageItem";
+export type { UserMessageMetadata } from "./UserMessageMetadata";
+export type { UserMessagePersonality } from "./UserMessagePersonality";
+export type { UserMessageSandboxPolicy } from "./UserMessageSandboxPolicy";
+export type { UserMessageType } from "./UserMessageType";
 export type { Verbosity } from "./Verbosity";
 export type { ViewImageToolCallEvent } from "./ViewImageToolCallEvent";
 export type { WarningEvent } from "./WarningEvent";

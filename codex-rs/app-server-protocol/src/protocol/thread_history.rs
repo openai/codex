@@ -1265,6 +1265,7 @@ mod tests {
                 item: CoreTurnItem::UserMessage(CoreUserMessageItem {
                     id: "user-item-id".to_string(),
                     content: Vec::new(),
+                    metadata: None,
                 }),
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {

@@ -29,10 +29,73 @@ pub enum TurnItem {
     ContextCompaction(ContextCompactionItem),
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum UserMessageType {
+    Prompt,
+    PromptSteering,
+    PromptQueued,
+    PromptWithIdeContext,
+    AgentsMdDefault,
+    AgentsMdCustom,
+    EnvironmentContext,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum EscalationStatus {
+    Approved,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum UserMessageSandboxPolicy {
+    ReadOnly,
+    Sandbox,
+    FullAccess,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum UserMessagePersonality {
+    Friendly,
+    Pragmatic,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct UserMessageMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub is_plan_mode: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub is_tool_call_escalated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub escalation_status: Option<EscalationStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_policy: Option<UserMessageSandboxPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_message_type: Option<UserMessageType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub personality: Option<UserMessagePersonality>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct UserMessageItem {
     pub id: String,
     pub content: Vec<UserInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub metadata: Option<UserMessageMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -119,9 +182,14 @@ impl Default for ContextCompactionItem {
 
 impl UserMessageItem {
     pub fn new(content: &[UserInput]) -> Self {
+        Self::new_with_metadata(content, None)
+    }
+
+    pub fn new_with_metadata(content: &[UserInput], metadata: Option<UserMessageMetadata>) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             content: content.to_vec(),
+            metadata,
         }
     }
 
