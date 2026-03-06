@@ -1984,7 +1984,9 @@ pub(crate) fn build_specs(
     }
 
     if config.image_gen_tool {
-        builder.push_spec(ToolSpec::ImageGeneration {});
+        builder.push_spec(ToolSpec::ImageGeneration {
+            output_format: "png".to_string(),
+        });
     }
 
     builder.push_spec_with_parallel_support(create_view_image_tool(), true);
@@ -2116,7 +2118,7 @@ mod tests {
         match tool {
             ToolSpec::Function(ResponsesApiTool { name, .. }) => name,
             ToolSpec::LocalShell {} => "local_shell",
-            ToolSpec::ImageGeneration {} => "image_generation",
+            ToolSpec::ImageGeneration { .. } => "image_generation",
             ToolSpec::WebSearch { .. } => "web_search",
             ToolSpec::Freeform(FreeformTool { name, .. }) => name,
         }
@@ -2208,7 +2210,7 @@ mod tests {
             }
             ToolSpec::Freeform(_)
             | ToolSpec::LocalShell {}
-            | ToolSpec::ImageGeneration {}
+            | ToolSpec::ImageGeneration { .. }
             | ToolSpec::WebSearch { .. } => {}
         }
     }
@@ -2496,6 +2498,14 @@ mod tests {
         });
         let (supported_tools, _) = build_specs(&supported_tools_config, None, None, &[]).build();
         assert_contains_tool_names(&supported_tools, &["image_generation"]);
+        let image_generation_tool = find_tool(&supported_tools, "image_generation");
+        assert_eq!(
+            serde_json::to_value(&image_generation_tool.spec).expect("serialize image tool"),
+            serde_json::json!({
+                "type": "image_generation",
+                "output_format": "png"
+            })
+        );
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &unsupported_model_info,

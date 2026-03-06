@@ -71,6 +71,7 @@ impl CodexFeedback {
     {
         tracing_subscriber::fmt::layer()
             .with_writer(self.make_writer())
+            .with_timer(tracing_subscriber::fmt::time::SystemTime)
             .with_ansi(false)
             .with_target(false)
             // Capture everything, regardless of the caller's `RUST_LOG`, so feedback includes the

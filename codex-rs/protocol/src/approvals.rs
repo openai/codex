@@ -196,10 +196,16 @@ impl ExecApprovalRequestEvent {
 #[ts(tag = "mode")]
 pub enum ElicitationRequest {
     Form {
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, rename = "_meta")]
+        meta: Option<JsonValue>,
         message: String,
         requested_schema: JsonValue,
     },
     Url {
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, rename = "_meta")]
+        meta: Option<JsonValue>,
         message: String,
         url: String,
         elicitation_id: String,
@@ -216,6 +222,10 @@ impl ElicitationRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ElicitationRequestEvent {
+    /// Turn ID that this elicitation belongs to, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
     pub server_name: String,
     #[ts(type = "string | number")]
     pub id: RequestId,

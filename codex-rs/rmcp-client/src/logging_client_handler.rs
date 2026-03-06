@@ -42,6 +42,7 @@ impl ClientHandler for LoggingClientHandler {
     ) -> Result<CreateElicitationResult, rmcp::ErrorData> {
         (self.send_elicitation)(context.id, request)
             .await
+            .map(Into::into)
             .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))
     }
 

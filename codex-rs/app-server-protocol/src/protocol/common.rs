@@ -248,6 +248,10 @@ client_request_definitions! {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
+    PluginList => "plugin/list" {
+        params: v2::PluginListParams,
+        response: v2::PluginListResponse,
+    },
     SkillsRemoteList => "skills/remote/list" {
         params: v2::SkillsRemoteReadParams,
         response: v2::SkillsRemoteReadResponse,
@@ -1054,21 +1058,23 @@ mod tests {
 
     #[test]
     fn serialize_mcp_server_elicitation_request() -> Result<()> {
+        let requested_schema: v2::McpElicitationSchema = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "confirmed": {
+                    "type": "boolean"
+                }
+            },
+            "required": ["confirmed"]
+        }))?;
         let params = v2::McpServerElicitationRequestParams {
             thread_id: "thr_123".to_string(),
             turn_id: Some("turn_123".to_string()),
             server_name: "codex_apps".to_string(),
             request: v2::McpServerElicitationRequest::Form {
+                meta: None,
                 message: "Allow this request?".to_string(),
-                requested_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "confirmed": {
-                            "type": "boolean"
-                        }
-                    },
-                    "required": ["confirmed"]
-                }),
+                requested_schema,
             },
         };
         let request = ServerRequest::McpServerElicitationRequest {
@@ -1085,6 +1091,7 @@ mod tests {
                     "turnId": "turn_123",
                     "serverName": "codex_apps",
                     "mode": "form",
+                    "_meta": null,
                     "message": "Allow this request?",
                     "requestedSchema": {
                         "type": "object",

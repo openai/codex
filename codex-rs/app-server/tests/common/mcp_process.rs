@@ -35,6 +35,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::PluginInstallParams;
+use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ServerRequest;
@@ -439,6 +441,32 @@ impl McpProcess {
         self.send_request("skills/list", params).await
     }
 
+    /// Send a `plugin/install` JSON-RPC request.
+    pub async fn send_plugin_install_request(
+        &mut self,
+        params: PluginInstallParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("plugin/install", params).await
+    }
+
+    /// Send a `plugin/list` JSON-RPC request.
+    pub async fn send_plugin_list_request(
+        &mut self,
+        params: PluginListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("plugin/list", params).await
+    }
+
+    /// Send a JSON-RPC request with raw params for protocol-level validation tests.
+    pub async fn send_raw_request(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> anyhow::Result<i64> {
+        self.send_request(method, params).await
+    }
     /// Send a `collaborationMode/list` JSON-RPC request.
     pub async fn send_list_collaboration_modes_request(
         &mut self,

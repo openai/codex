@@ -953,23 +953,32 @@
     },
     "PluginInstallParams": {
       "properties": {
-        "cwd": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "marketplaceName": {
-          "type": "string"
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
         },
         "pluginName": {
           "type": "string"
         }
       },
       "required": [
-        "marketplaceName",
+        "marketplacePath",
         "pluginName"
       ],
+      "type": "object"
+    },
+    "PluginListParams": {
+      "properties": {
+        "cwds": {
+          "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces are considered.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ProductSurface": {
@@ -3262,6 +3271,30 @@
         "params"
       ],
       "title": "Skills/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/list"
+          ],
+          "title": "Plugin/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/listRequest",
       "type": "object"
     },
     {

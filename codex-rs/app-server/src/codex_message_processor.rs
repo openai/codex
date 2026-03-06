@@ -22,6 +22,7 @@ use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppListUpdatedNotification;
+use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::AskForApproval;
@@ -79,6 +80,11 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::PluginListParams;
+use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginMarketplaceEntry;
+use codex_app_server_protocol::PluginSource;
+use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::ProductSurface as ApiProductSurface;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
@@ -182,6 +188,8 @@ use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::CloudRequirementsLoader;
+use codex_core::connectors::filter_disallowed_connectors;
+use codex_core::connectors::merge_plugin_apps;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::error::CodexErr;
 use codex_core::exec::ExecParams;
@@ -198,8 +206,12 @@ use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
+use codex_core::plugins::AppConnectorId;
+use codex_core::plugins::MarketplaceError;
+use codex_core::plugins::MarketplacePluginSourceSummary;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
+use codex_core::plugins::load_plugin_apps;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
@@ -461,10 +473,14 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
+    async fn load_latest_config(
+        &self,
+        fallback_cwd: Option<PathBuf>,
+    ) -> Result<Config, JSONRPCErrorError> {
         let cloud_requirements = self.current_cloud_requirements();
         let mut config = codex_core::config::ConfigBuilder::default()
             .cli_overrides(self.cli_overrides.clone())
+            .fallback_cwd(fallback_cwd)
             .cloud_requirements(cloud_requirements)
             .build()
             .await
@@ -644,6 +660,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PluginList { request_id, params } => {
+                self.plugin_list(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsRemoteList { request_id, params } => {
@@ -3902,7 +3922,7 @@ impl CodexMessageProcessor {
         params: ExperimentalFeatureListParams,
     ) {
         let ExperimentalFeatureListParams { cursor, limit } = params;
-        let config = match self.load_latest_config().await {
+        let config = match self.load_latest_config(None).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4017,7 +4037,7 @@ impl CodexMessageProcessor {
     }
 
     async fn mcp_server_refresh(&self, request_id: ConnectionRequestId, _params: Option<()>) {
-        let config = match self.load_latest_config().await {
+        let config = match self.load_latest_config(None).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4076,7 +4096,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: McpServerOauthLoginParams,
     ) {
-        let config = match self.load_latest_config().await {
+        let config = match self.load_latest_config(None).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4182,7 +4202,7 @@ impl CodexMessageProcessor {
         let request = request_id.clone();
 
         let outgoing = Arc::clone(&self.outgoing);
-        let config = match self.load_latest_config().await {
+        let config = match self.load_latest_config(None).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request, error).await;
@@ -4316,6 +4336,30 @@ impl CodexMessageProcessor {
             data: None,
         };
         self.outgoing.send_error(request_id, error).await;
+    }
+
+    async fn send_marketplace_error(
+        &self,
+        request_id: ConnectionRequestId,
+        err: MarketplaceError,
+        action: &str,
+    ) {
+        match err {
+            MarketplaceError::MarketplaceNotFound { .. } => {
+                self.send_invalid_request_error(request_id, err.to_string())
+                    .await;
+            }
+            MarketplaceError::Io { .. } => {
+                self.send_internal_error(request_id, format!("failed to {action}: {err}"))
+                    .await;
+            }
+            MarketplaceError::InvalidMarketplaceFile { .. }
+            | MarketplaceError::PluginNotFound { .. }
+            | MarketplaceError::InvalidPlugin(_) => {
+                self.send_invalid_request_error(request_id, err.to_string())
+                    .await;
+            }
+        }
     }
 
     async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> ThreadShutdownResult {
@@ -4581,7 +4625,7 @@ impl CodexMessageProcessor {
     }
 
     async fn apps_list(&self, request_id: ConnectionRequestId, params: AppsListParams) {
-        let mut config = match self.load_latest_config().await {
+        let mut config = match self.load_latest_config(None).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4812,6 +4856,36 @@ impl CodexMessageProcessor {
         connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded)
     }
 
+    fn plugin_apps_needing_auth(
+        all_connectors: &[AppInfo],
+        accessible_connectors: &[AppInfo],
+        plugin_apps: &[AppConnectorId],
+        codex_apps_ready: bool,
+    ) -> Vec<AppSummary> {
+        if !codex_apps_ready {
+            return Vec::new();
+        }
+
+        let accessible_ids = accessible_connectors
+            .iter()
+            .map(|connector| connector.id.as_str())
+            .collect::<HashSet<_>>();
+        let plugin_app_ids = plugin_apps
+            .iter()
+            .map(|connector_id| connector_id.0.as_str())
+            .collect::<HashSet<_>>();
+
+        all_connectors
+            .iter()
+            .filter(|connector| {
+                plugin_app_ids.contains(connector.id.as_str())
+                    && !accessible_ids.contains(connector.id.as_str())
+            })
+            .cloned()
+            .map(AppSummary::from)
+            .collect()
+    }
+
     fn should_send_app_list_updated_notification(
         connectors: &[AppInfo],
         accessible_loaded: bool,
@@ -4921,6 +4995,66 @@ impl CodexMessageProcessor {
         }
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
+            .await;
+    }
+
+    async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
+        let plugins_manager = self.thread_manager.plugins_manager();
+        let roots = params.cwds.unwrap_or_default();
+
+        let config = match self.load_latest_config(None).await {
+            Ok(config) => config,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+
+        let data = match tokio::task::spawn_blocking(move || {
+            let marketplaces = plugins_manager.list_marketplaces_for_config(&config, &roots)?;
+            Ok::<Vec<PluginMarketplaceEntry>, MarketplaceError>(
+                marketplaces
+                    .into_iter()
+                    .map(|marketplace| PluginMarketplaceEntry {
+                        name: marketplace.name,
+                        path: marketplace.path,
+                        plugins: marketplace
+                            .plugins
+                            .into_iter()
+                            .map(|plugin| PluginSummary {
+                                enabled: plugin.enabled,
+                                name: plugin.name,
+                                source: match plugin.source {
+                                    MarketplacePluginSourceSummary::Local { path } => {
+                                        PluginSource::Local { path }
+                                    }
+                                },
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            )
+        })
+        .await
+        {
+            Ok(Ok(data)) => data,
+            Ok(Err(err)) => {
+                self.send_marketplace_error(request_id, err, "list marketplace plugins")
+                    .await;
+                return;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to list marketplace plugins: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        self.outgoing
+            .send_response(request_id, PluginListResponse { marketplaces: data })
             .await;
     }
 
@@ -5034,24 +5168,96 @@ impl CodexMessageProcessor {
 
     async fn plugin_install(&self, request_id: ConnectionRequestId, params: PluginInstallParams) {
         let PluginInstallParams {
-            marketplace_name,
+            marketplace_path,
             plugin_name,
-            cwd,
         } = params;
+        let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
 
         let plugins_manager = self.thread_manager.plugins_manager();
         let request = PluginInstallRequest {
             plugin_name,
-            marketplace_name,
-            cwd: cwd.unwrap_or_else(|| self.config.cwd.clone()),
+            marketplace_path,
         };
 
         match plugins_manager.install_plugin(request).await {
-            Ok(_) => {
+            Ok(result) => {
+                let config = match self.load_latest_config(config_cwd).await {
+                    Ok(config) => config,
+                    Err(err) => {
+                        warn!(
+                            "failed to reload config after plugin install, using current config: {err:?}"
+                        );
+                        self.config.as_ref().clone()
+                    }
+                };
+                let plugin_apps = load_plugin_apps(&result.installed_path);
+                let apps_needing_auth = if plugin_apps.is_empty()
+                    || !config.features.enabled(Feature::Apps)
+                {
+                    Vec::new()
+                } else {
+                    let (all_connectors_result, accessible_connectors_result) = tokio::join!(
+                        connectors::list_all_connectors_with_options(&config, true),
+                        connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
+                            &config, true
+                        ),
+                    );
+
+                    let all_connectors = match all_connectors_result {
+                        Ok(connectors) => filter_disallowed_connectors(merge_plugin_apps(
+                            connectors,
+                            plugin_apps.clone(),
+                        )),
+                        Err(err) => {
+                            warn!(
+                                plugin = result.plugin_id.as_key(),
+                                "failed to load app metadata after plugin install: {err:#}"
+                            );
+                            filter_disallowed_connectors(merge_plugin_apps(
+                                connectors::list_cached_all_connectors(&config)
+                                    .await
+                                    .unwrap_or_default(),
+                                plugin_apps.clone(),
+                            ))
+                        }
+                    };
+                    let (accessible_connectors, codex_apps_ready) =
+                        match accessible_connectors_result {
+                            Ok(status) => (status.connectors, status.codex_apps_ready),
+                            Err(err) => {
+                                warn!(
+                                    plugin = result.plugin_id.as_key(),
+                                    "failed to load accessible apps after plugin install: {err:#}"
+                                );
+                                (
+                                    connectors::list_cached_accessible_connectors_from_mcp_tools(
+                                        &config,
+                                    )
+                                    .await
+                                    .unwrap_or_default(),
+                                    false,
+                                )
+                            }
+                        };
+                    if !codex_apps_ready {
+                        warn!(
+                            plugin = result.plugin_id.as_key(),
+                            "codex_apps MCP not ready after plugin install; skipping appsNeedingAuth check"
+                        );
+                    }
+
+                    Self::plugin_apps_needing_auth(
+                        &all_connectors,
+                        &accessible_connectors,
+                        &plugin_apps,
+                        codex_apps_ready,
+                    )
+                };
+
                 plugins_manager.clear_cache();
                 self.thread_manager.skills_manager().clear_cache();
                 self.outgoing
-                    .send_response(request_id, PluginInstallResponse {})
+                    .send_response(request_id, PluginInstallResponse { apps_needing_auth })
                     .await;
             }
             Err(err) => {
@@ -5062,6 +5268,10 @@ impl CodexMessageProcessor {
                 }
 
                 match err {
+                    CorePluginInstallError::Marketplace(err) => {
+                        self.send_marketplace_error(request_id, err, "install plugin")
+                            .await;
+                    }
                     CorePluginInstallError::Config(err) => {
                         self.send_internal_error(
                             request_id,
@@ -5076,7 +5286,13 @@ impl CodexMessageProcessor {
                         )
                         .await;
                     }
-                    CorePluginInstallError::Marketplace(_) | CorePluginInstallError::Store(_) => {}
+                    CorePluginInstallError::Store(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to install plugin: {err}"),
+                        )
+                        .await;
+                    }
                 }
             }
         }
@@ -7265,6 +7481,35 @@ mod tests {
             input_schema: json!({"properties": {}}),
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
+    fn plugin_apps_needing_auth_returns_empty_when_codex_apps_is_not_ready() {
+        let all_connectors = vec![AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha connector".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        }];
+
+        assert_eq!(
+            CodexMessageProcessor::plugin_apps_needing_auth(
+                &all_connectors,
+                &[],
+                &[AppConnectorId("alpha".to_string())],
+                false,
+            ),
+            Vec::<AppSummary>::new()
+        );
     }
 
     #[test]
