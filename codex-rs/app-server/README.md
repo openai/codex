@@ -405,7 +405,7 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 - `{"type":"image","url":"https://…png"}`
 - `{"type":"localImage","path":"/tmp/screenshot.png"}`
 
-You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` is the exception: it applies only to the current turn.
+You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
 
 ```json
 { "method": "turn/start", "id": 30, "params": {
