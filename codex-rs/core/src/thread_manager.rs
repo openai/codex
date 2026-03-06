@@ -479,6 +479,7 @@ impl ThreadManagerState {
             false,
             None,
             None,
+            None,
         ))
         .await
     }
@@ -491,6 +492,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -502,6 +504,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
+            inherited_exec_policy,
         ))
         .await
     }
@@ -513,6 +516,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         Box::pin(self.spawn_thread_with_source(
@@ -525,6 +529,7 @@ impl ThreadManagerState {
             false,
             None,
             inherited_shell_snapshot,
+            inherited_exec_policy,
         ))
         .await
     }
@@ -537,6 +542,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -548,6 +554,7 @@ impl ThreadManagerState {
             persist_extended_history,
             None,
             inherited_shell_snapshot,
+            inherited_exec_policy,
         ))
         .await
     }
@@ -574,6 +581,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             None,
+            None,
         ))
         .await
     }
@@ -590,6 +598,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         let watch_registration = self
             .file_watcher
@@ -611,6 +620,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
+            inherited_exec_policy,
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)

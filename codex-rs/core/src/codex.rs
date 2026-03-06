@@ -361,6 +361,7 @@ impl Codex {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -409,9 +410,14 @@ impl Codex {
         )
         .await;
 
-        let exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
-            .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
+        let exec_policy = match inherited_exec_policy {
+            Some(exec_policy) => exec_policy,
+            None => Arc::new(
+                ExecPolicyManager::load(&config.config_layer_stack)
+                    .await
+                    .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
+            ),
+        };
 
         let config = Arc::new(config);
         let refresh_strategy = match session_source {
@@ -1198,7 +1204,7 @@ impl Session {
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
-        exec_policy: ExecPolicyManager,
+        exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
