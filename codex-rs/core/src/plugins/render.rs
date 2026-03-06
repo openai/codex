@@ -1,9 +1,9 @@
-use crate::instructions::PluginsInstructions;
+use crate::instructions::PluginInstructions;
 use crate::plugins::PluginCapabilitySummary;
 
-pub(crate) fn render_plugins_instructions(
+pub(crate) fn render_plugin_instructions(
     plugins: &[PluginCapabilitySummary],
-) -> Option<PluginsInstructions> {
+) -> Option<PluginInstructions> {
     if plugins.is_empty() {
         return None;
     }
@@ -30,7 +30,7 @@ pub(crate) fn render_plugins_instructions(
             .to_string(),
     );
 
-    Some(PluginsInstructions {
+    Some(PluginInstructions {
         text: lines.join("\n"),
     })
 }
@@ -41,7 +41,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn render_plugins_instructions_returns_none_for_empty_plugins() {
-        assert_eq!(render_plugins_instructions(&[]), None);
+    fn render_plugin_instructions_returns_none_for_empty_plugins() {
+        assert_eq!(render_plugin_instructions(&[]), None);
     }
 }

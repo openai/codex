@@ -95,11 +95,11 @@ impl ModelVisibleContextFragment for SkillInstructions {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "plugin_instructions", rename_all = "snake_case")]
-pub(crate) struct PluginsInstructions {
+pub(crate) struct PluginInstructions {
     pub text: String,
 }
 
-impl ModelVisibleContextFragment for PluginsInstructions {
+impl ModelVisibleContextFragment for PluginInstructions {
     type Role = ContextualUserContextRole;
 
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_plugin_instructions() {
-        let plugin_instructions = PluginsInstructions {
+        let plugin_instructions = PluginInstructions {
             text: "## Plugins\n- `sample`".to_string(),
         };
         let response_item = plugin_instructions.into_message();

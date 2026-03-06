@@ -209,7 +209,7 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
-use crate::plugins::render_plugins_instructions;
+use crate::plugins::render_plugin_instructions;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -3133,7 +3133,7 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&turn_context.config);
         if let Some(plugin_instructions) =
-            render_plugins_instructions(loaded_plugins.capability_summaries())
+            render_plugin_instructions(loaded_plugins.capability_summaries())
         {
             contextual_user_envelope.push_fragment(plugin_instructions);
         }
