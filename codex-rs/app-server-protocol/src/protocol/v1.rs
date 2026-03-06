@@ -431,9 +431,6 @@ pub struct SendUserTurnParams {
     pub summary: ReasoningSummary,
     /// Optional JSON Schema used to constrain the final assistant message for
     /// this turn.
-    ///
-    /// When set, Codex requests a strict JSON response matching this schema.
-    /// This applies only to the final assistant message.
     pub output_schema: Option<serde_json::Value>,
 }
 

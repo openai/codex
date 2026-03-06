@@ -38,9 +38,6 @@ summary?: ReasoningSummary | null, /**
 personality?: Personality | null, /**
  * Optional JSON Schema used to constrain the final assistant message for
  * this turn.
- *
- * When set, Codex requests a strict JSON response matching this schema.
- * This applies only to the final assistant message.
  */
 outputSchema?: JsonValue | null, /**
  * EXPERIMENTAL - Set a pre-set collaboration mode.

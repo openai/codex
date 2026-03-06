@@ -407,8 +407,6 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` is the exception: it applies only to the current turn.
 
-When `outputSchema` is set, Codex asks the model for a strict JSON final answer matching that schema. This applies only to the final assistant message.
-
 ```json
 { "method": "turn/start", "id": 30, "params": {
     "threadId": "thr_123",
