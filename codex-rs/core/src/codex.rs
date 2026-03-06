@@ -273,6 +273,8 @@ use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 
+const ROOT_AGENT_PROMPT_FALLBACK: &str = include_str!("../root_agent_prompt.md");
+const SUBAGENT_PROMPT_FALLBACK: &str = include_str!("../subagent_prompt.md");
 const WATCHDOG_PROMPT_FALLBACK: &str = include_str!("../watchdog_agent_prompt.md");
 
 async fn load_agent_prompt_fallback(
@@ -288,6 +290,14 @@ async fn load_agent_prompt_fallback(
     }
 
     fallback.to_string()
+}
+
+async fn load_root_agent_prompt(codex_home: &Path) -> String {
+    load_agent_prompt_fallback(codex_home, ROOT_AGENT_PROMPT_FALLBACK, "AGENTS.root.md").await
+}
+
+async fn load_subagent_prompt(codex_home: &Path) -> String {
+    load_agent_prompt_fallback(codex_home, SUBAGENT_PROMPT_FALLBACK, "AGENTS.subagent.md").await
 }
 
 pub(crate) async fn load_watchdog_prompt(codex_home: &Path) -> String {
@@ -451,6 +461,15 @@ impl Codex {
         let model = models_manager
             .get_default_model(&config.model, refresh_strategy)
             .await;
+        let role_prompt = match session_source {
+            SessionSource::SubAgent(_) => Some(load_subagent_prompt(&config.codex_home).await),
+            _ => Some(load_root_agent_prompt(&config.codex_home).await),
+        };
+        let developer_instructions = match (role_prompt, config.developer_instructions.clone()) {
+            (Some(prompt), Some(existing)) => Some(format!("{prompt}\n\n{existing}")),
+            (Some(prompt), None) => Some(prompt),
+            (None, existing) => existing,
+        };
 
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
@@ -505,7 +524,7 @@ impl Codex {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier: config.service_tier,
-            developer_instructions: config.developer_instructions.clone(),
+            developer_instructions,
             user_instructions,
             personality: config.personality,
             base_instructions,
