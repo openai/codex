@@ -362,6 +362,110 @@ async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn search_tool_results_match_plugin_names_and_annotate_descriptions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_with_connector_name(&server, "Google Calendar").await?;
+    let call_id = "tool-search";
+    let args = json!({
+        "query": "sample",
+        "limit": 2,
+    });
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    SEARCH_TOOL_BM25_TOOL_NAME,
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let codex_home = Arc::new(tempfile::TempDir::new()?);
+    let plugin_root = codex_home.path().join("plugins/cache/test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .expect("write plugin manifest");
+    std::fs::write(
+        plugin_root.join(".app.json"),
+        r#"{
+  "apps": {
+    "calendar": {
+      "id": "calendar"
+    }
+  }
+}"#,
+    )
+    .expect("write plugin app config");
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[features]\nplugins = true\n\n[plugins.\"sample@test\"]\nenabled = true\n",
+    )
+    .expect("write config");
+
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone(), None).with_home(codex_home);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policies(
+        "find sample plugin tools",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected 2 requests, got {}",
+        requests.len()
+    );
+
+    let search_output_payload = search_tool_output_payload(&requests[1], call_id);
+    let result_tools = search_result_tools(&search_output_payload);
+    assert_eq!(result_tools.len(), 2, "expected 2 search results");
+    assert!(
+        result_tools.iter().all(|tool| {
+            tool.get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| {
+                    description.contains("This tool is part of plugin `sample`.")
+                })
+        }),
+        "expected plugin provenance in search result descriptions: {search_output_payload:?}"
+    );
+    assert!(
+        result_tools
+            .iter()
+            .any(|tool| { tool.get("name").and_then(Value::as_str) == Some(CALENDAR_CREATE_TOOL) }),
+        "expected calendar create tool in search results: {search_output_payload:?}"
+    );
+    assert!(
+        result_tools
+            .iter()
+            .any(|tool| { tool.get("name").and_then(Value::as_str) == Some(CALENDAR_LIST_TOOL) }),
+        "expected calendar list tool in search results: {search_output_payload:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn search_tool_selection_persists_across_turns() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

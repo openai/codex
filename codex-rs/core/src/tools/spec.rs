@@ -3076,6 +3076,7 @@ mod tests {
                         ),
                         connector_id: Some("calendar".to_string()),
                         connector_name: Some("Calendar".to_string()),
+                        plugin_display_names: Vec::new(),
                     },
                 ),
                 (
@@ -3086,6 +3087,7 @@ mod tests {
                         tool: mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
                         connector_id: None,
                         connector_name: None,
+                        plugin_display_names: Vec::new(),
                     },
                 ),
             ])),

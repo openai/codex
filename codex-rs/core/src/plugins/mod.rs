@@ -1,9 +1,11 @@
+mod injection;
 mod manager;
 mod manifest;
 mod marketplace;
 mod render;
 mod store;
 
+pub(crate) use injection::build_plugin_injections;
 pub use manager::AppConnectorId;
 pub use manager::LoadedPlugin;
 pub use manager::PluginCapabilitySummary;
@@ -14,6 +16,7 @@ pub use manager::PluginsManager;
 pub(crate) use manager::plugin_namespace_for_skill_path;
 pub(crate) use manifest::load_plugin_manifest;
 pub(crate) use manifest::plugin_manifest_name;
+pub(crate) use render::render_explicit_plugin_instructions;
 pub(crate) use render::render_plugins_section;
 pub use store::PluginId;
 pub use store::PluginInstallResult;
