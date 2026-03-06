@@ -560,6 +560,34 @@
       ],
       "type": "object"
     },
+    "AppSummary": {
+      "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "installUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
     "AppToolApproval": {
       "enum": [
         "auto",
@@ -3321,6 +3349,7 @@
       "oneOf": [
         {
           "properties": {
+            "_meta": true,
             "message": {
               "type": "string"
             },
@@ -3341,6 +3370,7 @@
         },
         {
           "properties": {
+            "_meta": true,
             "elicitation_id": {
               "type": "string"
             },
@@ -4270,6 +4300,12 @@
                 "null"
               ]
             },
+            "saved_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "status": {
               "type": "string"
             },
@@ -4817,6 +4853,13 @@
             },
             "server_name": {
               "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this elicitation belongs to, when known.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -7412,24 +7455,30 @@
     "MacOsSeatbeltProfileExtensions": {
       "properties": {
         "macos_accessibility": {
+          "default": false,
           "type": "boolean"
         },
         "macos_automation": {
-          "$ref": "#/definitions/MacOsAutomationPermission"
+          "allOf": [
+            {
+              "$ref": "#/definitions/MacOsAutomationPermission"
+            }
+          ],
+          "default": "none"
         },
         "macos_calendar": {
+          "default": false,
           "type": "boolean"
         },
         "macos_preferences": {
-          "$ref": "#/definitions/MacOsPreferencesPermission"
+          "allOf": [
+            {
+              "$ref": "#/definitions/MacOsPreferencesPermission"
+            }
+          ],
+          "default": "read_only"
         }
       },
-      "required": [
-        "macos_accessibility",
-        "macos_automation",
-        "macos_calendar",
-        "macos_preferences"
-      ],
       "type": "object"
     },
     "McpAuthStatus": {
@@ -8052,12 +8101,6 @@
             "null"
           ]
         },
-        "dangerouslyAllowNonLoopbackAdmin": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "dangerouslyAllowNonLoopbackProxy": {
           "type": [
             "boolean",
@@ -8411,6 +8454,17 @@
     },
     "PluginInstallResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "appsNeedingAuth": {
+          "items": {
+            "$ref": "#/definitions/AppSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "appsNeedingAuth"
+      ],
       "title": "PluginInstallResponse",
       "type": "object"
     },
@@ -11088,9 +11142,6 @@
     },
     "SessionNetworkProxyRuntime": {
       "properties": {
-        "admin_addr": {
-          "type": "string"
-        },
         "http_addr": {
           "type": "string"
         },
@@ -11099,7 +11150,6 @@
         }
       },
       "required": [
-        "admin_addr",
         "http_addr",
         "socks_addr"
       ],
@@ -14013,6 +14063,12 @@
               "type": "string"
             },
             "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
               "type": [
                 "string",
                 "null"

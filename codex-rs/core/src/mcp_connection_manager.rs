@@ -295,25 +295,34 @@ impl ElicitationRequestManager {
                     return Ok(ElicitationResponse {
                         action: ElicitationAction::Decline,
                         content: None,
+                        meta: None,
                     });
                 }
 
                 let request = match elicitation {
                     CreateElicitationRequestParams::FormElicitationParams {
+                        meta,
                         message,
                         requested_schema,
-                        ..
                     } => ElicitationRequest::Form {
+                        meta: meta
+                            .map(serde_json::to_value)
+                            .transpose()
+                            .context("failed to serialize MCP elicitation metadata")?,
                         message,
                         requested_schema: serde_json::to_value(requested_schema)
                             .context("failed to serialize MCP elicitation schema")?,
                     },
                     CreateElicitationRequestParams::UrlElicitationParams {
+                        meta,
                         message,
                         url,
                         elicitation_id,
-                        ..
                     } => ElicitationRequest::Url {
+                        meta: meta
+                            .map(serde_json::to_value)
+                            .transpose()
+                            .context("failed to serialize MCP elicitation metadata")?,
                         message,
                         url,
                         elicitation_id,
@@ -328,6 +337,7 @@ impl ElicitationRequestManager {
                     .send(Event {
                         id: "mcp_elicitation_request".to_string(),
                         msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
+                            turn_id: None,
                             server_name,
                             id: match id.clone() {
                                 rmcp::model::NumberOrString::String(value) => {

@@ -42,6 +42,7 @@ use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
+use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
@@ -224,6 +225,7 @@ use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
+use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
@@ -1223,6 +1225,7 @@ impl ChatWidget {
         self.refresh_model_display();
         self.sync_fast_command_enabled();
         self.sync_personality_command_enabled();
+        self.refresh_plugin_mentions();
         let startup_tooltip_override = self.startup_tooltip_override.take();
         let show_fast_status = self.should_show_fast_status(event.service_tier);
         let session_info_cell = history_cell::new_session_info(
@@ -2871,21 +2874,36 @@ impl ChatWidget {
             server_name: ev.server_name.clone(),
         });
 
-        let request = ApprovalRequest::McpElicitation {
-            thread_id: self.thread_id.unwrap_or_default(),
-            thread_label: None,
-            server_name: ev.server_name,
-            request_id: ev.id,
-            message: ev.request.message().to_string(),
-        };
-        self.bottom_pane
-            .push_approval_request(request, &self.config.features);
+        let thread_id = self.thread_id.unwrap_or_default();
+        if let Some(request) = McpServerElicitationFormRequest::from_event(thread_id, ev.clone()) {
+            self.bottom_pane
+                .push_mcp_server_elicitation_request(request);
+        } else {
+            let request = ApprovalRequest::McpElicitation {
+                thread_id,
+                thread_label: None,
+                server_name: ev.server_name,
+                request_id: ev.id,
+                message: ev.request.message().to_string(),
+            };
+            self.bottom_pane
+                .push_approval_request(request, &self.config.features);
+        }
         self.request_redraw();
     }
 
     pub(crate) fn push_approval_request(&mut self, request: ApprovalRequest) {
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    pub(crate) fn push_mcp_server_elicitation_request(
+        &mut self,
+        request: McpServerElicitationFormRequest,
+    ) {
+        self.bottom_pane
+            .push_mcp_server_elicitation_request(request);
         self.request_redraw();
     }
 
@@ -4394,6 +4412,7 @@ impl ChatWidget {
             .collect();
         let mut skill_names_lower: HashSet<String> = HashSet::new();
         let mut selected_skill_paths: HashSet<PathBuf> = HashSet::new();
+        let mut selected_plugin_ids: HashSet<String> = HashSet::new();
 
         if let Some(skills) = self.bottom_pane.skills() {
             skill_names_lower = skills
@@ -4430,6 +4449,30 @@ impl ChatWidget {
                     name: skill.name.clone(),
                     path: skill.path_to_skills_md.clone(),
                 });
+            }
+        }
+
+        if let Some(plugins) = self.plugins_for_mentions() {
+            for binding in &mention_bindings {
+                let Some(plugin_config_name) = binding
+                    .path
+                    .strip_prefix("plugin://")
+                    .filter(|id| !id.is_empty())
+                else {
+                    continue;
+                };
+                if !selected_plugin_ids.insert(plugin_config_name.to_string()) {
+                    continue;
+                }
+                if let Some(plugin) = plugins
+                    .iter()
+                    .find(|plugin| plugin.config_name == plugin_config_name)
+                {
+                    items.push(UserInput::Mention {
+                        name: plugin.display_name.clone(),
+                        path: binding.path.clone(),
+                    });
+                }
             }
         }
 
@@ -5119,6 +5162,10 @@ impl ChatWidget {
         let configured_status_line_items = self.configured_status_line_items();
         let view = StatusLineSetupView::new(
             Some(configured_status_line_items.as_slice()),
+            StatusLinePreviewData::from_iter(StatusLineItem::iter().filter_map(|item| {
+                self.status_line_value_for_item(&item)
+                    .map(|value| (item, value))
+            })),
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -7132,6 +7179,9 @@ impl ChatWidget {
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
+        if feature == Feature::Plugins {
+            self.refresh_plugin_mentions();
+        }
         if feature == Feature::PreventIdleSleep {
             self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
             self.turn_sleep_inhibitor
@@ -7555,6 +7605,14 @@ impl ChatWidget {
             ConnectorsCacheState::Ready(snapshot) => Some(snapshot.connectors.as_slice()),
             _ => None,
         }
+    }
+
+    fn plugins_for_mentions(&self) -> Option<&[codex_core::plugins::PluginCapabilitySummary]> {
+        if !self.config.features.enabled(Feature::Plugins) {
+            return None;
+        }
+
+        self.bottom_pane.plugins().map(Vec::as_slice)
     }
 
     /// Build a placeholder header cell while the session is configuring.
@@ -8056,6 +8114,7 @@ impl ChatWidget {
 
     fn on_list_skills(&mut self, ev: ListSkillsResponseEvent) {
         self.set_skills_from_response(&ev);
+        self.refresh_plugin_mentions();
     }
 
     pub(crate) fn on_connectors_loaded(
@@ -8137,6 +8196,19 @@ impl ChatWidget {
         self.refresh_connectors_popup_if_open(&snapshot.connectors);
         self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
         self.bottom_pane.set_connectors_snapshot(Some(snapshot));
+    }
+
+    fn refresh_plugin_mentions(&mut self) {
+        if !self.config.features.enabled(Feature::Plugins) {
+            self.bottom_pane.set_plugin_mentions(None);
+            return;
+        }
+
+        let plugins = PluginsManager::new(self.config.codex_home.clone())
+            .plugins_for_config(&self.config)
+            .capability_summaries()
+            .to_vec();
+        self.bottom_pane.set_plugin_mentions(Some(plugins));
     }
 
     pub(crate) fn open_review_popup(&mut self) {

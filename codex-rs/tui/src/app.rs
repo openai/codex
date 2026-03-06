@@ -7,6 +7,7 @@ use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
+use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
@@ -116,6 +117,11 @@ use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+
+enum ThreadInteractiveRequest {
+    Approval(ApprovalRequest),
+    McpServerElicitation(McpServerElicitationFormRequest),
+}
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
 /// Smooth-mode streaming drains one line per tick, so this interval controls
@@ -1010,41 +1016,55 @@ impl App {
         }
     }
 
-    async fn approval_request_for_thread_event(
+    async fn interactive_request_for_thread_event(
         &self,
         thread_id: ThreadId,
         event: &Event,
-    ) -> Option<ApprovalRequest> {
+    ) -> Option<ThreadInteractiveRequest> {
         let thread_label = Some(self.thread_label(thread_id));
         match &event.msg {
-            EventMsg::ExecApprovalRequest(ev) => Some(ApprovalRequest::Exec {
-                thread_id,
-                thread_label,
-                id: ev.effective_approval_id(),
-                command: ev.command.clone(),
-                reason: ev.reason.clone(),
-                available_decisions: ev.effective_available_decisions(),
-                network_approval_context: ev.network_approval_context.clone(),
-                additional_permissions: ev.additional_permissions.clone(),
-            }),
-            EventMsg::ApplyPatchApprovalRequest(ev) => Some(ApprovalRequest::ApplyPatch {
-                thread_id,
-                thread_label,
-                id: ev.call_id.clone(),
-                reason: ev.reason.clone(),
-                cwd: self
-                    .thread_cwd(thread_id)
-                    .await
-                    .unwrap_or_else(|| self.config.cwd.clone()),
-                changes: ev.changes.clone(),
-            }),
-            EventMsg::ElicitationRequest(ev) => Some(ApprovalRequest::McpElicitation {
-                thread_id,
-                thread_label,
-                server_name: ev.server_name.clone(),
-                request_id: ev.id.clone(),
-                message: ev.request.message().to_string(),
-            }),
+            EventMsg::ExecApprovalRequest(ev) => {
+                Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
+                    thread_id,
+                    thread_label,
+                    id: ev.effective_approval_id(),
+                    command: ev.command.clone(),
+                    reason: ev.reason.clone(),
+                    available_decisions: ev.effective_available_decisions(),
+                    network_approval_context: ev.network_approval_context.clone(),
+                    additional_permissions: ev.additional_permissions.clone(),
+                }))
+            }
+            EventMsg::ApplyPatchApprovalRequest(ev) => Some(ThreadInteractiveRequest::Approval(
+                ApprovalRequest::ApplyPatch {
+                    thread_id,
+                    thread_label,
+                    id: ev.call_id.clone(),
+                    reason: ev.reason.clone(),
+                    cwd: self
+                        .thread_cwd(thread_id)
+                        .await
+                        .unwrap_or_else(|| self.config.cwd.clone()),
+                    changes: ev.changes.clone(),
+                },
+            )),
+            EventMsg::ElicitationRequest(ev) => {
+                if let Some(request) =
+                    McpServerElicitationFormRequest::from_event(thread_id, ev.clone())
+                {
+                    Some(ThreadInteractiveRequest::McpServerElicitation(request))
+                } else {
+                    Some(ThreadInteractiveRequest::Approval(
+                        ApprovalRequest::McpElicitation {
+                            thread_id,
+                            thread_label,
+                            server_name: ev.server_name.clone(),
+                            request_id: ev.id.clone(),
+                            message: ev.request.message().to_string(),
+                        },
+                    ))
+                }
+            }
             _ => None,
         }
     }
@@ -1112,8 +1132,8 @@ impl App {
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
         let refresh_pending_thread_approvals =
             ThreadEventStore::event_can_change_pending_thread_approvals(&event);
-        let inactive_approval_request = if self.active_thread_id != Some(thread_id) {
-            self.approval_request_for_thread_event(thread_id, &event)
+        let inactive_interactive_request = if self.active_thread_id != Some(thread_id) {
+            self.interactive_request_for_thread_event(thread_id, &event)
                 .await
         } else {
             None
@@ -1146,8 +1166,16 @@ impl App {
                     tracing::warn!("thread {thread_id} event channel closed");
                 }
             }
-        } else if let Some(request) = inactive_approval_request {
-            self.chat_widget.push_approval_request(request);
+        } else if let Some(request) = inactive_interactive_request {
+            match request {
+                ThreadInteractiveRequest::Approval(request) => {
+                    self.chat_widget.push_approval_request(request);
+                }
+                ThreadInteractiveRequest::McpServerElicitation(request) => {
+                    self.chat_widget
+                        .push_mcp_server_elicitation_request(request);
+                }
+            }
         }
         if refresh_pending_thread_approvals {
             self.refresh_pending_thread_approvals().await;
