@@ -4,6 +4,7 @@ use std::path::Path;
 use pretty_assertions::assert_eq;
 
 use crate::spawn_pipe_process;
+use crate::spawn_pipe_process_split;
 use crate::spawn_pty_process;
 
 fn find_python() -> Option<String> {
@@ -88,6 +89,29 @@ async fn collect_output_until_exit(
             }
             _ = tokio::time::sleep_until(deadline) => {
                 return (collected, -1);
+            }
+        }
+    }
+}
+
+async fn collect_output_until_closed(
+    mut output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+    timeout_ms: u64,
+) -> Vec<u8> {
+    let mut collected = Vec::new();
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
+
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return collected;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        match tokio::time::timeout(remaining, output_rx.recv()).await {
+            Ok(Ok(chunk)) => collected.extend_from_slice(&chunk),
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) | Err(_) => {
+                return collected;
             }
         }
     }
@@ -271,6 +295,46 @@ async fn pipe_process_round_trips_stdin() -> anyhow::Result<()> {
         "expected pipe process to echo stdin: {text:?}"
     );
     assert_eq!(code, 0, "expected python -c to exit cleanly");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_process_split_preserves_stdout_and_stderr() -> anyhow::Result<()> {
+    let Some(python) = find_python() else {
+        eprintln!("python not found; skipping pipe_process_split_preserves_stdout_and_stderr");
+        return Ok(());
+    };
+
+    let args = vec![
+        "-u".to_string(),
+        "-c".to_string(),
+        "import sys; print('stdout-line'); sys.stderr.write('stderr-line\\n'); sys.stderr.flush()"
+            .to_string(),
+    ];
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let spawned = spawn_pipe_process_split(&python, &args, Path::new("."), &env_map, &None).await?;
+    let merged_rx = spawned.session.output_receiver();
+
+    let stdout_task =
+        tokio::spawn(async move { collect_output_until_closed(spawned.stdout_rx, 5_000).await });
+    let stderr_task =
+        tokio::spawn(async move { collect_output_until_closed(spawned.stderr_rx, 5_000).await });
+    let merged_task =
+        tokio::spawn(
+            async move { collect_output_until_exit(merged_rx, spawned.exit_rx, 5_000).await },
+        );
+
+    let stdout = stdout_task.await?;
+    let stderr = stderr_task.await?;
+    let (merged, code) = merged_task.await?;
+
+    assert_eq!(code, 0, "expected python -c to exit cleanly");
+    assert_eq!(String::from_utf8_lossy(&stdout), "stdout-line\n");
+    assert_eq!(String::from_utf8_lossy(&stderr), "stderr-line\n");
+    let merged = String::from_utf8_lossy(&merged);
+    assert!(merged.contains("stdout-line"));
+    assert!(merged.contains("stderr-line"));
 
     Ok(())
 }

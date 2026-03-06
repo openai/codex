@@ -19,6 +19,7 @@ use crate::tools::events::ToolEventStage;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::js_repl::JS_REPL_PRAGMA_PREFIX;
 use crate::tools::js_repl::JsReplArgs;
+use crate::tools::js_repl::JsReplExecuteError;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -41,6 +42,7 @@ fn build_js_repl_exec_output(
     output: &str,
     error: Option<&str>,
     duration: Duration,
+    timed_out: bool,
 ) -> ExecToolCallOutput {
     let stdout = output.to_string();
     let stderr = error.unwrap_or("").to_string();
@@ -51,7 +53,7 @@ fn build_js_repl_exec_output(
         stderr: StreamOutput::new(stderr),
         aggregated_output: StreamOutput::new(aggregated_output),
         duration,
-        timed_out: false,
+        timed_out,
     }
 }
 
@@ -77,8 +79,9 @@ async fn emit_js_repl_exec_end(
     output: &str,
     error: Option<&str>,
     duration: Duration,
+    timed_out: bool,
 ) {
-    let exec_output = build_js_repl_exec_output(output, error, duration);
+    let exec_output = build_js_repl_exec_output(output, error, duration, timed_out);
     let emitter = ToolEmitter::shell(
         vec!["js_repl".to_string()],
         turn.cwd.clone(),
@@ -140,6 +143,7 @@ impl ToolHandler for JsReplHandler {
         let result = match result {
             Ok(result) => result,
             Err(err) => {
+                let timed_out = matches!(err, JsReplExecuteError::TimedOut);
                 let message = err.to_string();
                 emit_js_repl_exec_end(
                     session.as_ref(),
@@ -148,9 +152,10 @@ impl ToolHandler for JsReplHandler {
                     "",
                     Some(&message),
                     started_at.elapsed(),
+                    timed_out,
                 )
                 .await;
-                return Err(err);
+                return Err(err.into());
             }
         };
 
@@ -170,6 +175,7 @@ impl ToolHandler for JsReplHandler {
             &content,
             None,
             started_at.elapsed(),
+            false,
         )
         .await;
 
@@ -216,6 +222,8 @@ fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
     let mut args = JsReplArgs {
         code: input.to_string(),
         timeout_ms: None,
+        poll: false,
+        session_id: None,
     };
 
     let mut lines = input.splitn(2, '\n');
@@ -355,6 +363,7 @@ mod tests {
             "hello",
             None,
             Duration::from_millis(12),
+            false,
         )
         .await;
 

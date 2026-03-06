@@ -31,6 +31,7 @@ impl fmt::Debug for PtyHandles {
 pub struct ProcessHandle {
     writer_tx: mpsc::Sender<Vec<u8>>,
     output_tx: broadcast::Sender<Vec<u8>>,
+    pid: Option<u32>,
     killer: StdMutex<Option<Box<dyn ChildTerminator>>>,
     reader_handle: StdMutex<Option<JoinHandle<()>>>,
     reader_abort_handles: StdMutex<Vec<AbortHandle>>,
@@ -55,6 +56,7 @@ impl ProcessHandle {
         writer_tx: mpsc::Sender<Vec<u8>>,
         output_tx: broadcast::Sender<Vec<u8>>,
         initial_output_rx: broadcast::Receiver<Vec<u8>>,
+        pid: Option<u32>,
         killer: Box<dyn ChildTerminator>,
         reader_handle: JoinHandle<()>,
         reader_abort_handles: Vec<AbortHandle>,
@@ -68,6 +70,7 @@ impl ProcessHandle {
             Self {
                 writer_tx,
                 output_tx,
+                pid,
                 killer: StdMutex::new(Some(killer)),
                 reader_handle: StdMutex::new(Some(reader_handle)),
                 reader_abort_handles: StdMutex::new(reader_abort_handles),
@@ -91,6 +94,11 @@ impl ProcessHandle {
         self.output_tx.subscribe()
     }
 
+    /// Returns the child process ID when available.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
     /// True if the child process has exited.
     pub fn has_exited(&self) -> bool {
         self.exit_status.load(std::sync::atomic::Ordering::SeqCst)
@@ -107,6 +115,14 @@ impl ProcessHandle {
             if let Some(mut killer) = killer_opt.take() {
                 let _ = killer.kill();
             }
+        }
+        self.exit_status
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        match self.exit_code.lock() {
+            Ok(mut guard) if guard.is_none() => {
+                *guard = Some(-1);
+            }
+            Ok(_) | Err(_) => {}
         }
 
         if let Ok(mut h) = self.reader_handle.lock() {
@@ -143,5 +159,14 @@ impl Drop for ProcessHandle {
 pub struct SpawnedProcess {
     pub session: ProcessHandle,
     pub output_rx: broadcast::Receiver<Vec<u8>>,
+    pub exit_rx: oneshot::Receiver<i32>,
+}
+
+/// Return value from split-output spawn helpers.
+#[derive(Debug)]
+pub struct SpawnedProcessSplit {
+    pub session: ProcessHandle,
+    pub stdout_rx: broadcast::Receiver<Vec<u8>>,
+    pub stderr_rx: broadcast::Receiver<Vec<u8>>,
     pub exit_rx: oneshot::Receiver<i32>,
 }
