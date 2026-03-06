@@ -80,6 +80,8 @@ pub enum Feature {
     // Experimental
     /// Enable JavaScript REPL tools backed by a persistent Node kernel.
     JsRepl,
+    /// Enable js_repl polling helpers and tool.
+    JsReplPolling,
     /// Only expose js_repl tools directly to the model.
     JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
@@ -497,6 +499,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities. Requires Node >= v22.22.0 installed.",
             announcement: "NEW: JavaScript REPL is now available in /experimental. Enable it, then start a new chat or restart Codex to use it.",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::JsReplPolling,
+        key: "js_repl_polling",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
