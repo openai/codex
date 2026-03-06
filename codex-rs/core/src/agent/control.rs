@@ -732,12 +732,7 @@ impl AgentControl {
         {
             let mut compacting = self.watchdog_compactions_in_progress.lock().await;
             if compacting.contains(&parent_thread_id) {
-                if parent_has_active_turn {
-                    return Ok(WatchdogParentCompactionResult::AlreadyInProgress {
-                        parent_thread_id,
-                    });
-                }
-                compacting.remove(&parent_thread_id);
+                return Ok(WatchdogParentCompactionResult::AlreadyInProgress { parent_thread_id });
             }
             if parent_has_active_turn {
                 return Ok(WatchdogParentCompactionResult::ParentBusy { parent_thread_id });
@@ -756,6 +751,11 @@ impl AgentControl {
                 Err(err)
             }
         }
+    }
+
+    pub(crate) async fn finish_watchdog_parent_compaction(&self, parent_thread_id: ThreadId) {
+        let mut compacting = self.watchdog_compactions_in_progress.lock().await;
+        compacting.remove(&parent_thread_id);
     }
 
     #[cfg(test)]
@@ -2243,7 +2243,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compact_parent_for_watchdog_helper_submits_when_only_stale_marker_remains() {
+    async fn compact_parent_for_watchdog_helper_blocks_duplicates_until_finish() {
         let harness = AgentControlHarness::new().await;
         let (owner_thread_id, _owner_thread) = harness.start_thread().await;
         let watchdog_handle_id = harness
@@ -2292,7 +2292,7 @@ mod tests {
             .control
             .compact_parent_for_watchdog_helper(helper_thread_id)
             .await
-            .expect("stale compact marker should not block submission");
+            .expect("first compact request should submit");
         let submission_id = match result {
             WatchdogParentCompactionResult::Submitted {
                 parent_thread_id,
@@ -2312,6 +2312,49 @@ mod tests {
                 .filter(|(thread_id, op)| *thread_id == owner_thread_id && matches!(op, Op::Compact))
                 .count(),
             1
+        );
+
+        let result = harness
+            .control
+            .compact_parent_for_watchdog_helper(helper_thread_id)
+            .await
+            .expect("duplicate compact should be blocked");
+        assert_eq!(
+            result,
+            WatchdogParentCompactionResult::AlreadyInProgress {
+                parent_thread_id: owner_thread_id,
+            }
+        );
+
+        harness
+            .control
+            .finish_watchdog_parent_compaction(owner_thread_id)
+            .await;
+
+        let result = harness
+            .control
+            .compact_parent_for_watchdog_helper(helper_thread_id)
+            .await
+            .expect("completed compact should unblock later requests");
+        let resubmitted_id = match result {
+            WatchdogParentCompactionResult::Submitted {
+                parent_thread_id,
+                submission_id,
+            } => {
+                assert_eq!(parent_thread_id, owner_thread_id);
+                submission_id
+            }
+            other => panic!("expected submitted compaction result after finish, got {other:?}"),
+        };
+        assert_eq!(resubmitted_id.is_empty(), false);
+        assert_eq!(
+            harness
+                .manager
+                .captured_ops()
+                .iter()
+                .filter(|(thread_id, op)| *thread_id == owner_thread_id && matches!(op, Op::Compact))
+                .count(),
+            2
         );
 
         let _ = harness
