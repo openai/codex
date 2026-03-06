@@ -157,6 +157,43 @@ async fn reconstruct_history_materializes_fork_reference_rollout_items() {
 }
 
 #[tokio::test]
+async fn record_initial_history_forked_materializes_fork_reference_rollout_items() {
+    let (session, turn_context) = make_session_and_context().await;
+    let codex_home = turn_context.config.codex_home.clone();
+    let parent_thread_id = ThreadId::new();
+    let parent_rollout_path = write_rollout_items(
+        codex_home.as_path(),
+        parent_thread_id,
+        &[
+            RolloutItem::ResponseItem(user_message("first user")),
+            RolloutItem::ResponseItem(assistant_message("first reply")),
+            RolloutItem::ResponseItem(user_message("second user")),
+            RolloutItem::ResponseItem(assistant_message("second reply")),
+        ],
+    )
+    .expect("write parent rollout");
+    let rollout_items = vec![RolloutItem::ForkReference(ForkReferenceItem {
+        rollout_path: parent_rollout_path,
+        nth_user_message: 1,
+    })];
+
+    session
+        .record_initial_history(InitialHistory::Forked(rollout_items))
+        .await;
+
+    let reconstruction_turn = session.new_default_turn().await;
+    let mut expected = vec![user_message("first user"), assistant_message("first reply")];
+    expected.extend(
+        session
+            .build_initial_context(reconstruction_turn.as_ref())
+            .await,
+    );
+
+    let history = session.state.lock().await.clone_history();
+    assert_eq!(expected, history.raw_items());
+}
+
+#[tokio::test]
 async fn reconstruct_history_resolves_fork_reference_after_parent_archive_and_unarchive() {
     let (session, turn_context) = make_session_and_context().await;
     let codex_home = turn_context.config.codex_home.clone();

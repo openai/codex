@@ -1892,17 +1892,25 @@ impl Session {
                     self.flush_rollout().await;
                 }
             }
-            InitialHistory::Forked(mut rollout_items) => {
+            InitialHistory::Forked(rollout_items) => {
                 let persisted_rollout_items = rollout_items
                     .iter()
                     .position(|item| matches!(item, RolloutItem::ForkReference(_)))
                     .map(|index| rollout_items[index..].to_vec());
-                rollout_items.retain(|item| !matches!(item, RolloutItem::ForkReference(_)));
+                let hydrated_rollout_items = if rollout_items
+                    .iter()
+                    .any(|item| matches!(item, RolloutItem::ForkReference(_)))
+                {
+                    self.materialize_rollout_items_for_replay(&rollout_items)
+                        .await
+                } else {
+                    rollout_items.clone()
+                };
                 let restored_tool_selection =
-                    Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
+                    Self::extract_mcp_tool_selection_from_rollout(&hydrated_rollout_items);
 
                 let reconstructed_rollout = self
-                    .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+                    .reconstruct_history_from_rollout(&turn_context, &hydrated_rollout_items)
                     .await;
                 self.set_previous_turn_settings(
                     reconstructed_rollout.previous_turn_settings.clone(),
@@ -1924,7 +1932,7 @@ impl Session {
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                if let Some(info) = Self::last_token_info_from_rollout(&hydrated_rollout_items) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }

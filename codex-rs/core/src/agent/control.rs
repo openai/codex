@@ -170,6 +170,17 @@ impl AgentControl {
                         RolloutRecorder::get_rollout_history(&rollout_path)
                             .await?
                             .get_rollout_items();
+                    if forked_rollout_items
+                        .iter()
+                        .any(|item| matches!(item, RolloutItem::ForkReference(_)))
+                    {
+                        forked_rollout_items =
+                            crate::rollout::truncation::materialize_rollout_items_for_replay(
+                                config.codex_home.as_path(),
+                                &forked_rollout_items,
+                            )
+                            .await;
+                    }
                     forked_rollout_items.push(RolloutItem::ForkReference(ForkReferenceItem {
                         rollout_path: rollout_path.clone(),
                         nth_user_message: usize::MAX,
