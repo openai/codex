@@ -61,13 +61,6 @@ impl SandboxPermissions {
     pub fn uses_additional_permissions(self) -> bool {
         matches!(self, SandboxPermissions::WithAdditionalPermissions)
     }
-
-    /// Legacy helper kept for compatibility. Prefer
-    /// `requests_sandbox_override()` or `uses_additional_permissions()` when
-    /// the distinction matters.
-    pub fn requires_additional_permissions(self) -> bool {
-        self.requests_sandbox_override()
-    }
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1378,10 +1371,6 @@ mod tests {
             assert_eq!(
                 sandbox_permissions.uses_additional_permissions(),
                 uses_additional_permissions
-            );
-            assert_eq!(
-                sandbox_permissions.requires_additional_permissions(),
-                requests_sandbox_override
             );
         }
     }
