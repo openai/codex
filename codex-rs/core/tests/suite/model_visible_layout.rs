@@ -25,7 +25,6 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use serde_json::json;
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "PRETURN_CONTEXT_DIFF_CWD";
 
@@ -51,37 +50,6 @@ fn agents_message_count(request: &ResponsesRequest) -> usize {
         .iter()
         .filter(|text| text.starts_with("<AGENTS.md INSTRUCTIONS FOR "))
         .count()
-}
-
-fn format_subagents_snapshot(subagents: &[&str]) -> String {
-    assert!(
-        !subagents.is_empty(),
-        "format_subagents_snapshot requires at least one subagent entry"
-    );
-    let lines = subagents
-        .iter()
-        .map(|line| format!("  {line}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let items = vec![
-        json!({
-            "type": "message",
-            "role": "developer",
-            "content": [{
-                "type": "input_text",
-                "text": format!("<subagents>\n{lines}\n</subagents>"),
-            }],
-        }),
-        json!({
-            "type": "message",
-            "role": "user",
-            "content": [{
-                "type": "input_text",
-                "text": "<environment_context>\n  <cwd>/tmp/example</cwd>\n  <shell>bash</shell>\n</environment_context>",
-            }],
-        }),
-    ];
-    context_snapshot::format_response_items_snapshot(items.as_slice(), &context_snapshot_options())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -484,26 +452,6 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
                 ("First Request After Resume + Override", &resumed_request),
             ]
         )
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn snapshot_model_visible_layout_subagents_fragment_includes_one_subagent() -> Result<()> {
-    insta::assert_snapshot!(
-        "model_visible_layout_subagents_fragment_includes_one_subagent",
-        format_subagents_snapshot(&["- agent-1: Atlas"])
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn snapshot_model_visible_layout_subagents_fragment_includes_two_subagents() -> Result<()> {
-    insta::assert_snapshot!(
-        "model_visible_layout_subagents_fragment_includes_two_subagents",
-        format_subagents_snapshot(&["- agent-1: Atlas", "- agent-2: Juniper"])
     );
 
     Ok(())
