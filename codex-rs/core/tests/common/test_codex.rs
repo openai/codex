@@ -185,6 +185,7 @@ impl TestCodexBuilder {
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
                 SessionSource::Exec,
                 Some(model_catalog),
+                config.custom_models.clone(),
                 CollaborationModesConfig::default(),
             )
         } else {
