@@ -700,7 +700,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "guardian_approval",
         stage: Stage::Experimental {
             name: "Guardian approvals",
-            menu_description: "Let a guardian subagent review approval prompts instead of asking you directly. Try `codex -a guardian -s workspace-write`.",
+            menu_description: "Let a guardian subagent review approval prompts for sandbox escapes and blocked network access instead of asking you directly. Try `codex -a guardian -s workspace-write`.",
             announcement: "NEW: Guardian approvals can now be enabled from /experimental.",
         },
         default_enabled: false,
@@ -898,6 +898,22 @@ mod tests {
             ))
         );
         assert_eq!(Feature::JsRepl.default_enabled(), false);
+    }
+
+    #[test]
+    fn guardian_approval_is_experimental_and_user_toggleable() {
+        let spec = Feature::GuardianApproval.info();
+        let stage = spec.stage;
+
+        assert!(matches!(stage, Stage::Experimental { .. }));
+        assert_eq!(stage.experimental_menu_name(), Some("Guardian approvals"));
+        assert_eq!(
+            stage.experimental_menu_description().map(str::to_owned),
+            Some(
+                "Let a guardian subagent review approval prompts for sandbox escapes and blocked network access instead of asking you directly. Try `codex -a guardian -s workspace-write`.".to_string()
+            )
+        );
+        assert_eq!(Feature::GuardianApproval.default_enabled(), false);
     }
 
     #[test]
