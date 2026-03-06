@@ -147,6 +147,7 @@ pub enum MacOsAutomationPermission {
 enum MacOsAutomationPermissionDe {
     Mode(String),
     BundleIds(Vec<String>),
+    BundleIdsObject { bundle_ids: Vec<String> },
 }
 
 impl TryFrom<MacOsAutomationPermissionDe> for MacOsAutomationPermission {
@@ -155,6 +156,7 @@ impl TryFrom<MacOsAutomationPermissionDe> for MacOsAutomationPermission {
     /// Accepts one of:
     /// - `"none"` or `"all"`
     /// - a plain list of bundle IDs, e.g. `["com.apple.Notes"]`
+    /// - an object with bundle IDs, e.g. `{"bundle_ids": ["com.apple.Notes"]}`
     fn try_from(value: MacOsAutomationPermissionDe) -> Result<Self, Self::Error> {
         let permission = match value {
             MacOsAutomationPermissionDe::Mode(value) => {
@@ -169,7 +171,8 @@ impl TryFrom<MacOsAutomationPermissionDe> for MacOsAutomationPermission {
                     ));
                 }
             }
-            MacOsAutomationPermissionDe::BundleIds(bundle_ids) => {
+            MacOsAutomationPermissionDe::BundleIds(bundle_ids)
+            | MacOsAutomationPermissionDe::BundleIdsObject { bundle_ids } => {
                 let bundle_ids = bundle_ids
                     .into_iter()
                     .map(|bundle_id| bundle_id.trim().to_string())
@@ -1483,6 +1486,19 @@ mod tests {
 
         assert_eq!(all, MacOsAutomationPermission::All);
         assert_eq!(none, MacOsAutomationPermission::None);
+    }
+
+    #[test]
+    fn macos_automation_permission_deserializes_bundle_ids_object() {
+        let permission = serde_json::from_value::<MacOsAutomationPermission>(serde_json::json!({
+            "bundle_ids": ["com.apple.Notes"]
+        }))
+        .expect("deserialize bundle_ids object automation permission");
+
+        assert_eq!(
+            permission,
+            MacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string(),])
+        );
     }
 
     #[test]
