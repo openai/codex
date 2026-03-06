@@ -16,8 +16,13 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
 
 // ---------------------------------------------------------------------------
-// Developer update fragments
+// Settings-update fragments for the developer envelope
 // ---------------------------------------------------------------------------
+//
+// Contextual-user settings-update fragments are assembled in `updates.rs`
+// (currently `EnvironmentContext::diff_from_turn_context_item(...)`) and the
+// corresponding fragment types live in their own modules (for example
+// `environment_context.rs` and `instructions/contextual_user_fragments.rs`).
 
 struct PermissionsUpdateFragment {
     text: String,
