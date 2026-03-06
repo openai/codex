@@ -2064,6 +2064,7 @@ async fn subagent_panel_is_not_flushed_into_transcript_history() {
 #[tokio::test]
 async fn subagent_panel_mounts_while_placeholder_active_cell_exists_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.cwd = PathBuf::from("/repo/codex-rs/tui");
     chat.active_cell = Some(ChatWidget::placeholder_session_header_cell(
         chat.config_ref(),
     ));
