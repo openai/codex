@@ -8155,6 +8155,81 @@
         ],
         "type": "object"
       },
+      "AppSummary": {
+        "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+        "properties": {
+          "appMetadata": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branding": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppBranding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "distributionChannel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "installUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "logoUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logoUrlDark": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "AppToolApproval": {
         "enum": [
           "auto",
@@ -11214,6 +11289,17 @@
       },
       "PluginInstallResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "appsNeedingAuth": {
+            "items": {
+              "$ref": "#/definitions/v2/AppSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "appsNeedingAuth"
+        ],
         "title": "PluginInstallResponse",
         "type": "object"
       },
