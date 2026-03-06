@@ -1223,6 +1223,7 @@ async fn list_apps_force_refetch_reuses_affinity_cookie_across_temp_mcp_clients(
         app_metadata: None,
         labels: None,
         install_url: None,
+        plugin_display_names: Vec::new(),
         is_accessible: false,
         is_enabled: true,
     }];
