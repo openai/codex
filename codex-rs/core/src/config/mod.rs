@@ -364,6 +364,10 @@ pub struct Config {
     pub agent_max_threads: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
+    /// When true, inbound agent messages to non-subagent threads are delivered
+    /// as a synthetic function_call/function_call_output pair instead of plain
+    /// user input.
+    pub agent_use_function_call_inbox: bool,
 
     /// When true, inbound agent messages to non-subagent threads are delivered
     /// as a synthetic function_call/function_call_output pair instead of plain
