@@ -6,8 +6,8 @@ use crate::AgentJobItemStatus;
 use crate::AgentJobProgress;
 use crate::AgentJobStatus;
 use crate::DB_ERROR_METRIC;
-use crate::LOG_DB_FILENAME;
-use crate::LOG_DB_VERSION;
+use crate::LOGS_DB_FILENAME;
+use crate::LOGS_DB_VERSION;
 use crate::LogEntry;
 use crate::LogQuery;
 use crate::LogRow;
@@ -19,7 +19,7 @@ use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
-use crate::migrations::LOG_MIGRATOR;
+use crate::migrations::LOGS_MIGRATOR;
 use crate::migrations::STATE_MIGRATOR;
 use crate::model::AgentJobRow;
 use crate::model::ThreadRow;
@@ -98,8 +98,8 @@ impl StateRuntime {
         remove_legacy_db_files(
             &codex_home,
             current_logs_name.as_str(),
-            LOG_DB_FILENAME,
-            "log",
+            LOGS_DB_FILENAME,
+            "logs",
         )
         .await;
         let state_path = state_db_path(codex_home.as_path());
@@ -115,10 +115,10 @@ impl StateRuntime {
                 return Err(err);
             }
         };
-        let logs_pool = match open_sqlite(&logs_path, &LOG_MIGRATOR).await {
+        let logs_pool = match open_sqlite(&logs_path, &LOGS_MIGRATOR).await {
             Ok(db) => Arc::new(db),
             Err(err) => {
-                warn!("failed to open log db at {}: {err}", logs_path.display());
+                warn!("failed to open logs db at {}: {err}", logs_path.display());
                 if let Some(otel) = otel.as_ref() {
                     otel.counter(METRIC_DB_INIT, 1, &[("status", "open_error")]);
                 }
@@ -175,7 +175,7 @@ pub fn state_db_path(codex_home: &Path) -> PathBuf {
 }
 
 pub fn logs_db_filename() -> String {
-    db_filename(LOG_DB_FILENAME, LOG_DB_VERSION)
+    db_filename(LOGS_DB_FILENAME, LOGS_DB_VERSION)
 }
 
 pub fn logs_db_path(codex_home: &Path) -> PathBuf {
