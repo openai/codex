@@ -7,6 +7,7 @@ use crate::config::types::MemoriesConfig;
 use crate::error::CodexErr;
 use crate::memories::metrics;
 use crate::memories::phase_one;
+use crate::memories::phase_one::PRUNE_BATCH_SIZE;
 use crate::memories::prompts::build_stage_one_input_message;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::policy::should_persist_response_item_for_memories;
@@ -118,6 +119,30 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
         counts.succeeded_no_output,
         counts.failed
     );
+}
+
+/// Prune old un-used "dead" raw memories.
+pub(in crate::memories) async fn prune(session: &Arc<Session>, config: &Config) {
+    if let Some(db) = session.services.state_db.as_deref() {
+        let max_unused_days = config.memories.max_unused_days;
+        match db
+            .prune_stage1_outputs_for_retention(max_unused_days, PRUNE_BATCH_SIZE)
+            .await
+        {
+            Ok(pruned) => {
+                if pruned > 0 {
+                    info!(
+                        "memory startup pruned {pruned} stale stage-1 output row(s) older than {max_unused_days} days"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(
+                    "state db prune_stage1_outputs_for_retention failed during memories startup: {err}"
+                );
+            }
+        }
+    }
 }
 
 /// JSON schema used to constrain phase-1 model output.
