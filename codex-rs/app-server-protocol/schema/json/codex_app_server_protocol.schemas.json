@@ -9595,16 +9595,6 @@
                 "type": "null"
               }
             ]
-          },
-          "web_search_config": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/WebSearchConfig"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "type": "object"
@@ -11999,20 +11989,20 @@
               }
             ]
           },
-          "web_search": {
+          "tools": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/WebSearchMode"
+                "$ref": "#/definitions/v2/ToolsV2"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "web_search_config": {
+          "web_search": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/WebSearchConfig"
+                "$ref": "#/definitions/v2/WebSearchMode"
               },
               {
                 "type": "null"
@@ -15749,9 +15739,13 @@
             ]
           },
           "web_search": {
-            "type": [
-              "boolean",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WebSearchToolConfig"
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         },
@@ -16350,42 +16344,6 @@
           }
         ]
       },
-      "WebSearchConfig": {
-        "additionalProperties": false,
-        "properties": {
-          "filters": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/WebSearchFilters"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "search_context_size": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/WebSearchContextSize"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "user_location": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/WebSearchUserLocation"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "type": "object"
-      },
       "WebSearchContextSize": {
         "enum": [
           "low",
@@ -16394,30 +16352,7 @@
         ],
         "type": "string"
       },
-      "WebSearchFilters": {
-        "additionalProperties": false,
-        "properties": {
-          "allowed_domains": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
-      "WebSearchMode": {
-        "enum": [
-          "disabled",
-          "cached",
-          "live"
-        ],
-        "type": "string"
-      },
-      "WebSearchUserLocation": {
+      "WebSearchLocation": {
         "additionalProperties": false,
         "properties": {
           "city": {
@@ -16443,23 +16378,52 @@
               "string",
               "null"
             ]
-          },
-          "type": {
-            "allOf": [
-              {
-                "$ref": "#/definitions/v2/WebSearchUserLocationType"
-              }
-            ],
-            "default": "approximate"
           }
         },
         "type": "object"
       },
-      "WebSearchUserLocationType": {
+      "WebSearchMode": {
         "enum": [
-          "approximate"
+          "disabled",
+          "cached",
+          "live"
         ],
         "type": "string"
+      },
+      "WebSearchToolConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "context_size": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WebSearchContextSize"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WebSearchLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
       },
       "WindowsSandboxSetupCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

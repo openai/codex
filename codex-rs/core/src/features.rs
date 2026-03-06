@@ -213,10 +213,17 @@ impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
         LegacyFeatureToggles {
             include_apply_patch_tool: self.include_apply_patch_tool,
-            tools_web_search: self.web_search_request,
             ..Default::default()
         }
         .apply(features);
+        if let Some(enabled) = self.web_search_request {
+            if enabled {
+                features.enable(Feature::WebSearchRequest);
+            } else {
+                features.disable(Feature::WebSearchRequest);
+            }
+            features.record_legacy_usage("web_search_request", Feature::WebSearchRequest);
+        }
     }
 }
 
@@ -342,7 +349,6 @@ impl Features {
         let base_legacy = LegacyFeatureToggles {
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
-            tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
             ..Default::default()
         };
         base_legacy.apply(&mut features);
@@ -357,7 +363,6 @@ impl Features {
                 .experimental_use_freeform_apply_patch,
 
             experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
-            tools_web_search: config_profile.tools_web_search,
         };
         profile_legacy.apply(&mut features);
         if let Some(profile_features) = config_profile.features.as_ref() {
@@ -388,7 +393,6 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
         Feature::WebSearchRequest | Feature::WebSearchCached => {
             let label = match alias {
                 "web_search" => "[features].web_search",
-                "tools.web_search" => "[tools].web_search",
                 "features.web_search_request" | "web_search_request" => {
                     "[features].web_search_request"
                 }

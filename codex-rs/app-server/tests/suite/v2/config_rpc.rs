@@ -23,11 +23,9 @@ use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
 use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
-use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchContextSize;
-use codex_protocol::config_types::WebSearchFilters;
-use codex_protocol::config_types::WebSearchUserLocation;
-use codex_protocol::config_types::WebSearchUserLocationType;
+use codex_protocol::config_types::WebSearchLocation;
+use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -98,8 +96,11 @@ async fn config_read_includes_tools() -> Result<()> {
         r#"
 model = "gpt-user"
 
+[tools.web_search]
+context_size = "low"
+allowed_domains = ["example.com"]
+
 [tools]
-web_search = true
 view_image = false
 "#,
     )?;
@@ -130,12 +131,28 @@ view_image = false
     assert_eq!(
         tools,
         ToolsV2 {
-            web_search: Some(true),
+            web_search: Some(WebSearchToolConfig {
+                context_size: Some(WebSearchContextSize::Low),
+                allowed_domains: Some(vec!["example.com".to_string()]),
+                location: None,
+            }),
             view_image: Some(false),
         }
     );
     assert_eq!(
-        origins.get("tools.web_search").expect("origin").name,
+        origins
+            .get("tools.web_search.context_size")
+            .expect("origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins
+            .get("tools.web_search.allowed_domains")
+            .expect("origin")
+            .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }
@@ -154,23 +171,17 @@ view_image = false
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_read_includes_web_search_config() -> Result<()> {
+async fn config_read_includes_nested_web_search_tool_config() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
         &codex_home,
         r#"
 web_search = "live"
 
-[web_search_config]
-search_context_size = "high"
-
-[web_search_config.filters]
+[tools.web_search]
+context_size = "high"
 allowed_domains = ["example.com"]
-
-[web_search_config.user_location]
-country = "US"
-city = "New York"
-timezone = "America/New_York"
+location = { country = "US", city = "New York", timezone = "America/New_York" }
 "#,
     )?;
 
@@ -191,20 +202,17 @@ timezone = "America/New_York"
     let ConfigReadResponse { config, .. } = to_response(resp)?;
 
     assert_eq!(
-        config.web_search_config,
-        Some(WebSearchConfig {
-            filters: Some(WebSearchFilters {
-                allowed_domains: Some(vec!["example.com".to_string()]),
-            }),
-            user_location: Some(WebSearchUserLocation {
-                r#type: WebSearchUserLocationType::Approximate,
+        config.tools.expect("tools present").web_search,
+        Some(WebSearchToolConfig {
+            context_size: Some(WebSearchContextSize::High),
+            allowed_domains: Some(vec!["example.com".to_string()]),
+            location: Some(WebSearchLocation {
                 country: Some("US".to_string()),
                 region: None,
                 city: Some("New York".to_string()),
                 timezone: Some("America/New_York".to_string()),
             }),
-            search_context_size: Some(WebSearchContextSize::High),
-        })
+        }),
     );
 
     Ok(())

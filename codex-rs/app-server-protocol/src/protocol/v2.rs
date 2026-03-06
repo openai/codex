@@ -21,8 +21,8 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
@@ -376,8 +376,7 @@ pub struct SandboxWorkspaceWrite {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
-    #[serde(alias = "web_search_request")]
-    pub web_search: Option<bool>,
+    pub web_search: Option<WebSearchToolConfig>,
     pub view_image: Option<bool>,
 }
 
@@ -402,7 +401,7 @@ pub struct ProfileV2 {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub web_search: Option<WebSearchMode>,
-    pub web_search_config: Option<WebSearchConfig>,
+    pub tools: Option<ToolsV2>,
     pub chatgpt_base_url: Option<String>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
@@ -500,7 +499,6 @@ pub struct Config {
     pub forced_chatgpt_workspace_id: Option<String>,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub web_search: Option<WebSearchMode>,
-    pub web_search_config: Option<WebSearchConfig>,
     pub tools: Option<ToolsV2>,
     pub profile: Option<String>,
     #[serde(default)]

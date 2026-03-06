@@ -2635,16 +2635,6 @@
               "type": "null"
             }
           ]
-        },
-        "web_search_config": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/WebSearchConfig"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "type": "object"
@@ -8656,20 +8646,20 @@
             }
           ]
         },
-        "web_search": {
+        "tools": {
           "anyOf": [
             {
-              "$ref": "#/definitions/WebSearchMode"
+              "$ref": "#/definitions/ToolsV2"
             },
             {
               "type": "null"
             }
           ]
         },
-        "web_search_config": {
+        "web_search": {
           "anyOf": [
             {
-              "$ref": "#/definitions/WebSearchConfig"
+              "$ref": "#/definitions/WebSearchMode"
             },
             {
               "type": "null"
@@ -13781,9 +13771,13 @@
           ]
         },
         "web_search": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchToolConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -14606,42 +14600,6 @@
         }
       ]
     },
-    "WebSearchConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "filters": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/WebSearchFilters"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "search_context_size": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/WebSearchContextSize"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "user_location": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/WebSearchUserLocation"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
     "WebSearchContextSize": {
       "enum": [
         "low",
@@ -14650,30 +14608,7 @@
       ],
       "type": "string"
     },
-    "WebSearchFilters": {
-      "additionalProperties": false,
-      "properties": {
-        "allowed_domains": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "WebSearchMode": {
-      "enum": [
-        "disabled",
-        "cached",
-        "live"
-      ],
-      "type": "string"
-    },
-    "WebSearchUserLocation": {
+    "WebSearchLocation": {
       "additionalProperties": false,
       "properties": {
         "city": {
@@ -14699,23 +14634,52 @@
             "string",
             "null"
           ]
-        },
-        "type": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/WebSearchUserLocationType"
-            }
-          ],
-          "default": "approximate"
         }
       },
       "type": "object"
     },
-    "WebSearchUserLocationType": {
+    "WebSearchMode": {
       "enum": [
-        "approximate"
+        "disabled",
+        "cached",
+        "live"
       ],
       "type": "string"
+    },
+    "WebSearchToolConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "context_size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchContextSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "WindowsSandboxSetupCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",

@@ -68,9 +68,9 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
-use codex_protocol::config_types::WebSearchFilters;
+use codex_protocol::config_types::WebSearchLocation;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::config_types::WebSearchUserLocation;
+use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::openai_models::ModelsResponse;
@@ -1222,9 +1222,6 @@ pub struct ConfigToml {
     /// Controls the web search tool mode: disabled, cached, or live.
     pub web_search: Option<WebSearchMode>,
 
-    /// Optional structured configuration for the web search tool.
-    pub web_search_config: Option<WebSearchConfig>,
-
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
@@ -1363,8 +1360,8 @@ pub struct RealtimeAudioToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
-    #[serde(default, alias = "web_search_request")]
-    pub web_search: Option<bool>,
+    #[serde(default)]
+    pub web_search: Option<WebSearchToolConfig>,
 
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
@@ -1650,53 +1647,52 @@ fn resolve_web_search_config(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
 ) -> Option<WebSearchConfig> {
-    let base = config_toml.web_search_config.as_ref();
-    let profile = config_profile.web_search_config.as_ref();
+    let base = config_toml
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.web_search.as_ref());
+    let profile = config_profile
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.web_search.as_ref());
 
     match (base, profile) {
         (None, None) => None,
-        (Some(base), None) => Some(base.clone()),
-        (None, Some(profile)) => Some(profile.clone()),
-        (Some(base), Some(profile)) => Some(WebSearchConfig {
-            filters: match (base.filters.as_ref(), profile.filters.as_ref()) {
-                (None, None) => None,
-                (Some(base_filters), None) => Some(base_filters.clone()),
-                (None, Some(profile_filters)) => Some(profile_filters.clone()),
-                (Some(base_filters), Some(profile_filters)) => Some(WebSearchFilters {
-                    allowed_domains: profile_filters
-                        .allowed_domains
-                        .clone()
-                        .or_else(|| base_filters.allowed_domains.clone()),
-                }),
-            },
-            user_location: match (base.user_location.as_ref(), profile.user_location.as_ref()) {
-                (None, None) => None,
-                (Some(base_user_location), None) => Some(base_user_location.clone()),
-                (None, Some(profile_user_location)) => Some(profile_user_location.clone()),
-                (Some(base_user_location), Some(profile_user_location)) => {
-                    Some(WebSearchUserLocation {
-                        r#type: profile_user_location.r#type,
-                        country: profile_user_location
+        (Some(base), None) => Some(base.clone().into()),
+        (None, Some(profile)) => Some(profile.clone().into()),
+        (Some(base), Some(profile)) => Some(
+            WebSearchToolConfig {
+                context_size: profile.context_size.or(base.context_size),
+                allowed_domains: profile
+                    .allowed_domains
+                    .clone()
+                    .or_else(|| base.allowed_domains.clone()),
+                location: match (base.location.as_ref(), profile.location.as_ref()) {
+                    (None, None) => None,
+                    (Some(base_location), None) => Some(base_location.clone()),
+                    (None, Some(profile_location)) => Some(profile_location.clone()),
+                    (Some(base_location), Some(profile_location)) => Some(WebSearchLocation {
+                        country: profile_location
                             .country
                             .clone()
-                            .or_else(|| base_user_location.country.clone()),
-                        region: profile_user_location
+                            .or_else(|| base_location.country.clone()),
+                        region: profile_location
                             .region
                             .clone()
-                            .or_else(|| base_user_location.region.clone()),
-                        city: profile_user_location
+                            .or_else(|| base_location.region.clone()),
+                        city: profile_location
                             .city
                             .clone()
-                            .or_else(|| base_user_location.city.clone()),
-                        timezone: profile_user_location
+                            .or_else(|| base_location.city.clone()),
+                        timezone: profile_location
                             .timezone
                             .clone()
-                            .or_else(|| base_user_location.timezone.clone()),
-                    })
-                }
-            },
-            search_context_size: profile.search_context_size.or(base.search_context_size),
-        }),
+                            .or_else(|| base_location.timezone.clone()),
+                    }),
+                },
+            }
+            .into(),
+        ),
     }
 }
 
@@ -1900,10 +1896,6 @@ impl Config {
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
-        // TODO(dylan): We should be able to leverage ConfigLayerStack so that
-        // we can reliably check this at every config level.
-        let did_user_set_custom_approval_policy_or_sandbox_mode =
-            approval_policy_was_explicit || sandbox_mode_was_explicit;
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.

@@ -530,17 +530,14 @@
         "service_tier": {
           "$ref": "#/definitions/ServiceTier"
         },
-        "tools_view_image": {
-          "type": "boolean"
+        "tools": {
+          "$ref": "#/definitions/ToolsToml"
         },
-        "tools_web_search": {
+        "tools_view_image": {
           "type": "boolean"
         },
         "web_search": {
           "$ref": "#/definitions/WebSearchMode"
-        },
-        "web_search_config": {
-          "$ref": "#/definitions/WebSearchConfig"
         },
         "windows": {
           "allOf": [
@@ -1442,8 +1439,12 @@
           "type": "boolean"
         },
         "web_search": {
-          "default": null,
-          "type": "boolean"
+          "allOf": [
+            {
+              "$ref": "#/definitions/WebSearchToolConfig"
+            }
+          ],
+          "default": null
         }
       },
       "type": "object"
@@ -1551,21 +1552,6 @@
       ],
       "type": "string"
     },
-    "WebSearchConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "filters": {
-          "$ref": "#/definitions/WebSearchFilters"
-        },
-        "search_context_size": {
-          "$ref": "#/definitions/WebSearchContextSize"
-        },
-        "user_location": {
-          "$ref": "#/definitions/WebSearchUserLocation"
-        }
-      },
-      "type": "object"
-    },
     "WebSearchContextSize": {
       "enum": [
         "low",
@@ -1574,27 +1560,7 @@
       ],
       "type": "string"
     },
-    "WebSearchFilters": {
-      "additionalProperties": false,
-      "properties": {
-        "allowed_domains": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "WebSearchMode": {
-      "enum": [
-        "disabled",
-        "cached",
-        "live"
-      ],
-      "type": "string"
-    },
-    "WebSearchUserLocation": {
+    "WebSearchLocation": {
       "additionalProperties": false,
       "properties": {
         "city": {
@@ -1608,23 +1574,35 @@
         },
         "timezone": {
           "type": "string"
-        },
-        "type": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/WebSearchUserLocationType"
-            }
-          ],
-          "default": "approximate"
         }
       },
       "type": "object"
     },
-    "WebSearchUserLocationType": {
+    "WebSearchMode": {
       "enum": [
-        "approximate"
+        "disabled",
+        "cached",
+        "live"
       ],
       "type": "string"
+    },
+    "WebSearchToolConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "context_size": {
+          "$ref": "#/definitions/WebSearchContextSize"
+        },
+        "location": {
+          "$ref": "#/definitions/WebSearchLocation"
+        }
+      },
+      "type": "object"
     },
     "WindowsSandboxModeToml": {
       "enum": [
@@ -2293,14 +2271,6 @@
         }
       ],
       "description": "Controls the web search tool mode: disabled, cached, or live."
-    },
-    "web_search_config": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/WebSearchConfig"
-        }
-      ],
-      "description": "Optional structured configuration for the web search tool."
     },
     "windows": {
       "allOf": [

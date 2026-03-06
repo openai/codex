@@ -124,6 +124,23 @@ pub enum WebSearchContextSize {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[schemars(deny_unknown_fields)]
+pub struct WebSearchLocation {
+    pub country: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchToolConfig {
+    pub context_size: Option<WebSearchContextSize>,
+    pub allowed_domains: Option<Vec<String>>,
+    pub location: Option<WebSearchLocation>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
 pub struct WebSearchFilters {
     pub allowed_domains: Option<Vec<String>>,
 }
@@ -155,6 +172,32 @@ pub struct WebSearchConfig {
     pub filters: Option<WebSearchFilters>,
     pub user_location: Option<WebSearchUserLocation>,
     pub search_context_size: Option<WebSearchContextSize>,
+}
+
+impl From<WebSearchLocation> for WebSearchUserLocation {
+    fn from(location: WebSearchLocation) -> Self {
+        Self {
+            r#type: WebSearchUserLocationType::Approximate,
+            country: location.country,
+            region: location.region,
+            city: location.city,
+            timezone: location.timezone,
+        }
+    }
+}
+
+impl From<WebSearchToolConfig> for WebSearchConfig {
+    fn from(config: WebSearchToolConfig) -> Self {
+        Self {
+            filters: config
+                .allowed_domains
+                .map(|allowed_domains| WebSearchFilters {
+                    allowed_domains: Some(allowed_domains),
+                }),
+            user_location: config.location.map(Into::into),
+            search_context_size: config.context_size,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
