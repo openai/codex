@@ -40,7 +40,7 @@ personality?: Personality | null, /**
  * this turn.
  *
  * When set, Codex requests a strict JSON response matching this schema.
- * This applies only to the final assistant message for the current turn.
+ * This applies only to the final assistant message.
  */
 outputSchema?: JsonValue | null, /**
  * EXPERIMENTAL - Set a pre-set collaboration mode.

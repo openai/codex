@@ -3234,7 +3234,7 @@ pub struct TurnStartParams {
     /// this turn.
     ///
     /// When set, Codex requests a strict JSON response matching this schema.
-    /// This applies only to the final assistant message for the current turn.
+    /// This applies only to the final assistant message.
     #[ts(optional = nullable)]
     pub output_schema: Option<JsonValue>,
 

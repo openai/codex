@@ -433,7 +433,7 @@ pub struct SendUserTurnParams {
     /// this turn.
     ///
     /// When set, Codex requests a strict JSON response matching this schema.
-    /// This applies only to the final assistant message for the current turn.
+    /// This applies only to the final assistant message.
     pub output_schema: Option<serde_json::Value>,
 }
 
