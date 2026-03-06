@@ -2937,7 +2937,8 @@ impl Session {
         turn_context: &Arc<TurnContext>,
         server_model: String,
     ) -> bool {
-        let requested_model = turn_context.model_info.slug.clone();
+        let requested_model = turn_context.model_info.request_model_slug().to_string();
+        let selected_model = turn_context.model_info.slug.clone();
         let server_model_normalized = server_model.to_ascii_lowercase();
         let requested_model_normalized = requested_model.to_ascii_lowercase();
         if server_model_normalized == requested_model_normalized {
@@ -2945,7 +2946,9 @@ impl Session {
             return false;
         }
 
-        warn!("server reported model {server_model} while requested model was {requested_model}");
+        warn!(
+            "server reported model {server_model} while requested model was {requested_model} (selected alias: {selected_model})"
+        );
 
         let warning_message = format!(
             "Your account was flagged for potentially high-risk cyber activity and this request was routed to gpt-5.2 as a fallback. To regain access to gpt-5.3-codex, apply for trusted access: {CYBER_VERIFY_URL} or learn more: {CYBER_SAFETY_URL}"
@@ -2954,7 +2957,7 @@ impl Session {
         self.send_event(
             turn_context,
             EventMsg::ModelReroute(ModelRerouteEvent {
-                from_model: requested_model.clone(),
+                from_model: selected_model,
                 to_model: server_model.clone(),
                 reason: ModelRerouteReason::HighRiskCyberActivity,
             }),
@@ -8287,6 +8290,7 @@ mod tests {
             config.codex_home.clone(),
             auth_manager.clone(),
             None,
+            HashMap::new(),
             CollaborationModesConfig::default(),
         ));
         let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
@@ -8375,6 +8379,7 @@ mod tests {
             config.codex_home.clone(),
             auth_manager.clone(),
             None,
+            HashMap::new(),
             CollaborationModesConfig::default(),
         ));
         let agent_control = AgentControl::default();
@@ -8784,6 +8789,7 @@ mod tests {
             config.codex_home.clone(),
             auth_manager.clone(),
             None,
+            HashMap::new(),
             CollaborationModesConfig::default(),
         ));
         let agent_control = AgentControl::default();
