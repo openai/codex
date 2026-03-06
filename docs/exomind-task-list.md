@@ -10,12 +10,14 @@
 - [x] 本地克隆并配置 `origin` / `upstream`
 - [x] 建立分支 `feat/rlph-protocol-bootstrap`
 - [x] 启用 GitHub Issues 并建立跟踪 issue：`#1` `#2` `#3`
+- [x] 完成首个实现 PR 合并：`#4`
 
 ## B. 想法一（规范治理体系文档）
 - [x] 产出系统化实施文档：`docs/exomind-norm-governance-plan.md`
 - [x] 建立跟踪 issue：`#1`
 - [x] 在 issue 内维护 checklist 与上下文同步约定
-- [-] 在 PR 中持续同步文档版本与后续里程碑
+- [x] 在 PR 中同步文档版本（`#4` 已合并）
+- [-] 持续迭代后续里程碑（Rule Catalog / CI Gate / 演进闭环）
 
 ## C. 想法二（RLPH 单队列持续重复机制）
 - [x] 需求语义化同步到 issue body：共享队列、轮转、颜色区分、Alt+Up 复用
@@ -26,6 +28,7 @@
 - [x] 预览 UI 四态区分：普通/持续 × queue/steer
 - [x] 复用 `Alt+Up` 编辑（共享队列天然生效）
 - [x] 补齐受影响测试构造与匹配分支（类型层面）
+- [x] Epic issue 收尾关闭：`#2`
 
 ## D. 编译检查与质量验证
 - [x] `cargo check -p codex-tui` 通过（代码主线）
@@ -38,4 +41,19 @@
 - [x] push 分支
 - [x] 创建 PR（在描述中写明最新需求与已完成项）
 - [x] 在 issue `#2` / `#3` 追加阶段总结与下一步计划
-- [-] PR 审阅/合并与 issue 收尾关闭
+- [x] PR 审阅/合并（`#4`）与 issue `#2` 收尾关闭
+
+## F. 持续跟踪机制（执行中）
+- [-] 需求变更先更新 GitHub issue/PR 描述，再继续开发
+- [-] 每轮任务结束执行编译检查，并把结果同步到 issue `#3`
+- [-] 定期将最新需求、任务计划、风险与决策语义化存储到 issue `#3`
+- [-] 想法一的长期治理任务持续拆解并通过 issue/PR 追踪至完成
+
+## G. 下一阶段（未完成）
+- [ ] 设计并提交 Rule Catalog 模板（含 L1/L2/L3 示例，Issue `#7`）
+- [ ] 定义规则冲突裁决接口草案（映射到 Codex CLI 执行点，Issue `#9`）
+- [ ] 建立 CI “warn 模式”入口并输出基础报告格式（Issue `#6`）
+- [ ] 形成误报/漏报反馈闭环模板（issue/PR 模板或文档，Issue `#8`）
+
+## H. 当前活跃 PR
+- [-] 跟踪同步 PR：`#5`（任务清单/issue 状态同步）
