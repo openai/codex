@@ -5,6 +5,8 @@
 //!    recent assistant context.
 //! 2. Ask a dedicated guardian subagent to assess the exact planned action and
 //!    return strict JSON.
+//!    The guardian clones the parent config, so it inherits any managed
+//!    network proxy / allowlist that the parent turn already had.
 //! 3. Fail closed on timeout, execution failure, or malformed output.
 //! 4. Approve only low- and medium-risk actions (`risk_score < 80`).
 
@@ -30,6 +32,7 @@ use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::compact::content_items_to_text;
 use crate::config::Config;
 use crate::config::Constrained;
+use crate::config::NetworkProxySpec;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::features::Feature;
 use crate::protocol::SandboxPolicy;
@@ -383,16 +386,12 @@ async fn run_guardian_subagent(
     prompt: String,
     schema: Value,
 ) -> anyhow::Result<GuardianAssessment> {
-    let mut guardian_config: Config = turn.config.as_ref().clone();
-    guardian_config.model = Some(GUARDIAN_MODEL.to_string());
-    guardian_config.model_reasoning_effort =
-        Some(codex_protocol::openai_models::ReasoningEffort::Low);
-    guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    guardian_config.permissions.sandbox_policy =
-        Constrained::allow_only(SandboxPolicy::new_read_only_policy());
-    let _ = guardian_config.features.disable(Feature::Collab);
-    let _ = guardian_config.features.disable(Feature::WebSearchRequest);
-    let _ = guardian_config.features.disable(Feature::WebSearchCached);
+    let live_network_config = match session.services.network_proxy.as_ref() {
+        Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
+        None => None,
+    };
+    let guardian_config =
+        build_guardian_subagent_config(turn.config.as_ref(), live_network_config)?;
 
     // `run_codex_thread_one_shot` is already the subagent runner used elsewhere
     // in core. Reusing it here keeps the MVP aligned with the existing review
@@ -427,6 +426,44 @@ async fn run_guardian_subagent(
     }
 
     parse_guardian_assessment(last_agent_message.as_deref())
+}
+
+/// Builds the locked-down guardian config from the parent turn config.
+///
+/// The guardian stays read-only and cannot request more permissions itself, but
+/// cloning the parent config preserves any already-configured managed network
+/// proxy / allowlist. When the parent session has edited that proxy state
+/// in-memory, we refresh from the live runtime config so the guardian sees the
+/// same current allowlist as the parent turn.
+fn build_guardian_subagent_config(
+    parent_config: &Config,
+    live_network_config: Option<codex_network_proxy::NetworkProxyConfig>,
+) -> anyhow::Result<Config> {
+    let mut guardian_config = parent_config.clone();
+    guardian_config.model = Some(GUARDIAN_MODEL.to_string());
+    guardian_config.model_reasoning_effort =
+        Some(codex_protocol::openai_models::ReasoningEffort::Low);
+    guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
+    guardian_config.permissions.sandbox_policy =
+        Constrained::allow_only(SandboxPolicy::new_read_only_policy());
+    if let Some(live_network_config) = live_network_config
+        && guardian_config.permissions.network.is_some()
+    {
+        let network_constraints = guardian_config
+            .config_layer_stack
+            .requirements()
+            .network
+            .as_ref()
+            .map(|network| network.value.clone());
+        guardian_config.permissions.network = Some(NetworkProxySpec::from_config_and_constraints(
+            live_network_config,
+            network_constraints,
+        )?);
+    }
+    let _ = guardian_config.features.disable(Feature::Collab);
+    let _ = guardian_config.features.disable(Feature::WebSearchRequest);
+    let _ = guardian_config.features.disable(Feature::WebSearchCached);
+    Ok(guardian_config)
 }
 
 /// The model is asked for strict JSON, but we still accept a surrounding prose
@@ -526,7 +563,12 @@ impl GuardianRiskLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::NetworkProxySpec;
+    use crate::config::test_config;
+    use crate::config_loader::NetworkConstraints;
+    use codex_network_proxy::NetworkProxyConfig;
     use codex_protocol::models::ContentItem;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn build_guardian_transcript_keeps_original_numbering() {
@@ -599,5 +641,61 @@ mod tests {
 
         assert_eq!(parsed.risk_score, 42);
         assert_eq!(parsed.risk_level, GuardianRiskLevel::Medium);
+    }
+
+    #[test]
+    fn guardian_subagent_config_preserves_parent_network_proxy() {
+        let mut parent_config = test_config();
+        let network = NetworkProxySpec::from_config_and_constraints(
+            NetworkProxyConfig::default(),
+            Some(NetworkConstraints {
+                enabled: Some(true),
+                allowed_domains: Some(vec!["github.com".to_string()]),
+                ..Default::default()
+            }),
+        )
+        .expect("network proxy spec");
+        parent_config.permissions.network = Some(network.clone());
+
+        let guardian_config =
+            build_guardian_subagent_config(&parent_config, None).expect("guardian config");
+
+        assert_eq!(guardian_config.permissions.network, Some(network));
+        assert_eq!(
+            guardian_config.permissions.approval_policy,
+            Constrained::allow_only(AskForApproval::Never)
+        );
+        assert_eq!(
+            guardian_config.permissions.sandbox_policy,
+            Constrained::allow_only(SandboxPolicy::new_read_only_policy())
+        );
+    }
+
+    #[test]
+    fn guardian_subagent_config_uses_live_network_proxy_state() {
+        let mut parent_config = test_config();
+        let mut parent_network = NetworkProxyConfig::default();
+        parent_network.network.enabled = true;
+        parent_network.network.allowed_domains = vec!["parent.example".to_string()];
+        parent_config.permissions.network = Some(
+            NetworkProxySpec::from_config_and_constraints(parent_network, None)
+                .expect("parent network proxy spec"),
+        );
+
+        let mut live_network = NetworkProxyConfig::default();
+        live_network.network.enabled = true;
+        live_network.network.allowed_domains = vec!["github.com".to_string()];
+
+        let guardian_config =
+            build_guardian_subagent_config(&parent_config, Some(live_network.clone()))
+                .expect("guardian config");
+
+        assert_eq!(
+            guardian_config.permissions.network,
+            Some(
+                NetworkProxySpec::from_config_and_constraints(live_network, None)
+                    .expect("live network proxy spec")
+            )
+        );
     }
 }
