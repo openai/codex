@@ -551,9 +551,9 @@ impl SubagentStatusCell {
 
 impl HistoryCell for SubagentStatusCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let state = {
-            let guard = self.state.lock().expect("subagent panel state lock");
-            guard.clone()
+        let state = match self.state.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
         };
         if state.running_agents.is_empty() {
             return Vec::new();
@@ -603,7 +603,10 @@ impl HistoryCell for SubagentStatusCell {
         if !self.animations_enabled {
             return None;
         }
-        let guard = self.state.lock().expect("subagent panel state lock");
+        let guard = match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let now = Instant::now();
         if !guard.has_animating_agents(now) {
             return None;
