@@ -234,9 +234,11 @@ impl MessageRole {
             Self::System => "system",
         }
     }
+}
 
-    pub fn into_message_role(self) -> String {
-        self.as_str().to_string()
+impl std::fmt::Display for MessageRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

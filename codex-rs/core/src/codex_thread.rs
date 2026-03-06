@@ -104,7 +104,7 @@ impl CodexThread {
 
     pub(crate) async fn inject_message_without_turn(&self, role: MessageRole, message: String) {
         let pending_item = ResponseInputItem::Message {
-            role: role.into_message_role(),
+            role: role.to_string(),
             content: vec![ContentItem::InputText { text: message }],
         };
         let pending_items = vec![pending_item];

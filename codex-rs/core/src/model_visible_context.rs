@@ -115,7 +115,7 @@ impl ModelVisibleContextFragmentSpec {
     pub(crate) fn into_message<R: ModelVisibleContextRole>(self, text: String) -> ResponseItem {
         ResponseItem::Message {
             id: None,
-            role: R::MESSAGE_ROLE.into_message_role(),
+            role: R::MESSAGE_ROLE.to_string(),
             content: vec![self.into_content_item(text)],
             end_turn: None,
             phase: None,
@@ -127,7 +127,7 @@ impl ModelVisibleContextFragmentSpec {
         text: String,
     ) -> ResponseInputItem {
         ResponseInputItem::Message {
-            role: R::MESSAGE_ROLE.into_message_role(),
+            role: R::MESSAGE_ROLE.to_string(),
             content: vec![self.into_content_item(text)],
         }
     }
