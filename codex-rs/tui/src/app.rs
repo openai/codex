@@ -768,7 +768,9 @@ impl App {
     }
 
     async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
-        let mut config = self.rebuild_config_for_cwd(self.config.cwd.clone()).await?;
+        let mut config = self
+            .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.clone())
+            .await?;
         self.apply_runtime_policy_overrides(&mut config);
         self.config = config;
         Ok(())
@@ -1411,6 +1413,13 @@ impl App {
     async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
+        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+            tracing::warn!(error = %err, "failed to refresh config before starting fresh session");
+            self.chat_widget.add_error_message(format!(
+                "Failed to refresh configuration before starting a new thread: {err}"
+            ));
+            return;
+        }
         let model = self.chat_widget.current_model().to_string();
         let config = self.fresh_session_config();
         let summary = session_summary(
@@ -2007,19 +2016,15 @@ impl App {
                                 return Ok(AppRunControl::Exit(ExitReason::UserRequested));
                             }
                         };
-                        let mut resume_config = if crate::cwds_differ(&current_cwd, &resume_cwd) {
-                            match self.rebuild_config_for_cwd(resume_cwd).await {
-                                Ok(cfg) => cfg,
-                                Err(err) => {
-                                    self.chat_widget.add_error_message(format!(
-                                        "Failed to rebuild configuration for resume: {err}"
-                                    ));
-                                    return Ok(AppRunControl::Continue);
-                                }
+                        let mut resume_config = match self.rebuild_config_for_cwd(resume_cwd).await
+                        {
+                            Ok(cfg) => cfg,
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to rebuild configuration for resume: {err}"
+                                ));
+                                return Ok(AppRunControl::Continue);
                             }
-                        } else {
-                            // No rebuild needed: current_cwd comes from self.config.cwd.
-                            self.config.clone()
                         };
                         self.apply_runtime_policy_overrides(&mut resume_config);
                         let summary = session_summary(
@@ -2091,6 +2096,13 @@ impl App {
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(path) = self.chat_widget.rollout_path() {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(error = %err, "failed to refresh config before forking thread");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to refresh configuration before forking the thread: {err}"
+                        ));
+                        return Ok(AppRunControl::Continue);
+                    }
                     // Fresh threads expose a precomputed path, but the file is
                     // materialized lazily on first user message.
                     if path.exists() {
@@ -5780,6 +5792,43 @@ mod tests {
             app_enabled_in_effective_config(&app.config, &app_id),
             Some(false)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_uses_active_chat_widget_cwd() -> Result<()> {
+        let mut app = make_test_app().await;
+        let original_cwd = app.config.cwd.clone();
+        let next_cwd_tmp = tempdir()?;
+        let next_cwd = next_cwd_tmp.path().to_path_buf();
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: next_cwd.clone(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        assert_eq!(app.chat_widget.config_ref().cwd, next_cwd);
+        assert_eq!(app.config.cwd, original_cwd);
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(app.config.cwd, app.chat_widget.config_ref().cwd);
         Ok(())
     }
 
