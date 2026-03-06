@@ -52,10 +52,11 @@ config value for "follow the global default in Plan mode".
 ## Custom model aliases
 
 You can add aliases to the model picker via `custom_models` in `~/.codex/config.toml`.
-Each alias maps to a provider-facing model slug and can override context settings:
+Each entry maps a user-facing alias to a provider-facing model slug and can override context settings:
 
 ```toml
-[custom_models."gpt-5.4 1m"]
+[[custom_models]]
+name = "gpt-5.4 1m"
 model = "gpt-5.4"
 model_context_window = 1000000
 model_auto_compact_token_limit = 900000

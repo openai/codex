@@ -343,9 +343,6 @@ pub struct Config {
     /// Combined provider map (defaults merged with user-defined overrides).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
-    /// User-defined model aliases shown in the picker.
-    pub custom_models: HashMap<String, CustomModelConfig>,
-
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: usize,
 
@@ -667,10 +664,6 @@ impl Config {
             .harness_overrides(harness_overrides)
             .build()
             .await
-    }
-
-    pub(crate) fn custom_model_alias(&self, alias: &str) -> Option<&CustomModelConfig> {
-        self.custom_models.get(alias)
     }
 }
 
@@ -1124,10 +1117,6 @@ pub struct ConfigToml {
     #[serde(default)]
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
-    /// User-defined model aliases that can override model context settings.
-    #[serde(default)]
-    pub custom_models: HashMap<String, CustomModelToml>,
-
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
 
@@ -1337,27 +1326,6 @@ impl From<ConfigToml> for UserSavedConfig {
 #[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CustomModelConfig {
-    /// Provider-facing model slug used on API requests.
-    pub model: String,
-    /// Optional context window override applied when this alias is selected.
-    pub model_context_window: Option<i64>,
-    /// Optional auto-compaction token limit override applied when this alias is selected.
-    pub model_auto_compact_token_limit: Option<i64>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct CustomModelToml {
-    /// Provider-facing model slug used on API requests.
-    pub model: String,
-    /// Optional context window override applied when this alias is selected.
-    pub model_context_window: Option<i64>,
-    /// Optional auto-compaction token limit override applied when this alias is selected.
-    pub model_auto_compact_token_limit: Option<i64>,
 }
 
 impl ProjectConfig {
@@ -1875,21 +1843,6 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
-        let custom_models = cfg
-            .custom_models
-            .into_iter()
-            .map(|(alias, custom)| {
-                (
-                    alias,
-                    CustomModelConfig {
-                        model: custom.model,
-                        model_context_window: custom.model_context_window,
-                        model_auto_compact_token_limit: custom.model_auto_compact_token_limit,
-                    },
-                )
-            })
-            .collect();
-
         let model_provider_id = model_provider
             .or(config_profile.model_provider)
             .or(cfg.model_provider)
@@ -2204,7 +2157,6 @@ impl Config {
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
-            custom_models,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames
