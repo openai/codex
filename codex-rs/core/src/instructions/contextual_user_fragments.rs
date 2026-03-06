@@ -18,12 +18,12 @@ pub const USER_INSTRUCTIONS_PREFIX: &str = AGENTS_MD_OPEN_TAG_PREFIX;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "user_instructions", rename_all = "snake_case")]
-pub(crate) struct UserInstructions {
+pub(crate) struct AgentsMdInstructions {
     pub directory: String,
     pub text: String,
 }
 
-impl ModelVisibleContextFragment for UserInstructions {
+impl ModelVisibleContextFragment for AgentsMdInstructions {
     type Role = ContextualUserContextRole;
 
     fn spec(&self) -> crate::model_visible_context::ModelVisibleContextFragmentSpec {
@@ -41,7 +41,7 @@ impl ModelVisibleContextFragment for UserInstructions {
     }
 }
 
-impl TurnContextDiffFragment for UserInstructions {
+impl TurnContextDiffFragment for AgentsMdInstructions {
     fn from_turn_context(
         turn_context: &TurnContext,
         _context: &TurnContextDiffParams<'_>,
@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_user_instructions() {
-        let user_instructions = UserInstructions {
+        let user_instructions = AgentsMdInstructions {
             directory: "test_directory".to_string(),
             text: "test_text".to_string(),
         };

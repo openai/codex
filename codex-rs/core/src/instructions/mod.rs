@@ -1,6 +1,6 @@
-mod user_instructions;
+mod contextual_user_fragments;
 
-pub(crate) use user_instructions::PluginInstructions;
-pub(crate) use user_instructions::SkillInstructions;
-pub use user_instructions::USER_INSTRUCTIONS_PREFIX;
-pub(crate) use user_instructions::UserInstructions;
+pub(crate) use contextual_user_fragments::AgentsMdInstructions;
+pub(crate) use contextual_user_fragments::PluginInstructions;
+pub(crate) use contextual_user_fragments::SkillInstructions;
+pub use contextual_user_fragments::USER_INSTRUCTIONS_PREFIX;

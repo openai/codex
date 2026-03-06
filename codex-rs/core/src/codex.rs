@@ -191,7 +191,7 @@ use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
-use crate::instructions::UserInstructions;
+use crate::instructions::AgentsMdInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
 use crate::mcp::auth::compute_auth_statuses;
@@ -3121,7 +3121,7 @@ impl Session {
             developer_envelope.push(DeveloperTextFragment::new(commit_message_instruction));
         }
         if let Some(user_instructions) =
-            <UserInstructions as TurnContextDiffFragment>::from_turn_context(
+            <AgentsMdInstructions as TurnContextDiffFragment>::from_turn_context(
                 turn_context,
                 &diff_context,
             )
