@@ -551,10 +551,12 @@ pub async fn touch_thread_updated_at(
     let Some(thread_id) = thread_id else {
         return false;
     };
-    ctx.touch_thread_updated_at(thread_id, updated_at).await.unwrap_or_else(|err| {
-        warn!("state db touch_thread_updated_at failed during {stage} for {thread_id}: {err}");
-        false
-    })
+    ctx.touch_thread_updated_at(thread_id, updated_at)
+        .await
+        .unwrap_or_else(|err| {
+            warn!("state db touch_thread_updated_at failed during {stage} for {thread_id}: {err}");
+            false
+        })
 }
 
 #[cfg(test)]
