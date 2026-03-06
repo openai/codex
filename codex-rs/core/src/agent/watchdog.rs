@@ -6,6 +6,7 @@ use crate::codex::load_watchdog_prompt;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::features::Feature;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AgentStatus;
@@ -514,10 +515,54 @@ async fn watchdog_helper_prompt(
     target_thread_id: ThreadId,
     prompt: &str,
 ) -> String {
+    if !config.features.enabled(Feature::AgentPromptInjection) {
+        if prompt.trim().is_empty() {
+            return format!("Target agent id: {target_thread_id}");
+        }
+        return format!("Target agent id: {target_thread_id}\n\n{prompt}");
+    }
     let watchdog_prompt = load_watchdog_prompt(&config.codex_home).await;
     if prompt.trim().is_empty() {
         format!("{watchdog_prompt}\n\nTarget agent id: {target_thread_id}")
     } else {
         format!("{watchdog_prompt}\n\nTarget agent id: {target_thread_id}\n\n{prompt}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::watchdog_helper_prompt;
+    use crate::config::ConfigBuilder;
+    use crate::features::Feature;
+    use codex_protocol::ThreadId;
+
+    #[tokio::test]
+    async fn watchdog_helper_prompt_is_minimal_when_agent_prompt_injection_is_disabled() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load config");
+
+        let thread_id = ThreadId::default();
+        let prompt = watchdog_helper_prompt(&config, thread_id, "ping").await;
+        assert_eq!(prompt, format!("Target agent id: {thread_id}\n\nping"));
+    }
+
+    #[tokio::test]
+    async fn watchdog_helper_prompt_includes_watchdog_instructions_when_enabled() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load config");
+        let _ = config.features.enable(Feature::AgentPromptInjection);
+
+        let prompt = watchdog_helper_prompt(&config, ThreadId::default(), "ping").await;
+        assert!(prompt.contains("watchdog check-in agent"));
+        assert!(prompt.contains("Target agent id:"));
+        assert!(prompt.ends_with("\n\nping"));
     }
 }
