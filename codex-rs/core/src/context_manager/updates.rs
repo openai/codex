@@ -157,16 +157,23 @@ impl TurnContextDiffFragment for RealtimeUpdateFragment {
     fn diff_from_turn_context_item(
         previous: &TurnContextItem,
         turn_context: &TurnContext,
-        _params: &TurnContextDiffParams<'_>,
+        params: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         match (previous.realtime_active, turn_context.realtime_active) {
             (Some(true), false) => Some(Self {
                 text: developer_realtime_end_text("inactive"),
             }),
-            (Some(false), true) => Some(Self {
+            (Some(false), true) | (None, true) => Some(Self {
                 text: developer_realtime_start_text(),
             }),
-            (Some(true), true) | (Some(false), false) | (None, false) | (None, true) => None,
+            (Some(true), true) | (Some(false), false) => None,
+            (None, false) => params
+                .previous_turn_settings
+                .and_then(|settings| settings.realtime_active)
+                .filter(|realtime_active| *realtime_active)
+                .map(|_| Self {
+                    text: developer_realtime_end_text("inactive"),
+                }),
         }
     }
 }
@@ -324,6 +331,19 @@ fn build_collaboration_mode_update_item(
         .map(|fragment| fragment.text)
 }
 
+fn build_realtime_update_fragment(
+    previous: Option<&TurnContextItem>,
+    turn_context: &TurnContext,
+    params: &TurnContextDiffParams<'_>,
+) -> Option<RealtimeUpdateFragment> {
+    match previous {
+        Some(previous) => {
+            RealtimeUpdateFragment::diff_from_turn_context_item(previous, turn_context, params)
+        }
+        None => RealtimeUpdateFragment::from_turn_context(turn_context, params),
+    }
+}
+
 pub(crate) fn build_realtime_update_item(
     previous: Option<&TurnContextItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
@@ -463,12 +483,7 @@ pub(crate) fn build_settings_update_items(
             })
             .map(|fragment| fragment.text),
         build_collaboration_mode_update_item(previous, next, params),
-        previous
-            .and_then(|previous| {
-                RealtimeUpdateFragment::diff_from_turn_context_item(previous, next, params)
-            })
-            .or_else(|| RealtimeUpdateFragment::from_turn_context(next, params))
-            .map(|fragment| fragment.text),
+        build_realtime_update_fragment(previous, next, params).map(|fragment| fragment.text),
         build_personality_update_item(previous, next, params),
     ]
     .into_iter()
