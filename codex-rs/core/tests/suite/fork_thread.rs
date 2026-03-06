@@ -171,3 +171,62 @@ async fn fork_thread_twice_drops_to_first_message() {
         serde_json::to_value(&expected_after_second).unwrap()
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fork_thread_session_configured_preserves_parent_and_history() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let sse = sse(vec![ev_response_created("resp"), ev_completed("resp")]);
+    let first = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse, "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(first)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let test = test_codex()
+        .build(&server)
+        .await
+        .expect("create conversation");
+    let codex = test.codex.clone();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let base_path = codex.rollout_path().expect("rollout path");
+    let forked = test
+        .thread_manager
+        .fork_thread(usize::MAX, test.config.clone(), base_path, false)
+        .await
+        .expect("fork thread");
+
+    assert_eq!(
+        forked.session_configured.forked_from_id,
+        Some(test.session_configured.session_id)
+    );
+    assert!(
+        forked
+            .session_configured
+            .initial_messages
+            .as_ref()
+            .is_some_and(|messages| {
+                messages
+                    .iter()
+                    .any(|message| matches!(message, EventMsg::UserMessage(_)))
+            })
+    );
+}

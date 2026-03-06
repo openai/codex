@@ -35,9 +35,10 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::SessionMeta(_) | RolloutItem::TurnContext(_) => true,
         RolloutItem::EventMsg(EventMsg::TokenCount(_) | EventMsg::UserMessage(_)) => true,
-        RolloutItem::EventMsg(_) | RolloutItem::ResponseItem(_) | RolloutItem::Compacted(_) => {
-            false
-        }
+        RolloutItem::EventMsg(_)
+        | RolloutItem::ResponseItem(_)
+        | RolloutItem::ForkReference(_)
+        | RolloutItem::Compacted(_) => false,
     }
 }
 

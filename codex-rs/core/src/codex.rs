@@ -1251,7 +1251,41 @@ impl Session {
             ));
         }
 
-        let forked_from_id = initial_history.forked_from_id();
+        let event_initial_history = match &initial_history {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed)
+                if resumed
+                    .history
+                    .iter()
+                    .any(|item| matches!(item, RolloutItem::ForkReference(_))) =>
+            {
+                Some(InitialHistory::Resumed(crate::protocol::ResumedHistory {
+                    conversation_id: resumed.conversation_id,
+                    history: crate::rollout::truncation::materialize_rollout_items_for_replay(
+                        config.codex_home.as_path(),
+                        &resumed.history,
+                    )
+                    .await,
+                    rollout_path: resumed.rollout_path.clone(),
+                }))
+            }
+            InitialHistory::Forked(items)
+                if items
+                    .iter()
+                    .any(|item| matches!(item, RolloutItem::ForkReference(_))) =>
+            {
+                Some(InitialHistory::Forked(
+                    crate::rollout::truncation::materialize_rollout_items_for_replay(
+                        config.codex_home.as_path(),
+                        items,
+                    )
+                    .await,
+                ))
+            }
+            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => None,
+        };
+        let event_initial_history = event_initial_history.as_ref().unwrap_or(&initial_history);
+        let forked_from_id = event_initial_history.forked_from_id();
 
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -1631,7 +1665,7 @@ impl Session {
         }
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
-        let initial_messages = initial_history.get_event_msgs();
+        let initial_messages = event_initial_history.get_event_msgs();
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {

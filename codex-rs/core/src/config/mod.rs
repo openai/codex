@@ -121,6 +121,7 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
+pub(crate) const DEFAULT_WATCHDOG_INTERVAL_S: i64 = 60;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -219,6 +220,10 @@ pub struct Config {
     /// particular geography. HTTP clients should direct their requests
     /// using backend-specific headers or URLs to enforce this.
     pub enforce_residency: Constrained<Option<ResidencyRequirement>>,
+
+    /// True if the user passed in an override or set a value in config.toml
+    /// for either of approval_policy or sandbox_mode.
+    pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -343,6 +348,9 @@ pub struct Config {
     /// Combined provider map (defaults merged with user-defined overrides).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
+    /// User-defined model aliases shown in the picker.
+    pub custom_models: HashMap<String, CustomModelConfig>,
+
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: usize,
 
@@ -356,6 +364,14 @@ pub struct Config {
     pub agent_max_threads: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
+
+    /// When true, inbound agent messages to non-subagent threads are delivered
+    /// as a synthetic function_call/function_call_output pair instead of plain
+    /// user input.
+    pub agent_use_function_call_inbox: bool,
+
+    /// Watchdog polling interval in seconds.
+    pub watchdog_interval_s: i64,
 
     /// Maximum nesting depth allowed for spawned agent threads.
     pub agent_max_depth: i32,
@@ -645,6 +661,10 @@ impl Config {
             codex_home,
             ConfigLayerStack::default(),
         )
+    }
+
+    pub(crate) fn custom_model_alias(&self, alias: &str) -> Option<&CustomModelConfig> {
+        self.custom_models.get(alias)
     }
 
     /// This is a secondary way of creating [Config], which is appropriate when
@@ -1117,6 +1137,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
+    /// User-defined model aliases that can override model context settings.
+    #[serde(default)]
+    pub custom_models: Vec<CustomModelToml>,
+
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
 
@@ -1221,6 +1245,9 @@ pub struct ConfigToml {
 
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
+
+    /// Watchdog polling interval in seconds.
+    pub watchdog_interval_s: Option<i64>,
 
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
@@ -1338,6 +1365,29 @@ impl ProjectConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomModelConfig {
+    /// Provider-facing model slug used on API requests.
+    pub model: String,
+    /// Optional context window override applied when this alias is selected.
+    pub model_context_window: Option<i64>,
+    /// Optional auto-compaction token limit override applied when this alias is selected.
+    pub model_auto_compact_token_limit: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct CustomModelToml {
+    /// User-facing alias shown in the model picker.
+    pub name: String,
+    /// Provider-facing model slug used on API requests.
+    pub model: String,
+    /// Optional context window override applied when this alias is selected.
+    pub model_context_window: Option<i64>,
+    /// Optional auto-compaction token limit override applied when this alias is selected.
+    pub model_auto_compact_token_limit: Option<i64>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RealtimeAudioConfig {
     pub microphone: Option<String>,
@@ -1376,6 +1426,10 @@ pub struct AgentsToml {
     /// Default maximum runtime in seconds for agent job workers.
     #[schemars(range(min = 1))]
     pub job_max_runtime_seconds: Option<u64>,
+    /// Deliver inbound agent messages to non-subagent threads as a synthetic
+    /// function_call/function_call_output pair instead of plain user input.
+    #[serde(default)]
+    pub use_function_call_inbox: bool,
 
     /// User-defined role declarations keyed by role name.
     ///
@@ -1390,12 +1444,24 @@ pub struct AgentsToml {
     pub roles: BTreeMap<String, AgentRoleToml>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRoleSpawnMode {
+    #[default]
+    Spawn,
+    Fork,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentRoleConfig {
     /// Human-facing role documentation used in spawn tool guidance.
     pub description: Option<String>,
+    /// Optional model override applied by this role.
+    pub model: Option<String>,
     /// Path to a role-specific config layer.
     pub config_file: Option<PathBuf>,
+    /// Optional default spawn mode when `spawn_agent` omits `spawn_mode`.
+    pub spawn_mode: Option<AgentRoleSpawnMode>,
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
 }
@@ -1406,9 +1472,15 @@ pub struct AgentRoleToml {
     /// Human-facing role documentation used in spawn tool guidance.
     pub description: Option<String>,
 
+    /// Optional model override applied by this role.
+    pub model: Option<String>,
+
     /// Path to a role-specific config layer.
     /// Relative paths are resolved relative to the `config.toml` that defines them.
     pub config_file: Option<AbsolutePathBuf>,
+
+    /// Optional default spawn mode when `spawn_agent` omits `spawn_mode`.
+    pub spawn_mode: Option<AgentRoleSpawnMode>,
 
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
@@ -1786,6 +1858,9 @@ impl Config {
         let active_project = cfg
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
+        let sandbox_mode_was_explicit = sandbox_mode.is_some()
+            || config_profile.sandbox_mode.is_some()
+            || cfg.sandbox_mode.is_some();
 
         let windows_sandbox_level = match windows_sandbox_mode {
             Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
@@ -1815,6 +1890,9 @@ impl Config {
                 }
             }
         }
+        let approval_policy_was_explicit = approval_policy_override.is_some()
+            || config_profile.approval_policy.is_some()
+            || cfg.approval_policy.is_some();
         let mut approval_policy = approval_policy_override
             .or(config_profile.approval_policy)
             .or(cfg.approval_policy)
@@ -1836,11 +1914,34 @@ impl Config {
         }
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
+        // TODO(dylan): We should be able to leverage ConfigLayerStack so that
+        // we can reliably check this at every config level.
+        let did_user_set_custom_approval_policy_or_sandbox_mode =
+            approval_policy_was_explicit || sandbox_mode_was_explicit;
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
+        }
+
+        let mut custom_models = HashMap::new();
+        for custom in cfg.custom_models {
+            let alias = custom.name;
+            if custom_models.contains_key(&alias) {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("duplicate custom model alias: {alias}"),
+                ));
+            }
+            custom_models.insert(
+                alias,
+                CustomModelConfig {
+                    model: custom.model,
+                    model_context_window: custom.model_context_window,
+                    model_auto_compact_token_limit: custom.model_auto_compact_token_limit,
+                },
+            );
         }
 
         let model_provider_id = model_provider
@@ -1905,7 +2006,9 @@ impl Config {
                             name.clone(),
                             AgentRoleConfig {
                                 description: role.description.clone(),
+                                model: role.model.clone(),
                                 config_file,
+                                spawn_mode: role.spawn_mode,
                                 nickname_candidates,
                             },
                         ))
@@ -1919,6 +2022,10 @@ impl Config {
             .as_ref()
             .and_then(|agents| agents.job_max_runtime_seconds)
             .or(DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS);
+        let agent_use_function_call_inbox = cfg
+            .agents
+            .as_ref()
+            .is_some_and(|agents| agents.use_function_call_inbox);
         if agent_job_max_runtime_seconds == Some(0) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -1931,6 +2038,15 @@ impl Config {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "agents.job_max_runtime_seconds must fit within a 64-bit signed integer",
+            ));
+        }
+        let watchdog_interval_s = cfg
+            .watchdog_interval_s
+            .unwrap_or(DEFAULT_WATCHDOG_INTERVAL_S);
+        if watchdog_interval_s <= 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "watchdog_interval_s must be at least 1",
             ));
         }
         let background_terminal_max_timeout = cfg
@@ -2140,6 +2256,7 @@ impl Config {
                 macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: enforce_residency.value,
+            did_user_set_custom_approval_policy_or_sandbox_mode,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -2157,6 +2274,7 @@ impl Config {
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
+            custom_models,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames
@@ -2173,10 +2291,12 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
+            watchdog_interval_s,
             agent_max_depth,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
+            agent_use_function_call_inbox,
             codex_home,
             sqlite_home,
             log_dir,
