@@ -293,10 +293,9 @@ impl ExecPolicyManager {
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let policy_path = default_policy_path(codex_home);
-        let prefix = amendment.command.clone();
         spawn_blocking({
             let policy_path = policy_path.clone();
-            let prefix = prefix.clone();
+            let prefix = amendment.command.clone();
             move || blocking_append_allow_prefix_rule(&policy_path, &prefix)
         })
         .await
@@ -306,8 +305,33 @@ impl ExecPolicyManager {
             source,
         })?;
 
+        self.apply_amendment_in_memory(amendment)?;
+        Ok(())
+    }
+
+    pub(crate) fn apply_amendment_in_memory(
+        &self,
+        amendment: &ExecPolicyAmendment,
+    ) -> Result<(), ExecPolicyUpdateError> {
+        let current_policy = self.current();
+        let match_options = MatchOptions {
+            resolve_host_executables: true,
+        };
+        let existing_evaluation = current_policy.check_multiple_with_options(
+            [&amendment.command],
+            &|_| Decision::Forbidden,
+            &match_options,
+        );
+        let already_allowed = existing_evaluation.decision == Decision::Allow
+            && existing_evaluation.matched_rules.iter().any(|rule_match| {
+                is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+            });
+        if already_allowed {
+            return Ok(());
+        }
+
         let mut updated_policy = self.current().as_ref().clone();
-        updated_policy.add_prefix_rule(&prefix, Decision::Allow)?;
+        updated_policy.add_prefix_rule(&amendment.command, Decision::Allow)?;
         self.policy.store(Arc::new(updated_policy));
         Ok(())
     }
