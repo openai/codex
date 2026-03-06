@@ -49,4 +49,19 @@ Plan preset. The string value `none` means "no reasoning" (an explicit Plan
 override), not "inherit the global default". There is currently no separate
 config value for "follow the global default in Plan mode".
 
+## Custom model aliases
+
+You can add aliases to the model picker via `custom_models` in `~/.codex/config.toml`.
+Each alias maps to a provider-facing model slug and can override context settings:
+
+```toml
+[custom_models."gpt-5.4 1m"]
+model = "gpt-5.4"
+model_context_window = 1000000
+model_auto_compact_token_limit = 900000
+```
+
+When selected, Codex sends `model = "gpt-5.4"` to the backend while using your
+alias-specific context overrides for that session.
+
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).
