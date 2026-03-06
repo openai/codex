@@ -150,7 +150,7 @@ view_image = false
     );
     assert_eq!(
         origins
-            .get("tools.web_search.allowed_domains")
+            .get("tools.web_search.allowed_domains.0")
             .expect("origin")
             .name,
         ConfigLayerSource::User {
