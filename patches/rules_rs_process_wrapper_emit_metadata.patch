@@ -1,0 +1,18 @@
+diff --git a/util/process_wrapper/rustc.rs b/util/process_wrapper/rustc.rs
+index ddb82c9..69052ce 100644
+--- a/util/process_wrapper/rustc.rs
++++ b/util/process_wrapper/rustc.rs
+@@ -64,10 +64,12 @@ pub(crate) fn process_json(line: String, error_format: ErrorFormat) -> LineResult {
+     let parsed: JsonValue = line
+         .parse()
+         .map_err(|_| "error parsing rustc output as json".to_owned())?;
+     Ok(match parsed.try_into() {
++        Ok(RustcMessage::Emit(emit)) if emit == "metadata" => LineOutput::Terminate,
++        Ok(RustcMessage::Emit(_)) => LineOutput::Skip,
+         Ok(RustcMessage::Message(rendered)) => {
+             output_based_on_error_format(line, rendered, error_format)
+         }
+-        _ => LineOutput::Skip,
++        Err(()) => LineOutput::Skip,
+     })
+ }
