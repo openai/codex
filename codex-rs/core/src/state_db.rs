@@ -503,6 +503,7 @@ pub async fn read_repair_rollout_path(
 }
 
 /// Apply rollout items incrementally to SQLite.
+#[allow(clippy::too_many_arguments)]
 pub async fn apply_rollout_items(
     context: Option<&codex_state::StateRuntime>,
     rollout_path: &Path,
