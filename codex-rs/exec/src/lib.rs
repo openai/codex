@@ -688,7 +688,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         sandbox_policy: Some(default_sandbox_policy.clone().into()),
                         model: None,
                         service_tier: None,
-                        effort: default_effort.map(Into::into),
+                        effort: default_effort,
                         summary: None,
                         personality: None,
                         output_schema,
@@ -893,7 +893,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
-        sandbox: sandbox_mode_from_policy(&config.permissions.sandbox_policy.get()),
+        sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         ephemeral: Some(config.ephemeral),
         ..ThreadStartParams::default()
     }
@@ -907,7 +907,7 @@ fn thread_resume_params_from_config(config: &Config, path: Option<PathBuf>) -> T
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
-        sandbox: sandbox_mode_from_policy(&config.permissions.sandbox_policy.get()),
+        sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         ..ThreadResumeParams::default()
     }
 }
