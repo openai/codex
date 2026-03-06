@@ -18,6 +18,10 @@ pub struct ZshForkRuntime {
 }
 
 impl ZshForkRuntime {
+    pub fn zsh_path(&self) -> &Path {
+        &self.zsh_path
+    }
+
     fn apply_to_config(
         &self,
         config: &mut Config,
@@ -87,6 +91,29 @@ where
         .with_pre_build_hook(pre_build_hook)
         .with_config(move |config| {
             runtime.apply_to_config(config, approval_policy, sandbox_policy);
+        });
+    builder.build(server).await
+}
+
+pub async fn build_unified_exec_zsh_fork_test<F>(
+    server: &wiremock::MockServer,
+    runtime: ZshForkRuntime,
+    approval_policy: AskForApproval,
+    sandbox_policy: SandboxPolicy,
+    pre_build_hook: F,
+) -> Result<TestCodex>
+where
+    F: FnOnce(&Path) + Send + 'static,
+{
+    let mut builder = test_codex()
+        .with_pre_build_hook(pre_build_hook)
+        .with_config(move |config| {
+            runtime.apply_to_config(config, approval_policy, sandbox_policy);
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
         });
     builder.build(server).await
 }

@@ -17,6 +17,7 @@ use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::spec::UnifiedExecBackendConfig;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -106,6 +107,7 @@ impl ToolHandler for UnifiedExecHandler {
             &params,
             invocation.session.user_shell(),
             invocation.turn.tools_config.allow_login_shell,
+            invocation.turn.tools_config.unified_exec_backend,
         ) {
             Ok(command) => command,
             Err(_) => return true,
@@ -153,6 +155,7 @@ impl ToolHandler for UnifiedExecHandler {
                     &args,
                     session.user_shell(),
                     turn.tools_config.allow_login_shell,
+                    turn.tools_config.unified_exec_backend,
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
 
@@ -286,12 +289,17 @@ pub(crate) fn get_command(
     args: &ExecCommandArgs,
     session_shell: Arc<Shell>,
     allow_login_shell: bool,
+    unified_exec_backend: UnifiedExecBackendConfig,
 ) -> Result<Vec<String>, String> {
-    let model_shell = args.shell.as_ref().map(|shell_str| {
-        let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
-        shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
-        shell
-    });
+    let model_shell = if unified_exec_backend == UnifiedExecBackendConfig::ZshFork {
+        None
+    } else {
+        args.shell.as_ref().map(|shell_str| {
+            let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
+            shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
+            shell
+        })
+    };
 
     let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
     let use_login_shell = match args.login {
@@ -339,9 +347,12 @@ fn format_response(response: &UnifiedExecResponse) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::ShellType;
     use crate::shell::default_user_shell;
+    use crate::shell::empty_shell_snapshot_receiver;
     use crate::tools::handlers::parse_arguments_with_base_path;
     use crate::tools::handlers::resolve_workdir_base_path;
+    use crate::tools::spec::UnifiedExecBackendConfig;
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -358,8 +369,13 @@ mod tests {
 
         assert!(args.shell.is_none());
 
-        let command =
-            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
+        let command = get_command(
+            &args,
+            Arc::new(default_user_shell()),
+            true,
+            UnifiedExecBackendConfig::Direct,
+        )
+        .map_err(anyhow::Error::msg)?;
 
         assert_eq!(command.len(), 3);
         assert_eq!(command[2], "echo hello");
@@ -374,8 +390,13 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
-        let command =
-            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
+        let command = get_command(
+            &args,
+            Arc::new(default_user_shell()),
+            true,
+            UnifiedExecBackendConfig::Direct,
+        )
+        .map_err(anyhow::Error::msg)?;
 
         assert_eq!(command.last(), Some(&"echo hello".to_string()));
         if command
@@ -395,8 +416,13 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("powershell"));
 
-        let command =
-            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
+        let command = get_command(
+            &args,
+            Arc::new(default_user_shell()),
+            true,
+            UnifiedExecBackendConfig::Direct,
+        )
+        .map_err(anyhow::Error::msg)?;
 
         assert_eq!(command[2], "echo hello");
         Ok(())
@@ -410,8 +436,13 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("cmd"));
 
-        let command =
-            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
+        let command = get_command(
+            &args,
+            Arc::new(default_user_shell()),
+            true,
+            UnifiedExecBackendConfig::Direct,
+        )
+        .map_err(anyhow::Error::msg)?;
 
         assert_eq!(command[2], "echo hello");
         Ok(())
@@ -422,13 +453,42 @@ mod tests {
         let json = r#"{"cmd": "echo hello", "login": true}"#;
 
         let args: ExecCommandArgs = parse_arguments(json)?;
-        let err = get_command(&args, Arc::new(default_user_shell()), false)
-            .expect_err("explicit login should be rejected");
+        let err = get_command(
+            &args,
+            Arc::new(default_user_shell()),
+            false,
+            UnifiedExecBackendConfig::Direct,
+        )
+        .expect_err("explicit login should be rejected");
 
         assert!(
             err.contains("login shell is disabled by config"),
             "unexpected error: {err}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn get_command_ignores_model_shell_override_for_zsh_fork_backend() -> anyhow::Result<()> {
+        let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
+        let args: ExecCommandArgs = parse_arguments(json)?;
+
+        let session_shell = Arc::new(Shell {
+            shell_type: ShellType::Zsh,
+            shell_path: PathBuf::from("/tmp/configured-zsh-fork-shell"),
+            shell_snapshot: empty_shell_snapshot_receiver(),
+        });
+        let command = get_command(
+            &args,
+            session_shell,
+            true,
+            UnifiedExecBackendConfig::ZshFork,
+        )
+        .map_err(anyhow::Error::msg)?;
+
+        assert_eq!(command[0], "/tmp/configured-zsh-fork-shell");
+        assert_eq!(command[1], "-lc");
+        assert_eq!(command[2], "echo hello");
         Ok(())
     }
 

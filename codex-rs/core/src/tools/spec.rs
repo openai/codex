@@ -119,8 +119,6 @@ impl ToolsConfig {
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
-        } else if features.enabled(Feature::ShellZshFork) {
-            ConfigShellToolType::ShellCommand
         } else if features.enabled(Feature::UnifiedExec) {
             // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
             if codex_utils_pty::conpty_supported() {
@@ -128,6 +126,8 @@ impl ToolsConfig {
             } else {
                 ConfigShellToolType::ShellCommand
             }
+        } else if features.enabled(Feature::ShellZshFork) {
+            ConfigShellToolType::ShellCommand
         } else {
             model_info.shell_type
         };
@@ -329,7 +329,11 @@ fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<Stri
     properties
 }
 
-fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled: bool) -> ToolSpec {
+fn create_exec_command_tool(
+    allow_login_shell: bool,
+    request_permission_enabled: bool,
+    unified_exec_backend: UnifiedExecBackendConfig,
+) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -344,12 +348,6 @@ fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled:
                     "Optional working directory to run the command in; defaults to the turn cwd."
                         .to_string(),
                 ),
-            },
-        ),
-        (
-            "shell".to_string(),
-            JsonSchema::String {
-                description: Some("Shell binary to launch. Defaults to the user's default shell.".to_string()),
             },
         ),
         (
@@ -379,6 +377,16 @@ fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled:
             },
         ),
     ]);
+    if unified_exec_backend != UnifiedExecBackendConfig::ZshFork {
+        properties.insert(
+            "shell".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Shell binary to launch. Defaults to the user's default shell.".to_string(),
+                ),
+            },
+        );
+    }
     if allow_login_shell {
         properties.insert(
             "login".to_string(),
@@ -1788,7 +1796,11 @@ pub(crate) fn build_specs(
         }
         ConfigShellToolType::UnifiedExec => {
             builder.push_spec_with_parallel_support(
-                create_exec_command_tool(config.allow_login_shell, request_permission_enabled),
+                create_exec_command_tool(
+                    config.allow_login_shell,
+                    request_permission_enabled,
+                    config.unified_exec_backend,
+                ),
                 true,
             );
             builder.push_spec(create_write_stdin_tool());
@@ -2193,7 +2205,7 @@ mod tests {
         // Build expected from the same helpers used by the builder.
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         for spec in [
-            create_exec_command_tool(true, false),
+            create_exec_command_tool(true, false, UnifiedExecBackendConfig::Direct),
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
             create_request_user_input_tool(CollaborationModesConfig::default()),
@@ -2816,7 +2828,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
+    fn shell_zsh_fork_uses_unified_exec_when_enabled() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
@@ -2830,7 +2842,7 @@ mod tests {
             session_source: SessionSource::Cli,
         });
 
-        assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
+        assert_eq!(tools_config.shell_type, ConfigShellToolType::UnifiedExec);
         assert_eq!(
             tools_config.shell_command_backend,
             ShellCommandBackendConfig::ZshFork
@@ -2838,6 +2850,19 @@ mod tests {
         assert_eq!(
             tools_config.unified_exec_backend,
             UnifiedExecBackendConfig::ZshFork
+        );
+
+        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), None, &[]).build();
+        let exec_spec = find_tool(&tools, "exec_command");
+        let ToolSpec::Function(exec_tool) = &exec_spec.spec else {
+            panic!("exec_command should be a function tool spec");
+        };
+        let JsonSchema::Object { properties, .. } = &exec_tool.parameters else {
+            panic!("exec_command parameters should be an object schema");
+        };
+        assert!(
+            !properties.contains_key("shell"),
+            "exec_command should omit `shell` when zsh-fork backend forces the configured shell",
         );
     }
 

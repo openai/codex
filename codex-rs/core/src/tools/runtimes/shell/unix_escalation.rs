@@ -45,10 +45,10 @@ use codex_shell_escalation::ShellCommandExecutor;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -61,7 +61,7 @@ pub(super) async fn try_run_zsh_fork(
     req: &ShellRequest,
     attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
-    command: &[String],
+    shell_command: &[String],
 ) -> Result<Option<ExecToolCallOutput>, ToolError> {
     let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_ref() else {
         tracing::warn!("ZshFork backend specified, but shell_zsh_path is not configured.");
@@ -76,8 +76,10 @@ pub(super) async fn try_run_zsh_fork(
         return Ok(None);
     }
 
+    let ParsedShellCommand { script, login, .. } = extract_shell_script(shell_command)?;
+
     let spec = build_command_spec(
-        command,
+        shell_command,
         &req.cwd,
         &req.env,
         req.timeout_ms.into(),
@@ -89,7 +91,7 @@ pub(super) async fn try_run_zsh_fork(
         .env_for(spec, req.network.as_ref())
         .map_err(|err| ToolError::Codex(err.into()))?;
     let crate::sandboxing::ExecRequest {
-        command,
+        command: sandbox_command,
         cwd: sandbox_cwd,
         env: sandbox_env,
         network: sandbox_network,
@@ -101,16 +103,14 @@ pub(super) async fn try_run_zsh_fork(
         justification,
         arg0,
     } = sandbox_exec_request;
-    let ParsedShellCommand { script, login, .. } = extract_shell_script(&command)?;
+    let host_zsh_path =
+        resolve_host_zsh_path(sandbox_env.get("PATH").map(String::as_str), &sandbox_cwd);
     let effective_timeout = Duration::from_millis(
         req.timeout_ms
             .unwrap_or(crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
     );
-    let exec_policy = Arc::new(RwLock::new(
-        ctx.session.services.exec_policy.current().as_ref().clone(),
-    ));
     let command_executor = CoreShellCommandExecutor {
-        command,
+        command: sandbox_command,
         cwd: sandbox_cwd,
         sandbox_policy,
         sandbox,
@@ -129,6 +129,8 @@ pub(super) async fn try_run_zsh_fork(
             .clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_linux_sandbox_bwrap: ctx.turn.features.enabled(Feature::UseLinuxSandboxBwrap),
+        shell_zsh_path: ctx.session.services.shell_zsh_path.clone(),
+        host_zsh_path: host_zsh_path.clone(),
     };
     let main_execve_wrapper_exe = ctx
         .session
@@ -153,7 +155,6 @@ pub(super) async fn try_run_zsh_fork(
     let stopwatch = Stopwatch::new(effective_timeout);
     let cancel_token = stopwatch.cancellation_token();
     let escalation_policy = CoreShellActionProvider {
-        policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
@@ -162,6 +163,7 @@ pub(super) async fn try_run_zsh_fork(
         sandbox_permissions: req.sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
         stopwatch: stopwatch.clone(),
+        host_zsh_path,
     };
 
     let escalate_server = EscalateServer::new(
@@ -182,6 +184,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
     req: &crate::tools::runtimes::unified_exec::UnifiedExecRequest,
     attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
+    shell_command: &[String],
     exec_request: ExecRequest,
 ) -> Result<Option<PreparedUnifiedExecZshFork>, ToolError> {
     let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_ref() else {
@@ -197,7 +200,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         return Ok(None);
     }
 
-    let parsed = match extract_shell_script(&exec_request.command) {
+    let parsed = match extract_shell_script(shell_command) {
         Ok(parsed) => parsed,
         Err(err) => {
             tracing::warn!("ZshFork unified exec fallback: {err:?}");
@@ -213,20 +216,31 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         return Ok(None);
     }
 
-    let exec_policy = Arc::new(RwLock::new(
-        ctx.session.services.exec_policy.current().as_ref().clone(),
-    ));
+    let ExecRequest {
+        command,
+        cwd,
+        env,
+        network,
+        expiration: _expiration,
+        sandbox,
+        windows_sandbox_level,
+        sandbox_permissions,
+        sandbox_policy,
+        justification,
+        arg0,
+    } = &exec_request;
+    let host_zsh_path = resolve_host_zsh_path(env.get("PATH").map(String::as_str), cwd);
     let command_executor = CoreShellCommandExecutor {
-        command: exec_request.command.clone(),
-        cwd: exec_request.cwd.clone(),
-        sandbox_policy: exec_request.sandbox_policy.clone(),
-        sandbox: exec_request.sandbox,
-        env: exec_request.env.clone(),
-        network: exec_request.network.clone(),
-        windows_sandbox_level: exec_request.windows_sandbox_level,
-        sandbox_permissions: exec_request.sandbox_permissions,
-        justification: exec_request.justification.clone(),
-        arg0: exec_request.arg0.clone(),
+        command: command.clone(),
+        cwd: cwd.clone(),
+        sandbox_policy: sandbox_policy.clone(),
+        sandbox: *sandbox,
+        env: env.clone(),
+        network: network.clone(),
+        windows_sandbox_level: *windows_sandbox_level,
+        sandbox_permissions: *sandbox_permissions,
+        justification: justification.clone(),
+        arg0: arg0.clone(),
         sandbox_policy_cwd: ctx.turn.cwd.clone(),
         macos_seatbelt_profile_extensions: ctx
             .turn
@@ -236,6 +250,8 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
             .clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_linux_sandbox_bwrap: ctx.turn.features.enabled(Feature::UseLinuxSandboxBwrap),
+        shell_zsh_path: ctx.session.services.shell_zsh_path.clone(),
+        host_zsh_path: host_zsh_path.clone(),
     };
     let main_execve_wrapper_exe = ctx
         .session
@@ -248,7 +264,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
             )
         })?;
     let escalation_policy = CoreShellActionProvider {
-        policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
@@ -257,6 +272,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         sandbox_permissions: req.sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
         stopwatch: Stopwatch::unlimited(),
+        host_zsh_path,
     };
 
     let escalate_server = EscalateServer::new(
@@ -276,7 +292,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
 }
 
 struct CoreShellActionProvider {
-    policy: Arc<RwLock<Policy>>,
     session: Arc<crate::codex::Session>,
     turn: Arc<crate::codex::TurnContext>,
     call_id: String,
@@ -285,6 +300,7 @@ struct CoreShellActionProvider {
     sandbox_permissions: SandboxPermissions,
     prompt_permissions: Option<PermissionProfile>,
     stopwatch: Stopwatch,
+    host_zsh_path: Option<PathBuf>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -295,6 +311,35 @@ enum DecisionSource {
     PrefixRule,
     /// Often, this is `is_safe_command()`.
     UnmatchedCommandFallback,
+}
+
+fn paths_match(lhs: &Path, rhs: &Path) -> bool {
+    lhs == rhs
+        || match (lhs.canonicalize(), rhs.canonicalize()) {
+            (Ok(lhs), Ok(rhs)) => lhs == rhs,
+            _ => false,
+        }
+}
+
+fn resolve_host_zsh_path(path_env: Option<&str>, cwd: &Path) -> Option<PathBuf> {
+    which::which_in("zsh", path_env, cwd)
+        .or_else(|_| which::which("zsh"))
+        .ok()
+        .map(|path| path.canonicalize().unwrap_or(path))
+}
+
+fn is_unconfigured_zsh_exec(
+    program: &AbsolutePathBuf,
+    shell_zsh_path: Option<&Path>,
+    host_zsh_path: Option<&Path>,
+) -> bool {
+    let Some(shell_zsh_path) = shell_zsh_path else {
+        return false;
+    };
+    let Some(host_zsh_path) = host_zsh_path else {
+        return false;
+    };
+    paths_match(program.as_path(), host_zsh_path) && !paths_match(program.as_path(), shell_zsh_path)
 }
 
 impl CoreShellActionProvider {
@@ -380,6 +425,10 @@ impl CoreShellActionProvider {
                         command,
                         workdir,
                         None,
+                        // Intercepted exec prompts happen after the original tool call has
+                        // started, so we do not attach an execpolicy amendment payload here.
+                        // Amendments are currently surfaced only from the top-level tool
+                        // request path.
                         None,
                         None,
                         additional_permissions,
@@ -592,24 +641,32 @@ impl EscalationPolicy for CoreShellActionProvider {
                 .await;
         }
 
-        let evaluation = {
-            let policy = self.policy.read().await;
-            evaluate_intercepted_exec_policy(
-                &policy,
-                program,
-                argv,
-                self.approval_policy,
-                &self.sandbox_policy,
-                self.sandbox_permissions,
-                ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
-            )
-        };
+        let policy = self.session.services.exec_policy.current();
+        let evaluation = evaluate_intercepted_exec_policy(
+            policy.as_ref(),
+            program,
+            argv,
+            self.approval_policy,
+            &self.sandbox_policy,
+            self.sandbox_permissions,
+            ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
+        );
         // When true, means the Evaluation was due to *.rules, not the
         // fallback function.
         let decision_driven_by_policy =
             Self::decision_driven_by_policy(&evaluation.matched_rules, evaluation.decision);
-        let needs_escalation =
-            self.sandbox_permissions.requires_escalated_permissions() || decision_driven_by_policy;
+        // Keep zsh-fork interception alive across nested shells: if an
+        // intercepted exec targets the known host `zsh` path instead of the
+        // configured zsh-fork binary, force it through escalation so the
+        // executor can rewrite the program path back to the configured shell.
+        let force_zsh_fork_reexec = is_unconfigured_zsh_exec(
+            program,
+            self.session.services.shell_zsh_path.as_deref(),
+            self.host_zsh_path.as_deref(),
+        );
+        let needs_escalation = self.sandbox_permissions.requires_escalated_permissions()
+            || decision_driven_by_policy
+            || force_zsh_fork_reexec;
 
         let decision_source = if decision_driven_by_policy {
             DecisionSource::PrefixRule
@@ -740,6 +797,8 @@ struct CoreShellCommandExecutor {
     macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     use_linux_sandbox_bwrap: bool,
+    shell_zsh_path: Option<PathBuf>,
+    host_zsh_path: Option<PathBuf>,
 }
 
 struct PrepareSandboxedExecParams<'a> {
@@ -808,7 +867,8 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
         env: HashMap<String, String>,
         execution: EscalationExecution,
     ) -> anyhow::Result<PreparedExec> {
-        let command = join_program_and_argv(program, argv);
+        let program = self.rewrite_intercepted_program_for_zsh_fork(program);
+        let command = join_program_and_argv(&program, argv);
         let Some(first_arg) = argv.first() else {
             return Err(anyhow::anyhow!(
                 "intercepted exec request must contain argv[0]"
@@ -870,6 +930,33 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
 }
 
 impl CoreShellCommandExecutor {
+    fn rewrite_intercepted_program_for_zsh_fork(
+        &self,
+        program: &AbsolutePathBuf,
+    ) -> AbsolutePathBuf {
+        let Some(shell_zsh_path) = self.shell_zsh_path.as_ref() else {
+            return program.clone();
+        };
+        if !is_unconfigured_zsh_exec(
+            program,
+            Some(shell_zsh_path.as_path()),
+            self.host_zsh_path.as_deref(),
+        ) {
+            return program.clone();
+        }
+        match AbsolutePathBuf::from_absolute_path(shell_zsh_path) {
+            Ok(rewritten) => rewritten,
+            Err(err) => {
+                tracing::warn!(
+                    "failed to rewrite intercepted zsh path {} to configured shell {}: {err}",
+                    program.display(),
+                    shell_zsh_path.display(),
+                );
+                program.clone()
+            }
+        }
+    }
+
     fn prepare_sandboxed_exec(
         &self,
         params: PrepareSandboxedExecParams<'_>,
@@ -941,23 +1028,21 @@ struct ParsedShellCommand {
 }
 
 fn extract_shell_script(command: &[String]) -> Result<ParsedShellCommand, ToolError> {
-    // Commands reaching zsh-fork can be wrapped by environment/sandbox helpers, so
-    // we search for the first `-c`/`-lc` triple anywhere in the argv rather
-    // than assuming it is the first positional form.
-    if let Some((program, script, login)) = command.windows(3).find_map(|parts| match parts {
-        [program, flag, script] if flag == "-c" => {
-            Some((program.to_owned(), script.to_owned(), false))
+    if let [program, flag, script, ..] = command {
+        if flag == "-c" {
+            return Ok(ParsedShellCommand {
+                program: program.to_owned(),
+                script: script.to_owned(),
+                login: false,
+            });
         }
-        [program, flag, script] if flag == "-lc" => {
-            Some((program.to_owned(), script.to_owned(), true))
+        if flag == "-lc" {
+            return Ok(ParsedShellCommand {
+                program: program.to_owned(),
+                script: script.to_owned(),
+                login: true,
+            });
         }
-        _ => None,
-    }) {
-        return Ok(ParsedShellCommand {
-            program,
-            script,
-            login,
-        });
     }
 
     Err(ToolError::Rejected(

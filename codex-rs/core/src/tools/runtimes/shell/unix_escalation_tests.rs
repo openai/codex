@@ -5,6 +5,7 @@ use super::ParsedShellCommand;
 use super::commands_for_intercepted_exec_policy;
 use super::evaluate_intercepted_exec_policy;
 use super::extract_shell_script;
+use super::is_unconfigured_zsh_exec;
 use super::join_program_and_argv;
 use super::map_exec_result;
 #[cfg(target_os = "macos")]
@@ -96,39 +97,16 @@ fn extract_shell_script_preserves_login_flag() {
 }
 
 #[test]
-fn extract_shell_script_supports_wrapped_command_prefixes() {
-    assert_eq!(
-        extract_shell_script(&[
-            "/usr/bin/env".into(),
-            "CODEX_EXECVE_WRAPPER=1".into(),
-            "/bin/zsh".into(),
-            "-lc".into(),
-            "echo hello".into()
-        ])
-        .unwrap(),
-        ParsedShellCommand {
-            program: "/bin/zsh".to_string(),
-            script: "echo hello".to_string(),
-            login: true,
-        }
-    );
-
-    assert_eq!(
-        extract_shell_script(&[
-            "sandbox-exec".into(),
-            "-p".into(),
-            "sandbox_policy".into(),
-            "/bin/zsh".into(),
-            "-c".into(),
-            "pwd".into(),
-        ])
-        .unwrap(),
-        ParsedShellCommand {
-            program: "/bin/zsh".to_string(),
-            script: "pwd".to_string(),
-            login: false,
-        }
-    );
+fn extract_shell_script_rejects_wrapped_command_prefixes() {
+    let err = extract_shell_script(&[
+        "/usr/bin/env".into(),
+        "CODEX_EXECVE_WRAPPER=1".into(),
+        "/bin/zsh".into(),
+        "-lc".into(),
+        "echo hello".into(),
+    ])
+    .unwrap_err();
+    assert!(matches!(err, super::ToolError::Rejected(_)));
 }
 
 #[test]
@@ -165,6 +143,55 @@ fn join_program_and_argv_replaces_original_argv_zero() {
         ),
         vec!["/tmp/tool"]
     );
+}
+
+#[test]
+fn is_unconfigured_zsh_exec_matches_non_configured_zsh_paths() {
+    let program = AbsolutePathBuf::try_from(host_absolute_path(&["bin", "zsh"])).unwrap();
+    let host = PathBuf::from(host_absolute_path(&["bin", "zsh"]));
+    let configured = PathBuf::from(host_absolute_path(&["tmp", "codex-zsh"]));
+    assert!(is_unconfigured_zsh_exec(
+        &program,
+        Some(configured.as_path()),
+        Some(host.as_path()),
+    ));
+}
+
+#[test]
+fn is_unconfigured_zsh_exec_ignores_non_zsh_or_configured_paths() {
+    let configured = PathBuf::from(host_absolute_path(&["tmp", "codex-zsh"]));
+    let host = PathBuf::from(host_absolute_path(&["bin", "zsh"]));
+    let configured_program = AbsolutePathBuf::try_from(configured.clone()).unwrap();
+    assert!(!is_unconfigured_zsh_exec(
+        &configured_program,
+        Some(configured.as_path()),
+        Some(host.as_path()),
+    ));
+
+    let non_zsh =
+        AbsolutePathBuf::try_from(host_absolute_path(&["usr", "bin", "python3"])).unwrap();
+    assert!(!is_unconfigured_zsh_exec(
+        &non_zsh,
+        Some(configured.as_path()),
+        Some(host.as_path()),
+    ));
+    assert!(!is_unconfigured_zsh_exec(
+        &non_zsh,
+        None,
+        Some(host.as_path()),
+    ));
+}
+
+#[test]
+fn is_unconfigured_zsh_exec_does_not_match_non_host_zsh_named_binaries() {
+    let program = AbsolutePathBuf::try_from(host_absolute_path(&["tmp", "repo", "zsh"])).unwrap();
+    let configured = PathBuf::from(host_absolute_path(&["tmp", "codex-zsh"]));
+    let host = PathBuf::from(host_absolute_path(&["bin", "zsh"]));
+    assert!(!is_unconfigured_zsh_exec(
+        &program,
+        Some(configured.as_path()),
+        Some(host.as_path()),
+    ));
 }
 
 #[test]
@@ -485,6 +512,8 @@ async fn prepare_escalated_exec_turn_default_preserves_macos_seatbelt_extensions
         }),
         codex_linux_sandbox_exe: None,
         use_linux_sandbox_bwrap: false,
+        shell_zsh_path: None,
+        host_zsh_path: None,
     };
 
     let prepared = executor
@@ -532,6 +561,8 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
         macos_seatbelt_profile_extensions: None,
         codex_linux_sandbox_exe: None,
         use_linux_sandbox_bwrap: false,
+        shell_zsh_path: None,
+        host_zsh_path: None,
     };
 
     let permissions = Permissions {

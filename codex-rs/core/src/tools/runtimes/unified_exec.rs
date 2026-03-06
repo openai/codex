@@ -202,7 +202,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             let exec_env = attempt
                 .env_for(spec, req.network.as_ref())
                 .map_err(|err| ToolError::Codex(err.into()))?;
-            match zsh_fork_backend::maybe_prepare_unified_exec(req, attempt, ctx, exec_env).await? {
+            match zsh_fork_backend::maybe_prepare_unified_exec(
+                req, attempt, ctx, &command, exec_env,
+            )
+            .await?
+            {
                 Some(prepared) => {
                     return self
                         .manager

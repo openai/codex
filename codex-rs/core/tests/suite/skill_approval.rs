@@ -18,6 +18,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::zsh_fork::build_unified_exec_zsh_fork_test;
 use core_test_support::zsh_fork::build_zsh_fork_test;
 use core_test_support::zsh_fork::restrictive_workspace_write_policy;
 use core_test_support::zsh_fork::zsh_fork_runtime;
@@ -45,6 +46,13 @@ fn shell_command_arguments(command: &str) -> Result<String> {
     Ok(serde_json::to_string(&json!({
         "command": command,
         "timeout_ms": 500,
+    }))?)
+}
+
+fn exec_command_arguments(command: &str) -> Result<String> {
+    Ok(serde_json::to_string(&json!({
+        "cmd": command,
+        "yield_time_ms": 500,
     }))?)
 }
 
@@ -85,6 +93,38 @@ echo 'zsh-fork-stdout'
 echo 'zsh-fork-stderr' >&2
 "#,
     )
+}
+
+#[cfg(unix)]
+fn write_repo_skill_with_shell_script_contents(
+    repo_root: &Path,
+    name: &str,
+    script_name: &str,
+    script_contents: &str,
+) -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let skill_dir = repo_root.join(".agents").join("skills").join(name);
+    let scripts_dir = skill_dir.join("scripts");
+    fs::create_dir_all(&scripts_dir)?;
+    fs::write(repo_root.join(".git"), "gitdir: here")?;
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!(
+            r#"---
+name: {name}
+description: {name} skill
+---
+"#
+        ),
+    )?;
+
+    let script_path = scripts_dir.join(script_name);
+    fs::write(&script_path, script_contents)?;
+    let mut permissions = fs::metadata(&script_path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions)?;
+    Ok(script_path)
 }
 
 #[cfg(unix)]
@@ -260,6 +300,168 @@ permissions:
     assert!(
         output.contains("Execution denied: User denied execution"),
         "expected rejection marker in function_call_output: {output:?}"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_zsh_fork_prompts_for_skill_script_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("unified exec zsh-fork skill prompt test")? else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let tool_call_id = "uexec-zsh-fork-skill-call";
+    let test = build_unified_exec_zsh_fork_test(
+        &server,
+        runtime,
+        AskForApproval::OnRequest,
+        SandboxPolicy::new_workspace_write_policy(),
+        |home| {
+            write_skill_with_shell_script(home, "mbolin-test-skill", "hello-mbolin.sh").unwrap();
+            write_skill_metadata(
+                home,
+                "mbolin-test-skill",
+                r#"
+permissions:
+  file_system:
+    read:
+      - "./data"
+    write:
+      - "./output"
+"#,
+            )
+            .unwrap();
+        },
+    )
+    .await?;
+
+    let (script_path_str, command) = skill_script_command(&test, "hello-mbolin.sh")?;
+    let arguments = exec_command_arguments(&command)?;
+    let mocks =
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "exec_command").await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        AskForApproval::OnRequest,
+        SandboxPolicy::new_workspace_write_policy(),
+    )
+    .await?;
+
+    let approval = wait_for_exec_approval_request(&test)
+        .await
+        .expect("expected exec approval request before completion");
+    assert_eq!(approval.call_id, tool_call_id);
+    assert_eq!(approval.command, vec![script_path_str.clone()]);
+    assert_eq!(
+        approval.available_decisions,
+        Some(vec![
+            ReviewDecision::Approved,
+            ReviewDecision::ApprovedForSession,
+            ReviewDecision::Abort,
+        ])
+    );
+    assert_eq!(
+        approval.additional_permissions,
+        Some(PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![absolute_path(
+                    &test.codex_home_path().join("skills/mbolin-test-skill/data"),
+                )]),
+                write: Some(vec![absolute_path(
+                    &test
+                        .codex_home_path()
+                        .join("skills/mbolin-test-skill/output"),
+                )]),
+            }),
+            ..Default::default()
+        })
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+
+    wait_for_turn_complete(&test).await;
+
+    let call_output = mocks
+        .completion
+        .single_request()
+        .function_call_output(tool_call_id);
+    let output = call_output["output"].as_str().unwrap_or_default();
+    assert!(
+        output.contains("Execution denied: User denied execution"),
+        "expected rejection marker in function_call_output: {output:?}"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_zsh_fork_keeps_skill_loading_pinned_to_turn_cwd() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("unified exec zsh-fork turn cwd skill test")? else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let tool_call_id = "uexec-zsh-fork-repo-skill-call";
+    let test = build_unified_exec_zsh_fork_test(
+        &server,
+        runtime,
+        AskForApproval::OnRequest,
+        SandboxPolicy::new_workspace_write_policy(),
+        |_| {},
+    )
+    .await?;
+
+    let repo_root = test.cwd_path().join("repo");
+    let script_path = write_repo_skill_with_shell_script_contents(
+        &repo_root,
+        "repo-skill",
+        "repo-skill.sh",
+        "#!/bin/sh\necho 'repo-skill-output'\n",
+    )?;
+    let script_path_quoted = shlex::try_join([script_path.to_string_lossy().as_ref()])?;
+    let repo_root_quoted = shlex::try_join([repo_root.to_string_lossy().as_ref()])?;
+    let command = format!("cd {repo_root_quoted} && {script_path_quoted}");
+    let arguments = exec_command_arguments(&command)?;
+    let mocks =
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "exec_command").await;
+
+    submit_turn_with_policies(
+        &test,
+        "run the repo skill after changing directories",
+        AskForApproval::OnRequest,
+        SandboxPolicy::new_workspace_write_policy(),
+    )
+    .await?;
+
+    let approval = wait_for_exec_approval_request(&test).await;
+    assert!(
+        approval.is_none(),
+        "changing directories inside unified exec should not load repo-local skills from the shell cwd",
+    );
+
+    let call_output = mocks
+        .completion
+        .single_request()
+        .function_call_output(tool_call_id);
+    let output = call_output["output"].as_str().unwrap_or_default();
+    assert!(
+        output.contains("repo-skill-output"),
+        "expected repo skill script to run without skill-specific approval when only the shell cwd changes: {output:?}"
     );
 
     Ok(())
