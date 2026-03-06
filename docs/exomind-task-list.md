@@ -49,7 +49,7 @@
 - [-] 定期将最新需求、任务计划、风险与决策语义化存储到 issue `#3`
 - [-] 想法一的长期治理任务持续拆解并通过 issue/PR 追踪至完成
 
-## G. 下一阶段（未完成）
+## G. 下一阶段（已完成）
 - [x] 设计并提交 Rule Catalog 模板（含 L1/L2/L3 示例，Issue `#7`）
 - [x] 定义规则冲突裁决接口草案（映射到 Codex CLI 执行点，Issue `#9`）
 - [x] 建立 CI “warn 模式”入口并输出基础报告格式（Issue `#6`）
@@ -57,7 +57,7 @@
 
 ## H. 当前活跃 PR
 - [x] 跟踪同步 PR：`#5`（任务清单/issue 状态同步，已合并）
-- [-] 里程碑落地 PR：待创建（#6/#7/#8/#9 交付物）
+- [x] 里程碑落地 PR：`#10`（#6/#7/#8/#9 交付物，已合并）
 
 ## I. Idea1 子任务实施（本轮）
 - [x] `#7` 规则目录模板与样例：`docs/exomind-rule-catalog-template.json`
@@ -67,3 +67,7 @@
 - [x] `#6` warn 模式 workflow：`.github/workflows/exomind-norm-governance-warn.yml`
 - [x] `#8` 反馈流程模板文档：`docs/exomind-norm-feedback-template.md`
 - [x] `#8` 反馈 issue 模板：`.github/ISSUE_TEMPLATE/7-norm-rule-feedback.yml`
+
+## J. 下一里程碑（进行中）
+- [ ] `#11` 本地会话治理 Hook MVP（生成后/写入前/命令前）
+- [ ] `#12` CI Block 模式与 Waiver 机制

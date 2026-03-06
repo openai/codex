@@ -128,3 +128,7 @@
 - `#8` 误报/漏报反馈闭环模板
   - `docs/exomind-norm-feedback-template.md`
   - `.github/ISSUE_TEMPLATE/7-norm-rule-feedback.yml`
+
+## 14. 后续里程碑（已建 issue）
+- `#11` 本地会话治理 Hook MVP（生成后/写入前/命令前）。
+- `#12` CI Block 模式与 Waiver 机制。
