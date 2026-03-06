@@ -552,7 +552,7 @@ pub fn render_decision_for_unmatched_command(
                     // In restricted sandboxes (ReadOnly/WorkspaceWrite), do not prompt for
                     // non‑escalated, non‑dangerous commands — let the sandbox enforce
                     // restrictions (e.g., block network/write) without a user prompt.
-                    if sandbox_permissions.uses_additional_permissions() {
+                    if sandbox_permissions.requests_sandbox_override() {
                         Decision::Prompt
                     } else {
                         Decision::Allow
@@ -567,7 +567,7 @@ pub fn render_decision_for_unmatched_command(
                 Decision::Allow
             }
             SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => {
-                if sandbox_permissions.uses_additional_permissions() {
+                if sandbox_permissions.requests_sandbox_override() {
                     Decision::Prompt
                 } else {
                     Decision::Allow
@@ -1592,7 +1592,8 @@ prefix_rule(pattern=["git"], decision="prompt")
     }
 
     #[tokio::test]
-    async fn exec_approval_requirement_rejects_unmatched_prompt_when_sandbox_rejection_enabled() {
+    async fn exec_approval_requirement_rejects_unmatched_sandbox_escalation_when_sandbox_rejection_enabled()
+     {
         let command = vec!["madeup-cmd".to_string()];
 
         let requirement = ExecPolicyManager::default()

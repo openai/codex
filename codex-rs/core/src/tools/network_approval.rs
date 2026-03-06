@@ -112,8 +112,12 @@ enum NetworkApprovalOutcome {
     DeniedByPolicy(String),
 }
 
-fn allows_network_prompt(policy: AskForApproval) -> bool {
-    !matches!(policy, AskForApproval::Never | AskForApproval::Guardian)
+/// Whether an allowlist miss may be reviewed instead of hard-denied.
+///
+/// Guardian uses the same inline decision path as user approvals, even though
+/// it is not an interactive prompt.
+fn allows_network_approval_flow(policy: AskForApproval) -> bool {
+    !matches!(policy, AskForApproval::Never)
 }
 
 impl PendingApprovalDecision {
@@ -316,7 +320,7 @@ impl NetworkApprovalService {
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
-        if !allows_network_prompt(turn_context.approval_policy.value()) {
+        if !allows_network_approval_flow(turn_context.approval_policy.value()) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;
             pending_approvals.remove(&key);
@@ -666,12 +670,12 @@ mod tests {
     }
 
     #[test]
-    fn never_policy_disables_network_prompts() {
-        assert!(!allows_network_prompt(AskForApproval::Never));
-        assert!(allows_network_prompt(AskForApproval::OnRequest));
-        assert!(allows_network_prompt(AskForApproval::OnFailure));
-        assert!(!allows_network_prompt(AskForApproval::Guardian));
-        assert!(allows_network_prompt(AskForApproval::UnlessTrusted));
+    fn only_never_policy_disables_network_approval_flow() {
+        assert!(!allows_network_approval_flow(AskForApproval::Never));
+        assert!(allows_network_approval_flow(AskForApproval::OnRequest));
+        assert!(allows_network_approval_flow(AskForApproval::OnFailure));
+        assert!(allows_network_approval_flow(AskForApproval::Guardian));
+        assert!(allows_network_approval_flow(AskForApproval::UnlessTrusted));
     }
 
     fn denied_blocked_request(host: &str) -> BlockedRequest {

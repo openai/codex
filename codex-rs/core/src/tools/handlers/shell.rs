@@ -33,7 +33,6 @@ use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::spec::ShellCommandBackendConfig;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::SandboxPermissions;
 
 pub struct ShellHandler;
 
