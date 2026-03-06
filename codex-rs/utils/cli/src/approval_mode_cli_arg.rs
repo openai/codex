@@ -21,7 +21,7 @@ pub enum ApprovalModeCliArg {
     /// The model decides when to ask the user for approval.
     OnRequest,
 
-    /// Feature-gated mode: run in the sandbox first, then let the guardian
+    /// Run in the sandbox first, then let the guardian
     /// reviewer decide whether a sandbox escape is acceptable.
     Guardian,
 
