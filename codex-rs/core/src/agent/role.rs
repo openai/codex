@@ -301,7 +301,7 @@ Rules:
 - When you wait for the `awaiter` to be done, use the largest possible timeout.
 - Only use `awaiter` for commands that may take time."#.to_string()),
                         config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
-                        model: None,
+                        model: Some("gpt-5.3-codex-spark".to_string()),
                         spawn_mode: Some(AgentRoleSpawnMode::Spawn),
                         nickname_candidates: None,
                     }
