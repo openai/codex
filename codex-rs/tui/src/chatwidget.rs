@@ -177,6 +177,10 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+const RLPH_READ_PREFIX: &str = "/read";
+const RLPH_EXEC_PREFIX: &str = "/exec";
+const RLPH_READ_MAX_CHARS: usize = 32_000;
+const RLPH_EXEC_MAX_CHARS: usize = 32_000;
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -215,6 +219,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
+use crate::bottom_pane::BufferedQueuePriority;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::CollaborationModeIndicator;
 use crate::bottom_pane::ColumnWidthMode;
@@ -225,6 +230,7 @@ use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
+use crate::bottom_pane::PendingPreviewMessage;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
@@ -623,6 +629,10 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // RLPH `/exec` commands are submitted as user shell commands and bridged
+    // back into a follow-up prompt on command completion.
+    pending_rlph_exec_commands: VecDeque<String>,
+    active_rlph_exec_commands: HashMap<String, String>,
     // Steers already submitted to core but not yet committed into history.
     //
     // The bottom pane shows these above queued drafts until core records the
@@ -736,6 +746,8 @@ pub(crate) struct UserMessage {
     remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
+    repeat_mode: bool,
+    steer_mode: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -778,6 +790,8 @@ impl From<String> for UserMessage {
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            repeat_mode: false,
+            steer_mode: false,
         }
     }
 }
@@ -791,8 +805,16 @@ impl From<&str> for UserMessage {
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            repeat_mode: false,
+            steer_mode: false,
         }
     }
+}
+
+enum RlphBufferedCommand {
+    Read { path: String },
+    Exec { command: String },
+    Plain,
 }
 
 struct PendingSteer {
@@ -823,6 +845,8 @@ pub(crate) fn create_initial_user_message(
             remote_image_urls: Vec::new(),
             text_elements,
             mention_bindings: Vec::new(),
+            repeat_mode: false,
+            steer_mode: false,
         })
     }
 }
@@ -853,6 +877,8 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         local_images,
         remote_image_urls,
         mention_bindings,
+        repeat_mode,
+        steer_mode,
     } = message;
     if local_images.is_empty() {
         return UserMessage {
@@ -861,6 +887,8 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
             local_images,
             remote_image_urls,
             mention_bindings,
+            repeat_mode,
+            steer_mode,
         };
     }
 
@@ -917,6 +945,8 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         remote_image_urls,
         text_elements: rebuilt_elements,
         mention_bindings,
+        repeat_mode,
+        steer_mode,
     }
 }
 
@@ -1988,6 +2018,8 @@ impl ChatWidget {
             local_images: self.bottom_pane.composer_local_images(),
             remote_image_urls: self.bottom_pane.remote_image_urls(),
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
+            repeat_mode: false,
+            steer_mode: false,
         };
 
         let mut to_merge: Vec<UserMessage> = self
@@ -2009,6 +2041,8 @@ impl ChatWidget {
             local_images: Vec::new(),
             remote_image_urls: Vec::new(),
             mention_bindings: Vec::new(),
+            repeat_mode: false,
+            steer_mode: false,
         };
         let total_remote_images = to_merge
             .iter()
@@ -2026,6 +2060,7 @@ impl ChatWidget {
                 local_images,
                 remote_image_urls,
                 mention_bindings,
+                ..
             } = remap_placeholders_for_message(message, &mut next_image_label);
             append_text_with_rebased_elements(
                 &mut combined.text,
@@ -2048,6 +2083,7 @@ impl ChatWidget {
             remote_image_urls,
             text_elements,
             mention_bindings,
+            ..
         } = user_message;
         let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
         self.set_remote_image_urls(remote_image_urls);
@@ -2118,6 +2154,8 @@ impl ChatWidget {
             self.queued_user_messages = input_state.pending_steers;
             self.queued_user_messages
                 .extend(input_state.queued_user_messages);
+            self.pending_rlph_exec_commands.clear();
+            self.active_rlph_exec_commands.clear();
         } else {
             self.agent_turn_running = false;
             self.pending_steers.clear();
@@ -2130,6 +2168,8 @@ impl ChatWidget {
             );
             self.bottom_pane.set_composer_pending_pastes(Vec::new());
             self.queued_user_messages.clear();
+            self.pending_rlph_exec_commands.clear();
+            self.active_rlph_exec_commands.clear();
         }
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
@@ -2191,6 +2231,12 @@ impl ChatWidget {
             if !is_standard_tool_call(&ev.parsed_cmd) {
                 return;
             }
+        }
+        if ev.source == ExecCommandSource::UserShell
+            && let Some(command) = self.pending_rlph_exec_commands.pop_front()
+        {
+            self.active_rlph_exec_commands
+                .insert(ev.call_id.clone(), command);
         }
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
@@ -2805,6 +2851,12 @@ impl ChatWidget {
                 }
             }
         }
+        if ev.source == ExecCommandSource::UserShell
+            && let Some(command) = self.active_rlph_exec_commands.remove(&ev.call_id)
+        {
+            let follow_up = self.build_rlph_exec_followup_message(&command, &ev);
+            self.queue_user_message(follow_up);
+        }
         // Mark that actual work was done (command executed)
         self.had_work_activity = true;
     }
@@ -3121,6 +3173,8 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_rlph_exec_commands: VecDeque::new(),
+            active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
@@ -3307,6 +3361,8 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
+            pending_rlph_exec_commands: VecDeque::new(),
+            active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
@@ -3477,6 +3533,8 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_rlph_exec_commands: VecDeque::new(),
+            active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: false,
@@ -3624,7 +3682,8 @@ impl ChatWidget {
                 ..
             } if self.collaboration_modes_enabled()
                 && !self.bottom_pane.is_task_running()
-                && self.bottom_pane.no_modal_or_popup_active() =>
+                && self.bottom_pane.no_modal_or_popup_active()
+                && self.bottom_pane.composer_is_empty() =>
             {
                 self.cycle_collaboration_mode();
             }
@@ -3645,6 +3704,8 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
+                        repeat_mode: false,
+                        steer_mode: false,
                     };
                     if user_message.text.is_empty()
                         && user_message.local_images.is_empty()
@@ -3686,6 +3747,8 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
+                        repeat_mode: false,
+                        steer_mode: false,
                     };
                     let Some(user_message) =
                         self.maybe_defer_user_message_for_realtime(user_message)
@@ -3693,6 +3756,34 @@ impl ChatWidget {
                         return;
                     };
                     self.queue_user_message(user_message);
+                }
+                InputResult::BufferedQueued {
+                    text,
+                    text_elements,
+                    priority,
+                } => {
+                    let local_images = self
+                        .bottom_pane
+                        .take_recent_submission_images_with_placeholders();
+                    let remote_image_urls = self.take_remote_image_urls();
+                    let user_message = UserMessage {
+                        text,
+                        local_images,
+                        remote_image_urls,
+                        text_elements,
+                        mention_bindings: self
+                            .bottom_pane
+                            .take_recent_submission_mention_bindings(),
+                        repeat_mode: false,
+                        steer_mode: false,
+                    };
+                    if user_message.text.is_empty()
+                        && user_message.local_images.is_empty()
+                        && user_message.remote_image_urls.is_empty()
+                    {
+                        return;
+                    }
+                    self.queue_rlph_buffered_message(user_message, priority);
                 }
                 InputResult::Command(cmd) => {
                     self.dispatch_command(cmd);
@@ -4175,6 +4266,8 @@ impl ChatWidget {
                     remote_image_urls,
                     text_elements: prepared_elements,
                     mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
+                    repeat_mode: false,
+                    steer_mode: false,
                 };
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
@@ -4311,6 +4404,127 @@ impl ChatWidget {
         }
     }
 
+    fn queue_rlph_buffered_message(
+        &mut self,
+        mut user_message: UserMessage,
+        priority: BufferedQueuePriority,
+    ) {
+        user_message.repeat_mode = true;
+        user_message.steer_mode = matches!(priority, BufferedQueuePriority::High);
+        if user_message.steer_mode {
+            self.queued_user_messages.push_front(user_message);
+        } else {
+            self.queued_user_messages.push_back(user_message);
+        }
+        self.maybe_send_next_queued_input();
+        self.refresh_pending_input_preview();
+    }
+
+    fn submit_rlph_buffered_message(&mut self, user_message: UserMessage) {
+        match self.parse_rlph_buffered_command(&user_message.text) {
+            RlphBufferedCommand::Read { path } => {
+                self.submit_user_message(
+                    self.build_rlph_read_injected_message(user_message, &path),
+                );
+            }
+            RlphBufferedCommand::Exec { command } => {
+                if command.trim().is_empty() {
+                    self.add_to_history(history_cell::new_error_event(
+                        "RLPH /exec requires a command.".to_string(),
+                    ));
+                    return;
+                }
+                self.pending_rlph_exec_commands.push_back(command.clone());
+                self.submit_op(Op::RunUserShellCommand { command });
+            }
+            RlphBufferedCommand::Plain => self.submit_user_message(user_message),
+        }
+    }
+
+    fn parse_rlph_buffered_command(&self, text: &str) -> RlphBufferedCommand {
+        let trimmed = text.trim_start();
+        if let Some(rest) = trimmed.strip_prefix(RLPH_READ_PREFIX) {
+            return RlphBufferedCommand::Read {
+                path: self.parse_rlph_command_arg(rest),
+            };
+        }
+        if let Some(rest) = trimmed.strip_prefix(RLPH_EXEC_PREFIX) {
+            return RlphBufferedCommand::Exec {
+                command: rest.trim().to_string(),
+            };
+        }
+        RlphBufferedCommand::Plain
+    }
+
+    fn parse_rlph_command_arg(&self, arg: &str) -> String {
+        let trimmed = arg.trim();
+        if let Some(parts) = shlex::split(trimmed)
+            && parts.len() == 1
+        {
+            return parts[0].clone();
+        }
+        trimmed.to_string()
+    }
+
+    fn resolve_rlph_read_path(&self, requested_path: &str) -> PathBuf {
+        let path = PathBuf::from(requested_path);
+        if path.is_absolute() {
+            path
+        } else {
+            self.config.cwd.join(path)
+        }
+    }
+
+    fn build_rlph_read_injected_message(
+        &self,
+        mut user_message: UserMessage,
+        requested_path: &str,
+    ) -> UserMessage {
+        let trimmed_path = requested_path.trim();
+        if trimmed_path.is_empty() {
+            user_message.text = "RLPH /read failed: missing path argument.".to_string();
+            return user_message;
+        }
+
+        let resolved_path = self.resolve_rlph_read_path(trimmed_path);
+        let read_result = std::fs::read_to_string(&resolved_path);
+        user_message.text = match read_result {
+            Ok(content) => {
+                let snippet = trim_for_rlph_context(&content, RLPH_READ_MAX_CHARS);
+                format!(
+                    "RLPH context injection (/read)\nrequested_path: {trimmed_path}\nresolved_path: {}\n\n--- file content begin ---\n{snippet}\n--- file content end ---",
+                    resolved_path.display()
+                )
+            }
+            Err(err) => format!(
+                "RLPH context injection (/read) failed\nrequested_path: {trimmed_path}\nresolved_path: {}\nerror: {err}",
+                resolved_path.display()
+            ),
+        };
+        user_message
+    }
+
+    fn build_rlph_exec_followup_message(
+        &self,
+        command: &str,
+        exec_end: &ExecCommandEndEvent,
+    ) -> UserMessage {
+        let output_source = if exec_end.aggregated_output.is_empty() {
+            if exec_end.stderr.is_empty() {
+                exec_end.stdout.as_str()
+            } else {
+                exec_end.stderr.as_str()
+            }
+        } else {
+            exec_end.aggregated_output.as_str()
+        };
+        let output = trim_for_rlph_context(output_source, RLPH_EXEC_MAX_CHARS);
+        UserMessage::from(format!(
+            "RLPH context injection (/exec)\ncommand: {command}\nexit_code: {}\n\n--- command output begin ---\n{output}\n--- command output end ---",
+            exec_end.exit_code
+        ))
+    }
+
     fn submit_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
@@ -4330,6 +4544,8 @@ impl ChatWidget {
             remote_image_urls,
             text_elements,
             mention_bindings,
+            repeat_mode,
+            steer_mode,
         } = user_message;
         if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
             return;
@@ -4347,7 +4563,7 @@ impl ChatWidget {
             return;
         }
 
-        let render_in_history = !self.agent_turn_running;
+        let render_in_history = !self.agent_turn_running && !steer_mode;
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -4483,6 +4699,8 @@ impl ChatWidget {
                 remote_image_urls: remote_image_urls.clone(),
                 text_elements: text_elements.clone(),
                 mention_bindings: mention_bindings.clone(),
+                repeat_mode,
+                steer_mode,
             },
             compare_key: Self::pending_steer_compare_key_from_items(&items),
         });
@@ -5040,11 +5258,25 @@ impl ChatWidget {
         if self.suppress_queue_autosend {
             return;
         }
-        if self.bottom_pane.is_task_running() {
+        if self.bottom_pane.is_task_running()
+            && !self
+                .queued_user_messages
+                .front()
+                .is_some_and(|message| message.steer_mode)
+        {
             return;
         }
         if let Some(user_message) = self.queued_user_messages.pop_front() {
-            self.submit_user_message(user_message);
+            let repeat_mode = user_message.repeat_mode;
+            let repeat_clone = repeat_mode.then_some(user_message.clone());
+            if repeat_mode {
+                self.submit_rlph_buffered_message(user_message);
+            } else {
+                self.submit_user_message(user_message);
+            }
+            if let Some(repeating_message) = repeat_clone {
+                self.queued_user_messages.push_back(repeating_message);
+            }
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();
@@ -5052,15 +5284,23 @@ impl ChatWidget {
 
     /// Rebuild and update the bottom-pane pending-input preview.
     fn refresh_pending_input_preview(&mut self) {
-        let queued_messages: Vec<String> = self
+        let queued_messages: Vec<PendingPreviewMessage> = self
             .queued_user_messages
             .iter()
-            .map(|m| m.text.clone())
+            .map(|m| PendingPreviewMessage {
+                text: truncate_text(&m.text, 80),
+                repeating: m.repeat_mode,
+                steer: m.steer_mode,
+            })
             .collect();
-        let pending_steers: Vec<String> = self
+        let pending_steers: Vec<PendingPreviewMessage> = self
             .pending_steers
             .iter()
-            .map(|steer| steer.user_message.text.clone())
+            .map(|steer| PendingPreviewMessage {
+                text: truncate_text(&steer.user_message.text, 80),
+                repeating: steer.user_message.repeat_mode,
+                steer: true,
+            })
             .collect();
         self.bottom_pane
             .set_pending_input_preview(queued_messages, pending_steers);
@@ -7955,6 +8195,8 @@ impl ChatWidget {
             remote_image_urls: Vec::new(),
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            repeat_mode: false,
+            steer_mode: false,
         };
         if should_queue {
             self.queue_user_message(user_message);
@@ -8597,6 +8839,14 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn trim_for_rlph_context(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let truncated: String = text.chars().take(max_chars).collect();
+    format!("{truncated}\n\n...[truncated]")
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {

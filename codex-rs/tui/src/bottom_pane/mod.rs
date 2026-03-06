@@ -94,6 +94,7 @@ pub(crate) use status_line_setup::StatusLineItem;
 pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
 mod pending_input_preview;
+pub(crate) use pending_input_preview::PendingPreviewMessage;
 mod pending_thread_approvals;
 pub mod popup_consts;
 mod scroll_state;
@@ -130,6 +131,7 @@ pub(crate) enum CancellationEvent {
 }
 
 use crate::bottom_pane::prompt_args::parse_slash_name;
+pub(crate) use chat_composer::BufferedQueuePriority;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
@@ -786,8 +788,8 @@ impl BottomPane {
     /// Update the pending-input preview shown above the composer.
     pub(crate) fn set_pending_input_preview(
         &mut self,
-        queued: Vec<String>,
-        pending_steers: Vec<String>,
+        queued: Vec<PendingPreviewMessage>,
+        pending_steers: Vec<PendingPreviewMessage>,
     ) {
         self.pending_input_preview.pending_steers = pending_steers;
         self.pending_input_preview.queued_messages = queued;
@@ -1421,7 +1423,14 @@ mod tests {
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
-        pane.set_pending_input_preview(vec!["Queued follow-up question".to_string()], Vec::new());
+        pane.set_pending_input_preview(
+            vec![PendingPreviewMessage {
+                text: "Queued follow-up question".to_string(),
+                repeating: false,
+                steer: false,
+            }],
+            Vec::new(),
+        );
 
         let width = 48;
         let height = pane.desired_height(width);
@@ -1448,7 +1457,14 @@ mod tests {
         });
 
         pane.set_task_running(true);
-        pane.set_pending_input_preview(vec!["Queued follow-up question".to_string()], Vec::new());
+        pane.set_pending_input_preview(
+            vec![PendingPreviewMessage {
+                text: "Queued follow-up question".to_string(),
+                repeating: false,
+                steer: false,
+            }],
+            Vec::new(),
+        );
         pane.hide_status_indicator();
 
         let width = 48;
@@ -1476,7 +1492,14 @@ mod tests {
         });
 
         pane.set_task_running(true);
-        pane.set_pending_input_preview(vec!["Queued follow-up question".to_string()], Vec::new());
+        pane.set_pending_input_preview(
+            vec![PendingPreviewMessage {
+                text: "Queued follow-up question".to_string(),
+                repeating: false,
+                steer: false,
+            }],
+            Vec::new(),
+        );
 
         let width = 48;
         let height = pane.desired_height(width);

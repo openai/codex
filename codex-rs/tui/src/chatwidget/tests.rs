@@ -1170,6 +1170,8 @@ async fn queued_restore_with_remote_images_keeps_local_placeholder_mapping() {
         remote_image_urls: remote_image_urls.clone(),
         text_elements: text_elements.clone(),
         mention_bindings: Vec::new(),
+        repeat_mode: false,
+        steer_mode: false,
     });
 
     assert_eq!(chat.bottom_pane.composer_text(), text);
@@ -1215,6 +1217,8 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         remote_image_urls: Vec::new(),
         text_elements: first_elements,
         mention_bindings: Vec::new(),
+        repeat_mode: false,
+        steer_mode: false,
     });
     chat.queued_user_messages.push_back(UserMessage {
         text: second_text,
@@ -1225,6 +1229,8 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         remote_image_urls: Vec::new(),
         text_elements: second_elements,
         mention_bindings: Vec::new(),
+        repeat_mode: false,
+        steer_mode: false,
     });
     chat.refresh_pending_input_preview();
 
@@ -1295,6 +1301,8 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
         remote_image_urls: Vec::new(),
         text_elements: Vec::new(),
         mention_bindings: Vec::new(),
+        repeat_mode: false,
+        steer_mode: false,
     });
     chat.refresh_pending_input_preview();
 
@@ -1357,6 +1365,8 @@ async fn remap_placeholders_uses_attachment_labels() {
         local_images: attachments,
         remote_image_urls: vec!["https://example.com/a.png".to_string()],
         mention_bindings: Vec::new(),
+        repeat_mode: false,
+        steer_mode: false,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -1423,6 +1433,8 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         local_images: attachments,
         remote_image_urls: Vec::new(),
         mention_bindings: Vec::new(),
+        repeat_mode: false,
+        steer_mode: false,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -1818,6 +1830,8 @@ async fn make_chatwidget_manual(
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
+        pending_rlph_exec_commands: VecDeque::new(),
+        active_rlph_exec_commands: HashMap::new(),
         pending_steers: VecDeque::new(),
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
@@ -4084,6 +4098,8 @@ async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() 
         remote_image_urls: Vec::new(),
         text_elements,
         mention_bindings: Vec::new(),
+        repeat_mode: false,
+        steer_mode: false,
     });
 
     match next_submit_op(&mut op_rx) {
