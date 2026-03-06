@@ -563,33 +563,7 @@
     "AppSummary": {
       "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
       "properties": {
-        "appMetadata": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AppMetadata"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "branding": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AppBranding"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "distributionChannel": {
           "type": [
             "string",
             "null"
@@ -599,27 +573,6 @@
           "type": "string"
         },
         "installUrl": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "labels": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": [
-            "object",
-            "null"
-          ]
-        },
-        "logoUrl": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "logoUrlDark": {
           "type": [
             "string",
             "null"

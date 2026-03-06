@@ -1721,12 +1721,6 @@ pub struct AppSummary {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
-    pub logo_url: Option<String>,
-    pub logo_url_dark: Option<String>,
-    pub distribution_channel: Option<String>,
-    pub branding: Option<AppBranding>,
-    pub app_metadata: Option<AppMetadata>,
-    pub labels: Option<HashMap<String, String>>,
     pub install_url: Option<String>,
 }
 
@@ -1736,12 +1730,6 @@ impl From<AppInfo> for AppSummary {
             id: value.id,
             name: value.name,
             description: value.description,
-            logo_url: value.logo_url,
-            logo_url_dark: value.logo_url_dark,
-            distribution_channel: value.distribution_channel,
-            branding: value.branding,
-            app_metadata: value.app_metadata,
-            labels: value.labels,
             install_url: value.install_url,
         }
     }
