@@ -1017,7 +1017,6 @@ impl Session {
             SessionNetworkProxyRuntime {
                 http_addr: proxy.http_addr().to_string(),
                 socks_addr: proxy.socks_addr().to_string(),
-                admin_addr: proxy.admin_addr().to_string(),
             }
         };
         Ok((network_proxy, session_network_proxy))

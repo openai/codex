@@ -2727,13 +2727,11 @@ allowed_domains = ["openai.com"]
             NetworkToml {
                 enabled: Some(true),
                 proxy_url: Some("http://127.0.0.1:43128".to_string()),
-                admin_url: None,
                 enable_socks5: Some(false),
                 socks_url: None,
                 enable_socks5_udp: None,
                 allow_upstream_proxy: Some(false),
                 dangerously_allow_non_loopback_proxy: None,
-                dangerously_allow_non_loopback_admin: None,
                 dangerously_allow_all_unix_sockets: None,
                 mode: None,
                 allowed_domains: Some(vec!["openai.com".to_string()]),
