@@ -3913,6 +3913,80 @@ async fn rejects_additional_permissions_when_policy_not_on_request() {
     pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
     assert!(exec_output.output.contains("hi"));
 }
+
+#[tokio::test]
+async fn rejects_escalated_permissions_when_policy_is_on_failure() {
+    use crate::exec::ExecParams;
+    use crate::protocol::AskForApproval;
+    use crate::sandboxing::SandboxPermissions;
+    use crate::turn_diff_tracker::TurnDiffTracker;
+    use std::collections::HashMap;
+
+    let (session, mut turn_context_raw) = make_session_and_context().await;
+    turn_context_raw
+        .approval_policy
+        .set(AskForApproval::OnFailure)
+        .expect("test setup should allow updating approval policy");
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context_raw);
+
+    let params = ExecParams {
+        command: if cfg!(windows) {
+            vec![
+                "cmd.exe".to_string(),
+                "/C".to_string(),
+                "echo hi".to_string(),
+            ]
+        } else {
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "echo hi".to_string(),
+            ]
+        },
+        cwd: turn_context.cwd.clone(),
+        expiration: 1000.into(),
+        env: HashMap::new(),
+        network: None,
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        windows_sandbox_level: turn_context.windows_sandbox_level,
+        justification: Some("test".to_string()),
+        arg0: None,
+    };
+
+    let handler = ShellHandler;
+    let resp = handler
+        .handle(ToolInvocation {
+            session: Arc::clone(&session),
+            turn: Arc::clone(&turn_context),
+            tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call_id: "test-call".to_string(),
+            tool_name: "shell".to_string(),
+            payload: ToolPayload::Function {
+                arguments: serde_json::json!({
+                    "command": params.command.clone(),
+                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "timeout_ms": params.expiration.timeout_ms(),
+                    "sandbox_permissions": params.sandbox_permissions,
+                    "justification": params.justification.clone(),
+                })
+                .to_string(),
+            },
+        })
+        .await;
+
+    let Err(FunctionCallError::RespondToModel(output)) = resp else {
+        panic!("expected error result");
+    };
+
+    let expected = format!(
+        "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+        policy = turn_context.approval_policy.value()
+    );
+
+    pretty_assertions::assert_eq!(output, expected);
+}
+
 #[tokio::test]
 async fn unified_exec_rejects_additional_permissions_when_policy_not_on_request() {
     use crate::protocol::AskForApproval;
@@ -3953,6 +4027,52 @@ async fn unified_exec_rejects_additional_permissions_when_policy_not_on_request(
 
     let expected = format!(
         "approval policy is {policy:?}; reject command — you cannot ask for additional sandbox permissions if the approval policy is {policy:?}",
+        policy = turn_context.approval_policy.value()
+    );
+
+    pretty_assertions::assert_eq!(output, expected);
+}
+
+#[tokio::test]
+async fn unified_exec_rejects_escalated_permissions_when_policy_is_on_failure() {
+    use crate::protocol::AskForApproval;
+    use crate::sandboxing::SandboxPermissions;
+    use crate::turn_diff_tracker::TurnDiffTracker;
+
+    let (session, mut turn_context_raw) = make_session_and_context().await;
+    turn_context_raw
+        .approval_policy
+        .set(AskForApproval::OnFailure)
+        .expect("test setup should allow updating approval policy");
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context_raw);
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+
+    let handler = UnifiedExecHandler;
+    let resp = handler
+        .handle(ToolInvocation {
+            session: Arc::clone(&session),
+            turn: Arc::clone(&turn_context),
+            tracker: Arc::clone(&tracker),
+            call_id: "exec-call".to_string(),
+            tool_name: "exec_command".to_string(),
+            payload: ToolPayload::Function {
+                arguments: serde_json::json!({
+                    "cmd": "echo hi",
+                    "sandbox_permissions": SandboxPermissions::RequireEscalated,
+                    "justification": "need escalated permissions",
+                })
+                .to_string(),
+            },
+        })
+        .await;
+
+    let Err(FunctionCallError::RespondToModel(output)) = resp else {
+        panic!("expected error result");
+    };
+
+    let expected = format!(
+        "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
         policy = turn_context.approval_policy.value()
     );
 

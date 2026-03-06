@@ -103,7 +103,10 @@ pub(super) fn normalize_and_validate_additional_permissions(
     );
 
     if sandbox_permissions.requires_escalated_permissions()
-        && matches!(approval_policy, AskForApproval::Never)
+        && !matches!(
+            approval_policy,
+            AskForApproval::OnRequest | AskForApproval::Guardian
+        )
     {
         return Err(format!(
             "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
