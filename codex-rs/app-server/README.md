@@ -120,10 +120,9 @@ Example with notification opt-out:
 
 ## API Overview
 
-- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread.
-- `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
-- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for the new thread.
-- `developerInstructions` (thread-level only) — `thread/start`, `thread/resume`, and `thread/fork` accept this top-level custom developer-override string, which takes precedence over `~/.codex/config.toml` `developer_instructions` for that thread session.
+- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. `developerInstructions` is supported here and takes precedence over `~/.codex/config.toml` `developer_instructions` for that thread session.
+- `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. `developerInstructions` is supported here and takes precedence over `~/.codex/config.toml` `developer_instructions` for that thread session. When calling `thread/resume` against a thread that is already loaded/running, override fields are ignored (including `developerInstructions`) and logged as mismatch warnings rather than being reapplied mid-session.
+- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for the new thread. `developerInstructions` is supported here and takes precedence over `~/.codex/config.toml` `developer_instructions` for that thread session.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
@@ -168,8 +167,6 @@ Example with notification opt-out:
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), pinned feature values (`featureRequirements`), `enforceResidency`, and `network` constraints.
-
-When calling `thread/resume` against a thread that is already loaded/running, override fields are ignored (including `developerInstructions`) and logged as mismatch warnings rather than being reapplied mid-session.
 
 ### Example: Start or resume a thread
 
