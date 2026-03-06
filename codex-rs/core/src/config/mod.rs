@@ -368,12 +368,6 @@ pub struct Config {
     /// as a synthetic function_call/function_call_output pair instead of plain
     /// user input.
     pub agent_use_function_call_inbox: bool,
-
-    /// When true, inbound agent messages to non-subagent threads are delivered
-    /// as a synthetic function_call/function_call_output pair instead of plain
-    /// user input.
-    pub agent_use_function_call_inbox: bool,
-
     /// Watchdog polling interval in seconds.
     pub watchdog_interval_s: i64,
 
@@ -2301,6 +2295,7 @@ impl Config {
             memories: cfg.memories.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
             agent_use_function_call_inbox,
+            watchdog_interval_s,
             codex_home,
             sqlite_home,
             log_dir,

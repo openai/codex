@@ -43,7 +43,6 @@ where you want a subagent handoff to start a valid turn while still being clearl
 non-user activity in the transcript.
 
 Messages sent to subagents continue to arrive as normal user input.
-
 ## Watchdog Interval
 
 Watchdog agents use the top-level `watchdog_interval_s` setting to decide how long the owner thread

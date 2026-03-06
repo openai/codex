@@ -274,7 +274,9 @@ use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 
 const ROOT_AGENT_PROMPT_FALLBACK: &str = include_str!("../root_agent_prompt.md");
+const ROOT_AGENT_WATCHDOG_PROMPT_FALLBACK: &str = include_str!("../root_agent_watchdog_prompt.md");
 const SUBAGENT_PROMPT_FALLBACK: &str = include_str!("../subagent_prompt.md");
+const SUBAGENT_WATCHDOG_PROMPT_FALLBACK: &str = include_str!("../subagent_watchdog_prompt.md");
 const WATCHDOG_PROMPT_FALLBACK: &str = include_str!("../watchdog_agent_prompt.md");
 
 async fn load_agent_prompt_fallback(
@@ -292,12 +294,56 @@ async fn load_agent_prompt_fallback(
     fallback.to_string()
 }
 
-async fn load_root_agent_prompt(codex_home: &Path) -> String {
-    load_agent_prompt_fallback(codex_home, ROOT_AGENT_PROMPT_FALLBACK, "AGENTS.root.md").await
+async fn maybe_load_agent_prompt_fragment(
+    codex_home: &Path,
+    fallback: &str,
+    override_filename: &str,
+    enabled: bool,
+) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    let fragment = load_agent_prompt_fallback(codex_home, fallback, override_filename).await;
+    if fragment.trim().is_empty() {
+        None
+    } else {
+        Some(fragment)
+    }
 }
 
-async fn load_subagent_prompt(codex_home: &Path) -> String {
-    load_agent_prompt_fallback(codex_home, SUBAGENT_PROMPT_FALLBACK, "AGENTS.subagent.md").await
+async fn load_root_agent_prompt(codex_home: &Path, include_watchdog: bool) -> String {
+    let mut prompt =
+        load_agent_prompt_fallback(codex_home, ROOT_AGENT_PROMPT_FALLBACK, "AGENTS.root.md").await;
+    if let Some(fragment) = maybe_load_agent_prompt_fragment(
+        codex_home,
+        ROOT_AGENT_WATCHDOG_PROMPT_FALLBACK,
+        "AGENTS.root.watchdog.md",
+        include_watchdog,
+    )
+    .await
+    {
+        prompt.push_str("\n\n");
+        prompt.push_str(fragment.trim());
+    }
+    prompt
+}
+
+async fn load_subagent_prompt(codex_home: &Path, include_watchdog: bool) -> String {
+    let mut prompt =
+        load_agent_prompt_fallback(codex_home, SUBAGENT_PROMPT_FALLBACK, "AGENTS.subagent.md")
+            .await;
+    if let Some(fragment) = maybe_load_agent_prompt_fragment(
+        codex_home,
+        SUBAGENT_WATCHDOG_PROMPT_FALLBACK,
+        "AGENTS.subagent.watchdog.md",
+        include_watchdog,
+    )
+    .await
+    {
+        prompt.push_str("\n\n");
+        prompt.push_str(fragment.trim());
+    }
+    prompt
 }
 
 pub(crate) async fn load_watchdog_prompt(codex_home: &Path) -> String {
@@ -461,9 +507,27 @@ impl Codex {
         let model = models_manager
             .get_default_model(&config.model, refresh_strategy)
             .await;
-        let role_prompt = match session_source {
-            SessionSource::SubAgent(_) => Some(load_subagent_prompt(&config.codex_home).await),
-            _ => Some(load_root_agent_prompt(&config.codex_home).await),
+        let role_prompt = if config.features.enabled(Feature::Collab)
+            && config.features.enabled(Feature::AgentPromptInjection)
+        {
+            match session_source {
+                SessionSource::SubAgent(_) => Some(
+                    load_subagent_prompt(
+                        &config.codex_home,
+                        config.features.enabled(Feature::AgentWatchdog),
+                    )
+                    .await,
+                ),
+                _ => Some(
+                    load_root_agent_prompt(
+                        &config.codex_home,
+                        config.features.enabled(Feature::AgentWatchdog),
+                    )
+                    .await,
+                ),
+            }
+        } else {
+            None
         };
         let developer_instructions = match (role_prompt, config.developer_instructions.clone()) {
             (Some(prompt), Some(existing)) => Some(format!("{prompt}\n\n{existing}")),

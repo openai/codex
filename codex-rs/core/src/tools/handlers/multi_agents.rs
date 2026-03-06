@@ -94,6 +94,11 @@ impl ToolHandler for MultiAgentHandler {
             "spawn_agent" => spawn::handle(session, turn, call_id, arguments).await,
             "send_input" => send_input::handle(session, turn, call_id, arguments).await,
             "resume_agent" => resume_agent::handle(session, turn, call_id, arguments).await,
+            "compact_parent_context" if !turn.config.features.enabled(Feature::AgentWatchdog) => {
+                Err(FunctionCallError::RespondToModel(
+                    "watchdogs are disabled".to_string(),
+                ))
+            }
             "compact_parent_context" => {
                 compact_parent_context::handle(session, turn, call_id, arguments).await
             }
@@ -165,6 +170,13 @@ mod spawn {
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
         let max_depth = turn.config.agent_max_depth;
+        if matches!(spawn_mode, SpawnMode::Watchdog)
+            && !turn.config.features.enabled(Feature::AgentWatchdog)
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "watchdogs are disabled".to_string(),
+            ));
+        }
         if matches!(spawn_mode, SpawnMode::Watchdog)
             && matches!(session_source, SessionSource::SubAgent(_))
         {
@@ -402,7 +414,7 @@ mod send_input {
                 )
             })?,
         };
-        let input_items = parse_collab_input(args.message.clone(), args.items.clone())?;
+        let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
         let (receiver_agent_nickname, receiver_agent_role) = session
             .services
