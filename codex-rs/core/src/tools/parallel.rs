@@ -46,7 +46,7 @@ impl ToolCallRuntime {
         }
     }
 
-    #[instrument(level = "trace", skip_all, fields(call = ?call))]
+    #[instrument(level = "trace", skip_all)]
     pub(crate) fn handle_tool_call(
         self,
         call: ToolCall,
