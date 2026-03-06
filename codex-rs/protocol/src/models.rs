@@ -68,23 +68,6 @@ impl FileSystemPermissions {
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
-pub struct MacOsPermissions {
-    pub preferences: Option<MacOsPreferencesValue>,
-    pub automations: Option<MacOsAutomationValue>,
-    pub accessibility: Option<bool>,
-    pub calendar: Option<bool>,
-}
-
-impl MacOsPermissions {
-    pub fn is_empty(&self) -> bool {
-        self.preferences.is_none()
-            && self.automations.is_none()
-            && self.accessibility.is_none()
-            && self.calendar.is_none()
-    }
-}
-
-#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct NetworkPermissions {
     pub enabled: Option<bool>,
 }
@@ -93,20 +76,6 @@ impl NetworkPermissions {
     pub fn is_empty(&self) -> bool {
         self.enabled.is_none()
     }
-}
-
-#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(untagged)]
-pub enum MacOsPreferencesValue {
-    Bool(bool),
-    Mode(String),
-}
-
-#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(untagged)]
-pub enum MacOsAutomationValue {
-    Bool(bool),
-    BundleIds(Vec<String>),
 }
 
 #[derive(
