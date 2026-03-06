@@ -5017,7 +5017,7 @@ pub(crate) async fn run_turn(
         .services
         .plugins_manager
         .plugins_for_config(&turn_context.config);
-    // Plain-text @plugin mentions are resolved from the current session's
+    // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&input, loaded_plugins.capability_summaries());
@@ -5114,7 +5114,7 @@ pub(crate) async fn run_turn(
         &available_connectors,
         &skill_name_counts_lower,
     ));
-    // Explicit @plugin mentions can make a plugin's enabled apps callable for
+    // Explicit plugin mentions can make a plugin's enabled apps callable for
     // this turn without persisting those connectors as sticky user selections.
     let mut turn_enabled_connectors = explicitly_enabled_connectors.clone();
     turn_enabled_connectors.extend(

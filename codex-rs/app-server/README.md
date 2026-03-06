@@ -476,6 +476,26 @@ Invoke an app by including `$<app-slug>` in the text input and adding a `mention
 } } }
 ```
 
+### Example: Start a turn (invoke a plugin)
+
+Invoke a plugin by including a UI mention token such as `@sample` in the text input and adding a `mention` input item with the exact `plugin://<plugin-name>@<marketplace-name>` path returned by `plugin/list`.
+
+```json
+{ "method": "turn/start", "id": 35, "params": {
+    "threadId": "thr_123",
+    "input": [
+        { "type": "text", "text": "@sample Summarize the latest updates." },
+        { "type": "mention", "name": "Sample Plugin", "path": "plugin://sample@test" }
+    ]
+} }
+{ "id": 35, "result": { "turn": {
+    "id": "turn_459",
+    "status": "inProgress",
+    "items": [],
+    "error": null
+} } }
+```
+
 ### Example: Interrupt an active turn
 
 You can cancel a running Turn with `turn/interrupt`.
@@ -976,7 +996,7 @@ The server also emits `app/list/updated` notifications whenever either source (a
 }
 ```
 
-Invoke an app by inserting `$<app-slug>` in the text input. The slug is derived from the app name and lowercased with non-alphanumeric characters replaced by `-` (for example, "Demo App" becomes `$demo-app`). Add a `mention` input item (recommended) so the server uses the exact `app://<connector-id>` path rather than guessing by name.
+Invoke an app by inserting `$<app-slug>` in the text input. The slug is derived from the app name and lowercased with non-alphanumeric characters replaced by `-` (for example, "Demo App" becomes `$demo-app`). Add a `mention` input item (recommended) so the server uses the exact `app://<connector-id>` path rather than guessing by name. Plugins use the same `mention` item shape, but with `plugin://<plugin-name>@<marketplace-name>` paths from `plugin/list`.
 
 Example:
 
