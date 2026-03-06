@@ -326,7 +326,13 @@ pub(crate) async fn handle_start(
             msg,
         };
         while let Ok(event) = events_rx.recv().await {
-            debug!(conversation_id = %sess_clone.conversation_id, "received realtime conversation event");
+            // if not audio out, log the event
+            if !matches!(event, RealtimeEvent::AudioOut(_)) {
+                info!(
+                    event = ?event,
+                    "received realtime conversation event"
+                );
+            }
             let maybe_routed_text = match &event {
                 RealtimeEvent::HandoffRequested(handoff) => {
                     realtime_text_from_handoff_request(handoff)
@@ -376,7 +382,7 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
     let messages = handoff
         .messages
         .iter()
-        .map(|message| message.text.as_str())
+        .map(|message| format!("{}: {}", message.role, message.text))
         .collect::<Vec<_>>()
         .join("\n");
     (!messages.is_empty()).then_some(messages).or_else(|| {
@@ -605,7 +611,7 @@ mod tests {
         };
         assert_eq!(
             realtime_text_from_handoff_request(&handoff),
-            Some("hello\nhi there".to_string())
+            Some("user: hello\nassistant: hi there".to_string())
         );
     }
 

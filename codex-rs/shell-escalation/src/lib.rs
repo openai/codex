@@ -14,6 +14,8 @@ pub use unix::EscalationPermissions;
 #[cfg(unix)]
 pub use unix::EscalationPolicy;
 #[cfg(unix)]
+pub use unix::EscalationSession;
+#[cfg(unix)]
 pub use unix::ExecParams;
 #[cfg(unix)]
 pub use unix::ExecResult;

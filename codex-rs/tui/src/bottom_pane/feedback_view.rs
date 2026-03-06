@@ -21,8 +21,6 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
-use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_lines;
 use codex_protocol::protocol::SessionSource;
 
 use super::CancellationEvent;
@@ -342,47 +340,9 @@ impl FeedbackNoteView {
         text_height.saturating_add(1).min(9)
     }
 
-    fn intro_lines(&self, width: u16) -> Vec<Line<'static>> {
+    fn intro_lines(&self, _width: u16) -> Vec<Line<'static>> {
         let (title, _) = feedback_title_and_placeholder(self.category);
-        let mut lines = vec![Line::from(vec![gutter(), title.bold()])];
-        if should_show_feedback_connectivity_details(
-            self.category,
-            self.snapshot.feedback_diagnostics(),
-        ) {
-            lines.push(Line::from(vec![gutter()]));
-            lines.push(Line::from(vec![
-                gutter(),
-                "Connectivity diagnostics".bold(),
-            ]));
-            lines.extend(self.diagnostics_lines(width));
-        }
-        lines
-    }
-
-    fn diagnostics_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let width = usize::from(width.max(1));
-        let headline_options = RtOptions::new(width)
-            .initial_indent(Line::from(vec![gutter(), "  - ".into()]))
-            .subsequent_indent(Line::from(vec![gutter(), "    ".into()]));
-        let detail_options = RtOptions::new(width)
-            .initial_indent(Line::from(vec![gutter(), "    - ".dim()]))
-            .subsequent_indent(Line::from(vec![gutter(), "      ".into()]));
-        let mut lines = Vec::new();
-
-        for diagnostic in self.snapshot.feedback_diagnostics().diagnostics() {
-            lines.extend(word_wrap_lines(
-                [Line::from(diagnostic.headline.clone())],
-                headline_options.clone(),
-            ));
-            for detail in &diagnostic.details {
-                lines.extend(word_wrap_lines(
-                    [Line::from(detail.clone())],
-                    detail_options.clone(),
-                ));
-            }
-        }
-
-        lines
+        vec![Line::from(vec![gutter(), title.bold()])]
     }
 }
 
@@ -542,7 +502,7 @@ pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
     rollout_path: Option<std::path::PathBuf>,
-    include_connectivity_diagnostics_attachment: bool,
+    feedback_diagnostics: &FeedbackDiagnostics,
 ) -> super::SelectionViewParams {
     use super::popup_consts::standard_popup_hint_line;
     let yes_action: super::SelectionAction = Box::new({
@@ -579,7 +539,7 @@ pub(crate) fn feedback_upload_consent_params(
     {
         header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
     }
-    if include_connectivity_diagnostics_attachment {
+    if !feedback_diagnostics.is_empty() {
         header_lines.push(
             Line::from(vec![
                 "  • ".into(),
@@ -587,6 +547,17 @@ pub(crate) fn feedback_upload_consent_params(
             ])
             .into(),
         );
+    }
+    if should_show_feedback_connectivity_details(category, feedback_diagnostics) {
+        header_lines.push(Line::from("").into());
+        header_lines.push(Line::from("Connectivity diagnostics".bold()).into());
+        for diagnostic in feedback_diagnostics.diagnostics() {
+            header_lines
+                .push(Line::from(vec!["  - ".into(), diagnostic.headline.clone().into()]).into());
+            for detail in &diagnostic.details {
+                header_lines.push(Line::from(vec!["    - ".dim(), detail.clone().into()]).into());
+            }
+        }
     }
 
     super::SelectionViewParams {

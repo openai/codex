@@ -159,8 +159,14 @@ pub(crate) async fn handle_output_item_done(
         Ok(None) => {
             if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode) {
                 if previously_active_item.is_none() {
+                    let mut started_item = turn_item.clone();
+                    if let TurnItem::ImageGeneration(item) = &mut started_item {
+                        item.status = "in_progress".to_string();
+                        item.revised_prompt = None;
+                        item.result.clear();
+                    }
                     ctx.sess
-                        .emit_turn_item_started(&ctx.turn_context, &turn_item)
+                        .emit_turn_item_started(&ctx.turn_context, &started_item)
                         .await;
                 }
 
@@ -243,7 +249,8 @@ pub(crate) fn handle_non_tool_response_item(
     match item {
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
-        | ResponseItem::WebSearchCall { .. } => {
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. } => {
             let mut turn_item = parse_turn_item(item)?;
             if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
                 let combined = agent_message

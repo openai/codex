@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "oneOf": [
+    {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "form"
+          ],
+          "type": "string"
+        },
+        "requestedSchema": true
+      },
+      "required": [
+        "message",
+        "mode",
+        "requestedSchema"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "elicitationId": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "url"
+          ],
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "elicitationId",
+        "message",
+        "mode",
+        "url"
+      ],
+      "type": "object"
+    }
+  ],
+  "properties": {
+    "serverName": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "description": "Active Codex turn when this elicitation was observed, if app-server could correlate one.\n\nThis is nullable because MCP models elicitation as a standalone server-to-client request identified by the MCP server request id. It may be triggered during a turn, but turn context is app-server correlation rather than part of the protocol identity of the elicitation itself.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "serverName",
+    "threadId"
+  ],
+  "title": "McpServerElicitationRequestParams",
+  "type": "object"
+}

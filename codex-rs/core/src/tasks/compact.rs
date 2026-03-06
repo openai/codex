@@ -17,6 +17,10 @@ impl SessionTask for CompactTask {
         TaskKind::Compact
     }
 
+    fn span_name(&self) -> &'static str {
+        "session_task.compact"
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,

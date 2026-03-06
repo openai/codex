@@ -153,11 +153,12 @@ Example with notification opt-out:
 - `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
+- `plugin/install` — install a plugin from a discovered marketplace entry by `pluginName` and `marketplaceName` (**under development; do not call from production clients yet**).
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
-- `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); returns `{ started: true }` immediately and later emits `windowsSandbox/setupCompleted`.
+- `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); accepts an optional `cwd` to target setup for a specific workspace, returns `{ started: true }` immediately, and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `config/read` — fetch the effective config on disk after resolving config layering.
@@ -180,7 +181,6 @@ Start a fresh thread when you need a new Codex conversation.
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     "personality": "friendly",
-    "serviceTier": "flex",
     "serviceName": "my_app_server_client", // optional metrics tag (`service_name`)
     // Experimental: requires opt-in
     "dynamicTools": [
@@ -209,7 +209,6 @@ Start a fresh thread when you need a new Codex conversation.
 ```
 
 Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
-Valid `serviceTier` values are `"fast"` and `"flex"`.
 
 To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
 
@@ -417,7 +416,6 @@ You can optionally specify config overrides on the new turn. If specified, these
         "networkAccess": true
     },
     "model": "gpt-5.1-codex",
-    "serviceTier": "flex",
     "effort": "medium",
     "summary": "concise",
     "personality": "friendly",
@@ -765,6 +763,20 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 ### request_user_input
 
 When the client responds to `item/tool/requestUserInput`, the server emits `serverRequest/resolved` with `{ threadId, requestId }`. If the pending request is cleared by turn start, turn completion, or turn interruption before the client answers, the server emits the same notification for that cleanup.
+
+### MCP server elicitations
+
+MCP servers can interrupt a turn and ask the client for structured input via `mcpServer/elicitation/request`.
+
+Order of messages:
+
+1. `mcpServer/elicitation/request` (request) — includes `threadId`, nullable `turnId`, `serverName`, and either:
+   - a form request: `{ "mode": "form", "message": "...", "requestedSchema": { ... } }`
+   - a URL request: `{ "mode": "url", "message": "...", "url": "...", "elicitationId": "..." }`
+2. Client response — `{ "action": "accept", "content": ... }`, `{ "action": "decline", "content": null }`, or `{ "action": "cancel", "content": null }`.
+3. `serverRequest/resolved` — `{ threadId, requestId }` confirms the pending request has been resolved or cleared, including lifecycle cleanup on turn start/complete/interrupt.
+
+`turnId` is best-effort. When the elicitation is correlated with an active turn, the request includes that turn id; otherwise it is `null`.
 
 ### Dynamic tool calls (experimental)
 

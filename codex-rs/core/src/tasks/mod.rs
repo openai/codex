@@ -14,7 +14,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
-use tracing::Span;
+use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
@@ -89,6 +89,9 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// surface it in telemetry and UI.
     fn kind(&self) -> TaskKind;
 
+    /// Returns the tracing name for a spawned task span.
+    fn span_name(&self) -> &'static str;
+
     /// Executes the task until completion or cancellation.
     ///
     /// Implementations typically stream protocol events using `session` and
@@ -127,6 +130,7 @@ impl Session {
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
+        let span_name = task.span_name();
 
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
@@ -137,7 +141,15 @@ impl Session {
             let ctx = Arc::clone(&turn_context);
             let task_for_run = Arc::clone(&task);
             let task_cancellation_token = cancellation_token.child_token();
-            let session_span = Span::current();
+            // Task-owned turn spans keep a core-owned span open for the
+            // full task lifecycle after the submission dispatch span ends.
+            let task_span = info_span!(
+                "turn",
+                otel.name = span_name,
+                thread.id = %self.conversation_id,
+                turn.id = %turn_context.sub_id,
+                model = %turn_context.model_info.slug,
+            );
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
@@ -158,7 +170,7 @@ impl Session {
                     }
                     done_clone.notify_waiters();
                 }
-                .instrument(session_span),
+                .instrument(task_span),
             )
         };
 

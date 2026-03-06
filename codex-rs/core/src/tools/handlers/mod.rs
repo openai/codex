@@ -1,5 +1,6 @@
 pub(crate) mod agent_jobs;
 pub mod apply_patch;
+mod artifacts;
 mod dynamic;
 mod grep_files;
 mod js_repl;
@@ -8,12 +9,10 @@ mod mcp;
 mod mcp_resource;
 pub(crate) mod multi_agents;
 mod plan;
-mod presentation_artifact;
 mod read_file;
 mod request_user_input;
 mod search_tool_bm25;
 mod shell;
-mod spreadsheet_artifact;
 mod test_sync;
 pub(crate) mod unified_exec;
 mod view_image;
@@ -29,6 +28,7 @@ use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
+pub use artifacts::ArtifactsHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
@@ -40,7 +40,6 @@ pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
 pub use multi_agents::MultiAgentHandler;
 pub use plan::PlanHandler;
-pub use presentation_artifact::PresentationArtifactHandler;
 pub use read_file::ReadFileHandler;
 pub use request_user_input::RequestUserInputHandler;
 pub(crate) use request_user_input::request_user_input_tool_description;
@@ -49,7 +48,6 @@ pub(crate) use search_tool_bm25::SEARCH_TOOL_BM25_TOOL_NAME;
 pub use search_tool_bm25::SearchToolBm25Handler;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;
-pub use spreadsheet_artifact::SpreadsheetArtifactHandler;
 pub use test_sync::TestSyncHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
@@ -91,7 +89,7 @@ fn resolve_workdir_base_path(
 }
 
 /// Validates feature/policy constraints for `with_additional_permissions` and
-/// returns normalized absolute paths. Errors if paths are invalid.
+/// normalizes any path-based permissions. Errors if the request is invalid.
 pub(super) fn normalize_and_validate_additional_permissions(
     request_permission_enabled: bool,
     approval_policy: AskForApproval,
@@ -121,14 +119,18 @@ pub(super) fn normalize_and_validate_additional_permissions(
         }
         let Some(additional_permissions) = additional_permissions else {
             return Err(
-                "missing `additional_permissions`; provide `file_system.read` and/or `file_system.write` when using `with_additional_permissions`"
+                "missing `additional_permissions`; provide at least one of `network`, `file_system`, or `macos` when using `with_additional_permissions`"
                     .to_string(),
             );
         };
+        #[cfg(not(target_os = "macos"))]
+        if additional_permissions.macos.is_some() {
+            return Err("`additional_permissions.macos` is only supported on macOS".to_string());
+        }
         let normalized = normalize_additional_permissions(additional_permissions)?;
         if normalized.is_empty() {
             return Err(
-                "`additional_permissions` must include at least one path in `file_system.read` or `file_system.write`"
+                "`additional_permissions` must include at least one requested permission in `network`, `file_system`, or `macos`"
                     .to_string(),
             );
         }
