@@ -52,8 +52,7 @@ async fn responses_mode_stream_cli() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
-        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
+        .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
     println!("Status: {}", output.status);
@@ -87,6 +86,75 @@ async fn responses_mode_stream_cli() {
     // );
     // assert!(page.items[0].thread_id.is_some(), "missing thread_id");
     // assert!(page.items[0].created_at.is_some(), "missing created_at");
+}
+
+/// Ensures `OPENAI_BASE_URL` still works as a deprecated fallback.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_mode_stream_cli_supports_openai_base_url_env_fallback() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let repo_root = repo_root();
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "hi"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let resp_mock = responses::mount_sse_once(&server, sse).await;
+
+    let home = TempDir::new().unwrap();
+    let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
+    let mut cmd = AssertCommand::new(bin);
+    cmd.timeout(Duration::from_secs(30));
+    cmd.arg("exec")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(&repo_root)
+        .arg("hello?");
+    cmd.env("CODEX_HOME", home.path())
+        .env("OPENAI_API_KEY", "dummy")
+        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
+
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let request = resp_mock.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+}
+
+/// Ensures `openai_base_url` config override routes built-in openai provider requests.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let repo_root = repo_root();
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "hi"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let resp_mock = responses::mount_sse_once(&server, sse).await;
+
+    let home = TempDir::new().unwrap();
+    let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
+    let mut cmd = AssertCommand::new(bin);
+    cmd.timeout(Duration::from_secs(30));
+    cmd.arg("exec")
+        .arg("--skip-git-repo-check")
+        .arg("-c")
+        .arg(format!("openai_base_url=\"{}/v1\"", server.uri()))
+        .arg("-C")
+        .arg(&repo_root)
+        .arg("hello?");
+    cmd.env("CODEX_HOME", home.path())
+        .env("OPENAI_API_KEY", "dummy");
+
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let request = resp_mock.single_request();
+    assert_eq!(request.path(), "/v1/responses");
 }
 
 /// Verify that passing `-c model_instructions_file=...` to the CLI
@@ -136,8 +204,7 @@ async fn exec_cli_applies_model_instructions_file() {
         .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
-        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
+        .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
     println!("Status: {}", output.status);
@@ -178,13 +245,14 @@ async fn responses_api_stream_cli() {
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
+        .arg("-c")
+        .arg("openai_base_url=\"http://unused.local\"")
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
-        .env("CODEX_RS_SSE_FIXTURE", fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local");
+        .env("CODEX_RS_SSE_FIXTURE", fixture);
 
     let output = cmd.output().unwrap();
     assert!(output.status.success());
@@ -214,14 +282,14 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
+        .arg("-c")
+        .arg("openai_base_url=\"http://unused.local\"")
         .arg("-C")
         .arg(&repo_root)
         .arg(&prompt);
     cmd.env("CODEX_HOME", home.path())
         .env(CODEX_API_KEY_ENV_VAR, "dummy")
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        // Required for CLI arg parsing even though fixture short-circuits network usage.
-        .env("OPENAI_BASE_URL", "http://unused.local");
+        .env("CODEX_RS_SSE_FIXTURE", &fixture);
 
     let output = cmd.output().unwrap();
     assert!(
@@ -335,6 +403,8 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let mut cmd2 = AssertCommand::new(bin2);
     cmd2.arg("exec")
         .arg("--skip-git-repo-check")
+        .arg("-c")
+        .arg("openai_base_url=\"http://unused.local\"")
         .arg("-C")
         .arg(&repo_root)
         .arg(&prompt2)
@@ -342,8 +412,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg("--last");
     cmd2.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local");
+        .env("CODEX_RS_SSE_FIXTURE", &fixture);
 
     let output2 = cmd2.output().unwrap();
     assert!(output2.status.success(), "resume codex-cli run failed");

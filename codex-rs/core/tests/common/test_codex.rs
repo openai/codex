@@ -12,7 +12,6 @@ use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -179,13 +178,11 @@ impl TestCodexBuilder {
         resume_from: Option<PathBuf>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let thread_manager = if let Some(model_catalog) = config.model_catalog.clone() {
+        let thread_manager = if config.model_catalog.is_some() {
             ThreadManager::new(
-                config.codex_home.clone(),
+                &config,
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
                 SessionSource::Exec,
-                Some(model_catalog),
-                CollaborationModesConfig::default(),
             )
         } else {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
@@ -226,7 +223,7 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<(Config, Arc<TempDir>)> {
         let model_provider = ModelProviderInfo {
             base_url: Some(base_url),
-            ..built_in_model_providers()["openai"].clone()
+            ..built_in_model_providers(None)["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);
         let mut config = load_default_config_for_test(home).await;

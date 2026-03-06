@@ -20,6 +20,7 @@ futures = { workspace = true }
 notify = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["net", "time"] }
 tokio-tungstenite = { workspace = true }

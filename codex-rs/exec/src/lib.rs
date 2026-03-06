@@ -32,7 +32,6 @@ use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::git_info::get_git_repo_root;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
@@ -475,15 +474,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         config.cli_auth_credentials_store_mode,
     );
     let thread_manager = Arc::new(ThreadManager::new(
-        config.codex_home.clone(),
+        &config,
         auth_manager.clone(),
         SessionSource::Exec,
-        config.model_catalog.clone(),
-        CollaborationModesConfig {
-            default_mode_request_user_input: config
-                .features
-                .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-        },
     ));
     let default_model = thread_manager
         .get_models_manager()

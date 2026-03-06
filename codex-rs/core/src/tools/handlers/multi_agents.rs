@@ -1034,7 +1034,7 @@ mod tests {
     fn thread_manager() -> ThreadManager {
         ThreadManager::with_models_provider_for_tests(
             CodexAuth::from_api_key("dummy"),
-            built_in_model_providers()["openai"].clone(),
+            built_in_model_providers(None)["openai"].clone(),
         )
     }
 
@@ -1133,7 +1133,7 @@ mod tests {
         let manager = thread_manager();
         session.services.agent_control = manager.agent_control();
         let mut config = (*turn.config).clone();
-        let provider = built_in_model_providers()["ollama"].clone();
+        let provider = built_in_model_providers(None)["ollama"].clone();
         config.model_provider_id = "ollama".to_string();
         config.model_provider = provider.clone();
         config

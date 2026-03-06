@@ -75,6 +75,23 @@ impl ModelsManager {
         model_catalog: Option<ModelsResponse>,
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
+        Self::new_with_provider(
+            codex_home,
+            auth_manager,
+            ModelProviderInfo::create_openai_provider(None),
+            model_catalog,
+            collaboration_modes_config,
+        )
+    }
+
+    /// Construct a manager with an explicit provider used for remote model refreshes.
+    pub fn new_with_provider(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        provider: ModelProviderInfo,
+        model_catalog: Option<ModelsResponse>,
+        collaboration_modes_config: CollaborationModesConfig,
+    ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         let catalog_mode = if model_catalog.is_some() {
@@ -95,7 +112,7 @@ impl ModelsManager {
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
-            provider: ModelProviderInfo::create_openai_provider(),
+            provider,
         }
     }
 
@@ -381,20 +398,13 @@ impl ModelsManager {
         auth_manager: Arc<AuthManager>,
         provider: ModelProviderInfo,
     ) -> Self {
-        let cache_path = codex_home.join(MODEL_CACHE_FILE);
-        let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
-        Self {
-            remote_models: RwLock::new(
-                Self::load_remote_models_from_file()
-                    .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}")),
-            ),
-            catalog_mode: CatalogMode::Default,
-            collaboration_modes_config: CollaborationModesConfig::default(),
+        Self::new_with_provider(
+            codex_home,
             auth_manager,
-            etag: RwLock::new(None),
-            cache_manager,
             provider,
-        }
+            None,
+            CollaborationModesConfig::default(),
+        )
     }
 
     /// Get model identifier without consulting remote state or cache.

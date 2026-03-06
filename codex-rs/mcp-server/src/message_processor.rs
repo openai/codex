@@ -6,7 +6,6 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
@@ -59,15 +58,9 @@ impl MessageProcessor {
             config.cli_auth_credentials_store_mode,
         );
         let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
+            config.as_ref(),
             auth_manager,
             SessionSource::Mcp,
-            config.model_catalog.clone(),
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-            },
         ));
         Self {
             outgoing,

@@ -124,6 +124,7 @@ pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
@@ -1194,10 +1195,12 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Base URL override for the built-in `openai` model provider.
+    pub openai_base_url: Option<String>,
+
     /// Machine-local realtime audio device preferences used by realtime voice.
     #[serde(default)]
     pub audio: Option<RealtimeAudioToml>,
-
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation`
     /// `/v1/realtime`
@@ -1836,7 +1839,40 @@ impl Config {
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
 
-        let mut model_providers = built_in_model_providers();
+        let openai_base_url = cfg.openai_base_url.as_ref().and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        let openai_base_url_from_env =
+            std::env::var(OPENAI_BASE_URL_ENV_VAR)
+                .ok()
+                .and_then(|value| {
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                });
+        if openai_base_url_from_env.is_some() {
+            if openai_base_url.is_some() {
+                tracing::warn!(
+                    env_var = OPENAI_BASE_URL_ENV_VAR,
+                    "deprecated env var is ignored because `openai_base_url` is set in config.toml"
+                );
+            } else {
+                startup_warnings.push(format!(
+                    "`{OPENAI_BASE_URL_ENV_VAR}` is deprecated. Set `openai_base_url` in config.toml instead."
+                ));
+            }
+        }
+        let effective_openai_base_url = openai_base_url.or(openai_base_url_from_env);
+
+        let mut model_providers = built_in_model_providers(effective_openai_base_url);
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -5110,7 +5146,7 @@ model_verbosity = "high"
             supports_websockets: false,
         };
         let model_provider_map = {
-            let mut model_provider_map = built_in_model_providers();
+            let mut model_provider_map = built_in_model_providers(None);
             model_provider_map.insert("openai-custom".to_string(), openai_custom_provider.clone());
             model_provider_map
         };
@@ -5142,6 +5178,40 @@ model_verbosity = "high"
     ///
     /// Note that profiles are the recommended way to specify a group of
     /// configuration options together.
+    #[test]
+    fn openai_base_url_overrides_builtin_openai_provider() -> std::io::Result<()> {
+        let mut fixture = create_test_fixture()?;
+        fixture.cfg.openai_base_url = Some("https://example-proxy.invalid/v1".to_string());
+        let cwd = fixture.cwd();
+        let codex_home = fixture.codex_home();
+
+        let config = Config::load_from_base_config_with_overrides(
+            fixture.cfg,
+            ConfigOverrides {
+                config_profile: Some("o3".to_string()),
+                cwd: Some(cwd),
+                ..Default::default()
+            },
+            codex_home,
+        )?;
+
+        assert_eq!(config.model_provider_id, "openai");
+        assert_eq!(
+            config.model_provider.base_url.as_deref(),
+            Some("https://example-proxy.invalid/v1")
+        );
+        assert_eq!(
+            config
+                .model_providers
+                .get("openai")
+                .and_then(|provider| provider.base_url.as_deref()),
+            Some("https://example-proxy.invalid/v1")
+        );
+        assert!(config.startup_warnings.is_empty());
+
+        Ok(())
+    }
+
     #[test]
     fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
         let fixture = create_test_fixture()?;
