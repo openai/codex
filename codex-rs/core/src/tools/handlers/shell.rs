@@ -413,6 +413,10 @@ impl ShellHandler {
             match shell_runtime_backend {
                 Generic => ShellRuntime::new(),
                 backend @ (ShellCommandClassic | ShellCommandZshFork) => {
+                    // Guardian review is only implemented in the standard
+                    // ShellRuntime approval path. The zsh-fork backend has its
+                    // own escalation/approval stack, so keep guardian on the
+                    // classic shell_command backend for the MVP.
                     let backend = if matches!(
                         turn.approval_policy.value(),
                         codex_protocol::protocol::AskForApproval::Guardian
