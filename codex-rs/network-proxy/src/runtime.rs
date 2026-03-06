@@ -905,7 +905,7 @@ mod tests {
         };
         let constraints = NetworkProxyConstraints {
             allowed_domains: Some(vec!["managed.example.com".to_string()]),
-            allow_user_allowlist_expansion: Some(true),
+            allowlist_expansion_enabled: Some(true),
             ..NetworkProxyConstraints::default()
         };
         let state = NetworkProxyState::with_reloader(
@@ -937,7 +937,7 @@ mod tests {
         };
         let constraints = NetworkProxyConstraints {
             allowed_domains: Some(vec!["managed.example.com".to_string()]),
-            allow_user_allowlist_expansion: Some(false),
+            allowlist_expansion_enabled: Some(false),
             ..NetworkProxyConstraints::default()
         };
         let state = NetworkProxyState::with_reloader(
@@ -967,7 +967,7 @@ mod tests {
         };
         let constraints = NetworkProxyConstraints {
             denied_domains: Some(vec!["managed.example.com".to_string()]),
-            allow_user_denylist_expansion: Some(false),
+            denylist_expansion_enabled: Some(false),
             ..NetworkProxyConstraints::default()
         };
         let state = NetworkProxyState::with_reloader(
@@ -1213,7 +1213,7 @@ mod tests {
     fn validate_policy_against_constraints_allows_expanding_allowed_domains_when_enabled() {
         let constraints = NetworkProxyConstraints {
             allowed_domains: Some(vec!["example.com".to_string()]),
-            allow_user_allowlist_expansion: Some(true),
+            allowlist_expansion_enabled: Some(true),
             ..NetworkProxyConstraints::default()
         };
 
@@ -1360,7 +1360,7 @@ mod tests {
     fn validate_policy_against_constraints_disallows_expanding_denied_domains_when_fixed() {
         let constraints = NetworkProxyConstraints {
             denied_domains: Some(vec!["evil.com".to_string()]),
-            allow_user_denylist_expansion: Some(false),
+            denylist_expansion_enabled: Some(false),
             ..NetworkProxyConstraints::default()
         };
 

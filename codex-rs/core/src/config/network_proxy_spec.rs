@@ -174,9 +174,9 @@ impl NetworkProxySpec {
         hard_deny_allowlist_misses: bool,
     ) -> (NetworkProxyConfig, NetworkProxyConstraints) {
         let mut constraints = NetworkProxyConstraints::default();
-        let allow_user_allowlist_expansion =
-            Self::allow_user_allowlist_expansion(sandbox_policy, hard_deny_allowlist_misses);
-        let allow_user_denylist_expansion = Self::allow_user_denylist_expansion(sandbox_policy);
+        let allowlist_expansion_enabled =
+            Self::allowlist_expansion_enabled(sandbox_policy, hard_deny_allowlist_misses);
+        let denylist_expansion_enabled = Self::denylist_expansion_enabled(sandbox_policy);
 
         if let Some(enabled) = requirements.enabled {
             config.network.enabled = enabled;
@@ -216,22 +216,22 @@ impl NetworkProxySpec {
             // Managed requirements seed the baseline allowlist. User additions
             // can extend that baseline unless managed-only mode pins the
             // effective allowlist to the managed set.
-            config.network.allowed_domains = if allow_user_allowlist_expansion {
+            config.network.allowed_domains = if allowlist_expansion_enabled {
                 Self::merge_domain_lists(allowed_domains.clone(), &config.network.allowed_domains)
             } else {
                 allowed_domains.clone()
             };
             constraints.allowed_domains = Some(allowed_domains);
-            constraints.allow_user_allowlist_expansion = Some(allow_user_allowlist_expansion);
+            constraints.allowlist_expansion_enabled = Some(allowlist_expansion_enabled);
         }
         if let Some(denied_domains) = requirements.denied_domains.clone() {
-            config.network.denied_domains = if allow_user_denylist_expansion {
+            config.network.denied_domains = if denylist_expansion_enabled {
                 Self::merge_domain_lists(denied_domains.clone(), &config.network.denied_domains)
             } else {
                 denied_domains.clone()
             };
             constraints.denied_domains = Some(denied_domains);
-            constraints.allow_user_denylist_expansion = Some(allow_user_denylist_expansion);
+            constraints.denylist_expansion_enabled = Some(denylist_expansion_enabled);
         }
         if let Some(allow_unix_sockets) = requirements.allow_unix_sockets.clone() {
             config.network.allow_unix_sockets = allow_unix_sockets.clone();
@@ -245,7 +245,7 @@ impl NetworkProxySpec {
         (config, constraints)
     }
 
-    fn allow_user_allowlist_expansion(
+    fn allowlist_expansion_enabled(
         sandbox_policy: &SandboxPolicy,
         hard_deny_allowlist_misses: bool,
     ) -> bool {
@@ -259,7 +259,7 @@ impl NetworkProxySpec {
         requirements.managed_allowed_domains_only.unwrap_or(false)
     }
 
-    fn allow_user_denylist_expansion(sandbox_policy: &SandboxPolicy) -> bool {
+    fn denylist_expansion_enabled(sandbox_policy: &SandboxPolicy) -> bool {
         matches!(
             sandbox_policy,
             SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
@@ -289,6 +289,7 @@ mod tests {
         let spec = NetworkProxySpec {
             config: NetworkProxyConfig::default(),
             constraints: NetworkProxyConstraints::default(),
+            hard_deny_allowlist_misses: false,
         };
         let metadata = NetworkProxyAuditMetadata {
             conversation_id: Some("conversation-1".to_string()),
@@ -327,7 +328,7 @@ mod tests {
             spec.constraints.allowed_domains,
             Some(vec!["*.example.com".to_string()])
         );
-        assert_eq!(spec.constraints.allow_user_allowlist_expansion, Some(true));
+        assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(true));
     }
 
     #[test]
@@ -356,8 +357,8 @@ mod tests {
             spec.config.network.denied_domains,
             vec!["blocked.example.com".to_string()]
         );
-        assert_eq!(spec.constraints.allow_user_allowlist_expansion, Some(false));
-        assert_eq!(spec.constraints.allow_user_denylist_expansion, Some(false));
+        assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(false));
+        assert_eq!(spec.constraints.denylist_expansion_enabled, Some(false));
     }
 
     #[test]
@@ -381,7 +382,7 @@ mod tests {
             spec.config.network.allowed_domains,
             vec!["*.example.com".to_string()]
         );
-        assert_eq!(spec.constraints.allow_user_allowlist_expansion, Some(false));
+        assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(false));
     }
 
     #[test]
@@ -409,7 +410,7 @@ mod tests {
             spec.constraints.allowed_domains,
             Some(vec!["managed.example.com".to_string()])
         );
-        assert_eq!(spec.constraints.allow_user_allowlist_expansion, Some(false));
+        assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(false));
         assert!(spec.hard_deny_allowlist_misses);
     }
 
@@ -431,7 +432,7 @@ mod tests {
 
         assert!(spec.config.network.allowed_domains.is_empty());
         assert_eq!(spec.constraints.allowed_domains, Some(Vec::new()));
-        assert_eq!(spec.constraints.allow_user_allowlist_expansion, Some(false));
+        assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(false));
         assert!(spec.hard_deny_allowlist_misses);
     }
 
@@ -453,7 +454,7 @@ mod tests {
 
         assert!(spec.config.network.allowed_domains.is_empty());
         assert_eq!(spec.constraints.allowed_domains, Some(Vec::new()));
-        assert_eq!(spec.constraints.allow_user_allowlist_expansion, Some(false));
+        assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(false));
         assert!(spec.hard_deny_allowlist_misses);
     }
 
@@ -480,6 +481,6 @@ mod tests {
                 "blocked.example.com".to_string()
             ]
         );
-        assert_eq!(spec.constraints.allow_user_denylist_expansion, Some(true));
+        assert_eq!(spec.constraints.denylist_expansion_enabled, Some(true));
     }
 }

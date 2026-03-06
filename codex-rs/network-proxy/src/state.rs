@@ -24,9 +24,9 @@ pub struct NetworkProxyConstraints {
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
-    pub allow_user_allowlist_expansion: Option<bool>,
+    pub allowlist_expansion_enabled: Option<bool>,
     pub denied_domains: Option<Vec<String>>,
-    pub allow_user_denylist_expansion: Option<bool>,
+    pub denylist_expansion_enabled: Option<bool>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
 }
@@ -209,7 +209,7 @@ pub fn validate_policy_against_constraints(
 
     if let Some(allowed_domains) = &constraints.allowed_domains {
         validate_domain_patterns("network.allowed_domains", allowed_domains)?;
-        match constraints.allow_user_allowlist_expansion {
+        match constraints.allowlist_expansion_enabled {
             Some(true) => {
                 let required_set: HashSet<String> = allowed_domains
                     .iter()
@@ -293,7 +293,7 @@ pub fn validate_policy_against_constraints(
             .iter()
             .map(|s| s.to_ascii_lowercase())
             .collect();
-        match constraints.allow_user_denylist_expansion {
+        match constraints.denylist_expansion_enabled {
             Some(false) => {
                 validate(config.network.denied_domains.clone(), move |candidate| {
                     let candidate_set: HashSet<String> = candidate
