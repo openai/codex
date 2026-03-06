@@ -231,9 +231,16 @@ impl ModelsManager {
         custom_model: Option<&CustomModelConfig>,
     ) -> ModelInfo {
         if let Some(custom_model) = custom_model {
+            let mut config = config.clone();
+            config.model_context_window = config
+                .model_context_window
+                .or(custom_model.model_context_window);
+            config.model_auto_compact_token_limit = config
+                .model_auto_compact_token_limit
+                .or(custom_model.model_auto_compact_token_limit);
             let model_info =
                 Self::construct_model_info_for_custom_alias(model, custom_model, candidates);
-            return model_info::with_config_overrides(model_info, config);
+            return model_info::with_config_overrides(model_info, &config);
         }
 
         // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
@@ -259,7 +266,7 @@ impl ModelsManager {
     ) -> ModelInfo {
         let remote = Self::find_model_by_longest_prefix(&custom_model.model, candidates)
             .or_else(|| Self::find_model_by_namespaced_suffix(&custom_model.model, candidates));
-        let mut model_info = if let Some(remote) = remote {
+        if let Some(remote) = remote {
             ModelInfo {
                 slug: alias.to_string(),
                 request_model: Some(custom_model.model.clone()),
@@ -273,14 +280,7 @@ impl ModelsManager {
             fallback_model.request_model = Some(custom_model.model.clone());
             fallback_model.display_name = alias.to_string();
             fallback_model
-        };
-        if let Some(model_context_window) = custom_model.model_context_window {
-            model_info.context_window = Some(model_context_window);
         }
-        if let Some(model_auto_compact_token_limit) = custom_model.model_auto_compact_token_limit {
-            model_info.auto_compact_token_limit = Some(model_auto_compact_token_limit);
-        }
-        model_info
     }
 
     /// Refresh models if the provided ETag differs from the cached ETag.
