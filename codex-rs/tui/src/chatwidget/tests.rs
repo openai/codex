@@ -9233,6 +9233,26 @@ async fn status_line_fast_mode_renders_on_and_off() {
 }
 
 #[tokio::test]
+async fn status_line_fast_mode_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+    chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
+    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.refresh_status_line();
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw fast-mode footer");
+    assert_snapshot!("status_line_fast_mode_footer", terminal.backend());
+}
+
+#[tokio::test]
 async fn stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
