@@ -209,10 +209,6 @@ pub(crate) enum AppEvent {
     },
 
     /// Persist the selected realtime microphone or speaker to top-level config.
-    #[cfg_attr(
-        any(target_os = "linux", not(feature = "voice-input")),
-        allow(dead_code)
-    )]
     PersistRealtimeAudioDeviceSelection {
         kind: RealtimeAudioDeviceKind,
         name: Option<String>,
@@ -383,21 +379,18 @@ pub(crate) enum AppEvent {
 
     /// Live update for the in-progress voice recording placeholder. Carries
     /// the placeholder `id` and the text to display (e.g., an ASCII meter).
-    #[cfg(not(target_os = "linux"))]
     UpdateRecordingMeter {
         id: String,
         text: String,
     },
 
     /// Voice transcription finished for the given placeholder id.
-    #[cfg(not(target_os = "linux"))]
     TranscriptionComplete {
         id: String,
         text: String,
     },
 
     /// Voice transcription failed; remove the placeholder identified by `id`.
-    #[cfg(not(target_os = "linux"))]
     TranscriptionFailed {
         id: String,
         #[allow(dead_code)]

@@ -49,6 +49,15 @@ just test
 cargo test --all-features
 ```
 
+On Linux, building from source currently requires ALSA development headers because local voice support is built with `cpal`. On Debian/Ubuntu, install them with:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libasound2-dev
+```
+
+If you just want to run Codex on Linux, prefer the prebuilt GitHub Release binaries instead of building from source.
+
 ## Tracing / verbose logging
 
 Codex is written in Rust, so it honors the `RUST_LOG` environment variable to configure its logging behavior.

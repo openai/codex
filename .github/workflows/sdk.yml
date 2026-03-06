@@ -18,7 +18,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libasound2-dev pkg-config libcap-dev
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

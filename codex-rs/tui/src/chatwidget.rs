@@ -39,7 +39,6 @@ use std::time::Instant;
 
 use self::realtime::PendingSteerCompareKey;
 use crate::app_event::RealtimeAudioDeviceKind;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
@@ -929,11 +928,10 @@ enum ReplayKind {
 impl ChatWidget {
     fn realtime_conversation_enabled(&self) -> bool {
         self.config.features.enabled(Feature::RealtimeConversation)
-            && cfg!(not(target_os = "linux"))
     }
 
     fn realtime_audio_device_selection_enabled(&self) -> bool {
-        self.realtime_conversation_enabled() && cfg!(feature = "voice-input")
+        self.realtime_conversation_enabled()
     }
 
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
@@ -5735,7 +5733,6 @@ impl ChatWidget {
         });
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
         match list_realtime_audio_device_names(kind) {
             Ok(device_names) => {
@@ -5750,12 +5747,6 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(any(target_os = "linux", not(feature = "voice-input")))]
-    pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
-        let _ = kind;
-    }
-
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn open_realtime_audio_device_selection_with_names(
         &mut self,
         kind: RealtimeAudioDeviceKind,
@@ -8378,7 +8369,6 @@ impl ChatWidget {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
 impl ChatWidget {
     pub(crate) fn replace_transcription(&mut self, id: &str, text: &str) {
         self.bottom_pane.replace_transcription(id, text);

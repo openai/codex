@@ -1,6 +1,6 @@
 # Codex CLI (Rust Implementation)
 
-We provide Codex CLI as a standalone, native executable to ensure a zero-dependency install.
+We provide Codex CLI as a standalone, native executable. For most users, the simplest install path is a prebuilt package or release binary.
 
 ## Installing Codex
 
@@ -12,6 +12,8 @@ codex
 ```
 
 You can also install via Homebrew (`brew install --cask codex`) or download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
+
+On Linux, the prebuilt release binaries are the recommended path. If you build from source on Linux, install ALSA development headers first (for example, `libasound2-dev` on Debian/Ubuntu).
 
 ## Documentation quickstart
 

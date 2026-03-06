@@ -14,7 +14,10 @@ pub(crate) fn list_realtime_audio_device_names(
     let host = cpal::default_host();
     let mut device_names = Vec::new();
     for device in devices(&host, kind)? {
-        let Ok(name) = device.name() else {
+        let Ok(name) = device
+            .description()
+            .map(|description| description.to_string())
+        else {
             continue;
         };
         if !device_names.contains(&name) {
@@ -52,7 +55,7 @@ pub(crate) fn preferred_input_config(
                 _ => return None,
             };
             let sample_rate = preferred_input_sample_rate(&range);
-            let sample_rate_penalty = sample_rate.0.abs_diff(PREFERRED_INPUT_SAMPLE_RATE);
+            let sample_rate_penalty = sample_rate.abs_diff(PREFERRED_INPUT_SAMPLE_RATE);
             let channel_penalty = range.channels().abs_diff(PREFERRED_INPUT_CHANNELS);
             Some((
                 (sample_rate_penalty, channel_penalty, sample_format_rank),
@@ -70,20 +73,20 @@ fn select_device_and_config(
     config: &Config,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
     let host = cpal::default_host();
-    let configured_name = configured_name(kind, config);
-    let selected = configured_name
-        .and_then(|name| find_device_by_name(&host, kind, name))
+    let configured_label = configured_label(kind, config);
+    let selected = configured_label
+        .and_then(|label| find_device_by_label(&host, kind, label))
         .or_else(|| {
             let default_device = default_device(&host, kind);
-            if let Some(name) = configured_name && default_device.is_some() {
+            if let Some(label) = configured_label && default_device.is_some() {
                 warn!(
-                    "configured {} audio device `{name}` was unavailable; falling back to system default",
+                    "configured {} audio device `{label}` was unavailable; falling back to system default",
                     kind.noun()
                 );
             }
             default_device
         })
-        .ok_or_else(|| missing_device_error(kind, configured_name))?;
+        .ok_or_else(|| missing_device_error(kind, configured_label))?;
 
     let stream_config = match kind {
         RealtimeAudioDeviceKind::Microphone => preferred_input_config(&selected)?,
@@ -92,22 +95,27 @@ fn select_device_and_config(
     Ok((selected, stream_config))
 }
 
-fn configured_name(kind: RealtimeAudioDeviceKind, config: &Config) -> Option<&str> {
+fn configured_label(kind: RealtimeAudioDeviceKind, config: &Config) -> Option<&str> {
     match kind {
         RealtimeAudioDeviceKind::Microphone => config.realtime_audio.microphone.as_deref(),
         RealtimeAudioDeviceKind::Speaker => config.realtime_audio.speaker.as_deref(),
     }
 }
 
-fn find_device_by_name(
+fn find_device_by_label(
     host: &cpal::Host,
     kind: RealtimeAudioDeviceKind,
-    name: &str,
+    label: &str,
 ) -> Option<cpal::Device> {
     let devices = devices(host, kind).ok()?;
-    devices
-        .into_iter()
-        .find(|device| device.name().ok().as_deref() == Some(name))
+    devices.into_iter().find(|device| {
+        device
+            .description()
+            .ok()
+            .map(|description| description.to_string())
+            .as_deref()
+            == Some(label)
+    })
 }
 
 fn devices(host: &cpal::Host, kind: RealtimeAudioDeviceKind) -> Result<Vec<cpal::Device>, String> {
@@ -145,27 +153,27 @@ fn default_config(
 }
 
 fn preferred_input_sample_rate(range: &cpal::SupportedStreamConfigRange) -> cpal::SampleRate {
-    let min = range.min_sample_rate().0;
-    let max = range.max_sample_rate().0;
+    let min = range.min_sample_rate();
+    let max = range.max_sample_rate();
     if (min..=max).contains(&PREFERRED_INPUT_SAMPLE_RATE) {
-        cpal::SampleRate(PREFERRED_INPUT_SAMPLE_RATE)
+        PREFERRED_INPUT_SAMPLE_RATE
     } else if PREFERRED_INPUT_SAMPLE_RATE < min {
-        cpal::SampleRate(min)
+        min
     } else {
-        cpal::SampleRate(max)
+        max
     }
 }
 
-fn missing_device_error(kind: RealtimeAudioDeviceKind, configured_name: Option<&str>) -> String {
-    match (kind, configured_name) {
-        (RealtimeAudioDeviceKind::Microphone, Some(name)) => {
+fn missing_device_error(kind: RealtimeAudioDeviceKind, configured_label: Option<&str>) -> String {
+    match (kind, configured_label) {
+        (RealtimeAudioDeviceKind::Microphone, Some(label)) => {
             format!(
-                "configured microphone `{name}` was unavailable and no default input audio device was found"
+                "configured microphone `{label}` was unavailable and no default input audio device was found"
             )
         }
-        (RealtimeAudioDeviceKind::Speaker, Some(name)) => {
+        (RealtimeAudioDeviceKind::Speaker, Some(label)) => {
             format!(
-                "configured speaker `{name}` was unavailable and no default output audio device was found"
+                "configured speaker `{label}` was unavailable and no default output audio device was found"
             )
         }
         (RealtimeAudioDeviceKind::Microphone, None) => {

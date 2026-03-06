@@ -42,6 +42,8 @@ Each GitHub Release contains many executables, but in practice, you likely want 
 
 Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
 
+On Linux, these prebuilt binaries are the recommended install path and should work on most mainstream desktops with ALSA available. If you build Codex from source on Linux instead, install the ALSA development headers first (for example, `libasound2-dev` on Debian/Ubuntu).
+
 </details>
 
 ### Using Codex with your ChatGPT plan

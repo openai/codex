@@ -222,15 +222,12 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(not(target_os = "linux"))]
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-#[cfg(not(target_os = "linux"))]
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-#[cfg(not(target_os = "linux"))]
 use tokio::runtime::Handle;
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
@@ -327,13 +324,9 @@ struct VoiceState {
     space_hold_trigger: Option<Arc<AtomicBool>>,
     key_release_supported: bool,
     space_hold_repeat_seen: bool,
-    #[cfg(not(target_os = "linux"))]
     voice: Option<crate::voice::VoiceCapture>,
-    #[cfg(not(target_os = "linux"))]
     recording_placeholder_id: Option<String>,
-    #[cfg(not(target_os = "linux"))]
     space_recording_started_at: Option<Instant>,
-    #[cfg(not(target_os = "linux"))]
     space_recording_last_repeat_at: Option<Instant>,
 }
 
@@ -387,7 +380,6 @@ pub(crate) struct ChatComposer {
     footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
     // Monotonically increasing identifier for textarea elements we insert.
-    #[cfg(not(target_os = "linux"))]
     next_element_id: u64,
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
@@ -506,7 +498,6 @@ impl ChatComposer {
             selected_remote_image_index: None,
             footer_flash: None,
             context_window_percent: None,
-            #[cfg(not(target_os = "linux"))]
             next_element_id: 0,
             context_window_used_tokens: None,
             skills: None,
@@ -531,7 +522,6 @@ impl ChatComposer {
         this
     }
 
-    #[cfg(not(target_os = "linux"))]
     fn next_id(&mut self) -> String {
         let id = self.next_element_id;
         self.next_element_id = self.next_element_id.wrapping_add(1);
@@ -622,9 +612,8 @@ impl ChatComposer {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
     fn voice_transcription_enabled(&self) -> bool {
-        self.voice_state.transcription_enabled && cfg!(not(target_os = "linux"))
+        self.voice_state.transcription_enabled
     }
     /// Centralized feature gating keeps config checks out of call sites.
     fn popups_enabled(&self) -> bool {
@@ -695,7 +684,6 @@ impl ChatComposer {
         }
 
         // Hide the cursor while recording voice input.
-        #[cfg(not(target_os = "linux"))]
         if self.voice_state.voice.is_some() {
             return None;
         }
@@ -756,7 +744,6 @@ impl ChatComposer {
     /// In all cases, clears any paste-burst Enter suppression state so a real paste cannot affect
     /// the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
-        #[cfg(not(target_os = "linux"))]
         if self.voice_state.voice.is_some() {
             return false;
         }
@@ -1004,7 +991,6 @@ impl ChatComposer {
         local_image_paths: Vec<PathBuf>,
         mention_bindings: Vec<MentionBinding>,
     ) {
-        #[cfg(not(target_os = "linux"))]
         self.stop_all_transcription_spinners();
 
         // Clear any existing content, placeholders, and attachments first.
@@ -2762,15 +2748,6 @@ impl ChatComposer {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn handle_voice_space_key_event(
-        &mut self,
-        _key_event: &KeyEvent,
-    ) -> Option<(InputResult, bool)> {
-        None
-    }
-
-    #[cfg(not(target_os = "linux"))]
     fn handle_voice_space_key_event(
         &mut self,
         key_event: &KeyEvent,
@@ -2845,15 +2822,6 @@ impl ChatComposer {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn handle_key_event_while_recording(
-        &mut self,
-        _key_event: KeyEvent,
-    ) -> Option<(InputResult, bool)> {
-        None
-    }
-
-    #[cfg(not(target_os = "linux"))]
     fn handle_key_event_while_recording(
         &mut self,
         key_event: KeyEvent,
@@ -3612,7 +3580,6 @@ impl ChatComposer {
         self.has_focus = has_focus;
     }
 
-    #[cfg(not(target_os = "linux"))]
     pub(crate) fn is_recording(&self) -> bool {
         self.voice_state.voice.is_some()
     }
@@ -3650,7 +3617,6 @@ impl ChatComposer {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
     fn schedule_space_hold_timer(flag: Arc<AtomicBool>, frame: Option<FrameRequester>) {
         const HOLD_DELAY_MILLIS: u64 = 500;
         if let Ok(handle) = Handle::try_current() {
@@ -3668,7 +3634,6 @@ impl ChatComposer {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
     fn complete_space_hold_timer(flag: Arc<AtomicBool>, frame: Option<FrameRequester>) {
         flag.store(true, Ordering::Relaxed);
         if let Some(frame) = frame {
@@ -3693,7 +3658,6 @@ impl ChatComposer {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
 impl ChatComposer {
     pub(crate) fn process_space_hold_trigger(&mut self) {
         if self.voice_transcription_enabled()
@@ -3961,7 +3925,6 @@ impl ChatComposer {
         self.textarea.update_named_element_by_id(id, text)
     }
 
-    #[cfg(not(target_os = "linux"))]
     pub fn insert_transcription_placeholder(&mut self, text: &str) -> String {
         let id = self.next_id();
         self.textarea.insert_named_element(text, id.clone());
@@ -6526,7 +6489,6 @@ mod tests {
         assert!(!composer.voice_state.space_hold_repeat_seen);
     }
 
-    #[cfg(not(target_os = "linux"))]
     #[test]
     fn space_hold_timeout_without_release_or_repeat_keeps_typed_space() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -6558,7 +6520,6 @@ mod tests {
         assert!(!composer.voice_state.space_hold_repeat_seen);
     }
 
-    #[cfg(not(target_os = "linux"))]
     #[test]
     fn space_hold_timeout_with_repeat_uses_hold_path_without_release() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -6592,7 +6553,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
     #[test]
     fn space_hold_timeout_with_repeat_does_not_duplicate_existing_space() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -6626,7 +6586,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
     #[test]
     fn replace_transcription_stops_spinner_for_placeholder() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -6653,7 +6612,6 @@ mod tests {
         assert_eq!(composer.textarea.text(), "transcribed text");
     }
 
-    #[cfg(not(target_os = "linux"))]
     #[test]
     fn set_text_content_stops_all_transcription_spinners() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();

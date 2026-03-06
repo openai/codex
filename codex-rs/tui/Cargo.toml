@@ -13,12 +13,11 @@ name = "codex_tui"
 path = "src/lib.rs"
 
 [features]
-default = ["voice-input"]
+default = []
 # Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
 vt100-tests = []
 # Gate verbose debug logging inside the TUI implementation.
 debug-logs = []
-voice-input = ["dep:cpal", "dep:hound"]
 
 [lints]
 workspace = true
@@ -103,13 +102,11 @@ unicode-width = { workspace = true }
 url = { workspace = true }
 webbrowser = { workspace = true }
 uuid = { workspace = true }
+cpal = { version = "0.17.3" }
+hound = { version = "3.5" }
 
 codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
-
-[target.'cfg(not(target_os = "linux"))'.dependencies]
-cpal = { version = "0.15", optional = true }
-hound = { version = "3.5", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

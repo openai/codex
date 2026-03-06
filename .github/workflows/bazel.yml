@@ -55,6 +55,14 @@ jobs:
         with:
           node-version-file: codex-rs/node-version.txt
 
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libasound2-dev pkg-config libcap-dev
+
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
