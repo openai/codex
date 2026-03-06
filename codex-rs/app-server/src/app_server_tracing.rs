@@ -191,6 +191,7 @@ pub(crate) fn client_request_id(request: &ClientRequest) -> &RequestId {
         | ClientRequest::SkillsRemoteExport { request_id, .. }
         | ClientRequest::AppsList { request_id, .. }
         | ClientRequest::SkillsConfigWrite { request_id, .. }
+        | ClientRequest::PluginList { request_id, .. }
         | ClientRequest::PluginInstall { request_id, .. }
         | ClientRequest::TurnStart { request_id, .. }
         | ClientRequest::TurnSteer { request_id, .. }
