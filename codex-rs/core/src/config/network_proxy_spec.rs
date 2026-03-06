@@ -183,14 +183,6 @@ impl NetworkProxySpec {
             constraints.dangerously_allow_non_loopback_proxy =
                 Some(dangerously_allow_non_loopback_proxy);
         }
-        if let Some(dangerously_allow_non_loopback_admin) =
-            requirements.dangerously_allow_non_loopback_admin
-        {
-            config.network.dangerously_allow_non_loopback_admin =
-                dangerously_allow_non_loopback_admin;
-            constraints.dangerously_allow_non_loopback_admin =
-                Some(dangerously_allow_non_loopback_admin);
-        }
         if let Some(dangerously_allow_all_unix_sockets) =
             requirements.dangerously_allow_all_unix_sockets
         {

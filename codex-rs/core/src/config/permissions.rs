@@ -17,13 +17,11 @@ pub struct PermissionsToml {
 pub struct NetworkToml {
     pub enabled: Option<bool>,
     pub proxy_url: Option<String>,
-    pub admin_url: Option<String>,
     pub enable_socks5: Option<bool>,
     pub socks_url: Option<String>,
     pub enable_socks5_udp: Option<bool>,
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
-    pub dangerously_allow_non_loopback_admin: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     #[schemars(with = "Option<NetworkModeSchema>")]
     pub mode: Option<NetworkMode>,
@@ -48,9 +46,6 @@ impl NetworkToml {
         if let Some(proxy_url) = self.proxy_url.as_ref() {
             config.network.proxy_url = proxy_url.clone();
         }
-        if let Some(admin_url) = self.admin_url.as_ref() {
-            config.network.admin_url = admin_url.clone();
-        }
         if let Some(enable_socks5) = self.enable_socks5 {
             config.network.enable_socks5 = enable_socks5;
         }
@@ -68,12 +63,6 @@ impl NetworkToml {
         {
             config.network.dangerously_allow_non_loopback_proxy =
                 dangerously_allow_non_loopback_proxy;
-        }
-        if let Some(dangerously_allow_non_loopback_admin) =
-            self.dangerously_allow_non_loopback_admin
-        {
-            config.network.dangerously_allow_non_loopback_admin =
-                dangerously_allow_non_loopback_admin;
         }
         if let Some(dangerously_allow_all_unix_sockets) = self.dangerously_allow_all_unix_sockets {
             config.network.dangerously_allow_all_unix_sockets = dangerously_allow_all_unix_sockets;

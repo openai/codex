@@ -467,7 +467,6 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         self.send_request(method, params).await
     }
-
     /// Send a `collaborationMode/list` JSON-RPC request.
     pub async fn send_list_collaboration_modes_request(
         &mut self,

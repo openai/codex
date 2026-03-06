@@ -167,7 +167,7 @@ pub(crate) mod tools {
         #[serde(rename = "local_shell")]
         LocalShell {},
         #[serde(rename = "image_generation")]
-        ImageGeneration {},
+        ImageGeneration { output_format: String },
         // TODO: Understand why we get an error on web_search although the API docs say it's supported.
         // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
         // The `external_web_access` field determines whether the web search is over cached or live content.
@@ -188,7 +188,7 @@ pub(crate) mod tools {
             match self {
                 ToolSpec::Function(tool) => tool.name.as_str(),
                 ToolSpec::LocalShell {} => "local_shell",
-                ToolSpec::ImageGeneration {} => "image_generation",
+                ToolSpec::ImageGeneration { .. } => "image_generation",
                 ToolSpec::WebSearch { .. } => "web_search",
                 ToolSpec::Freeform(tool) => tool.name.as_str(),
             }

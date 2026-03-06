@@ -4,7 +4,6 @@
 
 - an HTTP proxy (default `127.0.0.1:3128`)
 - a SOCKS5 proxy (default `127.0.0.1:8081`, enabled by default)
-- an admin HTTP API (default `127.0.0.1:8080`)
 
 It enforces an allow/deny policy and a "limited" mode intended for read-only network access.
 
@@ -20,7 +19,6 @@ Example config:
 [network]
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
-admin_url = "http://127.0.0.1:8080"
 # SOCKS5 listener (enabled by default).
 enable_socks5 = true
 socks_url = "http://127.0.0.1:8081"
@@ -32,7 +30,6 @@ allow_upstream_proxy = true
 # By default, non-loopback binds are clamped to loopback for safety.
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
 dangerously_allow_non_loopback_proxy = false
-dangerously_allow_non_loopback_admin = false
 mode = "full" # default when unset; use "limited" for read-only mode
 # When true, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
 mitm = false
@@ -104,7 +101,6 @@ use codex_network_proxy::{NetworkProxy, NetworkDecision, NetworkPolicyRequest};
 
 let proxy = NetworkProxy::builder()
     .http_addr("127.0.0.1:8080".parse()?)
-    .admin_addr("127.0.0.1:9000".parse()?)
     .policy_decider(|request: NetworkPolicyRequest| async move {
         // Example: auto-allow when exec policy already approved a command prefix.
         if let Some(command) = request.command.as_deref() {
@@ -124,7 +120,7 @@ handle.shutdown().await?;
 ```
 
 When unix socket proxying is enabled (`allow_unix_sockets` or
-`dangerously_allow_all_unix_sockets`), HTTP/admin bind overrides are still clamped to loopback to
+`dangerously_allow_all_unix_sockets`), proxy bind overrides are still clamped to loopback to
 avoid turning the proxy into a remote bridge to local daemons.
 
 ### Policy hook (exec-policy mapping)
@@ -176,25 +172,6 @@ Unix-socket block-path audits use sentinel endpoint values:
 
 Audit events intentionally avoid logging full URL/path/query data.
 
-## Admin API
-
-The admin API is a small HTTP server intended for debugging and runtime adjustments.
-
-Endpoints:
-
-```bash
-curl -sS http://127.0.0.1:8080/health
-curl -sS http://127.0.0.1:8080/config
-curl -sS http://127.0.0.1:8080/patterns
-curl -sS http://127.0.0.1:8080/blocked
-
-# Switch modes without restarting:
-curl -sS -X POST http://127.0.0.1:8080/mode -d '{"mode":"full"}'
-
-# Force a config reload:
-curl -sS -X POST http://127.0.0.1:8080/reload
-```
-
 ## Platform notes
 
 - Unix socket proxying via the `x-unix-socket` header is **macOS-only**; other platforms will
@@ -217,11 +194,9 @@ what it can reasonably guarantee.
   - only `GET`, `HEAD`, and `OPTIONS` are allowed
   - HTTPS `CONNECT` remains a tunnel; limited-mode method enforcement does not apply to HTTPS
 - Listener safety defaults:
-  - the admin API is unauthenticated; non-loopback binds are clamped unless explicitly enabled via
-    `dangerously_allow_non_loopback_admin`
-- the HTTP proxy listener similarly clamps non-loopback binds unless explicitly enabled via
+  - the HTTP proxy listener clamps non-loopback binds unless explicitly enabled via
     `dangerously_allow_non_loopback_proxy`
-- when unix socket proxying is enabled, both listeners are forced to loopback to avoid turning the
+- when unix socket proxying is enabled, all proxy listeners are forced to loopback to avoid turning the
     proxy into a remote bridge into local daemons.
 - `dangerously_allow_all_unix_sockets = true` bypasses the unix socket allowlist entirely (still
   macOS-only and absolute-path-only). Use only in tightly controlled environments.
