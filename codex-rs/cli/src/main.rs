@@ -322,6 +322,10 @@ struct AppServerCommand {
     )]
     listen: codex_app_server::AppServerTransport,
 
+    /// Disable Codex's bundled system skills and remove any cached `.system` copy.
+    #[arg(long = "disable-bundled-system-skills")]
+    disable_bundled_system_skills: bool,
+
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -610,6 +614,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     root_config_overrides,
                     codex_core::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
+                    app_server_cli.disable_bundled_system_skills,
                     transport,
                 )
                 .await?;
@@ -1434,6 +1439,7 @@ mod tests {
     fn app_server_analytics_default_disabled_without_flag() {
         let app_server = app_server_from_args(["codex", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
+        assert!(!app_server.disable_bundled_system_skills);
         assert_eq!(
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
@@ -1445,6 +1451,14 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn app_server_disable_bundled_system_skills_with_flag() {
+        let app_server = app_server_from_args(
+            ["codex", "app-server", "--disable-bundled-system-skills"].as_ref(),
+        );
+        assert!(app_server.disable_bundled_system_skills);
     }
 
     #[test]

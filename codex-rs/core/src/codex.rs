@@ -8810,6 +8810,7 @@ mod tests {
         let skills_manager = Arc::new(SkillsManager::new(
             config.codex_home.clone(),
             Arc::clone(&plugins_manager),
+            false,
         ));
         let result = Session::new(
             session_configuration,
@@ -8912,6 +8913,7 @@ mod tests {
         let skills_manager = Arc::new(SkillsManager::new(
             config.codex_home.clone(),
             Arc::clone(&plugins_manager),
+            false,
         ));
         let network_approval = Arc::new(NetworkApprovalService::default());
 
@@ -9321,6 +9323,7 @@ mod tests {
         let skills_manager = Arc::new(SkillsManager::new(
             config.codex_home.clone(),
             Arc::clone(&plugins_manager),
+            false,
         ));
         let network_approval = Arc::new(NetworkApprovalService::default());
 

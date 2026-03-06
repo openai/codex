@@ -25,6 +25,7 @@ use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use crate::skills::loader::skill_roots;
 use crate::skills::system::install_system_skills;
+use crate::skills::system::uninstall_system_skills;
 
 pub struct SkillsManager {
     codex_home: PathBuf,
@@ -33,16 +34,24 @@ pub struct SkillsManager {
 }
 
 impl SkillsManager {
-    pub fn new(codex_home: PathBuf, plugins_manager: Arc<PluginsManager>) -> Self {
-        if let Err(err) = install_system_skills(&codex_home) {
-            tracing::error!("failed to install system skills: {err}");
-        }
-
-        Self {
+    pub fn new(
+        codex_home: PathBuf,
+        plugins_manager: Arc<PluginsManager>,
+        disable_system_skills: bool,
+    ) -> Self {
+        let manager = Self {
             codex_home,
             plugins_manager,
             cache_by_cwd: RwLock::new(HashMap::new()),
+        };
+        if disable_system_skills {
+            // The loader always checks `skills/.system`, so disabling bundled skills must clear
+            // any stale cached copy. This is best-effort; startup should not fail if removal does.
+            uninstall_system_skills(&manager.codex_home);
+        } else if let Err(err) = install_system_skills(&manager.codex_home) {
+            tracing::error!("failed to install system skills: {err}");
         }
+        manager
     }
 
     /// Load skills for an already-constructed [`Config`], avoiding any additional config-layer
@@ -145,13 +154,7 @@ impl SkillsManager {
                     scope: SkillScope::User,
                 }),
         );
-        let mut outcome = load_skills_from_roots(roots);
-        if !extra_user_roots.is_empty() {
-            // When extra user roots are provided, skip system skills before caching the result.
-            outcome
-                .skills
-                .retain(|skill| skill.scope != SkillScope::System);
-        }
+        let outcome = load_skills_from_roots(roots);
         let outcome = finalize_skill_outcome(outcome, &config_layer_stack);
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
@@ -267,6 +270,24 @@ mod tests {
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
     }
 
+    #[test]
+    fn new_with_disabled_system_skills_removes_stale_cached_system_skills() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let stale_system_skill_dir = codex_home.path().join("skills/.system/stale-skill");
+        fs::create_dir_all(&stale_system_skill_dir).expect("create stale system skill dir");
+        fs::write(stale_system_skill_dir.join("SKILL.md"), "# stale\n")
+            .expect("write stale system skill");
+
+        let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+        let _skills_manager =
+            SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
+
+        assert!(
+            !codex_home.path().join("skills/.system").exists(),
+            "expected disabling system skills to remove stale cached bundled skills"
+        );
+    }
+
     #[tokio::test]
     async fn skills_for_config_seeds_cache_by_cwd() {
         let codex_home = tempfile::tempdir().expect("tempdir");
@@ -283,7 +304,8 @@ mod tests {
             .expect("defaults for test should always succeed");
 
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
-        let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager);
+        let skills_manager =
+            SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, false);
 
         write_user_skill(&codex_home, "a", "skill-a", "from a");
         let outcome1 = skills_manager.skills_for_config(&cfg);
@@ -317,7 +339,8 @@ mod tests {
             .expect("defaults for test should always succeed");
 
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
-        let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager);
+        let skills_manager =
+            SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, false);
         let _ = skills_manager.skills_for_config(&config);
 
         write_user_skill(&extra_root, "x", "extra-skill", "from extra root");
@@ -334,6 +357,12 @@ mod tests {
                 .skills
                 .iter()
                 .any(|skill| skill.name == "extra-skill")
+        );
+        assert!(
+            outcome_with_extra
+                .skills
+                .iter()
+                .any(|skill| skill.scope == SkillScope::System)
         );
 
         // The cwd-only API returns the current cached entry for this cwd, even when that entry
@@ -361,7 +390,8 @@ mod tests {
             .expect("defaults for test should always succeed");
 
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
-        let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager);
+        let skills_manager =
+            SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, false);
         let _ = skills_manager.skills_for_config(&config);
 
         write_user_skill(&extra_root_a, "x", "extra-skill-a", "from extra root a");

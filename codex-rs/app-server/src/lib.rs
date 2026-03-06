@@ -323,12 +323,14 @@ pub async fn run_main(
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
+    disable_bundled_system_skills: bool,
 ) -> IoResult<()> {
     run_main_with_transport(
         arg0_paths,
         cli_config_overrides,
         loader_overrides,
         default_analytics_enabled,
+        disable_bundled_system_skills,
         AppServerTransport::Stdio,
     )
     .await
@@ -339,6 +341,7 @@ pub async fn run_main_with_transport(
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
+    disable_bundled_system_skills: bool,
     transport: AppServerTransport,
 ) -> IoResult<()> {
     let (transport_event_tx, mut transport_event_rx) =
@@ -591,6 +594,7 @@ pub async fn run_main_with_transport(
             outgoing: outgoing_message_sender,
             arg0_paths,
             config: Arc::new(config),
+            disable_bundled_system_skills,
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
