@@ -4141,6 +4141,73 @@ async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() 
     assert!(stored_remote_image_urls.is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    chat.set_feature_enabled(Feature::Plugins, true);
+    chat.bottom_pane.set_plugin_mentions(Some(vec![
+        codex_core::plugins::PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "Sample Plugin".to_string(),
+            description: None,
+            has_skills: true,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        },
+    ]));
+
+    chat.submit_user_message(UserMessage {
+        text: "$sample".to_string(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        text_elements: Vec::new(),
+        mention_bindings: vec![MentionBinding {
+            mention: "sample".to_string(),
+            path: "plugin://sample@test".to_string(),
+        }],
+    });
+
+    let Op::UserTurn { items, .. } = next_submit_op(&mut op_rx) else {
+        panic!("expected Op::UserTurn");
+    };
+    assert_eq!(
+        items,
+        vec![
+            UserInput::Text {
+                text: "$sample".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Mention {
+                name: "Sample Plugin".to_string(),
+                path: "plugin://sample@test".to_string(),
+            },
+        ]
+    );
+}
+
 #[tokio::test]
 async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;

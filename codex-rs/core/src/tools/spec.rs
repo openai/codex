@@ -684,7 +684,7 @@ fn create_collab_input_items_schema() -> JsonSchema {
             "path".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Path when type is local_image/skill, or mention target such as app://<connector-id> when type is mention."
+                    "Path when type is local_image/skill, or structured mention target such as app://<connector-id> or plugin://<plugin-name>@<marketplace-name> when type is mention."
                         .to_string(),
                 ),
             },

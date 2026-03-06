@@ -6281,7 +6281,7 @@
           "type": "object"
         },
         {
-          "description": "Explicit mention selected by the user (name + app://connector id).",
+          "description": "Explicit structured mention selected by the user.\n\n`path` identifies the exact mention target, for example `app://<connector-id>` or `plugin://<plugin-name>@<marketplace-name>`.",
           "properties": {
             "name": {
               "type": "string"

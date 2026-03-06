@@ -1225,6 +1225,7 @@ impl ChatWidget {
         self.refresh_model_display();
         self.sync_fast_command_enabled();
         self.sync_personality_command_enabled();
+        self.refresh_plugin_mentions();
         let startup_tooltip_override = self.startup_tooltip_override.take();
         let show_fast_status = self.should_show_fast_status(event.service_tier);
         let session_info_cell = history_cell::new_session_info(
@@ -4411,6 +4412,7 @@ impl ChatWidget {
             .collect();
         let mut skill_names_lower: HashSet<String> = HashSet::new();
         let mut selected_skill_paths: HashSet<PathBuf> = HashSet::new();
+        let mut selected_plugin_ids: HashSet<String> = HashSet::new();
 
         if let Some(skills) = self.bottom_pane.skills() {
             skill_names_lower = skills
@@ -4447,6 +4449,30 @@ impl ChatWidget {
                     name: skill.name.clone(),
                     path: skill.path_to_skills_md.clone(),
                 });
+            }
+        }
+
+        if let Some(plugins) = self.plugins_for_mentions() {
+            for binding in &mention_bindings {
+                let Some(plugin_config_name) = binding
+                    .path
+                    .strip_prefix("plugin://")
+                    .filter(|id| !id.is_empty())
+                else {
+                    continue;
+                };
+                if !selected_plugin_ids.insert(plugin_config_name.to_string()) {
+                    continue;
+                }
+                if let Some(plugin) = plugins
+                    .iter()
+                    .find(|plugin| plugin.config_name == plugin_config_name)
+                {
+                    items.push(UserInput::Mention {
+                        name: plugin.display_name.clone(),
+                        path: binding.path.clone(),
+                    });
+                }
             }
         }
 
@@ -7153,6 +7179,9 @@ impl ChatWidget {
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
+        if feature == Feature::Plugins {
+            self.refresh_plugin_mentions();
+        }
         if feature == Feature::PreventIdleSleep {
             self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
             self.turn_sleep_inhibitor
@@ -7576,6 +7605,14 @@ impl ChatWidget {
             ConnectorsCacheState::Ready(snapshot) => Some(snapshot.connectors.as_slice()),
             _ => None,
         }
+    }
+
+    fn plugins_for_mentions(&self) -> Option<&[codex_core::plugins::PluginCapabilitySummary]> {
+        if !self.config.features.enabled(Feature::Plugins) {
+            return None;
+        }
+
+        self.bottom_pane.plugins().map(Vec::as_slice)
     }
 
     /// Build a placeholder header cell while the session is configuring.
@@ -8077,6 +8114,7 @@ impl ChatWidget {
 
     fn on_list_skills(&mut self, ev: ListSkillsResponseEvent) {
         self.set_skills_from_response(&ev);
+        self.refresh_plugin_mentions();
     }
 
     pub(crate) fn on_connectors_loaded(
@@ -8158,6 +8196,19 @@ impl ChatWidget {
         self.refresh_connectors_popup_if_open(&snapshot.connectors);
         self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
         self.bottom_pane.set_connectors_snapshot(Some(snapshot));
+    }
+
+    fn refresh_plugin_mentions(&mut self) {
+        if !self.config.features.enabled(Feature::Plugins) {
+            self.bottom_pane.set_plugin_mentions(None);
+            return;
+        }
+
+        let plugins = PluginsManager::new(self.config.codex_home.clone())
+            .plugins_for_config(&self.config)
+            .capability_summaries()
+            .to_vec();
+        self.bottom_pane.set_plugin_mentions(Some(plugins));
     }
 
     pub(crate) fn open_review_popup(&mut self) {
