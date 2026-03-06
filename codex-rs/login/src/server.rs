@@ -137,7 +137,20 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     );
 
     if opts.open_browser {
-        let _ = webbrowser::open(&auth_url);
+        #[cfg(target_os = "android")]
+        {
+            let opened_in_termux = std::process::Command::new("termux-open-url")
+                .arg(&auth_url)
+                .status()
+                .is_ok_and(|status| status.success());
+            if !opened_in_termux {
+                let _ = webbrowser::open(&auth_url);
+            }
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = webbrowser::open(&auth_url);
+        }
     }
 
     // Map blocking reads from server.recv() to an async channel.
