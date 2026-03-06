@@ -109,7 +109,7 @@ async fn insert_state_db_thread(
 //     ));
 //     insert_state_db_thread(home, db_thread_id, db_rollout_path.as_path(), false).await;
 //
-//     let page = RolloutRecorder::list_threads(
+//     let page = RolloutStore::list_threads(
 //         home,
 //         10,
 //         None,
@@ -160,7 +160,7 @@ async fn insert_state_db_thread(
 //     )
 //     .await;
 //
-//     let page = RolloutRecorder::list_threads(
+//     let page = RolloutStore::list_threads(
 //         home,
 //         10,
 //         None,
@@ -190,7 +190,7 @@ async fn insert_state_db_thread(
 //     )
 //     .unwrap();
 //
-//     let page = RolloutRecorder::list_threads(
+//     let page = RolloutStore::list_threads(
 //         home,
 //         10,
 //         None,

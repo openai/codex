@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::rollout;
+use crate::rollout::RolloutStore;
 use crate::rollout::list::parse_timestamp_uuid_from_filename;
-use crate::rollout::recorder::RolloutRecorder;
 use crate::state_db::normalize_cwd_for_state_db;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
@@ -61,11 +61,11 @@ pub(crate) fn builder_from_session_meta(
     Some(builder)
 }
 
-pub(crate) fn builder_from_items(
-    items: &[RolloutItem],
+pub(crate) fn builder_from_items<'a>(
+    items: impl IntoIterator<Item = &'a RolloutItem>,
     rollout_path: &Path,
 ) -> Option<ThreadMetadataBuilder> {
-    if let Some(session_meta) = items.iter().find_map(|item| match item {
+    if let Some(session_meta) = items.into_iter().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => Some(meta_line),
         RolloutItem::ResponseItem(_)
         | RolloutItem::Compacted(_)
@@ -96,22 +96,31 @@ pub(crate) async fn extract_metadata_from_rollout(
     rollout_path: &Path,
     default_provider: &str,
 ) -> anyhow::Result<ExtractionOutcome> {
-    let (items, _thread_id, parse_errors) =
-        RolloutRecorder::load_rollout_items(rollout_path).await?;
-    if items.is_empty() {
-        return Err(anyhow::anyhow!(
-            "empty session file: {}",
+    let loaded_rollout = RolloutStore::load_source(rollout_path).await?;
+    let parse_errors = loaded_rollout.parse_errors;
+    let source = loaded_rollout.source;
+    let rollout_start = source.inclusive_start_of_rollout_index();
+    let has_any_parsed_items = source.iter_forward_from(rollout_start).next().is_some();
+    if parse_errors > 0 && !has_any_parsed_items {
+        anyhow::bail!(
+            "rollout contains parse errors and no readable items: {}",
             rollout_path.display()
-        ));
+        );
     }
-    let builder = builder_from_items(items.as_slice(), rollout_path).ok_or_else(|| {
+    let builder = builder_from_items(
+        source
+            .iter_forward_from(rollout_start)
+            .map(|(_, item)| item),
+        rollout_path,
+    )
+    .ok_or_else(|| {
         anyhow::anyhow!(
             "rollout missing metadata builder: {}",
             rollout_path.display()
         )
     })?;
     let mut metadata = builder.build(default_provider);
-    for item in &items {
+    for (_, item) in source.iter_forward_from(rollout_start) {
         apply_rollout_item(&mut metadata, item, default_provider);
     }
     if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
@@ -119,13 +128,15 @@ pub(crate) async fn extract_metadata_from_rollout(
     }
     Ok(ExtractionOutcome {
         metadata,
-        memory_mode: items.iter().rev().find_map(|item| match item {
-            RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
-            RolloutItem::ResponseItem(_)
-            | RolloutItem::Compacted(_)
-            | RolloutItem::TurnContext(_)
-            | RolloutItem::EventMsg(_) => None,
-        }),
+        memory_mode: source
+            .iter_reverse_from(source.exclusive_end_of_rollout_index())
+            .find_map(|(_, item)| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
+                RolloutItem::ResponseItem(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
+            }),
         parse_errors,
     })
 }
@@ -571,6 +582,29 @@ mod tests {
             .expect("extract");
 
         assert_eq!(outcome.memory_mode.as_deref(), Some("polluted"));
+    }
+
+    #[tokio::test]
+    async fn extract_metadata_from_rollout_rejects_unparseable_rollout_with_no_items() {
+        let dir = tempdir().expect("tempdir");
+        let uuid = Uuid::new_v4();
+        let path = dir
+            .path()
+            .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
+
+        let mut file = File::create(&path).expect("create rollout");
+        writeln!(file, "{{").expect("write invalid rollout");
+
+        let err = extract_metadata_from_rollout(&path, "openai", None)
+            .await
+            .expect_err("unparseable rollout should fail metadata extraction");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "rollout contains parse errors and no readable items: {}",
+                path.display()
+            )
+        );
     }
 
     #[test]

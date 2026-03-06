@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use codex_core::EventPersistenceMode;
-use codex_core::RolloutRecorder;
-use codex_core::RolloutRecorderParams;
+use codex_core::RolloutStore;
+use codex_core::RolloutStoreParams;
 use codex_core::config::ConfigBuilder;
 use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
@@ -164,9 +164,9 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
         .await?;
     let thread_id = ThreadId::new();
     let thread_name = "named thread";
-    let recorder = RolloutRecorder::new(
+    let recorder = RolloutStore::new(
         &config,
-        RolloutRecorderParams::new(
+        RolloutStoreParams::new(
             thread_id,
             None,
             SessionSource::Exec,

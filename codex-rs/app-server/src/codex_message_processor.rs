@@ -176,7 +176,7 @@ use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::NewThread;
-use codex_core::RolloutRecorder;
+use codex_core::RolloutStore;
 use codex_core::SessionMeta;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
@@ -2364,17 +2364,18 @@ impl CodexMessageProcessor {
                     "ephemeral thread does not support metadata updates: {thread_uuid}"
                 )));
             };
-
-            reconcile_rollout(
-                Some(state_db_ctx),
-                rollout_path.as_path(),
-                self.config.model_provider_id.as_str(),
-                None,
-                &[],
-                None,
-                None,
-            )
-            .await;
+            if thread.rollout_path().is_some() {
+                reconcile_rollout(
+                    Some(state_db_ctx),
+                    rollout_path.as_path(),
+                    self.config.model_provider_id.as_str(),
+                    None,
+                    &[],
+                    None,
+                    None,
+                )
+                .await;
+            }
 
             match state_db_ctx.get_thread(thread_uuid).await {
                 Ok(Some(_)) => return Ok(()),
@@ -3009,16 +3010,6 @@ impl CodexMessageProcessor {
                 Ok(items) => {
                     thread.turns = build_turns_from_rollout_items(&items);
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!(
-                            "thread {thread_uuid} is not materialized yet; includeTurns is unavailable before first user message"
-                        ),
-                    )
-                    .await;
-                    return;
-                }
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
@@ -3296,34 +3287,7 @@ impl CodexMessageProcessor {
             }
 
             let rollout_path = if let Some(path) = existing_thread.rollout_path() {
-                if path.exists() {
-                    path
-                } else {
-                    match find_thread_path_by_id_str(
-                        &self.config.codex_home,
-                        &existing_thread_id.to_string(),
-                    )
-                    .await
-                    {
-                        Ok(Some(path)) => path,
-                        Ok(None) => {
-                            self.send_invalid_request_error(
-                                request_id,
-                                format!("no rollout found for thread id {existing_thread_id}"),
-                            )
-                            .await;
-                            return true;
-                        }
-                        Err(err) => {
-                            self.send_invalid_request_error(
-                                request_id,
-                                format!("failed to locate thread id {existing_thread_id}: {err}"),
-                            )
-                            .await;
-                            return true;
-                        }
-                    }
-                }
+                path
             } else {
                 match find_thread_path_by_id_str(
                     &self.config.codex_home,
@@ -3508,7 +3472,11 @@ impl CodexMessageProcessor {
             }
         };
 
-        match RolloutRecorder::get_rollout_history(&rollout_path).await {
+        // App-server should not need direct rollout-file access.
+        // TODO(ccunningham): make resumed startup stop requiring eager
+        // `InitialHistory::Resumed(Vec<RolloutItem>)` materialization so core can own rollout
+        // loading all the way through thread startup.
+        match RolloutStore::get_rollout_history(&rollout_path).await {
             Ok(initial_history) => Some(initial_history),
             Err(err) => {
                 self.send_invalid_request_error(
@@ -3946,7 +3914,7 @@ impl CodexMessageProcessor {
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
             let page = if archived {
-                RolloutRecorder::list_archived_threads(
+                RolloutStore::list_archived_threads(
                     &self.config,
                     page_size,
                     cursor_obj.as_ref(),
@@ -3963,7 +3931,7 @@ impl CodexMessageProcessor {
                     data: None,
                 })?
             } else {
-                RolloutRecorder::list_threads(
+                RolloutStore::list_threads(
                     &self.config,
                     page_size,
                     cursor_obj.as_ref(),
@@ -7443,7 +7411,10 @@ pub(crate) async fn read_summary_from_rollout(
 pub(crate) async fn read_rollout_items_from_rollout(
     path: &Path,
 ) -> std::io::Result<Vec<RolloutItem>> {
-    let items = match RolloutRecorder::get_rollout_history(path).await? {
+    // This helper exists specifically for callers that still need owned rollout items after
+    // loading by path. When startup and downstream consumers become `RolloutSource`-backed, they
+    // should bypass this eager conversion.
+    let items = match RolloutStore::get_rollout_history(path).await? {
         InitialHistory::New => Vec::new(),
         InitialHistory::Forked(items) => items,
         InitialHistory::Resumed(resumed) => resumed.history,

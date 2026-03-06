@@ -73,8 +73,8 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     let thread_path = thread.path.clone().expect("thread path should be present");
     assert!(thread_path.is_absolute(), "thread path should be absolute");
     assert!(
-        !thread_path.exists(),
-        "fresh thread rollout should not be materialized until first user message"
+        thread_path.exists(),
+        "fresh thread rollout should be readable at startup"
     );
 
     // Wire contract: thread title field is `name`, serialized as null when unset.

@@ -14,7 +14,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_core::Cursor;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
-use codex_core::RolloutRecorder;
+use codex_core::RolloutStore;
 use codex_core::ThreadItem;
 use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
@@ -111,7 +111,7 @@ enum BackgroundEvent {
 /// between sorting by creation time and last-updated time using the Tab key.
 ///
 /// Sessions are loaded on-demand via cursor-based pagination. The backend
-/// `RolloutRecorder::list_threads` returns pages ordered by the selected sort key,
+/// `RolloutStore::list_threads` returns pages ordered by the selected sort key,
 /// and the picker deduplicates across pages to handle overlapping windows when
 /// new sessions appear during pagination.
 ///
@@ -159,7 +159,7 @@ async fn run_session_picker(
         let config = config.clone();
         tokio::spawn(async move {
             let provider_filter = vec![request.default_provider.clone()];
-            let page = RolloutRecorder::list_threads(
+            let page = RolloutStore::list_threads(
                 &config,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
@@ -1456,7 +1456,7 @@ mod tests {
     //     set_rollout_mtime(&path_a, now - Duration::minutes(10));
     //     set_rollout_mtime(&path_b, now - Duration::seconds(10));
     //
-    //     let page = RolloutRecorder::list_threads(
+    //     let page = RolloutStore::list_threads(
     //         tempdir.path(),
     //         PAGE_SIZE,
     //         None,
@@ -1765,7 +1765,7 @@ mod tests {
     //         SessionPickerAction::Resume,
     //     );
     //
-    //     let page = RolloutRecorder::list_threads(
+    //     let page = RolloutStore::list_threads(
     //         &state.codex_home,
     //         PAGE_SIZE,
     //         None,

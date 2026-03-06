@@ -1520,7 +1520,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let Some(rollout_path) = conversation.rollout_path() else {
                     let error = JSONRPCErrorError {
                         code: INVALID_REQUEST_ERROR_CODE,
-                        message: "thread has no persisted rollout".to_string(),
+                        message: "thread has no rollout".to_string(),
                         data: None,
                     };
                     outgoing.send_error(request_id, error).await;

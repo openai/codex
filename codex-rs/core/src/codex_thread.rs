@@ -128,6 +128,7 @@ impl CodexThread {
             .await;
     }
 
+    /// Return the rollout path for this thread, if any.
     pub fn rollout_path(&self) -> Option<PathBuf> {
         self.rollout_path.clone()
     }

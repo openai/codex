@@ -6,7 +6,7 @@ use crate::agent::status::is_final;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
-use crate::rollout::RolloutRecorder;
+use crate::rollout::RolloutStore;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
@@ -144,12 +144,7 @@ impl AgentControl {
                     let parent_thread = state.get_thread(parent_thread_id).await.ok();
                     if let Some(parent_thread) = parent_thread.as_ref() {
                         // `record_conversation_items` only queues rollout writes asynchronously.
-                        // Flush/materialize the live parent before snapshotting JSONL for a fork.
-                        parent_thread
-                            .codex
-                            .session
-                            .ensure_rollout_materialized()
-                            .await;
+                        // Flush the live parent before snapshotting JSONL for a fork.
                         parent_thread.codex.session.flush_rollout().await;
                     }
                     let rollout_path = parent_thread
@@ -165,10 +160,12 @@ impl AgentControl {
                                 "parent thread rollout unavailable for fork: {parent_thread_id}"
                             ))
                         })?;
-                    let mut forked_rollout_items =
-                        RolloutRecorder::get_rollout_history(&rollout_path)
-                            .await?
-                            .get_rollout_items();
+                    // TODO(ccunningham): delete this eager owned-history path once fork startup
+                    // becomes `RolloutSource`-backed end-to-end; today agent forking still
+                    // appends a fresh tool output onto the parent rollout items before startup.
+                    let mut forked_rollout_items = RolloutStore::get_rollout_history(&rollout_path)
+                        .await?
+                        .get_rollout_items();
                     let mut output = FunctionCallOutputPayload::from_text(
                         FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string(),
                     );
@@ -886,11 +883,6 @@ mod tests {
             .session
             .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
             .await;
-        parent_thread
-            .codex
-            .session
-            .ensure_rollout_materialized()
-            .await;
         parent_thread.codex.session.flush_rollout().await;
 
         let child_thread_id = harness
@@ -967,11 +959,6 @@ mod tests {
             .codex
             .session
             .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
-            .await;
-        parent_thread
-            .codex
-            .session
-            .ensure_rollout_materialized()
             .await;
         parent_thread.codex.session.flush_rollout().await;
 
