@@ -331,6 +331,7 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         dangerously_allow_non_loopback_proxy,
         dangerously_allow_all_unix_sockets,
         allowed_domains,
+        allow_user_allowlist_expansion,
         denied_domains,
         allow_unix_sockets,
         allow_local_binding,
@@ -360,6 +361,11 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     }
     if let Some(allowed_domains) = allowed_domains {
         parts.push(format!("allowed_domains=[{}]", allowed_domains.join(", ")));
+    }
+    if let Some(allow_user_allowlist_expansion) = allow_user_allowlist_expansion {
+        parts.push(format!(
+            "allow_user_allowlist_expansion={allow_user_allowlist_expansion}"
+        ));
     }
     if let Some(denied_domains) = denied_domains {
         parts.push(format!("denied_domains=[{}]", denied_domains.join(", ")));

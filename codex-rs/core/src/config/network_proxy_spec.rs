@@ -83,9 +83,10 @@ impl NetworkProxySpec {
     pub(crate) fn from_config_and_constraints(
         config: NetworkProxyConfig,
         requirements: Option<NetworkConstraints>,
+        sandbox_policy: &SandboxPolicy,
     ) -> std::io::Result<Self> {
         let (config, constraints) = if let Some(requirements) = requirements {
-            Self::apply_requirements(config, &requirements)
+            Self::apply_requirements(config, &requirements, sandbox_policy)
         } else {
             (config, NetworkProxyConstraints::default())
         };
@@ -158,8 +159,12 @@ impl NetworkProxySpec {
     fn apply_requirements(
         mut config: NetworkProxyConfig,
         requirements: &NetworkConstraints,
+        sandbox_policy: &SandboxPolicy,
     ) -> (NetworkProxyConfig, NetworkProxyConstraints) {
         let mut constraints = NetworkProxyConstraints::default();
+        let allow_user_allowlist_expansion =
+            Self::allow_user_allowlist_expansion(requirements, sandbox_policy);
+        let allow_user_denylist_expansion = Self::allow_user_denylist_expansion(sandbox_policy);
 
         if let Some(enabled) = requirements.enabled {
             config.network.enabled = enabled;
@@ -191,23 +196,25 @@ impl NetworkProxySpec {
                 Some(dangerously_allow_all_unix_sockets);
         }
         if let Some(allowed_domains) = requirements.allowed_domains.clone() {
-            // Requirements define the managed baseline; user config may add
-            // narrower entries that still fit within that managed boundary.
-            let mut effective_allowed_domains = allowed_domains.clone();
-            for entry in &config.network.allowed_domains {
-                if !effective_allowed_domains
-                    .iter()
-                    .any(|managed_entry| managed_entry.eq_ignore_ascii_case(entry))
-                {
-                    effective_allowed_domains.push(entry.clone());
-                }
-            }
-            config.network.allowed_domains = effective_allowed_domains;
+            // Managed requirements seed the baseline allowlist. Restricted
+            // sandbox modes may layer user additions on top, while yolo and
+            // enterprise-locked default mode stay pinned to the managed set.
+            config.network.allowed_domains = if allow_user_allowlist_expansion {
+                Self::merge_domain_lists(allowed_domains.clone(), &config.network.allowed_domains)
+            } else {
+                allowed_domains.clone()
+            };
             constraints.allowed_domains = Some(allowed_domains);
+            constraints.allow_user_allowlist_expansion = Some(allow_user_allowlist_expansion);
         }
         if let Some(denied_domains) = requirements.denied_domains.clone() {
-            config.network.denied_domains = denied_domains.clone();
+            config.network.denied_domains = if allow_user_denylist_expansion {
+                Self::merge_domain_lists(denied_domains.clone(), &config.network.denied_domains)
+            } else {
+                denied_domains.clone()
+            };
             constraints.denied_domains = Some(denied_domains);
+            constraints.allow_user_denylist_expansion = Some(allow_user_denylist_expansion);
         }
         if let Some(allow_unix_sockets) = requirements.allow_unix_sockets.clone() {
             config.network.allow_unix_sockets = allow_unix_sockets.clone();
@@ -219,6 +226,35 @@ impl NetworkProxySpec {
         }
 
         (config, constraints)
+    }
+
+    fn allow_user_allowlist_expansion(
+        requirements: &NetworkConstraints,
+        sandbox_policy: &SandboxPolicy,
+    ) -> bool {
+        matches!(
+            sandbox_policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+        ) && requirements.allow_user_allowlist_expansion.unwrap_or(true)
+    }
+
+    fn allow_user_denylist_expansion(sandbox_policy: &SandboxPolicy) -> bool {
+        matches!(
+            sandbox_policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+        )
+    }
+
+    fn merge_domain_lists(mut managed: Vec<String>, user_entries: &[String]) -> Vec<String> {
+        for entry in user_entries {
+            if !managed
+                .iter()
+                .any(|managed_entry| managed_entry.eq_ignore_ascii_case(entry))
+            {
+                managed.push(entry.clone());
+            }
+        }
+        managed
     }
 }
 
@@ -255,8 +291,12 @@ mod tests {
             ..Default::default()
         };
 
-        let spec = NetworkProxySpec::from_config_and_constraints(config, Some(requirements))
-            .expect("config should stay within the managed allowlist");
+        let spec = NetworkProxySpec::from_config_and_constraints(
+            config,
+            Some(requirements),
+            &SandboxPolicy::new_read_only_policy(),
+        )
+        .expect("config should stay within the managed allowlist");
 
         assert_eq!(
             spec.config.network.allowed_domains,
@@ -266,25 +306,86 @@ mod tests {
             spec.constraints.allowed_domains,
             Some(vec!["*.example.com".to_string()])
         );
+        assert_eq!(spec.constraints.allow_user_allowlist_expansion, Some(true));
     }
 
     #[test]
-    fn requirements_allowed_domains_reject_user_widening() {
+    fn danger_full_access_keeps_managed_allowlist_and_denylist_fixed() {
         let mut config = NetworkProxyConfig::default();
         config.network.allowed_domains = vec!["evil.com".to_string()];
+        config.network.denied_domains = vec!["more-blocked.example.com".to_string()];
         let requirements = NetworkConstraints {
             allowed_domains: Some(vec!["*.example.com".to_string()]),
+            denied_domains: Some(vec!["blocked.example.com".to_string()]),
             ..Default::default()
         };
 
-        let err = NetworkProxySpec::from_config_and_constraints(config, Some(requirements))
-            .expect_err("config outside the managed allowlist should be rejected");
+        let spec = NetworkProxySpec::from_config_and_constraints(
+            config,
+            Some(requirements),
+            &SandboxPolicy::DangerFullAccess,
+        )
+        .expect("yolo mode should pin the effective policy to the managed baseline");
 
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        assert!(
-            err.to_string()
-                .contains("subset of managed allowed_domains"),
-            "unexpected error: {err}"
+        assert_eq!(
+            spec.config.network.allowed_domains,
+            vec!["*.example.com".to_string()]
         );
+        assert_eq!(
+            spec.config.network.denied_domains,
+            vec!["blocked.example.com".to_string()]
+        );
+        assert_eq!(spec.constraints.allow_user_allowlist_expansion, Some(false));
+        assert_eq!(spec.constraints.allow_user_denylist_expansion, Some(false));
+    }
+
+    #[test]
+    fn requirements_can_disable_default_mode_allowlist_expansion() {
+        let mut config = NetworkProxyConfig::default();
+        config.network.allowed_domains = vec!["api.example.com".to_string()];
+        let requirements = NetworkConstraints {
+            allowed_domains: Some(vec!["*.example.com".to_string()]),
+            allow_user_allowlist_expansion: Some(false),
+            ..Default::default()
+        };
+
+        let spec = NetworkProxySpec::from_config_and_constraints(
+            config,
+            Some(requirements),
+            &SandboxPolicy::new_workspace_write_policy(),
+        )
+        .expect("managed baseline should still load");
+
+        assert_eq!(
+            spec.config.network.allowed_domains,
+            vec!["*.example.com".to_string()]
+        );
+        assert_eq!(spec.constraints.allow_user_allowlist_expansion, Some(false));
+    }
+
+    #[test]
+    fn requirements_denied_domains_are_a_baseline_for_default_mode() {
+        let mut config = NetworkProxyConfig::default();
+        config.network.denied_domains = vec!["blocked.example.com".to_string()];
+        let requirements = NetworkConstraints {
+            denied_domains: Some(vec!["managed-blocked.example.com".to_string()]),
+            ..Default::default()
+        };
+
+        let spec = NetworkProxySpec::from_config_and_constraints(
+            config,
+            Some(requirements),
+            &SandboxPolicy::new_workspace_write_policy(),
+        )
+        .expect("default mode should merge managed and user deny entries");
+
+        assert_eq!(
+            spec.config.network.denied_domains,
+            vec![
+                "managed-blocked.example.com".to_string(),
+                "blocked.example.com".to_string()
+            ]
+        );
+        assert_eq!(spec.constraints.allow_user_denylist_expansion, Some(true));
     }
 }

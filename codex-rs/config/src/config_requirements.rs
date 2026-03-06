@@ -138,6 +138,7 @@ pub struct NetworkRequirementsToml {
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
+    pub allow_user_allowlist_expansion: Option<bool>,
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
@@ -153,6 +154,7 @@ pub struct NetworkConstraints {
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
+    pub allow_user_allowlist_expansion: Option<bool>,
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
@@ -168,6 +170,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             allowed_domains,
+            allow_user_allowlist_expansion,
             denied_domains,
             allow_unix_sockets,
             allow_local_binding,
@@ -180,6 +183,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             allowed_domains,
+            allow_user_allowlist_expansion,
             denied_domains,
             allow_unix_sockets,
             allow_local_binding,
@@ -1118,6 +1122,7 @@ mod tests {
             allow_upstream_proxy = false
             dangerously_allow_all_unix_sockets = true
             allowed_domains = ["api.example.com", "*.openai.com"]
+            allow_user_allowlist_expansion = false
             denied_domains = ["blocked.example.com"]
             allow_unix_sockets = ["/tmp/example.sock"]
             allow_local_binding = false
@@ -1145,6 +1150,10 @@ mod tests {
                 "api.example.com".to_string(),
                 "*.openai.com".to_string()
             ])
+        );
+        assert_eq!(
+            sourced_network.value.allow_user_allowlist_expansion,
+            Some(false)
         );
         assert_eq!(
             sourced_network.value.denied_domains.as_ref(),
