@@ -420,19 +420,16 @@ mod tests {
 
         drop(guard);
 
-        // TODO(ccunningham): Store enough span/event metadata in SQLite to reproduce
-        // span prefixes and structured fields in feedback exports.
+        // SQLite exports now include timestamps, while this test writer has
+        // `.without_time()`. Compare bodies after stripping the SQLite prefix.
         let feedback_logs = writer
             .snapshot()
             .replace("feedback-thread{thread_id=\"thread-1\"}: ", "");
         let strip_sqlite_timestamp = |logs: &str| {
             logs.lines()
                 .map(|line| {
-                    if line.len() > 28 {
-                        line[28..].to_string()
-                    } else {
-                        line.to_string()
-                    }
+                    line.split_once(' ')
+                        .map_or_else(|| line.to_string(), |(_, rest)| rest.to_string())
                 })
                 .collect::<Vec<_>>()
         };
