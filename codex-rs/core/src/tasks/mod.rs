@@ -204,9 +204,6 @@ impl Session {
         for task in self.take_all_running_tasks().await {
             self.handle_task_abort(task, reason.clone()).await;
         }
-        if reason == TurnAbortReason::Interrupted {
-            self.close_unified_exec_processes().await;
-        }
     }
 
     pub async fn on_task_finished(
@@ -354,13 +351,6 @@ impl Session {
         }
     }
 
-    pub(crate) async fn close_unified_exec_processes(&self) {
-        self.services
-            .unified_exec_manager
-            .terminate_all_processes()
-            .await;
-    }
-
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
@@ -390,6 +380,8 @@ impl Session {
             .await;
 
         if reason == TurnAbortReason::Interrupted {
+            self.cleanup_after_interrupt(&task.turn_context).await;
+
             let marker = ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
