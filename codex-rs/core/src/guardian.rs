@@ -162,7 +162,7 @@ async fn run_guardian_review(
     retry_reason: Option<String>,
 ) -> ReviewDecision {
     session
-        .notify_background_event(turn.as_ref(), "Reviewing sandbox escalation...".to_string())
+        .notify_background_event(turn.as_ref(), "Reviewing approval request...".to_string())
         .await;
 
     let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, action).await;
@@ -208,7 +208,7 @@ async fn run_guardian_review(
     // Emit a concise warning so the parent turn has an auditable summary of the
     // guardian decision without needing the full subagent transcript.
     let warning = format!(
-        "Sandbox escalation {verdict} (risk: {}): {}",
+        "Automatic approval review {verdict} (risk: {}): {}",
         assessment.risk_level.as_str(),
         assessment.rationale
     );
