@@ -230,14 +230,15 @@ async fn assess_approval_request(
         )
         .await;
 
-    let prompt = build_guardian_prompt(session.as_ref(), retry_reason, planned_action).await;
+    let prompt_items =
+        build_guardian_prompt_items(session.as_ref(), retry_reason, planned_action).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
     let review = run_guardian_subagent_with_timeout(
         run_guardian_subagent(
             session.clone(),
             turn.clone(),
-            prompt,
+            prompt_items,
             schema,
             cancel_token.clone(),
         ),
@@ -333,18 +334,19 @@ pub(crate) async fn review_approval_request_with_reason(
     }
 }
 
-/// Builds the guardian user message from:
+/// Builds the guardian user content items from:
 /// - a compact transcript for authorization and local context
 /// - the exact action JSON being proposed for approval
 ///
-/// The fixed guardian policy lives in the subagent developer message. Keep the
-/// variable request block at the end so the user-message prefix stays
-/// cache-friendly across repeated approval checks in the same conversation.
-async fn build_guardian_prompt(
+/// The fixed guardian policy lives in the subagent developer message. Split
+/// the variable request into separate user content items so the Responses
+/// request snapshot shows clear boundaries while preserving exact prompt text
+/// through trailing newlines.
+async fn build_guardian_prompt_items(
     session: &Session,
     retry_reason: Option<String>,
     planned_action: Option<GuardianAction>,
-) -> String {
+) -> Vec<UserInput> {
     let history = session.clone_history().await;
     let transcript_entries = collect_guardian_transcript_entries(history.raw_items());
     let session_id = session.conversation_id.to_string();
@@ -365,21 +367,37 @@ async fn build_guardian_prompt(
         &session_id,
         rollout_path.as_deref(),
     );
-    let omission_block = omission_note
-        .map(|note| format!("\n{note}\n"))
-        .unwrap_or_default();
-    let retry_reason_block = retry_reason
-        .map(|reason| format!("Retry reason:\n{reason}\n\n"))
-        .unwrap_or_default();
-
-    format!(
-        "{}>>> TRANSCRIPT START\n{}\n>>> TRANSCRIPT END\n{}\n>>> APPROVAL REQUEST START\n{}Planned action JSON:\n{}\n>>> APPROVAL REQUEST END\n",
-        "Assess the exact planned action below. Use read-only tool checks when local state matters.\n",
-        transcript,
-        omission_block,
-        retry_reason_block,
-        planned_action_json
-    )
+    let mut items = vec![
+        UserInput::Text {
+            text: "Assess the exact planned action below. Use read-only tool checks when local state matters.\n".to_string(),
+            text_elements: Vec::new(),
+        },
+        UserInput::Text {
+            text: format!(">>> TRANSCRIPT START\n{transcript}\n>>> TRANSCRIPT END\n"),
+            text_elements: Vec::new(),
+        },
+    ];
+    if let Some(note) = omission_note {
+        items.push(UserInput::Text {
+            text: format!("\n{note}\n"),
+            text_elements: Vec::new(),
+        });
+    }
+    items.push(UserInput::Text {
+        text: ">>> APPROVAL REQUEST START\n".to_string(),
+        text_elements: Vec::new(),
+    });
+    if let Some(reason) = retry_reason {
+        items.push(UserInput::Text {
+            text: format!("Retry reason:\n{reason}\n\n"),
+            text_elements: Vec::new(),
+        });
+    }
+    items.push(UserInput::Text {
+        text: format!("Planned action JSON:\n{planned_action_json}\n>>> APPROVAL REQUEST END\n"),
+        text_elements: Vec::new(),
+    });
+    items
 }
 
 /// Keeps all user turns plus a bounded amount of recent assistant/tool context.
@@ -658,7 +676,7 @@ fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTr
 async fn run_guardian_subagent(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
-    prompt: String,
+    prompt_items: Vec<UserInput>,
     schema: Value,
     cancel_token: CancellationToken,
 ) -> anyhow::Result<GuardianAssessment> {
@@ -721,10 +739,7 @@ async fn run_guardian_subagent(
         guardian_config,
         session.services.auth_manager.clone(),
         session.services.models_manager.clone(),
-        vec![UserInput::Text {
-            text: prompt,
-            text_elements: Vec::new(),
-        }],
+        prompt_items,
         session,
         turn,
         cancel_token,
@@ -1128,7 +1143,7 @@ fn guardian_output_contract_prompt() -> &'static str {
 }
 
 pub(crate) fn guardian_execution_instructions() -> &'static str {
-    "You are running in a read-only sandbox with `approval_policy = never`. You cannot request additional permissions or approvals from the user. Use available read-only checks to inspect local state and gather context when needed, including allowed network access that is already available in this session. Do not mutate files, change external state, or attempt side effects while investigating."
+    "You are running in a read-only sandbox with `approval_policy = never`. You cannot request additional permissions or approvals from the user. Use available read-only checks to inspect local state and gather context when needed, including allowed network access that is already available in this session. Do not mutate files, change external state, or attempt side effects while investigating.\n"
 }
 
 /// Guardian policy prompt.
@@ -1466,7 +1481,7 @@ mod tests {
             )
             .await;
 
-        let prompt = build_guardian_prompt(
+        let prompt = build_guardian_prompt_items(
             session.as_ref(),
             Some("Sandbox denied outbound git push to github.com.".to_string()),
             Some(GuardianAction::Command(GuardianCommandAction {
