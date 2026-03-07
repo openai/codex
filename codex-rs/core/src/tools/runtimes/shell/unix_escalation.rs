@@ -7,10 +7,9 @@ use crate::exec::SandboxType;
 use crate::exec::is_likely_sandbox_denied;
 use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::features::Feature;
-use crate::guardian::GuardianAction;
-use crate::guardian::GuardianExecveAction;
 use crate::guardian::GuardianReviewRequest;
 use crate::guardian::guardian_json_field;
+use crate::guardian::guardian_json_object;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecRequest;
@@ -388,15 +387,19 @@ impl CoreShellActionProvider {
             .pause_for(async move {
                 if routes_approval_to_guardian(&turn) {
                     let request = GuardianReviewRequest {
-                        action: GuardianAction::Execve(GuardianExecveAction {
-                            tool: tool_name,
-                            program: program.clone(),
-                            argv: argv.to_vec(),
-                            cwd: workdir,
-                            additional_permissions: additional_permissions
-                                .as_ref()
-                                .map(|value| guardian_json_field("additional_permissions", value)),
-                        }),
+                        tool_name,
+                        action: guardian_json_object(&[
+                            ("tool", Some(guardian_json_field("tool", tool_name))),
+                            ("program", Some(guardian_json_field("program", program))),
+                            ("argv", Some(guardian_json_field("argv", argv))),
+                            ("cwd", Some(guardian_json_field("cwd", &workdir))),
+                            (
+                                "additional_permissions",
+                                additional_permissions.as_ref().map(|value| {
+                                    guardian_json_field("additional_permissions", value)
+                                }),
+                            ),
+                        ]),
                     };
                     return review_approval_request(&session, &turn, request).await;
                 }

@@ -14,7 +14,6 @@
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,7 +23,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -84,65 +82,11 @@ pub(crate) fn is_guardian_subagent_source(
 /// Canonical description of the action the guardian is being asked to review.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct GuardianReviewRequest {
+    pub(crate) tool_name: &'static str,
     pub(crate) action: GuardianAction,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum GuardianAction {
-    Command(GuardianCommandAction),
-    Execve(GuardianExecveAction),
-    ApplyPatch(GuardianApplyPatchAction),
-    NetworkAccess(GuardianNetworkAccessAction),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GuardianCommandAction {
-    pub(crate) tool: &'static str,
-    pub(crate) command: Vec<String>,
-    pub(crate) cwd: PathBuf,
-    pub(crate) sandbox_permissions: Value,
-    pub(crate) additional_permissions: Option<Value>,
-    pub(crate) justification: Option<String>,
-    pub(crate) tty: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GuardianExecveAction {
-    pub(crate) tool: &'static str,
-    pub(crate) program: AbsolutePathBuf,
-    pub(crate) argv: Vec<String>,
-    pub(crate) cwd: PathBuf,
-    pub(crate) additional_permissions: Option<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GuardianApplyPatchAction {
-    pub(crate) tool: &'static str,
-    pub(crate) cwd: PathBuf,
-    pub(crate) files: Vec<AbsolutePathBuf>,
-    pub(crate) change_count: usize,
-    pub(crate) patch: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GuardianNetworkAccessAction {
-    pub(crate) tool: &'static str,
-    pub(crate) target: String,
-    pub(crate) host: String,
-    pub(crate) protocol: Value,
-    pub(crate) port: u16,
-}
-
-impl GuardianAction {
-    fn tool_name(&self) -> &'static str {
-        match self {
-            GuardianAction::Command(action) => action.tool,
-            GuardianAction::Execve(action) => action.tool,
-            GuardianAction::ApplyPatch(action) => action.tool,
-            GuardianAction::NetworkAccess(action) => action.tool,
-        }
-    }
-}
+pub(crate) type GuardianAction = Value;
 
 /// Coarse risk label paired with the numeric `risk_score`.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -216,12 +160,12 @@ struct GuardianTranscriptTokenCount {
 async fn assess_approval_request(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
-    planned_action: Option<GuardianAction>,
+    request: Option<GuardianReviewRequest>,
     retry_reason: Option<String>,
 ) -> GuardianReviewResult {
-    let tool_name = planned_action
+    let tool_name = request
         .as_ref()
-        .map(GuardianAction::tool_name)
+        .map(|request| request.tool_name)
         .unwrap_or("unknown");
     session
         .notify_background_event(
@@ -230,8 +174,7 @@ async fn assess_approval_request(
         )
         .await;
 
-    let prompt_items =
-        build_guardian_prompt_items(session.as_ref(), retry_reason, planned_action).await;
+    let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
     let review = run_guardian_subagent_with_timeout(
@@ -322,7 +265,7 @@ pub(crate) async fn review_approval_request_with_reason(
     let review = assess_approval_request(
         Arc::clone(session),
         Arc::clone(turn),
-        Some(request.action),
+        Some(request),
         retry_reason,
     )
     .await;
@@ -345,7 +288,7 @@ pub(crate) async fn review_approval_request_with_reason(
 async fn build_guardian_prompt_items(
     session: &Session,
     retry_reason: Option<String>,
-    planned_action: Option<GuardianAction>,
+    request: Option<GuardianReviewRequest>,
 ) -> Vec<UserInput> {
     let history = session.clone_history().await;
     let transcript_entries = collect_guardian_transcript_entries(history.raw_items());
@@ -357,9 +300,9 @@ async fn build_guardian_prompt_items(
         .await
         .as_ref()
         .map(|rollout| rollout.rollout_path().display().to_string());
-    let planned_action_json = planned_action
+    let planned_action_json = request
         .as_ref()
-        .map(format_guardian_action_pretty)
+        .map(|request| format_guardian_action_pretty(&request.action))
         .unwrap_or_else(|| "{}".to_string());
 
     let (transcript, omission_note) = build_guardian_transcript(
@@ -854,124 +797,7 @@ fn sanitize_guardian_value(value: Value) -> Value {
 }
 
 fn format_guardian_action_pretty(action: &GuardianAction) -> String {
-    format_guardian_action_pretty_at_indent(action, 0)
-}
-
-fn format_guardian_action_pretty_at_indent(action: &GuardianAction, indent: usize) -> String {
-    match action {
-        GuardianAction::Command(action) => format_guardian_object_fields_at_indent(
-            &[
-                ("tool", Some(guardian_json_field("tool", action.tool))),
-                (
-                    "command",
-                    Some(guardian_json_field("command", &action.command)),
-                ),
-                ("cwd", Some(guardian_json_field("cwd", &action.cwd))),
-                (
-                    "sandbox_permissions",
-                    Some(sanitize_guardian_value(action.sandbox_permissions.clone())),
-                ),
-                (
-                    "additional_permissions",
-                    action
-                        .additional_permissions
-                        .clone()
-                        .map(sanitize_guardian_value),
-                ),
-                (
-                    "justification",
-                    action
-                        .justification
-                        .as_ref()
-                        .map(|value| guardian_json_field("justification", value)),
-                ),
-                (
-                    "tty",
-                    action.tty.map(|value| guardian_json_field("tty", value)),
-                ),
-            ],
-            indent,
-        ),
-        GuardianAction::Execve(action) => format_guardian_object_fields_at_indent(
-            &[
-                ("tool", Some(guardian_json_field("tool", action.tool))),
-                (
-                    "program",
-                    Some(guardian_json_field("program", &action.program)),
-                ),
-                ("argv", Some(guardian_json_field("argv", &action.argv))),
-                ("cwd", Some(guardian_json_field("cwd", &action.cwd))),
-                (
-                    "additional_permissions",
-                    action
-                        .additional_permissions
-                        .clone()
-                        .map(sanitize_guardian_value),
-                ),
-            ],
-            indent,
-        ),
-        GuardianAction::ApplyPatch(action) => format_guardian_object_fields_at_indent(
-            &[
-                ("tool", Some(guardian_json_field("tool", action.tool))),
-                ("cwd", Some(guardian_json_field("cwd", &action.cwd))),
-                ("files", Some(guardian_json_field("files", &action.files))),
-                (
-                    "change_count",
-                    Some(guardian_json_field("change_count", action.change_count)),
-                ),
-                ("patch", Some(guardian_json_field("patch", &action.patch))),
-            ],
-            indent,
-        ),
-        GuardianAction::NetworkAccess(action) => format_guardian_object_fields_at_indent(
-            &[
-                ("tool", Some(guardian_json_field("tool", action.tool))),
-                (
-                    "target",
-                    Some(guardian_json_field("target", &action.target)),
-                ),
-                ("host", Some(guardian_json_field("host", &action.host))),
-                (
-                    "protocol",
-                    Some(sanitize_guardian_value(action.protocol.clone())),
-                ),
-                ("port", Some(guardian_json_field("port", action.port))),
-            ],
-            indent,
-        ),
-    }
-}
-
-fn format_guardian_object_fields_at_indent(
-    fields: &[(&str, Option<Value>)],
-    indent: usize,
-) -> String {
-    let rendered_fields = fields
-        .iter()
-        .filter_map(|(key, value)| value.as_ref().map(|value| (key, value)))
-        .map(|(key, value)| (key, sanitize_guardian_value(value.clone())))
-        .collect::<Vec<_>>();
-    if rendered_fields.is_empty() {
-        return "{}".to_string();
-    }
-
-    let next_indent = indent + 2;
-    let child_indent = " ".repeat(next_indent);
-    let closing_indent = " ".repeat(indent);
-    let lines = rendered_fields
-        .into_iter()
-        .map(|(key, value)| {
-            let rendered_key =
-                serde_json::to_string(key).unwrap_or_else(|_| "\"<invalid>\"".to_string());
-            format!(
-                "{child_indent}{rendered_key}: {}",
-                format_guardian_json_value_at_indent(&value, next_indent)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",\n");
-    format!("{{\n{lines}\n{closing_indent}}}")
+    format_guardian_json_value_at_indent(&sanitize_guardian_value(action.clone()), 0)
 }
 
 fn format_guardian_json_value_at_indent(value: &Value, indent: usize) -> String {
@@ -1038,6 +864,19 @@ pub(crate) fn guardian_json_field<T: Serialize>(field_name: &'static str, value:
             ))
         }
     }
+}
+
+pub(crate) fn guardian_json_object(fields: &[(&str, Option<Value>)]) -> Value {
+    Value::Object(
+        fields
+            .iter()
+            .filter_map(|(key, value)| {
+                value
+                    .as_ref()
+                    .map(|value| ((*key).to_string(), value.clone()))
+            })
+            .collect(),
+    )
 }
 
 fn guardian_truncate_text(content: &str, token_cap: usize) -> String {
@@ -1221,6 +1060,7 @@ mod tests {
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     #[test]
     fn build_guardian_transcript_keeps_original_numbering() {
@@ -1345,13 +1185,25 @@ mod tests {
 
     #[test]
     fn format_guardian_action_pretty_truncates_large_string_fields() {
-        let action = GuardianAction::ApplyPatch(GuardianApplyPatchAction {
-            tool: "apply_patch",
-            cwd: PathBuf::from("/tmp"),
-            files: vec![],
-            change_count: 1,
-            patch: "line\n".repeat(2_000),
-        });
+        let action = guardian_json_object(&[
+            ("tool", Some(guardian_json_field("tool", "apply_patch"))),
+            (
+                "cwd",
+                Some(guardian_json_field("cwd", PathBuf::from("/tmp"))),
+            ),
+            (
+                "files",
+                Some(guardian_json_field("files", Vec::<String>::new())),
+            ),
+            (
+                "change_count",
+                Some(guardian_json_field("change_count", 1usize)),
+            ),
+            (
+                "patch",
+                Some(guardian_json_field("patch", "line\n".repeat(2_000))),
+            ),
+        ]);
 
         let rendered = format_guardian_action_pretty(&action);
 
@@ -1514,25 +1366,45 @@ mod tests {
         let prompt = build_guardian_prompt_items(
             session.as_ref(),
             Some("Sandbox denied outbound git push to github.com.".to_string()),
-            Some(GuardianAction::Command(GuardianCommandAction {
-                tool: "shell",
-                command: vec![
-                    "git".to_string(),
-                    "push".to_string(),
-                    "origin".to_string(),
-                    "guardian-approval-mvp".to_string(),
-                ],
-                cwd: PathBuf::from("/repo/codex-rs/core"),
-                sandbox_permissions: guardian_json_field(
-                    "sandbox_permissions",
-                    crate::sandboxing::SandboxPermissions::UseDefault,
-                ),
-                additional_permissions: None,
-                justification: Some(
-                    "Need to push the reviewed docs fix to the repo remote.".to_string(),
-                ),
-                tty: None,
-            })),
+            Some(GuardianReviewRequest {
+                tool_name: "shell",
+                action: guardian_json_object(&[
+                    ("tool", Some(guardian_json_field("tool", "shell"))),
+                    (
+                        "command",
+                        Some(guardian_json_field(
+                            "command",
+                            vec![
+                                "git".to_string(),
+                                "push".to_string(),
+                                "origin".to_string(),
+                                "guardian-approval-mvp".to_string(),
+                            ],
+                        )),
+                    ),
+                    (
+                        "cwd",
+                        Some(guardian_json_field(
+                            "cwd",
+                            PathBuf::from("/repo/codex-rs/core"),
+                        )),
+                    ),
+                    (
+                        "sandbox_permissions",
+                        Some(guardian_json_field(
+                            "sandbox_permissions",
+                            crate::sandboxing::SandboxPermissions::UseDefault,
+                        )),
+                    ),
+                    (
+                        "justification",
+                        Some(guardian_json_field(
+                            "justification",
+                            "Need to push the reviewed docs fix to the repo remote.",
+                        )),
+                    ),
+                ]),
+            }),
         )
         .await;
 

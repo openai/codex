@@ -13,4 +13,4 @@ Scenario: Guardian review request layout
     [02] >>> TRANSCRIPT START\n[1] user: Please check the repo visibility and push the docs fix if needed.\n\n[2] tool gh_repo_view call: {"repo":"openai/codex"}\n\n[3] tool gh_repo_view result: repo visibility: public\n\n[4] assistant: The repo is public; I now need approval to push the docs fix.\n>>> TRANSCRIPT END\n
     [03] >>> APPROVAL REQUEST START\n
     [04] Retry reason:\nSandbox denied outbound git push to github.com.\n\n
-    [05] Planned action JSON:\n{\n  "tool": "shell",\n  "command": [\n    "git",\n    "push",\n    "origin",\n    "guardian-approval-mvp"\n  ],\n  "cwd": "/repo/codex-rs/core",\n  "sandbox_permissions": "use_default",\n  "justification": "Need to push the reviewed docs fix to the repo remote."\n}\n>>> APPROVAL REQUEST END\n
+    [05] Planned action JSON:\n{\n  "command": [\n    "git",\n    "push",\n    "origin",\n    "guardian-approval-mvp"\n  ],\n  "cwd": "/repo/codex-rs/core",\n  "justification": "Need to push the reviewed docs fix to the repo remote.",\n  "sandbox_permissions": "use_default",\n  "tool": "shell"\n}\n>>> APPROVAL REQUEST END\n
