@@ -66,6 +66,7 @@ pub(crate) struct ToolsConfig {
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub request_permission_enabled: bool,
+    pub request_permissions_tool_enabled: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
@@ -107,6 +108,7 @@ impl ToolsConfig {
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
         let include_agent_jobs = include_collab_tools;
         let request_permission_enabled = features.enabled(Feature::RequestPermissions);
+        let request_permissions_tool_enabled = features.enabled(Feature::RequestPermissionsTool);
         let shell_command_backend =
             if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
                 ShellCommandBackendConfig::ZshFork
@@ -167,6 +169,7 @@ impl ToolsConfig {
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             request_permission_enabled,
+            request_permissions_tool_enabled,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
@@ -1931,7 +1934,7 @@ pub(crate) fn build_specs(
         builder.register_handler("request_user_input", request_user_input_handler);
     }
 
-    if config.request_permission_enabled {
+    if config.request_permissions_tool_enabled {
         builder.push_spec(create_request_permissions_tool());
         builder.register_handler("request_permissions", request_permissions_handler);
     }
@@ -2469,7 +2472,7 @@ mod tests {
         assert_lacks_tool_name(&tools, "request_permissions");
 
         let mut features = Features::with_defaults();
-        features.enable(Feature::RequestPermissions);
+        features.enable(Feature::RequestPermissionsTool);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2482,6 +2485,24 @@ mod tests {
             request_permissions_tool.spec,
             create_request_permissions_tool()
         );
+    }
+
+    #[test]
+    fn request_permissions_tool_is_independent_from_additional_permissions() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RequestPermissions);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+        assert_lacks_tool_name(&tools, "request_permissions");
     }
 
     #[test]
