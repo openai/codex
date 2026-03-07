@@ -80,10 +80,9 @@ def codex_rust_crate(
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
     test_env = {
-        # Keep Insta rooted at the current Bazel unit-test cwd so it resolves
-        # existing snapshots inside the runfiles tree instead of walking one
-        # directory too high and treating every snapshot as new.
-        "INSTA_WORKSPACE_ROOT": ".",
+        # Bazel unit tests run from the repo root inside the runfiles tree, but
+        # Rust snapshots live under the shared `codex-rs` workspace.
+        "INSTA_WORKSPACE_ROOT": "codex-rs",
         "INSTA_SNAPSHOT_PATH": "src",
     }
 
@@ -191,8 +190,8 @@ def codex_rust_crate(
             ],
             rustc_env = rustc_env,
             # Important: do not merge `test_env` here. Its unit-test-only
-            # `INSTA_WORKSPACE_ROOT="."` can point integration tests at the
-            # runfiles cwd and cause false `.snap.new` churn on Linux.
+            # `INSTA_WORKSPACE_ROOT="codex-rs"` is tuned for unit tests that
+            # execute from the repo root and can misplace integration snapshots.
             env = cargo_env,
             tags = test_tags,
         )
