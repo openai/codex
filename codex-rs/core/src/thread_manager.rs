@@ -3,6 +3,7 @@ use crate::CodexAuth;
 use crate::ModelProviderInfo;
 use crate::agent::AgentControl;
 use crate::codex::Codex;
+use crate::codex::CodexSpawnArgs;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
@@ -30,6 +31,7 @@ use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::W3cTraceContext;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -329,6 +331,7 @@ impl ThreadManager {
             dynamic_tools,
             persist_extended_history,
             None,
+            None,
         ))
         .await
     }
@@ -339,6 +342,7 @@ impl ThreadManager {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
             config,
@@ -348,6 +352,7 @@ impl ThreadManager {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            parent_trace,
         ))
         .await
     }
@@ -357,10 +362,17 @@ impl ThreadManager {
         config: Config,
         rollout_path: PathBuf,
         auth_manager: Arc<AuthManager>,
+        parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        Box::pin(self.resume_thread_with_history(config, initial_history, auth_manager, false))
-            .await
+        Box::pin(self.resume_thread_with_history(
+            config,
+            initial_history,
+            auth_manager,
+            false,
+            parent_trace,
+        ))
+        .await
     }
 
     pub async fn resume_thread_with_history(
@@ -369,6 +381,7 @@ impl ThreadManager {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
             config,
@@ -378,6 +391,7 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             None,
+            parent_trace,
         ))
         .await
     }
@@ -392,7 +406,7 @@ impl ThreadManager {
     /// Closes all threads open in this ThreadManager
     pub async fn remove_and_close_all_threads(&self) -> CodexResult<()> {
         for thread in self.state.threads.read().await.values() {
-            thread.submit(Op::Shutdown).await?;
+            thread.shutdown_and_wait().await?;
         }
         self.state.threads.write().await.clear();
         Ok(())
@@ -408,6 +422,7 @@ impl ThreadManager {
         config: Config,
         path: PathBuf,
         persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
         let history = truncate_before_nth_user_message(history, nth_user_message);
@@ -419,6 +434,7 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             None,
+            parent_trace,
         ))
         .await
     }
@@ -503,6 +519,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
+            None,
         ))
         .await
     }
@@ -526,6 +543,7 @@ impl ThreadManagerState {
             false,
             None,
             inherited_shell_snapshot,
+            None,
         ))
         .await
     }
@@ -549,6 +567,7 @@ impl ThreadManagerState {
             persist_extended_history,
             None,
             inherited_shell_snapshot,
+            None,
         ))
         .await
     }
@@ -564,6 +583,7 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -575,6 +595,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             None,
+            parent_trace,
         ))
         .await
     }
@@ -591,28 +612,30 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let watch_registration = self
             .file_watcher
             .register_config(&config, self.skills_manager.as_ref());
         let CodexSpawnOk {
             codex, thread_id, ..
-        } = Codex::spawn(
+        } = Codex::spawn(CodexSpawnArgs {
             config,
             auth_manager,
-            Arc::clone(&self.models_manager),
-            Arc::clone(&self.skills_manager),
-            Arc::clone(&self.plugins_manager),
-            Arc::clone(&self.mcp_manager),
-            Arc::clone(&self.file_watcher),
-            initial_history,
+            models_manager: Arc::clone(&self.models_manager),
+            skills_manager: Arc::clone(&self.skills_manager),
+            plugins_manager: Arc::clone(&self.plugins_manager),
+            mcp_manager: Arc::clone(&self.mcp_manager),
+            file_watcher: Arc::clone(&self.file_watcher),
+            conversation_history: initial_history,
             session_source,
             agent_control,
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
-        )
+            parent_trace,
+        })
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)
             .await

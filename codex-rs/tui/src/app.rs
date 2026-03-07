@@ -1834,6 +1834,7 @@ impl App {
                         config.clone(),
                         target_session.path.clone(),
                         auth_manager.clone(),
+                        None,
                     )
                     .await
                     .wrap_err_with(|| {
@@ -1871,6 +1872,7 @@ impl App {
                         config.clone(),
                         target_session.path.clone(),
                         false,
+                        None,
                     )
                     .await
                     .wrap_err_with(|| {
@@ -2182,6 +2184,7 @@ impl App {
                                 resume_config.clone(),
                                 target_session.path.clone(),
                                 self.auth_manager.clone(),
+                                None,
                             )
                             .await
                         {
@@ -2250,7 +2253,7 @@ impl App {
                     if path.exists() {
                         match self
                             .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false)
+                            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false, None)
                             .await
                         {
                             Ok(forked) => {

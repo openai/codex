@@ -1722,6 +1722,7 @@ mod tests {
                 })]),
                 AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
                 false,
+                None,
             )
             .await
             .expect("start thread");

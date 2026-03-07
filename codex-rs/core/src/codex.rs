@@ -103,6 +103,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
@@ -332,6 +333,9 @@ pub struct Codex {
     // Last known status of the agent.
     pub(crate) agent_status: watch::Receiver<AgentStatus>,
     pub(crate) session: Arc<Session>,
+    // Shared handle for the background submission loop. Stored as an `Option` so
+    // `shutdown_and_wait(&self)` can take ownership and await it exactly once.
+    pub(crate) session_loop_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
@@ -344,6 +348,24 @@ pub struct CodexSpawnOk {
     pub conversation_id: ThreadId,
 }
 
+pub(crate) struct CodexSpawnArgs {
+    pub(crate) config: Config,
+    pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) models_manager: Arc<ModelsManager>,
+    pub(crate) skills_manager: Arc<SkillsManager>,
+    pub(crate) plugins_manager: Arc<PluginsManager>,
+    pub(crate) mcp_manager: Arc<McpManager>,
+    pub(crate) file_watcher: Arc<FileWatcher>,
+    pub(crate) conversation_history: InitialHistory,
+    pub(crate) session_source: SessionSource,
+    pub(crate) agent_control: AgentControl,
+    pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
+    pub(crate) persist_extended_history: bool,
+    pub(crate) metrics_service_name: Option<String>,
+    pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    pub(crate) parent_trace: Option<W3cTraceContext>,
+}
+
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
@@ -351,23 +373,48 @@ const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyb
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn spawn(
-        mut config: Config,
-        auth_manager: Arc<AuthManager>,
-        models_manager: Arc<ModelsManager>,
-        skills_manager: Arc<SkillsManager>,
-        plugins_manager: Arc<PluginsManager>,
-        mcp_manager: Arc<McpManager>,
-        file_watcher: Arc<FileWatcher>,
-        conversation_history: InitialHistory,
-        session_source: SessionSource,
-        agent_control: AgentControl,
-        dynamic_tools: Vec<DynamicToolSpec>,
-        persist_extended_history: bool,
-        metrics_service_name: Option<String>,
-        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
-    ) -> CodexResult<CodexSpawnOk> {
+    pub(crate) async fn spawn(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
+        let parent_trace = match args.parent_trace {
+            Some(trace) => {
+                if codex_otel::context_from_w3c_trace_context(&trace).is_some() {
+                    Some(trace)
+                } else {
+                    warn!("ignoring invalid thread spawn trace carrier");
+                    None
+                }
+            }
+            None => None,
+        };
+        let thread_spawn_span = info_span!("thread_spawn", otel.name = "thread_spawn");
+        if let Some(trace) = parent_trace.as_ref() {
+            let _ = set_parent_from_w3c_trace_context(&thread_spawn_span, trace);
+        }
+        Self::spawn_internal(CodexSpawnArgs {
+            parent_trace,
+            ..args
+        })
+        .instrument(thread_spawn_span)
+        .await
+    }
+
+    async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
+        let CodexSpawnArgs {
+            mut config,
+            auth_manager,
+            models_manager,
+            skills_manager,
+            plugins_manager,
+            mcp_manager,
+            file_watcher,
+            conversation_history,
+            session_source,
+            agent_control,
+            dynamic_tools,
+            persist_extended_history,
+            metrics_service_name,
+            inherited_shell_snapshot,
+            parent_trace: _,
+        } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -533,7 +580,6 @@ impl Codex {
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
-        let session_init_span = info_span!("session_init");
         let session = Session::new(
             session_configuration,
             config.clone(),
@@ -550,7 +596,6 @@ impl Codex {
             file_watcher,
             agent_control,
         )
-        .instrument(session_init_span)
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
@@ -559,15 +604,16 @@ impl Codex {
         let thread_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        let session_loop_span = info_span!("session_loop", thread_id = %thread_id);
-        tokio::spawn(
-            submission_loop(Arc::clone(&session), config, rx_sub).instrument(session_loop_span),
+        let session_loop_handle = tokio::spawn(
+            submission_loop(Arc::clone(&session), config, rx_sub)
+                .instrument(info_span!("session_loop", thread_id = %thread_id)),
         );
         let codex = Codex {
             tx_sub,
             rx_event,
             agent_status: agent_status_rx,
             session,
+            session_loop_handle: Arc::new(Mutex::new(Some(session_loop_handle))),
         };
 
         #[allow(deprecated)]
@@ -580,11 +626,19 @@ impl Codex {
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
+        self.submit_with_trace(op, None).await
+    }
+
+    pub async fn submit_with_trace(
+        &self,
+        op: Op,
+        trace: Option<W3cTraceContext>,
+    ) -> CodexResult<String> {
         let id = Uuid::now_v7().to_string();
         let sub = Submission {
             id: id.clone(),
             op,
-            trace: None,
+            trace,
         };
         self.submit_with_id(sub).await?;
         Ok(id)
@@ -600,6 +654,14 @@ impl Codex {
             .send(sub)
             .await
             .map_err(|_| CodexErr::InternalAgentDied)?;
+        Ok(())
+    }
+
+    pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
+        self.submit(Op::Shutdown).await?;
+        if let Some(handle) = self.session_loop_handle.lock().await.take() {
+            let _ = handle.await;
+        }
         Ok(())
     }
 
@@ -1246,6 +1308,7 @@ impl Session {
         }
     }
 
+    #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn new(
         mut session_configuration: SessionConfiguration,
@@ -1337,18 +1400,29 @@ impl Session {
                 .await?;
                 Ok((Some(rollout_recorder), state_db_ctx))
             }
-        };
+        }
+        .instrument(info_span!(
+            "session_init.rollout",
+            otel.name = "session_init.rollout",
+            session_init.ephemeral = config.ephemeral,
+        ));
 
+        let is_subagent = matches!(
+            session_configuration.session_source,
+            SessionSource::SubAgent(_)
+        );
         let history_meta_fut = async {
-            if matches!(
-                session_configuration.session_source,
-                SessionSource::SubAgent(_)
-            ) {
+            if is_subagent {
                 (0, 0)
             } else {
                 crate::message_history::history_metadata(&config).await
             }
-        };
+        }
+        .instrument(info_span!(
+            "session_init.history_metadata",
+            otel.name = "session_init.history_metadata",
+            session_init.is_subagent = is_subagent,
+        ));
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
@@ -1361,7 +1435,11 @@ impl Session {
             )
             .await;
             (auth, mcp_servers, auth_statuses)
-        };
+        }
+        .instrument(info_span!(
+            "session_init.auth_mcp",
+            otel.name = "session_init.auth_mcp",
+        ));
 
         // Join all independent futures.
         let (
@@ -1519,7 +1597,12 @@ impl Session {
             tx
         };
         let thread_name =
-            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id).await
+            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id)
+                .instrument(info_span!(
+                    "session_init.thread_name_lookup",
+                    otel.name = "session_init.thread_name_lookup",
+                ))
+                .await
             {
                 Ok(name) => name,
                 Err(err) => {
@@ -1569,6 +1652,12 @@ impl Session {
                     managed_network_requirements_enabled,
                     network_proxy_audit_metadata,
                 )
+                .instrument(info_span!(
+                    "session_init.network_proxy",
+                    otel.name = "session_init.network_proxy",
+                    session_init.managed_network_requirements_enabled =
+                        managed_network_requirements_enabled,
+                ))
                 .await?;
                 (Some(network_proxy), Some(session_network_proxy))
             } else {
@@ -1716,6 +1805,8 @@ impl Session {
             .map(|(name, _)| name.clone())
             .collect();
         required_mcp_servers.sort();
+        let enabled_mcp_server_count = mcp_servers.len();
+        let required_mcp_server_count = required_mcp_servers.len();
         let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
@@ -1733,6 +1824,12 @@ impl Session {
             codex_apps_tools_cache_key(auth),
             tool_plugin_provenance,
         )
+        .instrument(info_span!(
+            "session_init.mcp_manager_init",
+            otel.name = "session_init.mcp_manager_init",
+            session_init.enabled_mcp_server_count = enabled_mcp_server_count,
+            session_init.required_mcp_server_count = required_mcp_server_count,
+        ))
         .await;
         {
             let mut manager_guard = sess.services.mcp_connection_manager.write().await;
@@ -1752,6 +1849,11 @@ impl Session {
                 .read()
                 .await
                 .required_startup_failures(&required_mcp_servers)
+                .instrument(info_span!(
+                    "session_init.required_mcp_wait",
+                    otel.name = "session_init.required_mcp_wait",
+                    session_init.required_mcp_server_count = required_mcp_server_count,
+                ))
                 .await;
             if !failures.is_empty() {
                 let details = failures

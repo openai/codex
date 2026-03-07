@@ -79,6 +79,8 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 rmcp = { workspace = true, default-features = false, features = [
@@ -88,5 +90,6 @@ rmcp = { workspace = true, default-features = false, features = [
 ] }
 serial_test = { workspace = true }
 tokio-tungstenite = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }
