@@ -34,6 +34,51 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+async fn wait_for_responses_request_count_to_stabilize(
+    server: &wiremock::MockServer,
+    expected_count: usize,
+    settle_duration: std::time::Duration,
+) -> Result<()> {
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        let mut stable_since: Option<tokio::time::Instant> = None;
+        loop {
+            let requests = server
+                .received_requests()
+                .await
+                .context("failed to fetch received requests")?;
+            let responses_request_count = requests
+                .iter()
+                .filter(|request| {
+                    request.method == "POST" && request.url.path().ends_with("/responses")
+                })
+                .count();
+
+            if responses_request_count > expected_count {
+                anyhow::bail!(
+                    "expected exactly {expected_count} /responses requests, got {responses_request_count}"
+                );
+            }
+
+            if responses_request_count == expected_count {
+                match stable_since {
+                    Some(stable_since) if stable_since.elapsed() >= settle_duration => {
+                        return Ok::<(), anyhow::Error>(());
+                    }
+                    None => stable_since = Some(tokio::time::Instant::now()),
+                    Some(_) => {}
+                }
+            } else {
+                stable_since = None;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn thread_unsubscribe_unloads_thread_and_emits_thread_closed_notification() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
@@ -167,6 +212,13 @@ async fn thread_unsubscribe_during_turn_interrupts_turn_and_emits_thread_closed(
         anyhow::bail!("expected thread/closed notification");
     };
     assert_eq!(payload.thread_id, thread_id);
+
+    wait_for_responses_request_count_to_stabilize(
+        &server,
+        1,
+        std::time::Duration::from_millis(200),
+    )
+    .await?;
 
     Ok(())
 }
