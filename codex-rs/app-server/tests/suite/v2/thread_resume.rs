@@ -4,7 +4,7 @@ use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
-use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
@@ -58,6 +58,36 @@ use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
+
+async fn wait_for_responses_request_count(
+    server: &wiremock::MockServer,
+    expected_count: usize,
+) -> Result<()> {
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let Some(requests) = server.received_requests().await else {
+                anyhow::bail!("wiremock did not record requests");
+            };
+            let responses_request_count = requests
+                .iter()
+                .filter(|request| {
+                    request.method == "POST" && request.url.path().ends_with("/responses")
+                })
+                .count();
+            if responses_request_count == expected_count {
+                return Ok::<(), anyhow::Error>(());
+            }
+            if responses_request_count > expected_count {
+                anyhow::bail!(
+                    "expected exactly {expected_count} /responses requests, got {responses_request_count}"
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
@@ -866,7 +896,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
         )?,
         create_final_assistant_message_sse_response("done")?,
     ];
-    let server = create_mock_responses_server_sequence(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -981,6 +1011,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    wait_for_responses_request_count(&server, 3).await?;
 
     Ok(())
 }
@@ -1003,7 +1034,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
         create_apply_patch_sse_response(patch, "patch-call")?,
         create_final_assistant_message_sse_response("done")?,
     ];
-    let server = create_mock_responses_server_sequence(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
     create_config_toml(&codex_home, &server.uri())?;
 
     let mut primary = McpProcess::new(&codex_home).await?;
@@ -1146,6 +1177,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    wait_for_responses_request_count(&server, 3).await?;
 
     Ok(())
 }
