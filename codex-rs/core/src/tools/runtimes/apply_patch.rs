@@ -240,7 +240,7 @@ mod tests {
                 AbsolutePathBuf::from_absolute_path(&path).expect("temp path should be absolute"),
             ],
             changes: HashMap::from([(
-                path.clone(),
+                path,
                 FileChange::Add {
                     content: "hello".to_string(),
                 },

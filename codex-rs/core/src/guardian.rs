@@ -43,7 +43,7 @@ use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
 use codex_protocol::protocol::ReviewDecision;
 
-const GUARDIAN_MODEL: &str = "gpt-5.4";
+const GUARDIAN_PREFERRED_MODEL: &str = "gpt-5.4";
 const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const GUARDIAN_SUBAGENT_NAME: &str = "guardian";
 // This is intentionally much smaller than the model's context window. Guardian
@@ -543,8 +543,45 @@ async fn run_guardian_subagent(
         Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
         None => None,
     };
-    let guardian_config =
-        build_guardian_subagent_config(turn.config.as_ref(), live_network_config)?;
+    let available_models = session
+        .services
+        .models_manager
+        .list_models(crate::models_manager::manager::RefreshStrategy::Offline)
+        .await;
+    let preferred_model = available_models
+        .iter()
+        .find(|preset| preset.model == GUARDIAN_PREFERRED_MODEL);
+    let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = preferred_model {
+        let reasoning_effort = if preset
+            .supported_reasoning_efforts
+            .iter()
+            .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low)
+        {
+            Some(codex_protocol::openai_models::ReasoningEffort::Low)
+        } else {
+            Some(preset.default_reasoning_effort)
+        };
+        (GUARDIAN_PREFERRED_MODEL.to_string(), reasoning_effort)
+    } else {
+        let reasoning_effort = if turn
+            .model_info
+            .supported_reasoning_levels
+            .iter()
+            .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low)
+        {
+            Some(codex_protocol::openai_models::ReasoningEffort::Low)
+        } else {
+            turn.reasoning_effort
+                .or(turn.model_info.default_reasoning_level)
+        };
+        (turn.model_info.slug.clone(), reasoning_effort)
+    };
+    let guardian_config = build_guardian_subagent_config(
+        turn.config.as_ref(),
+        live_network_config,
+        guardian_model.as_str(),
+        guardian_reasoning_effort,
+    )?;
 
     // `run_codex_thread_one_shot` is already the subagent runner used elsewhere
     // in core. Reusing it here keeps the MVP aligned with the existing review
@@ -593,11 +630,12 @@ async fn run_guardian_subagent(
 fn build_guardian_subagent_config(
     parent_config: &Config,
     live_network_config: Option<codex_network_proxy::NetworkProxyConfig>,
+    active_model: &str,
+    reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> anyhow::Result<Config> {
     let mut guardian_config = parent_config.clone();
-    guardian_config.model = Some(GUARDIAN_MODEL.to_string());
-    guardian_config.model_reasoning_effort =
-        Some(codex_protocol::openai_models::ReasoningEffort::Low);
+    guardian_config.model = Some(active_model.to_string());
+    guardian_config.model_reasoning_effort = reasoning_effort;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config.permissions.sandbox_policy =
         Constrained::allow_only(SandboxPolicy::new_read_only_policy());
@@ -616,9 +654,24 @@ fn build_guardian_subagent_config(
             &SandboxPolicy::new_read_only_policy(),
         )?);
     }
-    let _ = guardian_config.features.disable(Feature::Collab);
-    let _ = guardian_config.features.disable(Feature::WebSearchRequest);
-    let _ = guardian_config.features.disable(Feature::WebSearchCached);
+    for feature in [
+        Feature::Collab,
+        Feature::WebSearchRequest,
+        Feature::WebSearchCached,
+    ] {
+        guardian_config.features.disable(feature).map_err(|err| {
+            anyhow::anyhow!(
+                "guardian subagent could not disable `features.{}`: {err}",
+                feature.key()
+            )
+        })?;
+        if guardian_config.features.enabled(feature) {
+            anyhow::bail!(
+                "guardian subagent requires `features.{}` to be disabled",
+                feature.key()
+            );
+        }
+    }
     Ok(guardian_config)
 }
 
@@ -697,12 +750,17 @@ impl GuardianRiskLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ManagedFeatures;
     use crate::config::NetworkProxySpec;
     use crate::config::test_config;
+    use crate::config_loader::FeatureRequirementsToml;
     use crate::config_loader::NetworkConstraints;
+    use crate::config_loader::RequirementSource;
+    use crate::config_loader::Sourced;
     use codex_network_proxy::NetworkProxyConfig;
     use codex_protocol::models::ContentItem;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
 
     #[test]
     fn build_guardian_transcript_keeps_original_numbering() {
@@ -921,10 +979,23 @@ mod tests {
         .expect("network proxy spec");
         parent_config.permissions.network = Some(network.clone());
 
-        let guardian_config =
-            build_guardian_subagent_config(&parent_config, None).expect("guardian config");
+        let guardian_config = build_guardian_subagent_config(
+            &parent_config,
+            None,
+            "parent-active-model",
+            Some(codex_protocol::openai_models::ReasoningEffort::Low),
+        )
+        .expect("guardian config");
 
         assert_eq!(guardian_config.permissions.network, Some(network));
+        assert_eq!(
+            guardian_config.model,
+            Some("parent-active-model".to_string())
+        );
+        assert_eq!(
+            guardian_config.model_reasoning_effort,
+            Some(codex_protocol::openai_models::ReasoningEffort::Low)
+        );
         assert_eq!(
             guardian_config.permissions.approval_policy,
             Constrained::allow_only(AskForApproval::Never)
@@ -954,9 +1025,13 @@ mod tests {
         live_network.network.enabled = true;
         live_network.network.allowed_domains = vec!["github.com".to_string()];
 
-        let guardian_config =
-            build_guardian_subagent_config(&parent_config, Some(live_network.clone()))
-                .expect("guardian config");
+        let guardian_config = build_guardian_subagent_config(
+            &parent_config,
+            Some(live_network.clone()),
+            "active-model",
+            None,
+        )
+        .expect("guardian config");
 
         assert_eq!(
             guardian_config.permissions.network,
@@ -969,5 +1044,40 @@ mod tests {
                 .expect("live network proxy spec")
             )
         );
+    }
+
+    #[test]
+    fn guardian_subagent_config_rejects_pinned_collab_feature() {
+        let mut parent_config = test_config();
+        parent_config.features = ManagedFeatures::from_configured(
+            parent_config.features.get().clone(),
+            Some(Sourced {
+                value: FeatureRequirementsToml {
+                    entries: BTreeMap::from([("multi_agent".to_string(), true)]),
+                },
+                source: RequirementSource::Unknown,
+            }),
+        )
+        .expect("managed features");
+
+        let err = build_guardian_subagent_config(&parent_config, None, "active-model", None)
+            .expect_err("guardian config should fail when collab is pinned on");
+
+        assert!(
+            err.to_string()
+                .contains("guardian subagent requires `features.multi_agent` to be disabled")
+        );
+    }
+
+    #[test]
+    fn guardian_subagent_config_uses_parent_active_model_instead_of_hardcoded_slug() {
+        let mut parent_config = test_config();
+        parent_config.model = Some("configured-model".to_string());
+
+        let guardian_config =
+            build_guardian_subagent_config(&parent_config, None, "active-model", None)
+                .expect("guardian config");
+
+        assert_eq!(guardian_config.model, Some("active-model".to_string()));
     }
 }
