@@ -597,6 +597,10 @@ impl BottomPane {
         self.composer.pending_pastes()
     }
 
+    pub(crate) fn transcription_placeholder_exists(&self, id: &str) -> bool {
+        self.composer.transcription_placeholder_exists(id)
+    }
+
     pub(crate) fn apply_external_edit(&mut self, text: String) {
         self.composer.apply_external_edit(text);
         self.request_redraw();

@@ -3646,80 +3646,78 @@ impl ChatWidget {
             {
                 self.cycle_collaboration_mode();
             }
-            _ => match self.bottom_pane.handle_key_event(key_event) {
-                InputResult::Submitted {
-                    text,
-                    text_elements,
-                } => {
-                    let local_images = self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders();
-                    let remote_image_urls = self.take_remote_image_urls();
-                    let user_message = UserMessage {
+            _ => {
+                match self.bottom_pane.handle_key_event(key_event) {
+                    InputResult::Submitted {
                         text,
-                        local_images,
-                        remote_image_urls,
                         text_elements,
-                        mention_bindings: self
+                    } => {
+                        let local_images = self
                             .bottom_pane
-                            .take_recent_submission_mention_bindings(),
-                    };
-                    if user_message.text.is_empty()
-                        && user_message.local_images.is_empty()
-                        && user_message.remote_image_urls.is_empty()
-                    {
-                        return;
+                            .take_recent_submission_images_with_placeholders();
+                        let remote_image_urls = self.take_remote_image_urls();
+                        let user_message = UserMessage {
+                            text,
+                            local_images,
+                            remote_image_urls,
+                            text_elements,
+                            mention_bindings: self
+                                .bottom_pane
+                                .take_recent_submission_mention_bindings(),
+                        };
+                        if !(user_message.text.is_empty()
+                            && user_message.local_images.is_empty()
+                            && user_message.remote_image_urls.is_empty())
+                            && let Some(user_message) =
+                                self.maybe_defer_user_message_for_realtime(user_message)
+                        {
+                            let should_submit_now =
+                                self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                            if should_submit_now {
+                                // Submitted is emitted when user submits.
+                                // Reset any reasoning header only when we are actually submitting a turn.
+                                self.reasoning_buffer.clear();
+                                self.full_reasoning_buffer.clear();
+                                self.set_status_header(String::from("Working"));
+                                self.submit_user_message(user_message);
+                            } else {
+                                self.queue_user_message(user_message);
+                            }
+                        }
                     }
-                    let Some(user_message) =
-                        self.maybe_defer_user_message_for_realtime(user_message)
-                    else {
-                        return;
-                    };
-                    let should_submit_now =
-                        self.is_session_configured() && !self.is_plan_streaming_in_tui();
-                    if should_submit_now {
-                        // Submitted is emitted when user submits.
-                        // Reset any reasoning header only when we are actually submitting a turn.
-                        self.reasoning_buffer.clear();
-                        self.full_reasoning_buffer.clear();
-                        self.set_status_header(String::from("Working"));
-                        self.submit_user_message(user_message);
-                    } else {
-                        self.queue_user_message(user_message);
-                    }
-                }
-                InputResult::Queued {
-                    text,
-                    text_elements,
-                } => {
-                    let local_images = self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders();
-                    let remote_image_urls = self.take_remote_image_urls();
-                    let user_message = UserMessage {
+                    InputResult::Queued {
                         text,
-                        local_images,
-                        remote_image_urls,
                         text_elements,
-                        mention_bindings: self
+                    } => {
+                        let local_images = self
                             .bottom_pane
-                            .take_recent_submission_mention_bindings(),
-                    };
-                    let Some(user_message) =
-                        self.maybe_defer_user_message_for_realtime(user_message)
-                    else {
-                        return;
-                    };
-                    self.queue_user_message(user_message);
+                            .take_recent_submission_images_with_placeholders();
+                        let remote_image_urls = self.take_remote_image_urls();
+                        let user_message = UserMessage {
+                            text,
+                            local_images,
+                            remote_image_urls,
+                            text_elements,
+                            mention_bindings: self
+                                .bottom_pane
+                                .take_recent_submission_mention_bindings(),
+                        };
+                        if let Some(user_message) =
+                            self.maybe_defer_user_message_for_realtime(user_message)
+                        {
+                            self.queue_user_message(user_message);
+                        }
+                    }
+                    InputResult::Command(cmd) => {
+                        self.dispatch_command(cmd);
+                    }
+                    InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                        self.dispatch_command_with_args(cmd, args, text_elements);
+                    }
+                    InputResult::None => {}
                 }
-                InputResult::Command(cmd) => {
-                    self.dispatch_command(cmd);
-                }
-                InputResult::CommandWithArgs(cmd, args, text_elements) => {
-                    self.dispatch_command_with_args(cmd, args, text_elements);
-                }
-                InputResult::None => {}
-            },
+                self.maybe_request_realtime_close_after_composer_mutation();
+            }
         }
     }
 
@@ -3746,6 +3744,7 @@ impl ChatWidget {
 
     pub(crate) fn apply_external_edit(&mut self, text: String) {
         self.bottom_pane.apply_external_edit(text);
+        self.maybe_request_realtime_close_after_composer_mutation();
         self.request_redraw();
     }
 
@@ -7887,15 +7886,21 @@ impl ChatWidget {
     /// Handles a Ctrl+C press at the chat-widget layer.
     ///
     /// The first press arms a time-bounded quit shortcut and shows a footer hint via the bottom
-    /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
-    /// is armed.
+    /// pane. When realtime voice mode is live, the first press closes realtime instead of clearing
+    /// the composer or arming quit. If cancellable work is active, Ctrl+C also submits
+    /// `Op::Interrupt` after the shortcut is armed.
     ///
     /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
     /// quit.
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
-        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
+        let cancellation_event = if modal_or_popup_active {
+            self.bottom_pane.on_ctrl_c()
+        } else {
+            CancellationEvent::NotHandled
+        };
+        if cancellation_event == CancellationEvent::Handled {
             if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
                 if modal_or_popup_active {
                     self.quit_shortcut_expires_at = None;
@@ -7904,6 +7909,29 @@ impl ChatWidget {
                 } else {
                     self.arm_quit_shortcut(key);
                 }
+            }
+            return;
+        }
+
+        if self.realtime_conversation.is_live() {
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.bottom_pane.clear_quit_shortcut_hint();
+
+            if !self.realtime_conversation.close_requested() {
+                self.request_realtime_conversation_close(None);
+                return;
+            }
+
+            if self.is_cancellable_work_active() {
+                self.submit_op(Op::Interrupt);
+                return;
+            }
+        }
+
+        if !modal_or_popup_active && self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
+            if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+                self.arm_quit_shortcut(key);
             }
             return;
         }

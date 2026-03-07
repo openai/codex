@@ -4046,6 +4046,10 @@ impl ChatComposer {
         id
     }
 
+    pub(crate) fn transcription_placeholder_exists(&self, id: &str) -> bool {
+        self.textarea.named_element_range(id).is_some()
+    }
+
     pub fn remove_transcription_placeholder(&mut self, id: &str) {
         self.stop_transcription_spinner(id);
         let _ = self.textarea.replace_element_by_id(id, "");
