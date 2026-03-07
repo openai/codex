@@ -3192,7 +3192,6 @@ impl Session {
             DeveloperInstructions::from_policy(
                 turn_context.sandbox_policy.get(),
                 turn_context.approval_policy.value(),
-                turn_context.features.enabled(Feature::GuardianApproval),
                 self.services.exec_policy.current().as_ref(),
                 &turn_context.cwd,
                 turn_context.features.enabled(Feature::RequestPermissions),
