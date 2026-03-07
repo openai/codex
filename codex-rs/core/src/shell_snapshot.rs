@@ -548,6 +548,8 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     #[cfg(unix)]
+    use serial_test::serial;
+    #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
     #[cfg(unix)]
     use std::process::Command;
@@ -735,6 +737,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial(stdin_fd)]
     async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
         let _stdin_guard = BlockingStdinPipe::install()?;
 
