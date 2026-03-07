@@ -33,12 +33,14 @@ use crate::protocol::TurnCompleteEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use crate::state::TurnState;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
+use tokio::sync::Mutex;
 
 use crate::features::Feature;
 pub(crate) use compact::CompactTask;
@@ -144,7 +146,7 @@ impl Session {
         let done = Arc::new(Notify::new());
 
         let timer = turn_context
-            .session_telemetry
+            .otel_manager
             .start_timer("codex.turn.e2e_duration_ms", &[])
             .ok();
 
@@ -201,7 +203,16 @@ impl Session {
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
-        for task in self.take_all_running_tasks().await {
+        let (tasks, turn_state) = self.take_all_running_tasks().await;
+        for task in &tasks {
+            task.cancellation_token.cancel();
+        }
+        if let Some(turn_state) = turn_state {
+            // Drop pending approvals only after all running tasks observe cancellation, so
+            // interrupted approval waits resolve as aborts instead of synthetic denials.
+            turn_state.lock().await.clear_pending();
+        }
+        for task in tasks {
             self.handle_task_abort(task, reason.clone()).await;
         }
         if reason == TurnAbortReason::Interrupted {
@@ -272,7 +283,7 @@ impl Session {
                     "false"
                 },
             );
-            self.services.session_telemetry.histogram(
+            self.services.otel_manager.histogram(
                 "codex.turn.tool.call",
                 i64::try_from(turn_tool_calls).unwrap_or(i64::MAX),
                 &[tmp_mem],
@@ -295,27 +306,27 @@ impl Session {
                     - token_usage_at_turn_start.total_tokens)
                     .max(0),
             };
-            self.services.session_telemetry.histogram(
+            self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.total_tokens,
                 &[("token_type", "total"), tmp_mem],
             );
-            self.services.session_telemetry.histogram(
+            self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.input_tokens,
                 &[("token_type", "input"), tmp_mem],
             );
-            self.services.session_telemetry.histogram(
+            self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.cached_input(),
                 &[("token_type", "cached_input"), tmp_mem],
             );
-            self.services.session_telemetry.histogram(
+            self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.output_tokens,
                 &[("token_type", "output"), tmp_mem],
             );
-            self.services.session_telemetry.histogram(
+            self.services.otel_manager.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.reasoning_output_tokens,
                 &[("token_type", "reasoning_output"), tmp_mem],
@@ -342,15 +353,14 @@ impl Session {
         *active = Some(turn);
     }
 
-    async fn take_all_running_tasks(&self) -> Vec<RunningTask> {
+    async fn take_all_running_tasks(&self) -> (Vec<RunningTask>, Option<Arc<Mutex<TurnState>>>) {
         let mut active = self.active_turn.lock().await;
         match active.take() {
             Some(mut at) => {
-                at.clear_pending().await;
-
-                at.drain_tasks()
+                let turn_state = Arc::clone(&at.turn_state);
+                (at.drain_tasks(), Some(turn_state))
             }
-            None => Vec::new(),
+            None => (Vec::new(), None),
         }
     }
 
@@ -363,10 +373,6 @@ impl Session {
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
-        if task.cancellation_token.is_cancelled() {
-            return;
-        }
-
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
         task.turn_context
