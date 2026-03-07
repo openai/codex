@@ -8,6 +8,10 @@ license.workspace = true
 name = "codex-app-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "codex-app-server-test-notify-capture"
+path = "src/bin/notify_capture.rs"
+
 [lib]
 name = "codex_app_server"
 path = "src/lib.rs"
@@ -18,14 +22,12 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-base64 = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-core = { workspace = true }
 codex-otel = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-cli = { workspace = true }
-codex-utils-pty = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
@@ -66,6 +68,7 @@ axum = { workspace = true, default-features = false, features = [
     "json",
     "tokio",
 ] }
+base64 = { workspace = true }
 core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
