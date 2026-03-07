@@ -793,6 +793,7 @@ fn should_suppress_agent_job_event(msg: &EventMsg) -> bool {
             | EventMsg::ElicitationRequest(_)
             | EventMsg::Error(_)
             | EventMsg::Warning(_)
+            | EventMsg::GuardianAssessment(_)
             | EventMsg::DeprecationNotice(_)
             | EventMsg::StreamError(_)
             | EventMsg::ShutdownComplete

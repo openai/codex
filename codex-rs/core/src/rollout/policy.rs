@@ -113,6 +113,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
             }
         }
         EventMsg::Error(_)
+        | EventMsg::GuardianAssessment(_)
         | EventMsg::WebSearchEnd(_)
         | EventMsg::ExecCommandEnd(_)
         | EventMsg::PatchApplyEnd(_)

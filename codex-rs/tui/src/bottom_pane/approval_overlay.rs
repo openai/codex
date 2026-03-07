@@ -232,7 +232,11 @@ impl ApprovalOverlay {
             return;
         };
         if request.thread_label().is_none() {
-            let cell = history_cell::new_approval_decision_cell(command.to_vec(), decision.clone());
+            let cell = history_cell::new_approval_decision_cell(
+                command.to_vec(),
+                decision.clone(),
+                history_cell::ApprovalDecisionActor::User,
+            );
             self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
         let thread_id = request.thread_id();
@@ -1283,7 +1287,11 @@ mod tests {
             "-lc".into(),
             "git add tui/src/render/mod.rs tui/src/render/renderable.rs".into(),
         ];
-        let cell = history_cell::new_approval_decision_cell(command, ReviewDecision::Approved);
+        let cell = history_cell::new_approval_decision_cell(
+            command,
+            ReviewDecision::Approved,
+            history_cell::ApprovalDecisionActor::User,
+        );
         let lines = cell.display_lines(28);
         let rendered: Vec<String> = lines
             .iter()

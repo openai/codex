@@ -5228,6 +5228,67 @@
           "type": "object"
         },
         {
+          "description": "Structured lifecycle event for a guardian-reviewed approval request.",
+          "properties": {
+            "action": {
+              "description": "Canonical action payload that was reviewed. Required for denied assessments so clients can show the rejected request, optional otherwise."
+            },
+            "id": {
+              "description": "Stable identifier for this guardian review lifecycle.",
+              "type": "string"
+            },
+            "rationale": {
+              "description": "Human-readable explanation of the final assessment. Omitted while in progress.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "risk_level": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GuardianRiskLevel"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Coarse risk label paired with `risk_score`. Omitted while in progress."
+            },
+            "risk_score": {
+              "description": "Numeric risk score from 0-100. Omitted while the assessment is in progress.",
+              "format": "uint8",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/GuardianAssessmentStatus"
+            },
+            "turn_id": {
+              "default": "",
+              "description": "Turn ID that this assessment belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "guardian_assessment"
+              ],
+              "title": "GuardianAssessmentEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "status",
+            "type"
+          ],
+          "title": "GuardianAssessmentEventMsg",
+          "type": "object"
+        },
+        {
           "description": "Notification advising the user that something they are using has been deprecated and should be phased out.",
           "properties": {
             "details": {
@@ -7320,6 +7381,22 @@
         }
       },
       "type": "object"
+    },
+    "GuardianAssessmentStatus": {
+      "enum": [
+        "in_progress",
+        "approved",
+        "denied"
+      ],
+      "type": "string"
+    },
+    "GuardianRiskLevel": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
     },
     "HazelnutScope": {
       "enum": [
@@ -12984,6 +13061,55 @@
             "type"
           ],
           "title": "ImageGenerationThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": true,
+            "id": {
+              "type": "string"
+            },
+            "rationale": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "riskLevel": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GuardianRiskLevel"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "riskScore": {
+              "format": "uint8",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/GuardianAssessmentStatus"
+            },
+            "type": {
+              "enum": [
+                "guardianAssessment"
+              ],
+              "title": "GuardianAssessmentThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "status",
+            "type"
+          ],
+          "title": "GuardianAssessmentThreadItem",
           "type": "object"
         },
         {
