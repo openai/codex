@@ -1,9 +1,9 @@
 ---
 source: core/src/guardian.rs
 assertion_line: 1502
-expression: "context_snapshot::format_labeled_requests_snapshot(\"Guardian subagent requests should use the standard Responses request snapshot format so developer messages, user messages, and the guardian prompt layout are visible together.\",\n&[(\"Guardian Review Request\", &request)], &ContextSnapshotOptions::default(),)"
+expression: "context_snapshot::format_labeled_requests_snapshot(\"Guardian review request layout\",\n&[(\"Guardian Review Request\", &request)], &ContextSnapshotOptions::default(),)"
 ---
-Scenario: Guardian subagent requests should use the standard Responses request snapshot format so developer messages, user messages, and the guardian prompt layout are visible together.
+Scenario: Guardian review request layout
 
 ## Guardian Review Request
 00:message/developer[2]:

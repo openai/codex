@@ -1502,7 +1502,7 @@ mod tests {
         assert_snapshot!(
             "guardian_review_request_layout",
             context_snapshot::format_labeled_requests_snapshot(
-                "Guardian subagent requests should use the standard Responses request snapshot format so developer messages, user messages, and the guardian prompt layout are visible together.",
+                "Guardian review request layout",
                 &[("Guardian Review Request", &request)],
                 &ContextSnapshotOptions::default(),
             )
