@@ -3198,25 +3198,6 @@ impl Session {
             )
             .into_text(),
         );
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            contextual_user_sections.push(
-                UserInstructions {
-                    text: user_instructions.to_string(),
-                    directory: turn_context.cwd.to_string_lossy().into_owned(),
-                }
-                .serialize_to_text(),
-            );
-        }
-        let subagents = self
-            .services
-            .agent_control
-            .format_environment_context_subagents(self.conversation_id)
-            .await;
-        contextual_user_sections.push(
-            EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
-                .with_subagents(subagents)
-                .serialize_to_xml(),
-        );
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             developer_sections.push(developer_instructions.to_string());
         }
@@ -3270,6 +3251,25 @@ impl Session {
         {
             developer_sections.push(commit_message_instruction);
         }
+        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
+            contextual_user_sections.push(
+                UserInstructions {
+                    text: user_instructions.to_string(),
+                    directory: turn_context.cwd.to_string_lossy().into_owned(),
+                }
+                .serialize_to_text(),
+            );
+        }
+        let subagents = self
+            .services
+            .agent_control
+            .format_environment_context_subagents(self.conversation_id)
+            .await;
+        contextual_user_sections.push(
+            EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                .with_subagents(subagents)
+                .serialize_to_xml(),
+        );
 
         let mut items = Vec::with_capacity(2);
         if let Some(developer_message) =
