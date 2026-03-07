@@ -169,8 +169,28 @@ fn format_guardian_action_pretty_truncates_large_string_fields() {
         .as_str()
         .expect("test patch should serialize as a string");
 
+    let change_count_index = rendered
+        .find("\"change_count\"")
+        .expect("rendered json should contain change_count");
+    let cwd_index = rendered
+        .find("\"cwd\"")
+        .expect("rendered json should contain cwd");
+    let files_index = rendered
+        .find("\"files\"")
+        .expect("rendered json should contain files");
+    let patch_index = rendered
+        .find("\"patch\"")
+        .expect("rendered json should contain patch");
+    let tool_index = rendered
+        .find("\"tool\"")
+        .expect("rendered json should contain tool");
+
     assert!(rendered.contains("\"tool\": \"apply_patch\""));
     assert!(rendered.len() < original_patch.len());
+    assert!(change_count_index < cwd_index);
+    assert!(cwd_index < files_index);
+    assert!(files_index < patch_index);
+    assert!(patch_index < tool_index);
 }
 
 #[test]
