@@ -1106,8 +1106,6 @@ async fn wait_for_streamable_http_server(
     let deadline = Instant::now() + timeout;
     let metadata_url = format!("http://{address}/.well-known/oauth-authorization-server/mcp");
     let client = Client::builder().no_proxy().build()?;
-    let mut attempts = 0u32;
-
     loop {
         if let Some(status) = server_child.try_wait()? {
             return Err(anyhow::anyhow!(
@@ -1122,8 +1120,6 @@ async fn wait_for_streamable_http_server(
                 "timed out waiting for streamable HTTP server metadata at {metadata_url}: deadline reached"
             ));
         }
-
-        attempts += 1;
 
         match tokio::time::timeout(remaining, client.get(&metadata_url).send()).await {
             Ok(Ok(response)) if response.status() == StatusCode::OK => return Ok(()),
