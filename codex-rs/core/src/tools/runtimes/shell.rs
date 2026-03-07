@@ -171,7 +171,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     }
                 }
                 let request = GuardianReviewRequest { action };
-                return review_approval_request(session, turn, request).await;
+                return review_approval_request(session, turn, request, None).await;
             }
             with_cached_approval(&session.services, "shell", keys, move || async move {
                 let available_decisions = None;

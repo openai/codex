@@ -136,7 +136,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
                 let request = ApplyPatchRuntime::build_guardian_review_request(req);
-                return review_approval_request(session, turn, request).await;
+                return review_approval_request(session, turn, request, None).await;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session

@@ -1,7 +1,7 @@
 use crate::codex::Session;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
 use crate::guardian::GuardianReviewRequest;
-use crate::guardian::review_approval_request_with_reason;
+use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::tools::sandboxing::ToolError;
@@ -341,7 +341,7 @@ impl NetworkApprovalService {
             protocol,
         };
         let approval_decision = if routes_approval_to_guardian(&turn_context) {
-            review_approval_request_with_reason(
+            review_approval_request(
                 &session,
                 &turn_context,
                 GuardianReviewRequest {

@@ -394,7 +394,7 @@ impl CoreShellActionProvider {
                             "additional_permissions": additional_permissions,
                         }),
                     };
-                    return review_approval_request(&session, &turn, request).await;
+                    return review_approval_request(&session, &turn, request, None).await;
                 }
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),

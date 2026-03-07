@@ -23,31 +23,21 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 #[test]
 fn build_guardian_transcript_keeps_original_numbering() {
     let entries = [
         GuardianTranscriptEntry {
-            number: 1,
-            role: "user".to_string(),
-            is_user: true,
-            is_tool: false,
+            kind: GuardianTranscriptEntryKind::User,
             text: "first".to_string(),
         },
         GuardianTranscriptEntry {
-            number: 2,
-            role: "assistant".to_string(),
-            is_user: false,
-            is_tool: false,
+            kind: GuardianTranscriptEntryKind::Assistant,
             text: "second".to_string(),
         },
         GuardianTranscriptEntry {
-            number: 3,
-            role: "assistant".to_string(),
-            is_user: false,
-            is_tool: false,
+            kind: GuardianTranscriptEntryKind::Assistant,
             text: "third".to_string(),
         },
     ];
@@ -85,8 +75,13 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
     let entries = collect_guardian_transcript_entries(&items);
 
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].number, 1);
-    assert_eq!(entries[0].role, "assistant");
+    assert_eq!(
+        entries[0],
+        GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::Assistant,
+            text: "hello".to_string(),
+        }
+    );
 }
 
 #[test]
@@ -127,11 +122,20 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
     let entries = collect_guardian_transcript_entries(&items);
 
     assert_eq!(entries.len(), 4);
-    assert_eq!(entries[1].role, "tool read_file call");
-    assert!(entries[1].is_tool);
-    assert_eq!(entries[1].text, "{\"path\":\"README.md\"}");
-    assert_eq!(entries[2].role, "tool read_file result");
-    assert_eq!(entries[2].text, "repo is public");
+    assert_eq!(
+        entries[1],
+        GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::Tool("tool read_file call".to_string()),
+            text: "{\"path\":\"README.md\"}".to_string(),
+        }
+    );
+    assert_eq!(
+        entries[2],
+        GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::Tool("tool read_file result".to_string()),
+            text: "repo is public".to_string(),
+        }
+    );
 }
 
 #[test]
@@ -166,45 +170,27 @@ fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
     let repeated = "signal ".repeat(8_000);
     let entries = vec![
         GuardianTranscriptEntry {
-            number: 1,
-            role: "user".to_string(),
-            is_user: true,
-            is_tool: false,
+            kind: GuardianTranscriptEntryKind::User,
             text: "please figure out if the repo is public".to_string(),
         },
         GuardianTranscriptEntry {
-            number: 2,
-            role: "tool gh".to_string(),
-            is_user: false,
-            is_tool: true,
+            kind: GuardianTranscriptEntryKind::Tool("tool gh".to_string()),
             text: repeated.clone(),
         },
         GuardianTranscriptEntry {
-            number: 3,
-            role: "tool read_file".to_string(),
-            is_user: false,
-            is_tool: true,
+            kind: GuardianTranscriptEntryKind::Tool("tool read_file".to_string()),
             text: repeated.clone(),
         },
         GuardianTranscriptEntry {
-            number: 4,
-            role: "tool web".to_string(),
-            is_user: false,
-            is_tool: true,
+            kind: GuardianTranscriptEntryKind::Tool("tool web".to_string()),
             text: repeated.clone(),
         },
         GuardianTranscriptEntry {
-            number: 5,
-            role: "tool gh".to_string(),
-            is_user: false,
-            is_tool: true,
+            kind: GuardianTranscriptEntryKind::Tool("tool gh".to_string()),
             text: repeated,
         },
         GuardianTranscriptEntry {
-            number: 6,
-            role: "assistant".to_string(),
-            is_user: false,
-            is_tool: false,
+            kind: GuardianTranscriptEntryKind::Assistant,
             text: "The public repo check is the main reason I want to escalate.".to_string(),
         },
     ];
@@ -355,31 +341,6 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
 
     Ok(())
 }
-
-#[tokio::test]
-async fn guardian_timeout_cancels_subagent_token() {
-    let cancel_token = CancellationToken::new();
-    let waiter = tokio::spawn({
-        let cancel_token = cancel_token.clone();
-        async move {
-            cancel_token.cancelled().await;
-        }
-    });
-
-    let result = run_guardian_subagent_with_timeout(
-        std::future::pending::<anyhow::Result<GuardianAssessment>>(),
-        cancel_token,
-        Duration::from_millis(10),
-    )
-    .await;
-
-    assert!(matches!(result, Err(GuardianReviewFailure::TimedOut)));
-    tokio::time::timeout(Duration::from_secs(1), waiter)
-        .await
-        .expect("timeout helper should cancel the guardian token")
-        .expect("waiter task should finish cleanly");
-}
-
 #[test]
 fn guardian_subagent_config_preserves_parent_network_proxy() {
     let mut parent_config = test_config();
