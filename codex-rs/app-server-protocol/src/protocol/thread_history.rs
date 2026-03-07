@@ -2339,6 +2339,9 @@ mod tests {
 
     #[test]
     fn reconstructs_interrupted_send_input_as_completed_collab_call() {
+        // `send_input(interrupt=true)` first stops the child's active turn, then redirects it with
+        // new input. The transient interrupted status should remain visible in agent state, but the
+        // collab tool call itself is still a successful redirect rather than a failed operation.
         let sender = ThreadId::try_from("00000000-0000-0000-0000-000000000001")
             .expect("valid sender thread id");
         let receiver = ThreadId::try_from("00000000-0000-0000-0000-000000000002")
