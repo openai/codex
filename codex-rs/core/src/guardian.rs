@@ -503,9 +503,10 @@ async fn run_guardian_subagent(
         .models_manager
         .list_models(crate::models_manager::manager::RefreshStrategy::Offline)
         .await;
-    // Prefer GPT-5.4 when the active provider exposes it, but fall back to the
-    // parent turn's active model so guardian does not become a blanket deny on
-    // providers or test environments that do not offer that slug.
+    // Prefer `GUARDIAN_PREFERRED_MODEL` when the active provider exposes it,
+    // but fall back to the parent turn's active model so guardian does not
+    // become a blanket deny on providers or test environments that do not
+    // offer that slug.
     let preferred_model = available_models
         .iter()
         .find(|preset| preset.model == GUARDIAN_PREFERRED_MODEL);
