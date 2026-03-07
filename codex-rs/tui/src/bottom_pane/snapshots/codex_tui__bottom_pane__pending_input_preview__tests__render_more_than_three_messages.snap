@@ -5,7 +5,7 @@ expression: "format!(\"{buf:?}\")"
 Buffer {
     area: Rect { x: 0, y: 0, width: 40, height: 6 },
     content: [
-        "Queued follow-up messages:              ",
+        "• Queued follow-up messages:            ",
         "  ↳ Hello, world!                       ",
         "  ↳ This is another message             ",
         "  ↳ This is a third message             ",
@@ -13,7 +13,8 @@ Buffer {
         "    ⌥ + ↑ edit last queued message      ",
     ],
     styles: [
-        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
         x: 4, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
         x: 17, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
