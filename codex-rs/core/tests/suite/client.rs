@@ -12,7 +12,7 @@ use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -1752,7 +1752,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let conversation_id = ThreadId::new();
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
-    let otel_manager = OtelManager::new(
+    let session_telemetry = SessionTelemetry::new(
         conversation_id,
         model.as_str(),
         model_info.slug.as_str(),
@@ -1844,7 +1844,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         .stream(
             &prompt,
             &model_info,
-            &otel_manager,
+            &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
             None,

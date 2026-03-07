@@ -11811,11 +11811,112 @@
         "title": "PluginInstallResponse",
         "type": "object"
       },
+      "PluginInterface": {
+        "properties": {
+          "brandColor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "composerIcon": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "defaultPrompt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "developerName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "longDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "privacyPolicyUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "screenshots": {
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": "array"
+          },
+          "shortDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "termsOfServiceUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "websiteUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "capabilities",
+          "screenshots"
+        ],
+        "type": "object"
+      },
       "PluginListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "cwds": {
-            "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces are considered.",
+            "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
             "items": {
               "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
@@ -11850,7 +11951,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "plugins": {
             "items": {
@@ -11871,7 +11972,7 @@
           {
             "properties": {
               "path": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "type": {
                 "enum": [
@@ -11895,6 +11996,22 @@
           "enabled": {
             "type": "boolean"
           },
+          "id": {
+            "type": "string"
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "interface": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginInterface"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -11904,6 +12021,8 @@
         },
         "required": [
           "enabled",
+          "id",
+          "installed",
           "name",
           "source"
         ],
@@ -11983,6 +12102,16 @@
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/ServiceTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ToolsV2"
               },
               {
                 "type": "null"
@@ -15729,9 +15858,13 @@
             ]
           },
           "web_search": {
-            "type": [
-              "boolean",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WebSearchToolConfig"
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         },
@@ -16330,6 +16463,44 @@
           }
         ]
       },
+      "WebSearchContextSize": {
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "type": "string"
+      },
+      "WebSearchLocation": {
+        "additionalProperties": false,
+        "properties": {
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "WebSearchMode": {
         "enum": [
           "disabled",
@@ -16337,6 +16508,41 @@
           "live"
         ],
         "type": "string"
+      },
+      "WebSearchToolConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "context_size": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WebSearchContextSize"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WebSearchLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
       },
       "WindowsSandboxSetupCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

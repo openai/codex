@@ -2580,6 +2580,8 @@ mod tests {
             responses_api_engine_service_ttft_ms: 460,
             responses_api_engine_iapi_tbt_ms: 1_180,
             responses_api_engine_service_tbt_ms: 1_240,
+            turn_ttft_ms: 0,
+            turn_ttfm_ms: 0,
         };
         let cell = FinalMessageSeparator::new(Some(12), Some(summary));
         let rendered = render_lines(&cell.display_lines(600));

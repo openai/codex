@@ -3152,6 +3152,11 @@ mod tests {
     use crate::items::ImageGenerationItem;
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
+    use crate::permissions::FileSystemAccessMode;
+    use crate::permissions::FileSystemPath;
+    use crate::permissions::FileSystemSandboxEntry;
+    use crate::permissions::FileSystemSandboxPolicy;
+    use crate::permissions::NetworkSandboxPolicy;
     use anyhow::Result;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -3234,6 +3239,36 @@ mod tests {
                 writable_root.root.as_path().display()
             );
         }
+    }
+
+    #[test]
+    fn file_system_policy_rejects_legacy_bridge_for_non_workspace_writes() {
+        let cwd = if cfg!(windows) {
+            Path::new(r"C:\workspace")
+        } else {
+            Path::new("/tmp/workspace")
+        };
+        let external_write_path = if cfg!(windows) {
+            AbsolutePathBuf::from_absolute_path(r"C:\temp").expect("absolute windows temp path")
+        } else {
+            AbsolutePathBuf::from_absolute_path("/tmp").expect("absolute tmp path")
+        };
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: external_write_path,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let err = policy
+            .to_legacy_sandbox_policy(NetworkSandboxPolicy::Restricted, cwd)
+            .expect_err("non-workspace writes should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("filesystem writes outside the workspace root"),
+            "{err}"
+        );
     }
 
     #[test]

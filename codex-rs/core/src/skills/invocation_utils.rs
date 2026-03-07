@@ -94,7 +94,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         return;
     }
 
-    turn_context.otel_manager.counter(
+    turn_context.session_telemetry.counter(
         "codex.skill.injected",
         1,
         &[

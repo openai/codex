@@ -22,6 +22,7 @@ use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
@@ -375,8 +376,7 @@ pub struct SandboxWorkspaceWrite {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
-    #[serde(alias = "web_search_request")]
-    pub web_search: Option<bool>,
+    pub web_search: Option<WebSearchToolConfig>,
     pub view_image: Option<bool>,
 }
 
@@ -401,6 +401,7 @@ pub struct ProfileV2 {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub web_search: Option<WebSearchMode>,
+    pub tools: Option<ToolsV2>,
     pub chatgpt_base_url: Option<String>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
@@ -2397,7 +2398,7 @@ pub struct SkillsListResponse {
 #[ts(export_to = "v2/")]
 pub struct PluginListParams {
     /// Optional working directories used to discover repo marketplaces. When omitted,
-    /// only home-scoped marketplaces are considered.
+    /// only home-scoped marketplaces and the official curated marketplace are considered.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<AbsolutePathBuf>>,
 }
@@ -2577,7 +2578,7 @@ pub struct SkillsListEntry {
 #[ts(export_to = "v2/")]
 pub struct PluginMarketplaceEntry {
     pub name: String,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub plugins: Vec<PluginSummary>,
 }
 
@@ -2585,9 +2586,32 @@ pub struct PluginMarketplaceEntry {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginSummary {
+    pub id: String,
     pub name: String,
     pub source: PluginSource,
+    pub installed: bool,
     pub enabled: bool,
+    pub interface: Option<PluginInterface>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginInterface {
+    pub display_name: Option<String>,
+    pub short_description: Option<String>,
+    pub long_description: Option<String>,
+    pub developer_name: Option<String>,
+    pub category: Option<String>,
+    pub capabilities: Vec<String>,
+    pub website_url: Option<String>,
+    pub privacy_policy_url: Option<String>,
+    pub terms_of_service_url: Option<String>,
+    pub default_prompt: Option<String>,
+    pub brand_color: Option<String>,
+    pub composer_icon: Option<AbsolutePathBuf>,
+    pub logo: Option<AbsolutePathBuf>,
+    pub screenshots: Vec<AbsolutePathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2597,7 +2621,7 @@ pub struct PluginSummary {
 pub enum PluginSource {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    Local { path: PathBuf },
+    Local { path: AbsolutePathBuf },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

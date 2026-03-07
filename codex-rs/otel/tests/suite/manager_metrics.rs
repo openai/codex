@@ -2,7 +2,7 @@ use crate::harness::attributes_to_map;
 use crate::harness::build_metrics_with_defaults;
 use crate::harness::find_metric;
 use crate::harness::latest_metrics;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::Result;
 use codex_protocol::ThreadId;
@@ -12,11 +12,11 @@ use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
-// Ensures OtelManager attaches metadata tags when forwarding metrics.
+// Ensures SessionTelemetry attaches metadata tags when forwarding metrics.
 #[test]
 fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[("service", "codex-cli")])?;
-    let manager = OtelManager::new(
+    let manager = SessionTelemetry::new(
         ThreadId::new(),
         "gpt-5.1",
         "gpt-5.1",
@@ -68,11 +68,11 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
     Ok(())
 }
 
-// Ensures metadata tagging can be disabled when recording via OtelManager.
+// Ensures metadata tagging can be disabled when recording via SessionTelemetry.
 #[test]
 fn manager_allows_disabling_metadata_tags() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
-    let manager = OtelManager::new(
+    let manager = SessionTelemetry::new(
         ThreadId::new(),
         "gpt-4o",
         "gpt-4o",
@@ -113,7 +113,7 @@ fn manager_allows_disabling_metadata_tags() -> Result<()> {
 #[test]
 fn manager_attaches_optional_service_name_tag() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
-    let manager = OtelManager::new(
+    let manager = SessionTelemetry::new(
         ThreadId::new(),
         "gpt-5.1",
         "gpt-5.1",

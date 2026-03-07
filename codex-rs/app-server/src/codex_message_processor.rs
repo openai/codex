@@ -80,6 +80,7 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
@@ -411,6 +412,21 @@ pub(crate) struct CodexMessageProcessorArgs {
 }
 
 impl CodexMessageProcessor {
+    pub(crate) fn clear_plugin_related_caches(&self) {
+        self.thread_manager.plugins_manager().clear_cache();
+        self.thread_manager.skills_manager().clear_cache();
+    }
+
+    pub(crate) async fn maybe_start_curated_repo_sync_for_latest_config(&self) {
+        match self.load_latest_config(None).await {
+            Ok(config) => self
+                .thread_manager
+                .plugins_manager()
+                .maybe_start_curated_repo_sync_for_config(&config),
+            Err(err) => warn!("failed to load latest config for curated plugin sync: {err:?}"),
+        }
+    }
+
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         AccountUpdatedNotification {
@@ -5022,6 +5038,8 @@ impl CodexMessageProcessor {
                             .plugins
                             .into_iter()
                             .map(|plugin| PluginSummary {
+                                id: plugin.id,
+                                installed: plugin.installed,
                                 enabled: plugin.enabled,
                                 name: plugin.name,
                                 source: match plugin.source {
@@ -5029,6 +5047,22 @@ impl CodexMessageProcessor {
                                         PluginSource::Local { path }
                                     }
                                 },
+                                interface: plugin.interface.map(|interface| PluginInterface {
+                                    display_name: interface.display_name,
+                                    short_description: interface.short_description,
+                                    long_description: interface.long_description,
+                                    developer_name: interface.developer_name,
+                                    category: interface.category,
+                                    capabilities: interface.capabilities,
+                                    website_url: interface.website_url,
+                                    privacy_policy_url: interface.privacy_policy_url,
+                                    terms_of_service_url: interface.terms_of_service_url,
+                                    default_prompt: interface.default_prompt,
+                                    brand_color: interface.brand_color,
+                                    composer_icon: interface.composer_icon,
+                                    logo: interface.logo,
+                                    screenshots: interface.screenshots,
+                                }),
                             })
                             .collect(),
                     })
@@ -5190,7 +5224,7 @@ impl CodexMessageProcessor {
                         self.config.as_ref().clone()
                     }
                 };
-                let plugin_apps = load_plugin_apps(&result.installed_path);
+                let plugin_apps = load_plugin_apps(result.installed_path.as_path());
                 let apps_needing_auth = if plugin_apps.is_empty()
                     || !config.features.enabled(Feature::Apps)
                 {
@@ -5254,8 +5288,7 @@ impl CodexMessageProcessor {
                     )
                 };
 
-                plugins_manager.clear_cache();
-                self.thread_manager.skills_manager().clear_cache();
+                self.clear_plugin_related_caches();
                 self.outgoing
                     .send_response(request_id, PluginInstallResponse { apps_needing_auth })
                     .await;
