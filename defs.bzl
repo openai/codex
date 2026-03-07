@@ -31,22 +31,70 @@ def multiplatform_binaries(name, platforms = PLATFORMS):
 def _workspace_root_test_impl(ctx):
     launcher = ctx.actions.declare_file(ctx.label.name)
     test_bin = ctx.executable.test_bin
+    workspace_root_marker = ctx.file.workspace_root_marker
     ctx.actions.write(
         output = launcher,
         is_executable = True,
         content = """#!/usr/bin/env bash
 set -euo pipefail
 
-runfiles_root="${{TEST_SRCDIR:?}}/${{TEST_WORKSPACE:?}}"
-cd "${{runfiles_root}}/{workspace_dir}"
-exec "${{runfiles_root}}/{test_bin}" "$@"
+resolve_runfile() {{
+  local logical_path="$1"
+  local workspace_logical_path="${{logical_path}}"
+  if [[ -n "${{TEST_WORKSPACE:-}}" ]]; then
+    workspace_logical_path="${{TEST_WORKSPACE}}/${{logical_path}}"
+  fi
+
+  for runfiles_root in "${{RUNFILES_DIR:-}}" "${{TEST_SRCDIR:-}}"; do
+    if [[ -n "${{runfiles_root}}" && -e "${{runfiles_root}}/${{logical_path}}" ]]; then
+      printf '%s\n' "${{runfiles_root}}/${{logical_path}}"
+      return 0
+    fi
+    if [[ -n "${{runfiles_root}}" && -e "${{runfiles_root}}/${{workspace_logical_path}}" ]]; then
+      printf '%s\n' "${{runfiles_root}}/${{workspace_logical_path}}"
+      return 0
+    fi
+  done
+
+  local manifest="${{RUNFILES_MANIFEST_FILE:-}}"
+  if [[ -z "${{manifest}}" ]]; then
+    if [[ -f "$0.runfiles_manifest" ]]; then
+      manifest="$0.runfiles_manifest"
+    elif [[ -f "$0.exe.runfiles_manifest" ]]; then
+      manifest="$0.exe.runfiles_manifest"
+    fi
+  fi
+
+  if [[ -n "${{manifest}}" && -f "${{manifest}}" ]]; then
+    local resolved=""
+    resolved="$(awk -v key="${{logical_path}}" '$1 == key {{ $1 = ""; sub(/^ /, ""); print; exit }}' "${{manifest}}")"
+    if [[ -z "${{resolved}}" ]]; then
+      resolved="$(awk -v key="${{workspace_logical_path}}" '$1 == key {{ $1 = ""; sub(/^ /, ""); print; exit }}' "${{manifest}}")"
+    fi
+    if [[ -n "${{resolved}}" ]]; then
+      printf '%s\n' "${{resolved}}"
+      return 0
+    fi
+  fi
+
+  echo "failed to resolve runfile: $logical_path" >&2
+  return 1
+}}
+
+workspace_root_marker="$(resolve_runfile "{workspace_root_marker}")"
+workspace_root="$(dirname "$(dirname "$(dirname "${{workspace_root_marker}}")")")"
+test_bin="$(resolve_runfile "{test_bin}")"
+
+export INSTA_WORKSPACE_ROOT="${{workspace_root}}"
+cd "${{workspace_root}}"
+exec "${{test_bin}}" "$@"
 """.format(
-            workspace_dir = ctx.attr.workspace_dir,
+            workspace_root_marker = workspace_root_marker.short_path,
             test_bin = test_bin.short_path,
         ),
     )
 
-    runfiles = ctx.runfiles(files = [test_bin]).merge(ctx.attr.test_bin[DefaultInfo].default_runfiles)
+    runfiles = ctx.runfiles(files = [test_bin, workspace_root_marker]).merge(ctx.attr.test_bin[DefaultInfo].default_runfiles)
 
     return [
         DefaultInfo(
@@ -69,7 +117,10 @@ workspace_root_test = rule(
             executable = True,
             mandatory = True,
         ),
-        "workspace_dir": attr.string(mandatory = True),
+        "workspace_root_marker": attr.label(
+            allow_single_file = True,
+            mandatory = True,
+        ),
     },
 )
 
@@ -125,9 +176,9 @@ def codex_rust_crate(
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
     test_env = {
-        # The launcher runs Bazel unit tests from the `codex-rs` workspace
-        # root inside runfiles, so `.` keeps Insta aligned with Cargo-style
-        # snapshot locations like `tui/src/snapshots/...`.
+        # The launcher resolves an absolute workspace root at runtime so
+        # manifest-only platforms like macOS still point Insta at the real
+        # `codex-rs` checkout.
         "INSTA_WORKSPACE_ROOT": ".",
         "INSTA_SNAPSHOT_PATH": "src",
     }
@@ -192,7 +243,7 @@ def codex_rust_crate(
             name = name + "-unit-tests",
             env = test_env,
             test_bin = ":" + unit_test_binary,
-            workspace_dir = "codex-rs",
+            workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             tags = test_tags,
         )
 
