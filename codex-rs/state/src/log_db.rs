@@ -392,7 +392,7 @@ mod tests {
     async fn sqlite_feedback_logs_match_feedback_formatter_shape() {
         let codex_home =
             std::env::temp_dir().join(format!("codex-state-log-db-{}", Uuid::new_v4()));
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
         let writer = SharedWriter::default();
@@ -463,7 +463,7 @@ mod tests {
     async fn flush_persists_logs_for_query() {
         let codex_home =
             std::env::temp_dir().join(format!("codex-state-log-db-{}", Uuid::new_v4()));
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
         let layer = start(runtime.clone());

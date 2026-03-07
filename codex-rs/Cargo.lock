@@ -2395,7 +2395,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "codex-otel",
  "codex-protocol",
  "dirs",
  "log",

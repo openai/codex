@@ -502,7 +502,6 @@ pub async fn run_main_with_transport(
     let log_db = codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
-        None,
     )
     .await
     .ok()
