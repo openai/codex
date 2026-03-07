@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/compact_remote.rs
-assertion_line: 1514
 expression: "format_labeled_requests_snapshot(\"Remote pre-turn compaction during model switch currently excludes incoming user input, strips incoming <model_switch> from the compact request payload, and restores it in the post-compaction follow-up request.\",\n&[(\"Initial Request (Previous Model)\", &initial_turn_request),\n(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &post_compact_turn_request),])"
 ---
 Scenario: Remote pre-turn compaction during model switch currently excludes incoming user input, strips incoming <model_switch> from the compact request payload, and restores it in the post-compaction follow-up request.

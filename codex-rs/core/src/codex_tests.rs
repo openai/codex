@@ -2135,6 +2135,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         active_turn: Mutex::new(None),
         services,
         js_repl,
+        turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
+        last_completed_turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -2542,6 +2544,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         active_turn: Mutex::new(None),
         services,
         js_repl,
+        turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
+        last_completed_turn_used_agent_send_input: std::sync::atomic::AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     });
 

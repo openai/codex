@@ -68,6 +68,7 @@ pub(crate) struct ToolsConfig {
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
+    pub agent_watchdog: bool,
     pub artifact_tools: bool,
     pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
@@ -96,6 +97,8 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_agent_watchdog =
+            include_collab_tools && features.enabled(Feature::AgentWatchdog);
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
@@ -169,6 +172,7 @@ impl ToolsConfig {
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
+            agent_watchdog: include_agent_watchdog,
             artifact_tools: include_artifact_tools,
             request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
@@ -719,6 +723,16 @@ fn create_collab_input_items_schema() -> JsonSchema {
 }
 
 fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
+    let spawn_mode_description = if config.agent_watchdog {
+        "Spawn behavior: fork, spawn (fresh context), or watchdog (idle-time check-ins). Roles may override the omitted-mode default. Watchdog mode returns a handle, not a conversational worker, and check-ins only happen after the current turn ends and the owner thread is idle."
+    } else {
+        "Spawn behavior: fork or spawn (fresh context). Roles may override the omitted-mode default."
+    };
+    let description_prefix = if config.agent_watchdog {
+        "Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. Watchdog mode returns a control handle, not a conversational worker; watchdog check-ins are asynchronous and cannot arrive until the current turn ends and the owner thread becomes idle."
+    } else {
+        "Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent."
+    };
     let properties = BTreeMap::from([
         (
             "message".to_string(),
@@ -747,11 +761,18 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
                 ),
             },
         ),
+        (
+            "spawn_mode".to_string(),
+            JsonSchema::String {
+                description: Some(spawn_mode_description.to_string()),
+            },
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
-        description: r#"Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+        description: format!(
+            r#"{description_prefix} This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
 
 ### When to delegate vs. do the subtask yourself
 - First, quickly analyze the overall user task and form a succinct high-level plan. Identify which tasks are immediate blockers on the critical path, and which tasks are sidecar tasks that are needed but can run in parallel without blocking the next local step. As part of that plan, explicitly decide what immediate task you should do locally right now. Do this planning step before delegating to agents so you do not hand off the immediate blocking task to a submodel and then waste time waiting on it.
@@ -781,7 +802,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 - Split implementation into disjoint codebase slices and spawn multiple agents for them in parallel when the write scopes do not overlap.
 - Delegate verification only when it can run in parallel with ongoing implementation and is likely to catch a concrete risk before final integration.
 - The key is to find opportunities to spawn multiple independent subtasks in parallel within the same round, while ensuring each subtask is well-defined, self-contained, and materially advances the main task."#
-            .to_string(),
+        ),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -921,7 +942,10 @@ fn create_send_input_tool() -> ToolSpec {
         (
             "id".to_string(),
             JsonSchema::String {
-                description: Some("Agent id to message (from spawn_agent).".to_string()),
+                description: Some(
+                    "Agent id to message (from spawn_agent). Optional: omit (or use \"parent\"/\"root\") to message the parent thread when available."
+                        .to_string(),
+                ),
             },
         ),
         (
@@ -952,7 +976,7 @@ fn create_send_input_tool() -> ToolSpec {
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["id".to_string()]),
+            required: None,
             additional_properties: Some(false.into()),
         },
     })
@@ -981,16 +1005,103 @@ fn create_resume_agent_tool() -> ToolSpec {
     })
 }
 
-fn create_wait_tool() -> ToolSpec {
+fn create_compact_parent_context_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "reason".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional short reason describing why the parent appears stuck.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "evidence".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional concrete evidence of non-progress (for example repeated identical replies with no tool or file actions)."
+                    .to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "compact_parent_context".to_string(),
+        description: "Watchdog-only: request compaction for the watchdog helper's parent thread when it is idle and appears stuck."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_list_agents_tool(agent_watchdog: bool) -> ToolSpec {
+    let description = if agent_watchdog {
+        "List agents spawned by an agent, optionally recursively. This is a status view; polling it will not make a watchdog fire."
+    } else {
+        "List agents spawned by an agent, optionally recursively."
+    };
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Identifier of the parent agent whose spawned agents to list. Defaults to the current agent."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "recursive".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true (default), include all descendants recursively. When false, include only direct children."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "all".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, ignore id/recursive and return all tracked open agents that currently count toward this session's agent limit."
+                    .to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_agents".to_string(),
+        description: description.to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_wait_tool(agent_watchdog: bool) -> ToolSpec {
+    let ids_description = if agent_watchdog {
+        "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first. Watchdog handle ids are status-only here: if all ids are watchdog handles, wait returns an immediate correction instead of blocking; if mixed with normal agent ids, wait still waits on normal agents and includes current watchdog statuses."
+    } else {
+        "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
+    };
+    let description = if agent_watchdog {
+        "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Watchdog handles cannot be waited on for new check-ins, and sleeping or polling cannot make a watchdog fire while the current turn is active."
+    } else {
+        "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out."
+    };
     let mut properties = BTreeMap::new();
     properties.insert(
         "ids".to_string(),
         JsonSchema::Array {
             items: Box::new(JsonSchema::String { description: None }),
-            description: Some(
-                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
-                    .to_string(),
-            ),
+            description: Some(ids_description.to_string()),
         },
     );
     properties.insert(
@@ -1004,8 +1115,7 @@ fn create_wait_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "wait".to_string(),
-        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
-            .to_string(),
+        description: description.to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -2022,11 +2132,19 @@ pub(crate) fn build_specs(
         builder.push_spec(create_spawn_agent_tool(config));
         builder.push_spec(create_send_input_tool());
         builder.push_spec(create_resume_agent_tool());
-        builder.push_spec(create_wait_tool());
+        builder.push_spec(create_list_agents_tool(config.agent_watchdog));
+        if config.agent_watchdog {
+            builder.push_spec(create_compact_parent_context_tool());
+        }
+        builder.push_spec(create_wait_tool(config.agent_watchdog));
         builder.push_spec(create_close_agent_tool());
         builder.register_handler("spawn_agent", multi_agent_handler.clone());
         builder.register_handler("send_input", multi_agent_handler.clone());
         builder.register_handler("resume_agent", multi_agent_handler.clone());
+        if config.agent_watchdog {
+            builder.register_handler("compact_parent_context", multi_agent_handler.clone());
+        }
+        builder.register_handler("list_agents", multi_agent_handler.clone());
         builder.register_handler("wait", multi_agent_handler.clone());
         builder.register_handler("close_agent", multi_agent_handler);
     }
@@ -2335,6 +2453,25 @@ mod tests {
                 "spawn_agents_on_csv",
             ],
         );
+        assert_lacks_tool_name(&tools, "compact_parent_context");
+    }
+
+    #[test]
+    fn test_build_specs_watchdog_tools_enabled() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Collab);
+        features.enable(Feature::AgentWatchdog);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        assert_contains_tool_names(&tools, &["compact_parent_context", "list_agents"]);
     }
 
     #[test]
