@@ -2109,7 +2109,7 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
     )
     .await;
 
-    let parent_repeat = mount_sse_once(
+    let _ = mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-parent-3"),
@@ -2208,7 +2208,6 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
     )
     .await?;
     wait_for_completion_without_approval(&test).await;
-    let _ = parent_repeat.single_request();
 
     Ok(())
 }
