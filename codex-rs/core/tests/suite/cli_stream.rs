@@ -70,7 +70,7 @@ async fn responses_mode_stream_cli() {
     // TODO(jif) fix
     // // Verify a new session rollout was created and is discoverable via list_conversations
     // let provider_filter = vec!["mock".to_string()];
-    // let page = RolloutRecorder::list_threads(
+    // let page = RolloutStore::list_threads(
     //     home.path(),
     //     10,
     //     None,

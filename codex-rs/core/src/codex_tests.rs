@@ -32,8 +32,9 @@ use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnCompleteEvent;
 use crate::protocol::UserMessageEvent;
 use crate::rollout::policy::EventPersistenceMode;
-use crate::rollout::recorder::RolloutRecorder;
-use crate::rollout::recorder::RolloutRecorderParams;
+use crate::rollout::recorder::InMemoryRolloutSource;
+use crate::rollout::recorder::RolloutStore;
+use crate::rollout::recorder::RolloutStoreParams;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -624,7 +625,8 @@ fn extract_mcp_tool_selection_from_rollout_reads_search_tool_output() {
         ),
     ];
 
-    let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+    let rollout_source = InMemoryRolloutSource::new(rollout_items);
+    let selected = Session::extract_mcp_tool_selection_from_rollout_source(&rollout_source);
     assert_eq!(
         selected,
         Some(vec![
@@ -655,7 +657,8 @@ fn extract_mcp_tool_selection_from_rollout_latest_valid_payload_wins() {
         ),
     ];
 
-    let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+    let rollout_source = InMemoryRolloutSource::new(rollout_items);
+    let selected = Session::extract_mcp_tool_selection_from_rollout_source(&rollout_source);
     assert_eq!(
         selected,
         Some(vec!["mcp__codex_apps__calendar_delete_event".to_string(),])
@@ -691,7 +694,8 @@ fn extract_mcp_tool_selection_from_rollout_ignores_non_search_and_malformed_payl
         ),
     ];
 
-    let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+    let rollout_source = InMemoryRolloutSource::new(rollout_items);
+    let selected = Session::extract_mcp_tool_selection_from_rollout_source(&rollout_source);
     assert_eq!(
         selected,
         Some(vec!["mcp__codex_apps__calendar_list_events".to_string(),])
@@ -704,7 +708,8 @@ fn extract_mcp_tool_selection_from_rollout_returns_none_without_valid_search_out
         SEARCH_TOOL_BM25_TOOL_NAME,
         "search-1",
     )];
-    let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+    let rollout_source = InMemoryRolloutSource::new(rollout_items);
+    let selected = Session::extract_mcp_tool_selection_from_rollout_source(&rollout_source);
     assert_eq!(selected, None);
 }
 
@@ -712,11 +717,11 @@ fn extract_mcp_tool_selection_from_rollout_returns_none_without_valid_search_out
 async fn reconstruct_history_matches_live_compactions() {
     let (session, turn_context) = make_session_and_context().await;
     let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
+    let rollout_source = InMemoryRolloutSource::new(rollout_items);
 
     let reconstruction_turn = session.new_default_turn().await;
-    let reconstructed = session
-        .reconstruct_history_from_rollout(reconstruction_turn.as_ref(), &rollout_items)
-        .await;
+    let reconstructed =
+        session.reconstruct_history_from_rollout(reconstruction_turn.as_ref(), &rollout_source);
 
     assert_eq!(expected, reconstructed.history);
 }
@@ -734,7 +739,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         phase: None,
     };
     let replacement_history = vec![
-        summary_item.clone(),
+        summary_item,
         ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
@@ -749,10 +754,9 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         message: String::new(),
         replacement_history: Some(replacement_history.clone()),
     })];
+    let rollout_source = InMemoryRolloutSource::new(rollout_items);
 
-    let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-        .await;
+    let reconstructed = session.reconstruct_history_from_rollout(&turn_context, &rollout_source);
 
     assert_eq!(reconstructed.history, replacement_history);
 }
@@ -1080,7 +1084,7 @@ async fn thread_rollback_drops_last_turn_from_history() {
     assert_eq!(sess.previous_turn_settings().await, None);
     assert!(sess.reference_context_item().await.is_none());
 
-    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+    let InitialHistory::Resumed(resumed) = RolloutStore::get_rollout_history(&rollout_path)
         .await
         .expect("read rollout history")
     else {
@@ -1332,7 +1336,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
         ]
     );
 
-    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+    let InitialHistory::Resumed(resumed) = RolloutStore::get_rollout_history(&rollout_path)
         .await
         .expect("read rollout history")
     else {
@@ -1766,9 +1770,9 @@ async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) ->
 
 async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
     let config = session.get_config().await;
-    let recorder = RolloutRecorder::new(
+    let recorder = RolloutStore::new(
         config.as_ref(),
-        RolloutRecorderParams::new(
+        RolloutStoreParams::new(
             ThreadId::default(),
             None,
             SessionSource::Exec,
@@ -2977,9 +2981,9 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         state.set_reference_context_item(Some(previous_context_item.clone()));
     }
     let config = session.get_config().await;
-    let recorder = RolloutRecorder::new(
+    let recorder = RolloutStore::new(
         config.as_ref(),
-        RolloutRecorderParams::new(
+        RolloutStoreParams::new(
             ThreadId::default(),
             None,
             SessionSource::Exec,
@@ -3020,7 +3024,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await;
 
-    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+    let InitialHistory::Resumed(resumed) = RolloutStore::get_rollout_history(&rollout_path)
         .await
         .expect("read rollout history")
     else {
@@ -3074,9 +3078,9 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         .with_model(next_model.to_string(), &session.services.models_manager)
         .await;
     let config = session.get_config().await;
-    let recorder = RolloutRecorder::new(
+    let recorder = RolloutStore::new(
         config.as_ref(),
-        RolloutRecorderParams::new(
+        RolloutStoreParams::new(
             ThreadId::default(),
             None,
             SessionSource::Exec,
@@ -3122,7 +3126,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await;
 
-    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+    let InitialHistory::Resumed(resumed) = RolloutStore::get_rollout_history(&rollout_path)
         .await
         .expect("read rollout history")
     else {
@@ -3138,6 +3142,188 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
             .expect("serialize persisted turn context item"),
         serde_json::to_value(Some(turn_context.to_turn_context_item()))
             .expect("serialize expected turn context item")
+    );
+}
+
+#[tokio::test]
+async fn session_new_ephemeral_resume_keeps_in_memory_history() {
+    let (seed_session, turn_context) = make_session_and_context().await;
+    let (rollout_items, expected) = sample_rollout(&seed_session, &turn_context).await;
+
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config.ephemeral = true;
+    let config = Arc::new(config);
+
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let models_manager = Arc::new(ModelsManager::new(
+        config.codex_home.clone(),
+        auth_manager.clone(),
+        None,
+        CollaborationModesConfig::default(),
+    ));
+    let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+    let model_info = ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model,
+            reasoning_effort: config.model_reasoning_effort,
+            developer_instructions: None,
+        },
+    };
+    let session_configuration = SessionConfiguration {
+        provider: config.model_provider.clone(),
+        collaboration_mode,
+        model_reasoning_summary: config.model_reasoning_summary,
+        developer_instructions: config.developer_instructions.clone(),
+        user_instructions: config.user_instructions.clone(),
+        personality: config.personality,
+        base_instructions: config
+            .base_instructions
+            .clone()
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+        compact_prompt: config.compact_prompt.clone(),
+        approval_policy: config.permissions.approval_policy.clone(),
+        sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        cwd: config.cwd.clone(),
+        codex_home: config.codex_home.clone(),
+        thread_name: None,
+        original_config_do_not_use: Arc::clone(&config),
+        service_tier: config.service_tier,
+        metrics_service_name: None,
+        app_server_client_name: None,
+        session_source: SessionSource::Exec,
+        dynamic_tools: Vec::new(),
+        persist_extended_history: false,
+        inherited_shell_snapshot: None,
+    };
+
+    let (tx_event, _rx_event) = async_channel::unbounded();
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+    let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        Arc::clone(&plugins_manager),
+    ));
+    let session = Session::new(
+        session_configuration,
+        Arc::clone(&config),
+        auth_manager,
+        models_manager,
+        ExecPolicyManager::default(),
+        tx_event,
+        agent_status_tx,
+        InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }),
+        SessionSource::Exec,
+        skills_manager,
+        plugins_manager,
+        mcp_manager,
+        Arc::new(FileWatcher::noop()),
+        AgentControl::default(),
+    )
+    .await
+    .expect("create ephemeral resumed session");
+
+    assert_eq!(expected, session.clone_history().await.raw_items());
+}
+
+#[tokio::test]
+async fn session_new_ephemeral_resume_with_empty_history_does_not_panic() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config.ephemeral = true;
+    let config = Arc::new(config);
+
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let models_manager = Arc::new(ModelsManager::new(
+        config.codex_home.clone(),
+        auth_manager.clone(),
+        None,
+        CollaborationModesConfig::default(),
+    ));
+    let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+    let model_info = ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model,
+            reasoning_effort: config.model_reasoning_effort,
+            developer_instructions: None,
+        },
+    };
+    let session_configuration = SessionConfiguration {
+        provider: config.model_provider.clone(),
+        collaboration_mode,
+        model_reasoning_summary: config.model_reasoning_summary,
+        developer_instructions: config.developer_instructions.clone(),
+        user_instructions: config.user_instructions.clone(),
+        personality: config.personality,
+        base_instructions: config
+            .base_instructions
+            .clone()
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+        compact_prompt: config.compact_prompt.clone(),
+        approval_policy: config.permissions.approval_policy.clone(),
+        sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        cwd: config.cwd.clone(),
+        codex_home: config.codex_home.clone(),
+        thread_name: None,
+        original_config_do_not_use: Arc::clone(&config),
+        service_tier: config.service_tier,
+        metrics_service_name: None,
+        app_server_client_name: None,
+        session_source: SessionSource::Exec,
+        dynamic_tools: Vec::new(),
+        persist_extended_history: false,
+        inherited_shell_snapshot: None,
+    };
+
+    let (tx_event, _rx_event) = async_channel::unbounded();
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+    let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        Arc::clone(&plugins_manager),
+    ));
+    let session = Session::new(
+        session_configuration,
+        Arc::clone(&config),
+        auth_manager,
+        models_manager,
+        ExecPolicyManager::default(),
+        tx_event,
+        agent_status_tx,
+        InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: Vec::new(),
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }),
+        SessionSource::Exec,
+        skills_manager,
+        plugins_manager,
+        mcp_manager,
+        Arc::new(FileWatcher::noop()),
+        AgentControl::default(),
+    )
+    .await
+    .expect("create ephemeral resumed session with empty history");
+
+    assert_eq!(
+        Vec::<ResponseItem>::new(),
+        session.clone_history().await.raw_items()
     );
 }
 
