@@ -6,7 +6,7 @@ expression: popup
   Experimental features
   Toggle experimental features. Changes are saved to config.toml.
 
-> [ ] JavaScript REPL              Enable a persistent Node-backed JavaScript REPL for interactive website debugging
+› [ ] JavaScript REPL              Enable a persistent Node-backed JavaScript REPL for interactive website debugging
                                    and other inline JavaScript execution capabilities. Requires Node >= v22.22.0
                                    installed.
   [ ] Bubblewrap sandbox           Try the new linux sandbox based on bubblewrap.
