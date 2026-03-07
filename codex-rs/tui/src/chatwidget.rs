@@ -2496,6 +2496,37 @@ impl ChatWidget {
         self.set_status_header(message);
     }
 
+    fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
+        let label = hook_event_label(event.run.event_name);
+        let mut message = format!("Running {label} hook");
+        if let Some(status_message) = event.run.status_message
+            && !status_message.is_empty()
+        {
+            message.push_str(": ");
+            message.push_str(&status_message);
+        }
+        self.add_to_history(history_cell::new_info_event(message, None));
+        self.request_redraw();
+    }
+
+    fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
+        let status = format!("{:?}", event.run.status).to_lowercase();
+        let header = format!("{} hook ({status})", hook_event_label(event.run.event_name));
+        let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
+        for entry in event.run.entries {
+            let prefix = match entry.kind {
+                codex_protocol::protocol::HookOutputEntryKind::Warning => "warning: ",
+                codex_protocol::protocol::HookOutputEntryKind::Stop => "stop: ",
+                codex_protocol::protocol::HookOutputEntryKind::Feedback => "feedback: ",
+                codex_protocol::protocol::HookOutputEntryKind::Context => "hook context: ",
+                codex_protocol::protocol::HookOutputEntryKind::Error => "error: ",
+            };
+            lines.push(format!("  {prefix}{}", entry.text).into());
+        }
+        self.add_to_history(PlainHistoryCell::new(lines));
+        self.request_redraw();
+    }
+
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(false);
@@ -4881,6 +4912,8 @@ impl ChatWidget {
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::DynamicToolCallResponse(_) => {}
+            EventMsg::HookStarted(event) => self.on_hook_started(event),
+            EventMsg::HookCompleted(event) => self.on_hook_completed(event),
             EventMsg::RealtimeConversationStarted(ev) => {
                 if !from_replay {
                     self.on_realtime_conversation_started(ev);
@@ -8671,6 +8704,13 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
+    match event_name {
+        codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
+        codex_protocol::protocol::HookEventName::Stop => "Stop",
+    }
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {

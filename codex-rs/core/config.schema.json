@@ -329,6 +329,9 @@
             "codex_git_commit": {
               "type": "boolean"
             },
+            "codex_hooks": {
+              "type": "boolean"
+            },
             "collab": {
               "type": "boolean"
             },
@@ -1796,6 +1799,9 @@
           "type": "boolean"
         },
         "codex_git_commit": {
+          "type": "boolean"
+        },
+        "codex_hooks": {
           "type": "boolean"
         },
         "collab": {

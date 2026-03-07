@@ -90,6 +90,16 @@ export type { GetAccountRateLimitsResponse } from "./GetAccountRateLimitsRespons
 export type { GetAccountResponse } from "./GetAccountResponse";
 export type { GitInfo } from "./GitInfo";
 export type { HazelnutScope } from "./HazelnutScope";
+export type { HookCompletedNotification } from "./HookCompletedNotification";
+export type { HookEventName } from "./HookEventName";
+export type { HookExecutionMode } from "./HookExecutionMode";
+export type { HookHandlerType } from "./HookHandlerType";
+export type { HookOutputEntry } from "./HookOutputEntry";
+export type { HookOutputEntryKind } from "./HookOutputEntryKind";
+export type { HookRunStatus } from "./HookRunStatus";
+export type { HookRunSummary } from "./HookRunSummary";
+export type { HookScope } from "./HookScope";
+export type { HookStartedNotification } from "./HookStartedNotification";
 export type { ItemCompletedNotification } from "./ItemCompletedNotification";
 export type { ItemStartedNotification } from "./ItemStartedNotification";
 export type { ListMcpServerStatusParams } from "./ListMcpServerStatusParams";
