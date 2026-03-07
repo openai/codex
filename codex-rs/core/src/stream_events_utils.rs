@@ -129,7 +129,7 @@ async fn record_stage1_output_usage_for_completed_item(
         return;
     }
 
-    if let Some(db) = state_db::get_state_db(turn_context.config.as_ref(), None).await {
+    if let Some(db) = state_db::get_state_db(turn_context.config.as_ref()).await {
         let _ = db.record_stage1_output_usage(&thread_ids).await;
     }
 }
@@ -220,7 +220,7 @@ pub(crate) async fn handle_output_item_done(
         Err(FunctionCallError::MissingLocalShellCallId) => {
             let msg = "LocalShellCall without call_id or id";
             ctx.turn_context
-                .otel_manager
+                .session_telemetry
                 .log_tool_failed("local_shell", msg);
             tracing::error!(msg);
 

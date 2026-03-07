@@ -1,6 +1,12 @@
-use crate::OTEL_LOG_ONLY_TARGET;
-use crate::OTEL_TRACE_SAFE_TARGET;
 use crate::TelemetryAuthMode;
+use crate::ToolDecisionSource;
+use crate::events::shared::log_and_trace_event;
+use crate::events::shared::log_event;
+use crate::events::shared::trace_event;
+use crate::metrics::MetricsClient;
+use crate::metrics::MetricsConfig;
+use crate::metrics::MetricsError;
+use crate::metrics::Result as MetricsResult;
 use crate::metrics::names::API_CALL_COUNT_METRIC;
 use crate::metrics::names::API_CALL_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC;
@@ -17,9 +23,12 @@ use crate::metrics::names::WEBSOCKET_EVENT_COUNT_METRIC;
 use crate::metrics::names::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_COUNT_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_DURATION_METRIC;
+use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
+use crate::metrics::timer::Timer;
+use crate::metrics::validation::validate_tag_key;
+use crate::metrics::validation::validate_tag_value;
+use crate::provider::OtelProvider;
 use crate::sanitize_metric_tag_value;
-use chrono::SecondsFormat;
-use chrono::Utc;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_protocol::ThreadId;
@@ -33,19 +42,15 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use reqwest::Error;
 use reqwest::Response;
 use std::borrow::Cow;
-use std::fmt::Display;
 use std::future::Future;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::time::error::Elapsed;
 use tracing::Span;
-
-pub use crate::OtelEventMetadata;
-pub use crate::OtelManager;
-pub use crate::ToolDecisionSource;
 
 const SSE_UNKNOWN_KIND: &str = "unknown";
 const WEBSOCKET_UNKNOWN_KIND: &str = "unknown";
@@ -58,85 +63,207 @@ const RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD: &str = "engine_service_ttft_total
 const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine_calls_ms";
 const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
 
-macro_rules! log_event {
-    ($self:expr, $($fields:tt)*) => {{
-        tracing::event!(
-            target: OTEL_LOG_ONLY_TARGET,
-            tracing::Level::INFO,
-            $($fields)*
-            event.timestamp = %timestamp(),
-            conversation.id = %$self.metadata.conversation_id,
-            app.version = %$self.metadata.app_version,
-            auth_mode = $self.metadata.auth_mode,
-            originator = %$self.metadata.originator,
-            user.account_id = $self.metadata.account_id,
-            user.email = $self.metadata.account_email,
-            terminal.type = %$self.metadata.terminal_type,
-            model = %$self.metadata.model,
-            slug = %$self.metadata.slug,
-        );
-    }};
+#[derive(Debug, Clone)]
+pub struct SessionTelemetryMetadata {
+    pub(crate) conversation_id: ThreadId,
+    pub(crate) auth_mode: Option<String>,
+    pub(crate) account_id: Option<String>,
+    pub(crate) account_email: Option<String>,
+    pub(crate) originator: String,
+    pub(crate) service_name: Option<String>,
+    pub(crate) session_source: String,
+    pub(crate) model: String,
+    pub(crate) slug: String,
+    pub(crate) log_user_prompts: bool,
+    pub(crate) app_version: &'static str,
+    pub(crate) terminal_type: String,
 }
 
-macro_rules! trace_event {
-    ($self:expr, $($fields:tt)*) => {{
-        tracing::event!(
-            target: OTEL_TRACE_SAFE_TARGET,
-            tracing::Level::INFO,
-            $($fields)*
-            event.timestamp = %timestamp(),
-            conversation.id = %$self.metadata.conversation_id,
-            app.version = %$self.metadata.app_version,
-            auth_mode = $self.metadata.auth_mode,
-            originator = %$self.metadata.originator,
-            terminal.type = %$self.metadata.terminal_type,
-            model = %$self.metadata.model,
-            slug = %$self.metadata.slug,
-        );
-    }};
+#[derive(Debug, Clone)]
+pub struct SessionTelemetry {
+    pub(crate) metadata: SessionTelemetryMetadata,
+    pub(crate) metrics: Option<MetricsClient>,
+    pub(crate) metrics_use_metadata_tags: bool,
 }
 
-macro_rules! log_and_trace_event {
-    (
-        $self:expr,
-        common: { $($common:tt)* },
-        log: { $($log:tt)* },
-        trace: { $($trace:tt)* },
-    ) => {{
-        tracing::event!(
-            target: OTEL_LOG_ONLY_TARGET,
-            tracing::Level::INFO,
-            $($common)*
-            $($log)*
-            event.timestamp = %timestamp(),
-            conversation.id = %$self.metadata.conversation_id,
-            app.version = %$self.metadata.app_version,
-            auth_mode = $self.metadata.auth_mode,
-            originator = %$self.metadata.originator,
-            user.account_id = $self.metadata.account_id,
-            user.email = $self.metadata.account_email,
-            terminal.type = %$self.metadata.terminal_type,
-            model = %$self.metadata.model,
-            slug = %$self.metadata.slug,
-        );
-        tracing::event!(
-            target: OTEL_TRACE_SAFE_TARGET,
-            tracing::Level::INFO,
-            $($common)*
-            $($trace)*
-            event.timestamp = %timestamp(),
-            conversation.id = %$self.metadata.conversation_id,
-            app.version = %$self.metadata.app_version,
-            auth_mode = $self.metadata.auth_mode,
-            originator = %$self.metadata.originator,
-            terminal.type = %$self.metadata.terminal_type,
-            model = %$self.metadata.model,
-            slug = %$self.metadata.slug,
-        );
-    }};
-}
+impl SessionTelemetry {
+    pub fn with_model(mut self, model: &str, slug: &str) -> Self {
+        self.metadata.model = model.to_owned();
+        self.metadata.slug = slug.to_owned();
+        self
+    }
 
-impl OtelManager {
+    pub fn with_metrics_service_name(mut self, service_name: &str) -> Self {
+        self.metadata.service_name = Some(sanitize_metric_tag_value(service_name));
+        self
+    }
+
+    pub fn with_metrics(mut self, metrics: MetricsClient) -> Self {
+        self.metrics = Some(metrics);
+        self.metrics_use_metadata_tags = true;
+        self
+    }
+
+    pub fn with_metrics_without_metadata_tags(mut self, metrics: MetricsClient) -> Self {
+        self.metrics = Some(metrics);
+        self.metrics_use_metadata_tags = false;
+        self
+    }
+
+    pub fn with_metrics_config(self, config: MetricsConfig) -> MetricsResult<Self> {
+        let metrics = MetricsClient::new(config)?;
+        Ok(self.with_metrics(metrics))
+    }
+
+    pub fn with_provider_metrics(self, provider: &OtelProvider) -> Self {
+        match provider.metrics() {
+            Some(metrics) => self.with_metrics(metrics.clone()),
+            None => self,
+        }
+    }
+
+    pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
+        let res: MetricsResult<()> = (|| {
+            let Some(metrics) = &self.metrics else {
+                return Ok(());
+            };
+
+            let tags = self.tags_with_metadata(tags)?;
+            metrics.counter(name, inc, &tags)
+        })();
+
+        if let Err(e) = res {
+            tracing::warn!("metrics counter [{name}] failed: {e}");
+        }
+    }
+
+    pub fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
+        let res: MetricsResult<()> = (|| {
+            let Some(metrics) = &self.metrics else {
+                return Ok(());
+            };
+
+            let tags = self.tags_with_metadata(tags)?;
+            metrics.histogram(name, value, &tags)
+        })();
+
+        if let Err(e) = res {
+            tracing::warn!("metrics histogram [{name}] failed: {e}");
+        }
+    }
+
+    pub fn record_duration(&self, name: &str, duration: Duration, tags: &[(&str, &str)]) {
+        let res: MetricsResult<()> = (|| {
+            let Some(metrics) = &self.metrics else {
+                return Ok(());
+            };
+
+            let tags = self.tags_with_metadata(tags)?;
+            metrics.record_duration(name, duration, &tags)
+        })();
+
+        if let Err(e) = res {
+            tracing::warn!("metrics duration [{name}] failed: {e}");
+        }
+    }
+
+    pub fn start_timer(&self, name: &str, tags: &[(&str, &str)]) -> Result<Timer, MetricsError> {
+        let Some(metrics) = &self.metrics else {
+            return Err(MetricsError::ExporterDisabled);
+        };
+        let tags = self.tags_with_metadata(tags)?;
+        metrics.start_timer(name, &tags)
+    }
+
+    pub fn shutdown_metrics(&self) -> MetricsResult<()> {
+        let Some(metrics) = &self.metrics else {
+            return Ok(());
+        };
+        metrics.shutdown()
+    }
+
+    pub fn snapshot_metrics(&self) -> MetricsResult<ResourceMetrics> {
+        let Some(metrics) = &self.metrics else {
+            return Err(MetricsError::ExporterDisabled);
+        };
+        metrics.snapshot()
+    }
+
+    /// Collect and discard a runtime metrics snapshot to reset delta accumulators.
+    pub fn reset_runtime_metrics(&self) {
+        if self.metrics.is_none() {
+            return;
+        }
+        if let Err(err) = self.snapshot_metrics() {
+            tracing::debug!("runtime metrics reset skipped: {err}");
+        }
+    }
+
+    /// Collect a runtime metrics summary if debug snapshots are available.
+    pub fn runtime_metrics_summary(&self) -> Option<RuntimeMetricsSummary> {
+        let snapshot = match self.snapshot_metrics() {
+            Ok(snapshot) => snapshot,
+            Err(_) => {
+                return None;
+            }
+        };
+        let summary = RuntimeMetricsSummary::from_snapshot(&snapshot);
+        if summary.is_empty() {
+            None
+        } else {
+            Some(summary)
+        }
+    }
+
+    fn tags_with_metadata<'a>(
+        &'a self,
+        tags: &'a [(&'a str, &'a str)],
+    ) -> MetricsResult<Vec<(&'a str, &'a str)>> {
+        let mut merged = self.metadata_tag_refs()?;
+        merged.extend(tags.iter().copied());
+        Ok(merged)
+    }
+
+    fn metadata_tag_refs(&self) -> MetricsResult<Vec<(&str, &str)>> {
+        if !self.metrics_use_metadata_tags {
+            return Ok(Vec::new());
+        }
+        let mut tags = Vec::with_capacity(7);
+        Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
+        Self::push_metadata_tag(
+            &mut tags,
+            "session_source",
+            Some(self.metadata.session_source.as_str()),
+        )?;
+        Self::push_metadata_tag(
+            &mut tags,
+            "originator",
+            Some(self.metadata.originator.as_str()),
+        )?;
+        Self::push_metadata_tag(
+            &mut tags,
+            "service_name",
+            self.metadata.service_name.as_deref(),
+        )?;
+        Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
+        Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
+        Ok(tags)
+    }
+
+    fn push_metadata_tag<'a>(
+        tags: &mut Vec<(&'a str, &'a str)>,
+        key: &'static str,
+        value: Option<&'a str>,
+    ) -> MetricsResult<()> {
+        let Some(value) = value else {
+            return Ok(());
+        };
+        validate_tag_key(key)?;
+        validate_tag_value(value)?;
+        tags.push((key, value));
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         conversation_id: ThreadId,
@@ -149,9 +276,9 @@ impl OtelManager {
         log_user_prompts: bool,
         terminal_type: String,
         session_source: SessionSource,
-    ) -> OtelManager {
+    ) -> SessionTelemetry {
         Self {
-            metadata: OtelEventMetadata {
+            metadata: SessionTelemetryMetadata {
                 conversation_id,
                 auth_mode: auth_mode.map(|m| m.to_string()),
                 account_id,
@@ -171,18 +298,18 @@ impl OtelManager {
     }
 
     pub fn record_responses(&self, handle_responses_span: &Span, event: &ResponseEvent) {
-        handle_responses_span.record("otel.name", OtelManager::responses_type(event));
+        handle_responses_span.record("otel.name", SessionTelemetry::responses_type(event));
 
         match event {
             ResponseEvent::OutputItemDone(item) => {
                 handle_responses_span.record("from", "output_item_done");
-                if let ResponseItem::FunctionCall { name, .. } = &item {
+                if let ResponseItem::FunctionCall { name, .. } = item {
                     handle_responses_span.record("tool_name", name.as_str());
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
                 handle_responses_span.record("from", "output_item_added");
-                if let ResponseItem::FunctionCall { name, .. } = &item {
+                if let ResponseItem::FunctionCall { name, .. } = item {
                     handle_responses_span.record("tool_name", name.as_str());
                 }
             }
@@ -406,7 +533,7 @@ impl OtelManager {
         response: &Result<Option<Result<StreamEvent, StreamError<E>>>, Elapsed>,
         duration: Duration,
     ) where
-        E: Display,
+        E: std::fmt::Display,
     {
         match response {
             Ok(Some(Ok(sse))) => {
@@ -469,7 +596,7 @@ impl OtelManager {
 
     pub fn sse_event_failed<T>(&self, kind: Option<&String>, duration: Duration, error: &T)
     where
-        T: Display,
+        T: std::fmt::Display,
     {
         let kind_str = kind.map_or(SSE_UNKNOWN_KIND, String::as_str);
         self.counter(
@@ -508,7 +635,7 @@ impl OtelManager {
 
     pub fn see_event_completed_failed<T>(&self, error: &T)
     where
-        T: Display,
+        T: std::fmt::Display,
     {
         log_and_trace_event!(
             self,
@@ -620,7 +747,7 @@ impl OtelManager {
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<(String, bool), E>>,
-        E: Display,
+        E: std::fmt::Display,
     {
         let start = Instant::now();
         let result = f().await;
@@ -774,8 +901,9 @@ impl OtelManager {
     fn responses_type(event: &ResponseEvent) -> String {
         match event {
             ResponseEvent::Created => "created".into(),
-            ResponseEvent::OutputItemDone(item) => OtelManager::responses_item_type(item),
-            ResponseEvent::OutputItemAdded(item) => OtelManager::responses_item_type(item),
+            ResponseEvent::OutputItemDone(item) | ResponseEvent::OutputItemAdded(item) => {
+                SessionTelemetry::responses_item_type(item)
+            }
             ResponseEvent::Completed { .. } => "completed".into(),
             ResponseEvent::OutputTextDelta(_) => "text_delta".into(),
             ResponseEvent::ReasoningSummaryDelta { .. } => "reasoning_summary_delta".into(),
@@ -806,10 +934,6 @@ impl OtelManager {
             ResponseItem::Other => "other".into(),
         }
     }
-}
-
-fn timestamp() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn duration_from_ms_value(value: Option<&serde_json::Value>) -> Option<Duration> {

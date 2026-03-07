@@ -284,13 +284,19 @@ pub(crate) async fn handle_start(
         .experimental_realtime_ws_backend_prompt
         .clone()
         .unwrap_or(params.prompt);
-    let prompt =
-        match build_realtime_startup_context(sess.as_ref(), REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET)
-            .await
-        {
-            Some(context) => format!("{prompt}\n\n{context}"),
-            None => prompt,
-        };
+    let startup_context = match config.experimental_realtime_ws_startup_context.clone() {
+        Some(startup_context) => startup_context,
+        None => {
+            build_realtime_startup_context(sess.as_ref(), REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET)
+                .await
+                .unwrap_or_default()
+        }
+    };
+    let prompt = if startup_context.is_empty() {
+        prompt
+    } else {
+        format!("{prompt}\n\n{startup_context}")
+    };
     let model = config.experimental_realtime_ws_model.clone();
 
     let requested_session_id = params

@@ -45,7 +45,7 @@ impl ToolHandler for McpHandler {
 
         let response = handle_mcp_tool_call(
             Arc::clone(&session),
-            turn.as_ref(),
+            &turn,
             call_id.clone(),
             server,
             tool,
