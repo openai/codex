@@ -52,7 +52,6 @@ impl ApplyPatchRuntime {
 
     fn build_guardian_review_request(req: &ApplyPatchRequest) -> GuardianReviewRequest {
         GuardianReviewRequest {
-            tool_name: "apply_patch",
             action: json!({
                 "tool": "apply_patch",
                 "cwd": req.action.cwd,
@@ -258,7 +257,6 @@ mod tests {
         assert_eq!(
             guardian_request,
             GuardianReviewRequest {
-                tool_name: "apply_patch",
                 action: json!({
                     "tool": "apply_patch",
                     "cwd": expected_cwd,

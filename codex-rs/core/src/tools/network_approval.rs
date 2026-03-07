@@ -345,7 +345,6 @@ impl NetworkApprovalService {
                 &session,
                 &turn_context,
                 GuardianReviewRequest {
-                    tool_name: "network_access",
                     action: json!({
                         "tool": "network_access",
                         "target": target,

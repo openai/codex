@@ -386,7 +386,6 @@ impl CoreShellActionProvider {
             .pause_for(async move {
                 if routes_approval_to_guardian(&turn) {
                     let request = GuardianReviewRequest {
-                        tool_name,
                         action: json!({
                             "tool": tool_name,
                             "program": program,

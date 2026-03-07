@@ -11,7 +11,6 @@
 //! 3. Fail closed on timeout, execution failure, or malformed output.
 //! 4. Approve only low- and medium-risk actions (`risk_score < 80`).
 
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -52,8 +51,8 @@ pub(crate) const GUARDIAN_SUBAGENT_NAME: &str = "guardian";
 // other.
 const GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
-const GUARDIAN_MAX_TRANSCRIPT_TOKENS: usize =
-    GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS + GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS;
+const GUARDIAN_MESSAGE_ENTRY_TOKEN_CAP: usize = 2_000;
+const GUARDIAN_TOOL_ENTRY_TOKEN_CAP: usize = 1_000;
 const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 1_000;
 // Always keep some recent non-user context so the reviewer can see what the
 // agent was trying to do immediately before the escalation.
@@ -82,11 +81,8 @@ pub(crate) fn is_guardian_subagent_source(
 /// Canonical description of the action the guardian is being asked to review.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct GuardianReviewRequest {
-    pub(crate) tool_name: &'static str,
-    pub(crate) action: GuardianAction,
+    pub(crate) action: Value,
 }
-
-pub(crate) type GuardianAction = Value;
 
 /// Coarse risk label paired with the numeric `risk_score`.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -113,12 +109,6 @@ pub(crate) struct GuardianAssessment {
     evidence: Vec<GuardianEvidence>,
 }
 
-/// Minimal result shape used by the existing approval/escalation pipeline.
-#[derive(Debug, Clone)]
-pub(crate) struct GuardianReviewResult {
-    pub(crate) approved: bool,
-}
-
 #[derive(Debug)]
 enum GuardianReviewFailure {
     TimedOut,
@@ -135,19 +125,6 @@ struct GuardianTranscriptEntry {
     text: String,
 }
 
-#[derive(Clone, Copy)]
-struct GuardianTranscriptRenderBudget {
-    message_entry_token_cap: usize,
-    tool_entry_token_cap: usize,
-}
-
-#[derive(Default)]
-struct GuardianTranscriptTokenCount {
-    total: usize,
-    message: usize,
-    tool: usize,
-}
-
 /// Top-level guardian review entry point for approval requests routed through
 /// guardian.
 ///
@@ -157,20 +134,16 @@ struct GuardianTranscriptTokenCount {
 ///
 /// This function always fails closed: any timeout, subagent failure, or parse
 /// failure is treated as a high-risk denial.
-async fn assess_approval_request(
+async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
-    request: Option<GuardianReviewRequest>,
+    request: GuardianReviewRequest,
     retry_reason: Option<String>,
-) -> GuardianReviewResult {
-    let tool_name = request
-        .as_ref()
-        .map(|request| request.tool_name)
-        .unwrap_or("unknown");
+) -> ReviewDecision {
     session
         .notify_background_event(
             turn.as_ref(),
-            format!("Guardian assessing approval request for {tool_name}..."),
+            "Guardian assessing approval request...".to_string(),
         )
         .await;
 
@@ -224,7 +197,11 @@ async fn assess_approval_request(
         )
         .await;
 
-    GuardianReviewResult { approved }
+    if approved {
+        ReviewDecision::Approved
+    } else {
+        ReviewDecision::Denied
+    }
 }
 
 async fn run_guardian_subagent_with_timeout<F>(
@@ -262,23 +239,10 @@ pub(crate) async fn review_approval_request_with_reason(
     request: GuardianReviewRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
-    let review = assess_approval_request(
-        Arc::clone(session),
-        Arc::clone(turn),
-        Some(request),
-        retry_reason,
-    )
-    .await;
-
-    if review.approved {
-        ReviewDecision::Approved
-    } else {
-        ReviewDecision::Denied
-    }
+    run_guardian_review(Arc::clone(session), Arc::clone(turn), request, retry_reason).await
 }
 
 /// Builds the guardian user content items from:
-/// - parent session instructions that may constrain approval decisions
 /// - a compact transcript for authorization and local context
 /// - the exact action JSON being proposed for approval
 ///
@@ -289,28 +253,13 @@ pub(crate) async fn review_approval_request_with_reason(
 async fn build_guardian_prompt_items(
     session: &Session,
     retry_reason: Option<String>,
-    request: Option<GuardianReviewRequest>,
+    request: GuardianReviewRequest,
 ) -> Vec<UserInput> {
     let history = session.clone_history().await;
     let transcript_entries = collect_guardian_transcript_entries(history.raw_items());
-    let session_id = session.conversation_id.to_string();
-    let rollout_path = session
-        .services
-        .rollout
-        .lock()
-        .await
-        .as_ref()
-        .map(|rollout| rollout.rollout_path().display().to_string());
-    let planned_action_json = request
-        .as_ref()
-        .map(|request| format_guardian_action_pretty(&request.action))
-        .unwrap_or_else(|| "{}".to_string());
+    let planned_action_json = format_guardian_action_pretty(&request.action);
 
-    let (transcript, omission_note) = build_guardian_transcript(
-        transcript_entries.as_slice(),
-        &session_id,
-        rollout_path.as_deref(),
-    );
+    let (transcript, omission_note) = build_guardian_transcript(transcript_entries.as_slice());
     let mut items = vec![
         UserInput::Text {
             text: "Assess the exact planned action below. Use read-only tool checks when local state matters.\n".to_string(),
@@ -368,163 +317,94 @@ async fn build_guardian_prompt_items(
 ///
 /// The pruning strategy is intentionally simple and reviewable:
 /// - always retain user messages because they carry authorization and intent
-/// - seed the transcript with the most recent entries
-/// - reserve a smaller sub-budget for tool evidence so it cannot crowd out the
-///   human conversation
-/// - if the transcript is still too large, drop older non-user entries first
-/// - progressively shrink the per-entry truncation cap before giving up
-fn build_guardian_transcript(
-    entries: &[GuardianTranscriptEntry],
-    session_id: &str,
-    rollout_path: Option<&str>,
-) -> (String, Option<String>) {
+/// - walk recent non-user entries from newest to oldest
+/// - keep them only while the message/tool budgets allow
+/// - reserve a separate tool budget so tool evidence cannot crowd out the human
+///   conversation
+///
+/// User messages are never dropped unless the entire transcript must be omitted.
+fn build_guardian_transcript(entries: &[GuardianTranscriptEntry]) -> (String, Option<String>) {
     if entries.is_empty() {
-        let note = format!(
-            "Conversation transcript omitted. Session ID: {session_id}. Rollout path: {}. Full conversation can be consulted for deeper judgment.",
-            rollout_path.unwrap_or("<unavailable>")
-        );
-        return ("<no retained transcript entries>".to_string(), Some(note));
+        return ("<no retained transcript entries>".to_string(), None);
     }
 
-    // Preserve all user turns and a slice of recent context so the reviewer can
-    // see both the authorization signal and the immediate lead-up to retry,
-    // including recent tool evidence that may justify the escalation.
-    let recent_numbers: BTreeSet<usize> = entries
+    let rendered_entries = entries
         .iter()
-        .rev()
-        .take(GUARDIAN_RECENT_ENTRY_LIMIT)
-        .map(|entry| entry.number)
-        .collect();
-    let mut included_numbers: BTreeSet<usize> = entries
-        .iter()
-        .filter(|entry| entry.is_user || recent_numbers.contains(&entry.number))
-        .map(|entry| entry.number)
-        .collect();
-
-    // Start with more generous per-entry truncation, then tighten it if needed
-    // before dropping the transcript entirely.
-    for budget in [
-        GuardianTranscriptRenderBudget {
-            message_entry_token_cap: 2_000,
-            tool_entry_token_cap: 1_000,
-        },
-        GuardianTranscriptRenderBudget {
-            message_entry_token_cap: 1_000,
-            tool_entry_token_cap: 500,
-        },
-        GuardianTranscriptRenderBudget {
-            message_entry_token_cap: 500,
-            tool_entry_token_cap: 250,
-        },
-    ] {
-        loop {
-            let counts = transcript_token_count(entries, &included_numbers, budget);
-            if counts.total <= GUARDIAN_MAX_TRANSCRIPT_TOKENS
-                && counts.message <= GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS
-                && counts.tool <= GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS
-            {
-                break;
-            }
-
-            // Trim the oldest retained tool evidence first when it exceeds its
-            // reserved budget. Otherwise trim the oldest non-user context.
-            let number = if counts.tool > GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS {
-                entries
-                    .iter()
-                    .find(|entry| included_numbers.contains(&entry.number) && entry.is_tool)
-                    .map(|entry| entry.number)
-            } else {
-                entries
-                    .iter()
-                    .find(|entry| included_numbers.contains(&entry.number) && !entry.is_user)
-                    .map(|entry| entry.number)
-            };
-
-            let Some(number) = number else {
-                break;
-            };
-            included_numbers.remove(&number);
-        }
-
-        let counts = transcript_token_count(entries, &included_numbers, budget);
-        if counts.total <= GUARDIAN_MAX_TRANSCRIPT_TOKENS
-            && counts.message <= GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS
-            && counts.tool <= GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS
-        {
-            let transcript = render_transcript(entries, &included_numbers, budget);
-            let omission = if included_numbers.len() < entries.len() {
-                Some(format!(
-                    "Earlier conversation entries were omitted. Session ID: {session_id}. Rollout path: {}. Full conversation can be consulted for deeper judgment.",
-                    rollout_path.unwrap_or("<unavailable>")
-                ))
-            } else {
-                None
-            };
-            return (transcript, omission);
-        }
-    }
-
-    (
-        "<transcript omitted to preserve budget for planned action>".to_string(),
-        Some(format!(
-            "Conversation transcript omitted due to size. Session ID: {session_id}. Rollout path: {}. Full conversation can be consulted for deeper judgment.",
-            rollout_path.unwrap_or("<unavailable>")
-        )),
-    )
-}
-
-fn render_transcript(
-    entries: &[GuardianTranscriptEntry],
-    included_numbers: &BTreeSet<usize>,
-    budget: GuardianTranscriptRenderBudget,
-) -> String {
-    entries
-        .iter()
-        .filter(|entry| included_numbers.contains(&entry.number))
         .map(|entry| {
             let token_cap = if entry.is_tool {
-                budget.tool_entry_token_cap
+                GUARDIAN_TOOL_ENTRY_TOKEN_CAP
             } else {
-                budget.message_entry_token_cap
+                GUARDIAN_MESSAGE_ENTRY_TOKEN_CAP
             };
             let text = guardian_truncate_text(&entry.text, token_cap);
-            format!("[{}] {}: {}", entry.number, entry.role, text)
+            let rendered = format!("[{}] {}: {}", entry.number, entry.role, text);
+            let token_count = approx_token_count(&rendered);
+            (rendered, token_count)
         })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
+        .collect::<Vec<_>>();
 
-fn transcript_token_count(
-    entries: &[GuardianTranscriptEntry],
-    included_numbers: &BTreeSet<usize>,
-    budget: GuardianTranscriptRenderBudget,
-) -> GuardianTranscriptTokenCount {
-    let mut counts = GuardianTranscriptTokenCount::default();
-    for entry in entries
-        .iter()
-        .filter(|entry| included_numbers.contains(&entry.number))
-    {
-        let token_cap = if entry.is_tool {
-            budget.tool_entry_token_cap
+    let mut included = vec![false; entries.len()];
+    let mut message_tokens = 0usize;
+    let mut tool_tokens = 0usize;
+
+    for (index, entry) in entries.iter().enumerate() {
+        if !entry.is_user {
+            continue;
+        }
+
+        message_tokens += rendered_entries[index].1;
+        if message_tokens > GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS {
+            return (
+                "<transcript omitted to preserve budget for planned action>".to_string(),
+                Some("Conversation transcript omitted due to size.".to_string()),
+            );
+        }
+        included[index] = true;
+    }
+
+    let mut retained_non_user_entries = 0usize;
+    for index in (0..entries.len()).rev() {
+        let entry = &entries[index];
+        if entry.is_user || retained_non_user_entries >= GUARDIAN_RECENT_ENTRY_LIMIT {
+            continue;
+        }
+
+        let token_count = rendered_entries[index].1;
+        let within_budget = if entry.is_tool {
+            tool_tokens + token_count <= GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS
         } else {
-            budget.message_entry_token_cap
+            message_tokens + token_count <= GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS
         };
-        let text = guardian_truncate_text(&entry.text, token_cap);
-        let rendered = format!("[{}] {}: {}", entry.number, entry.role, text);
-        let token_count = approx_token_count(&rendered);
-        counts.total += token_count;
+        if !within_budget {
+            continue;
+        }
+
+        included[index] = true;
+        retained_non_user_entries += 1;
         if entry.is_tool {
-            counts.tool += token_count;
+            tool_tokens += token_count;
         } else {
-            counts.message += token_count;
+            message_tokens += token_count;
         }
     }
-    counts
+
+    let transcript = entries
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| included[*index])
+        .map(|(index, _)| rendered_entries[index].0.clone())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let omitted_any = included.iter().any(|included_entry| !included_entry);
+    let omission_note =
+        omitted_any.then(|| "Earlier conversation entries were omitted.".to_string());
+    (transcript, omission_note)
 }
 
 /// Retains the human-readable conversation plus recent tool call / result
 /// evidence for guardian review and skips synthetic contextual scaffolding that
-/// would just add noise.
+/// would just add noise because the guardian subagent already gets the normal
+/// inherited top-level context from session startup.
 fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();
@@ -653,6 +533,9 @@ async fn run_guardian_subagent(
         .models_manager
         .list_models(crate::models_manager::manager::RefreshStrategy::Offline)
         .await;
+    // Prefer GPT-5.4 when the active provider exposes it, but fall back to the
+    // parent turn's active model so guardian does not become a blanket deny on
+    // providers or test environments that do not offer that slug.
     let preferred_model = available_models
         .iter()
         .find(|preset| preset.model == GUARDIAN_PREFERRED_MODEL);
@@ -706,8 +589,9 @@ async fn run_guardian_subagent(
         None,
     )
     .await?;
-    // Preserve exact session-scoped network approvals without broadening them
-    // into host-level allowlist entries in the guardian's inherited proxy cfg.
+    // Preserve exact session-scoped network approvals after spawn so their
+    // original protocol/port scope survives without broadening them into
+    // host-level allowlist entries.
     session
         .services
         .network_approval
@@ -787,7 +671,7 @@ fn build_guardian_subagent_config(
     Ok(guardian_config)
 }
 
-fn sanitize_guardian_value(value: Value) -> Value {
+fn truncate_guardian_action_value(value: Value) -> Value {
     match value {
         Value::String(text) => Value::String(guardian_truncate_text(
             &text,
@@ -796,71 +680,22 @@ fn sanitize_guardian_value(value: Value) -> Value {
         Value::Array(values) => Value::Array(
             values
                 .into_iter()
-                .map(sanitize_guardian_value)
+                .map(truncate_guardian_action_value)
                 .collect::<Vec<_>>(),
         ),
         Value::Object(values) => Value::Object(
             values
                 .into_iter()
-                .map(|(key, value)| (key, sanitize_guardian_value(value)))
+                .map(|(key, value)| (key, truncate_guardian_action_value(value)))
                 .collect(),
         ),
         other => other,
     }
 }
 
-fn format_guardian_action_pretty(action: &GuardianAction) -> String {
-    format_guardian_json_value_at_indent(&sanitize_guardian_value(action.clone()), 0)
-}
-
-fn format_guardian_json_value_at_indent(value: &Value, indent: usize) -> String {
-    match value {
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
-            serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
-        }
-        Value::Array(values) => {
-            if values.is_empty() {
-                return "[]".to_string();
-            }
-
-            let next_indent = indent + 2;
-            let child_indent = " ".repeat(next_indent);
-            let closing_indent = " ".repeat(indent);
-            let lines = values
-                .iter()
-                .map(|value| {
-                    format!(
-                        "{child_indent}{}",
-                        format_guardian_json_value_at_indent(value, next_indent)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",\n");
-            format!("[\n{lines}\n{closing_indent}]")
-        }
-        Value::Object(values) => {
-            if values.is_empty() {
-                return "{}".to_string();
-            }
-
-            let next_indent = indent + 2;
-            let child_indent = " ".repeat(next_indent);
-            let closing_indent = " ".repeat(indent);
-            let lines = values
-                .iter()
-                .map(|(key, value)| {
-                    let rendered_key =
-                        serde_json::to_string(key).unwrap_or_else(|_| "\"<invalid>\"".to_string());
-                    format!(
-                        "{child_indent}{rendered_key}: {}",
-                        format_guardian_json_value_at_indent(value, next_indent)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",\n");
-            format!("{{\n{lines}\n{closing_indent}}}")
-        }
-    }
+fn format_guardian_action_pretty(action: &Value) -> String {
+    serde_json::to_string_pretty(&truncate_guardian_action_value(action.clone()))
+        .unwrap_or_else(|_| "null".to_string())
 }
 
 fn guardian_truncate_text(content: &str, token_cap: usize) -> String {
@@ -928,6 +763,8 @@ fn split_guardian_truncation_bounds(
 
 /// The model is asked for strict JSON, but we still accept a surrounding prose
 /// wrapper so transient formatting drift fails less noisily during dogfooding.
+/// Non-JSON output is still a review failure; this is only a thin recovery path
+/// for cases where the model wrapped the JSON in extra prose.
 fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<GuardianAssessment> {
     let Some(text) = text else {
         anyhow::bail!("guardian review completed without an assessment payload");
@@ -1016,503 +853,5 @@ impl GuardianRiskLevel {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::ManagedFeatures;
-    use crate::config::NetworkProxySpec;
-    use crate::config::test_config;
-    use crate::config_loader::FeatureRequirementsToml;
-    use crate::config_loader::NetworkConstraints;
-    use crate::config_loader::RequirementSource;
-    use crate::config_loader::Sourced;
-    use crate::test_support;
-    use codex_network_proxy::NetworkProxyConfig;
-    use codex_protocol::models::ContentItem;
-    use core_test_support::context_snapshot;
-    use core_test_support::context_snapshot::ContextSnapshotOptions;
-    use core_test_support::responses::ev_assistant_message;
-    use core_test_support::responses::ev_completed;
-    use core_test_support::responses::ev_response_created;
-    use core_test_support::responses::mount_sse_once;
-    use core_test_support::responses::sse;
-    use core_test_support::responses::start_mock_server;
-    use core_test_support::skip_if_no_network;
-    use insta::assert_snapshot;
-    use pretty_assertions::assert_eq;
-    use std::collections::BTreeMap;
-    use std::path::PathBuf;
-
-    #[test]
-    fn build_guardian_transcript_keeps_original_numbering() {
-        let entries = [
-            GuardianTranscriptEntry {
-                number: 1,
-                role: "user".to_string(),
-                is_user: true,
-                is_tool: false,
-                text: "first".to_string(),
-            },
-            GuardianTranscriptEntry {
-                number: 2,
-                role: "assistant".to_string(),
-                is_user: false,
-                is_tool: false,
-                text: "second".to_string(),
-            },
-            GuardianTranscriptEntry {
-                number: 3,
-                role: "assistant".to_string(),
-                is_user: false,
-                is_tool: false,
-                text: "third".to_string(),
-            },
-        ];
-
-        let (transcript, omission) =
-            build_guardian_transcript(&entries[..2], "session-1", Some("/tmp/rollout.jsonl"));
-
-        assert!(transcript.contains("[1] user: first"));
-        assert!(transcript.contains("[2] assistant: second"));
-        assert!(omission.is_none());
-    }
-
-    #[test]
-    fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
-        let items = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>"
-                        .to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "hello".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-        ];
-
-        let entries = collect_guardian_transcript_entries(&items);
-
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].number, 1);
-        assert_eq!(entries[0].role, "assistant");
-    }
-
-    #[test]
-    fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
-        let items = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "check the repo".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::FunctionCall {
-                id: None,
-                name: "read_file".to_string(),
-                arguments: "{\"path\":\"README.md\"}".to_string(),
-                call_id: "call-1".to_string(),
-            },
-            ResponseItem::FunctionCallOutput {
-                call_id: "call-1".to_string(),
-                output: codex_protocol::models::FunctionCallOutputPayload::from_text(
-                    "repo is public".to_string(),
-                ),
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "I need to push a fix".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-        ];
-
-        let entries = collect_guardian_transcript_entries(&items);
-
-        assert_eq!(entries.len(), 4);
-        assert_eq!(entries[1].role, "tool read_file call");
-        assert!(entries[1].is_tool);
-        assert_eq!(entries[1].text, "{\"path\":\"README.md\"}");
-        assert_eq!(entries[2].role, "tool read_file result");
-        assert_eq!(entries[2].text, "repo is public");
-    }
-
-    #[test]
-    fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
-        let content = "prefix ".repeat(200) + &" suffix".repeat(200);
-
-        let truncated = guardian_truncate_text(&content, 20);
-
-        assert!(truncated.starts_with("prefix"));
-        assert!(truncated.contains("<guardian_truncated omitted_approx_tokens=\""));
-        assert!(truncated.ends_with("suffix"));
-    }
-
-    #[test]
-    fn format_guardian_action_pretty_truncates_large_string_fields() {
-        let action = serde_json::json!({
-            "tool": "apply_patch",
-            "cwd": PathBuf::from("/tmp"),
-            "files": Vec::<String>::new(),
-            "change_count": 1usize,
-            "patch": "line\n".repeat(2_000),
-        });
-
-        let rendered = format_guardian_action_pretty(&action);
-
-        assert!(rendered.contains("\"tool\": \"apply_patch\""));
-        assert!(rendered.contains("<guardian_truncated omitted_approx_tokens=\""));
-    }
-
-    #[test]
-    fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
-        let repeated = "signal ".repeat(8_000);
-        let entries = vec![
-            GuardianTranscriptEntry {
-                number: 1,
-                role: "user".to_string(),
-                is_user: true,
-                is_tool: false,
-                text: "please figure out if the repo is public".to_string(),
-            },
-            GuardianTranscriptEntry {
-                number: 2,
-                role: "tool gh".to_string(),
-                is_user: false,
-                is_tool: true,
-                text: repeated.clone(),
-            },
-            GuardianTranscriptEntry {
-                number: 3,
-                role: "tool read_file".to_string(),
-                is_user: false,
-                is_tool: true,
-                text: repeated.clone(),
-            },
-            GuardianTranscriptEntry {
-                number: 4,
-                role: "tool web".to_string(),
-                is_user: false,
-                is_tool: true,
-                text: repeated.clone(),
-            },
-            GuardianTranscriptEntry {
-                number: 5,
-                role: "tool gh".to_string(),
-                is_user: false,
-                is_tool: true,
-                text: repeated,
-            },
-            GuardianTranscriptEntry {
-                number: 6,
-                role: "assistant".to_string(),
-                is_user: false,
-                is_tool: false,
-                text: "The public repo check is the main reason I want to escalate.".to_string(),
-            },
-        ];
-
-        let (transcript, omission) =
-            build_guardian_transcript(&entries, "session-1", Some("/tmp/rollout.jsonl"));
-
-        assert!(transcript.contains("[1] user: please figure out if the repo is public"));
-        assert!(transcript.contains(
-            "[6] assistant: The public repo check is the main reason I want to escalate."
-        ));
-        assert!(!transcript.contains("[2] tool gh:"));
-        assert!(omission.is_some());
-    }
-
-    #[test]
-    fn parse_guardian_assessment_extracts_embedded_json() {
-        let parsed = parse_guardian_assessment(Some(
-            "preface {\"risk_level\":\"medium\",\"risk_score\":42,\"rationale\":\"ok\",\"evidence\":[]}",
-        ))
-        .expect("guardian assessment");
-
-        assert_eq!(parsed.risk_score, 42);
-        assert_eq!(parsed.risk_level, GuardianRiskLevel::Medium);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
-    -> anyhow::Result<()> {
-        skip_if_no_network!(Ok(()));
-
-        let server = start_mock_server().await;
-        let guardian_assessment = serde_json::json!({
-            "risk_level": "medium",
-            "risk_score": 35,
-            "rationale": "The user explicitly requested pushing the reviewed branch to the known remote.",
-            "evidence": [{
-                "message": "The user asked to check repo visibility and then push the docs fix.",
-                "why": "This authorizes the specific network action under review.",
-            }],
-        })
-        .to_string();
-        let request_log = mount_sse_once(
-            &server,
-            sse(vec![
-                ev_response_created("resp-guardian"),
-                ev_assistant_message("msg-guardian", &guardian_assessment),
-                ev_completed("resp-guardian"),
-            ]),
-        )
-        .await;
-
-        let (mut session, mut turn) = crate::codex::make_session_and_context().await;
-        let mut config = (*turn.config).clone();
-        config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
-        let config = Arc::new(config);
-        let models_manager = Arc::new(test_support::models_manager_with_provider(
-            config.codex_home.clone(),
-            Arc::clone(&session.services.auth_manager),
-            config.model_provider.clone(),
-        ));
-        session.services.models_manager = models_manager;
-        turn.config = Arc::clone(&config);
-        turn.provider = config.model_provider.clone();
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-
-        session
-            .record_into_history(
-                &[
-                    ResponseItem::Message {
-                        id: None,
-                        role: "user".to_string(),
-                        content: vec![ContentItem::InputText {
-                            text:
-                                "Please check the repo visibility and push the docs fix if needed."
-                                    .to_string(),
-                        }],
-                        end_turn: None,
-                        phase: None,
-                    },
-                    ResponseItem::FunctionCall {
-                        id: None,
-                        name: "gh_repo_view".to_string(),
-                        arguments: "{\"repo\":\"openai/codex\"}".to_string(),
-                        call_id: "call-1".to_string(),
-                    },
-                    ResponseItem::FunctionCallOutput {
-                        call_id: "call-1".to_string(),
-                        output: codex_protocol::models::FunctionCallOutputPayload::from_text(
-                            "repo visibility: public".to_string(),
-                        ),
-                    },
-                    ResponseItem::Message {
-                        id: None,
-                        role: "assistant".to_string(),
-                        content: vec![ContentItem::OutputText {
-                            text: "The repo is public; I now need approval to push the docs fix."
-                                .to_string(),
-                        }],
-                        end_turn: None,
-                        phase: None,
-                    },
-                ],
-                turn.as_ref(),
-            )
-            .await;
-
-        let prompt = build_guardian_prompt_items(
-            session.as_ref(),
-            Some("Sandbox denied outbound git push to github.com.".to_string()),
-            Some(GuardianReviewRequest {
-                tool_name: "shell",
-                action: serde_json::json!({
-                    "tool": "shell",
-                    "command": [
-                        "git",
-                        "push",
-                        "origin",
-                        "guardian-approval-mvp"
-                    ],
-                    "cwd": "/repo/codex-rs/core",
-                    "sandbox_permissions": crate::sandboxing::SandboxPermissions::UseDefault,
-                    "justification": "Need to push the reviewed docs fix to the repo remote.",
-                }),
-            }),
-        )
-        .await;
-
-        let assessment = run_guardian_subagent(
-            Arc::clone(&session),
-            Arc::clone(&turn),
-            prompt,
-            guardian_output_schema(),
-            CancellationToken::new(),
-        )
-        .await?;
-        assert_eq!(assessment.risk_score, 35);
-
-        let request = request_log.single_request();
-        assert_snapshot!(
-            "guardian_review_request_layout",
-            context_snapshot::format_labeled_requests_snapshot(
-                "Guardian review request layout",
-                &[("Guardian Review Request", &request)],
-                &ContextSnapshotOptions::default(),
-            )
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn guardian_timeout_cancels_subagent_token() {
-        let cancel_token = CancellationToken::new();
-        let waiter = tokio::spawn({
-            let cancel_token = cancel_token.clone();
-            async move {
-                cancel_token.cancelled().await;
-            }
-        });
-
-        let result = run_guardian_subagent_with_timeout(
-            std::future::pending::<anyhow::Result<GuardianAssessment>>(),
-            cancel_token,
-            Duration::from_millis(10),
-        )
-        .await;
-
-        assert!(matches!(result, Err(GuardianReviewFailure::TimedOut)));
-        tokio::time::timeout(Duration::from_secs(1), waiter)
-            .await
-            .expect("timeout helper should cancel the guardian token")
-            .expect("waiter task should finish cleanly");
-    }
-
-    #[test]
-    fn guardian_subagent_config_preserves_parent_network_proxy() {
-        let mut parent_config = test_config();
-        let network = NetworkProxySpec::from_config_and_constraints(
-            NetworkProxyConfig::default(),
-            Some(NetworkConstraints {
-                enabled: Some(true),
-                allowed_domains: Some(vec!["github.com".to_string()]),
-                ..Default::default()
-            }),
-            parent_config.permissions.sandbox_policy.get(),
-        )
-        .expect("network proxy spec");
-        parent_config.permissions.network = Some(network.clone());
-
-        let guardian_config = build_guardian_subagent_config(
-            &parent_config,
-            None,
-            "parent-active-model",
-            Some(codex_protocol::openai_models::ReasoningEffort::Low),
-        )
-        .expect("guardian config");
-
-        assert_eq!(guardian_config.permissions.network, Some(network));
-        assert_eq!(
-            guardian_config.model,
-            Some("parent-active-model".to_string())
-        );
-        assert_eq!(
-            guardian_config.model_reasoning_effort,
-            Some(codex_protocol::openai_models::ReasoningEffort::Low)
-        );
-        assert_eq!(
-            guardian_config.permissions.approval_policy,
-            Constrained::allow_only(AskForApproval::Never)
-        );
-        assert_eq!(
-            guardian_config.permissions.sandbox_policy,
-            Constrained::allow_only(SandboxPolicy::new_read_only_policy())
-        );
-    }
-
-    #[test]
-    fn guardian_subagent_config_uses_live_network_proxy_state() {
-        let mut parent_config = test_config();
-        let mut parent_network = NetworkProxyConfig::default();
-        parent_network.network.enabled = true;
-        parent_network.network.allowed_domains = vec!["parent.example".to_string()];
-        parent_config.permissions.network = Some(
-            NetworkProxySpec::from_config_and_constraints(
-                parent_network,
-                None,
-                parent_config.permissions.sandbox_policy.get(),
-            )
-            .expect("parent network proxy spec"),
-        );
-
-        let mut live_network = NetworkProxyConfig::default();
-        live_network.network.enabled = true;
-        live_network.network.allowed_domains = vec!["github.com".to_string()];
-
-        let guardian_config = build_guardian_subagent_config(
-            &parent_config,
-            Some(live_network.clone()),
-            "active-model",
-            None,
-        )
-        .expect("guardian config");
-
-        assert_eq!(
-            guardian_config.permissions.network,
-            Some(
-                NetworkProxySpec::from_config_and_constraints(
-                    live_network,
-                    None,
-                    &SandboxPolicy::new_read_only_policy(),
-                )
-                .expect("live network proxy spec")
-            )
-        );
-    }
-
-    #[test]
-    fn guardian_subagent_config_rejects_pinned_collab_feature() {
-        let mut parent_config = test_config();
-        parent_config.features = ManagedFeatures::from_configured(
-            parent_config.features.get().clone(),
-            Some(Sourced {
-                value: FeatureRequirementsToml {
-                    entries: BTreeMap::from([("multi_agent".to_string(), true)]),
-                },
-                source: RequirementSource::Unknown,
-            }),
-        )
-        .expect("managed features");
-
-        let err = build_guardian_subagent_config(&parent_config, None, "active-model", None)
-            .expect_err("guardian config should fail when collab is pinned on");
-
-        assert!(
-            err.to_string()
-                .contains("guardian subagent requires `features.multi_agent` to be disabled")
-        );
-    }
-
-    #[test]
-    fn guardian_subagent_config_uses_parent_active_model_instead_of_hardcoded_slug() {
-        let mut parent_config = test_config();
-        parent_config.model = Some("configured-model".to_string());
-
-        let guardian_config =
-            build_guardian_subagent_config(&parent_config, None, "active-model", None)
-                .expect("guardian config");
-
-        assert_eq!(guardian_config.model, Some("active-model".to_string()));
-    }
-}
+#[path = "guardian_tests.rs"]
+mod tests;

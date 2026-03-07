@@ -136,10 +136,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         action.remove("justification");
                     }
                 }
-                let request = GuardianReviewRequest {
-                    tool_name: "exec_command",
-                    action,
-                };
+                let request = GuardianReviewRequest { action };
                 return review_approval_request(session, turn, request).await;
             }
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
