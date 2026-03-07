@@ -373,6 +373,12 @@ struct McpToolApprovalMetadata {
     tool_description: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct McpToolApprovalPromptOptions {
+    allow_session_remember: bool,
+    allow_persistent_approval: bool,
+}
+
 const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
 const MCP_TOOL_APPROVAL_ACCEPT: &str = "Approve Once";
 const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Approve this session";
@@ -449,8 +455,10 @@ async fn maybe_request_mcp_tool_approval(
         return Some(decision);
     }
 
-    let allow_session_remember = session_approval_key.is_some();
-    let allow_persistent_approval = persistent_approval_key.is_some();
+    let prompt_options = McpToolApprovalPromptOptions {
+        allow_session_remember: session_approval_key.is_some(),
+        allow_persistent_approval: persistent_approval_key.is_some(),
+    };
     let question_id = format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}");
     let question = build_mcp_tool_approval_question(
         question_id.clone(),
@@ -459,8 +467,7 @@ async fn maybe_request_mcp_tool_approval(
         metadata.and_then(|metadata| metadata.tool_title.as_deref()),
         metadata.and_then(|metadata| metadata.connector_name.as_deref()),
         annotations,
-        allow_session_remember,
-        allow_persistent_approval,
+        prompt_options,
     );
     if turn_context
         .config
@@ -477,8 +484,7 @@ async fn maybe_request_mcp_tool_approval(
             metadata,
             invocation.arguments.as_ref(),
             question.clone(),
-            allow_session_remember,
-            allow_persistent_approval,
+            prompt_options,
         );
         let decision = parse_mcp_tool_approval_elicitation_response(
             sess.request_mcp_server_elicitation(turn_context.as_ref(), request_id, params)
@@ -741,8 +747,7 @@ fn build_mcp_tool_approval_question(
     tool_title: Option<&str>,
     connector_name: Option<&str>,
     annotations: Option<&ToolAnnotations>,
-    allow_session_remember: bool,
-    allow_persistent_approval: bool,
+    prompt_options: McpToolApprovalPromptOptions,
 ) -> RequestUserInputQuestion {
     let destructive =
         annotations.and_then(|annotations| annotations.destructive_hint) == Some(true);
@@ -772,13 +777,13 @@ fn build_mcp_tool_approval_question(
         label: MCP_TOOL_APPROVAL_ACCEPT.to_string(),
         description: "Run the tool and continue.".to_string(),
     }];
-    if allow_session_remember {
+    if prompt_options.allow_session_remember {
         options.push(RequestUserInputQuestionOption {
             label: MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION.to_string(),
             description: "Run the tool and remember this choice for this session.".to_string(),
         });
     }
-    if allow_persistent_approval {
+    if prompt_options.allow_persistent_approval {
         options.push(RequestUserInputQuestionOption {
             label: MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER.to_string(),
             description: "Run the tool and remember this choice for future tool calls.".to_string(),
@@ -806,8 +811,7 @@ fn build_mcp_tool_approval_elicitation_request(
     metadata: Option<&McpToolApprovalMetadata>,
     tool_params: Option<&serde_json::Value>,
     question: RequestUserInputQuestion,
-    allow_session_remember: bool,
-    allow_persistent_approval: bool,
+    prompt_options: McpToolApprovalPromptOptions,
 ) -> McpServerElicitationRequestParams {
     let message = if question.header.trim().is_empty() {
         question.question
@@ -826,8 +830,7 @@ fn build_mcp_tool_approval_elicitation_request(
                 server,
                 metadata,
                 tool_params,
-                allow_session_remember,
-                allow_persistent_approval,
+                prompt_options,
             ),
             message,
             requested_schema: McpElicitationSchema {
@@ -844,15 +847,17 @@ fn build_mcp_tool_approval_elicitation_meta(
     server: &str,
     metadata: Option<&McpToolApprovalMetadata>,
     tool_params: Option<&serde_json::Value>,
-    allow_session_remember: bool,
-    allow_persistent_approval: bool,
+    prompt_options: McpToolApprovalPromptOptions,
 ) -> Option<serde_json::Value> {
     let mut meta = serde_json::Map::new();
     meta.insert(
         MCP_TOOL_APPROVAL_KIND_KEY.to_string(),
         serde_json::Value::String(MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL.to_string()),
     );
-    match (allow_session_remember, allow_persistent_approval) {
+    match (
+        prompt_options.allow_session_remember,
+        prompt_options.allow_persistent_approval,
+    ) {
         (true, true) => {
             meta.insert(
                 MCP_TOOL_APPROVAL_PERSIST_KEY.to_string(),
@@ -1204,6 +1209,16 @@ mod tests {
         }
     }
 
+    fn prompt_options(
+        allow_session_remember: bool,
+        allow_persistent_approval: bool,
+    ) -> McpToolApprovalPromptOptions {
+        McpToolApprovalPromptOptions {
+            allow_session_remember,
+            allow_persistent_approval,
+        }
+    }
+
     #[test]
     fn approval_required_when_read_only_false_and_destructive() {
         let annotations = annotations(Some(false), Some(true), None);
@@ -1249,8 +1264,7 @@ mod tests {
             Some("Run Action"),
             None,
             Some(&annotations(Some(false), Some(true), None)),
-            false,
-            false,
+            prompt_options(false, false),
         );
 
         assert_eq!(question.header, "Approve app tool call?");
@@ -1277,8 +1291,7 @@ mod tests {
             Some("Run Action"),
             None,
             Some(&annotations(Some(false), Some(true), None)),
-            true,
-            true,
+            prompt_options(true, true),
         );
 
         assert!(
@@ -1297,8 +1310,7 @@ mod tests {
             Some("Run Action"),
             Some("Calendar"),
             Some(&annotations(Some(false), Some(true), None)),
-            true,
-            true,
+            prompt_options(true, true),
         );
         let options = question.options.expect("options");
 
@@ -1334,8 +1346,7 @@ mod tests {
             Some("Run Action"),
             None,
             Some(&annotations(Some(false), Some(true), None)),
-            true,
-            false,
+            prompt_options(true, false),
         );
 
         assert_eq!(
@@ -1480,7 +1491,12 @@ mod tests {
     #[test]
     fn approval_elicitation_meta_marks_tool_approvals() {
         assert_eq!(
-            build_mcp_tool_approval_elicitation_meta("custom_server", None, None, false, false),
+            build_mcp_tool_approval_elicitation_meta(
+                "custom_server",
+                None,
+                None,
+                prompt_options(false, false),
+            ),
             Some(serde_json::json!({
                 MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
             }))
@@ -1500,8 +1516,7 @@ mod tests {
                     Some("Runs the selected action."),
                 )),
                 Some(&serde_json::json!({"id": 1})),
-                true,
-                false,
+                prompt_options(true, false),
             ),
             Some(serde_json::json!({
                 MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
@@ -1622,8 +1637,7 @@ mod tests {
                 Some(&serde_json::json!({
                     "calendar_id": "primary",
                 })),
-                false,
-                false,
+                prompt_options(false, false),
             ),
             Some(serde_json::json!({
                 MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
@@ -1655,8 +1669,7 @@ mod tests {
                 Some(&serde_json::json!({
                     "calendar_id": "primary",
                 })),
-                true,
-                true,
+                prompt_options(true, true),
             ),
             Some(serde_json::json!({
                 MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
