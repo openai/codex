@@ -14,7 +14,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
-use codex_otel::SessionTelemetry;
+use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use tokio::fs;
 use tokio::process::Command;
@@ -40,7 +40,7 @@ impl ShellSnapshot {
         session_id: ThreadId,
         session_cwd: PathBuf,
         shell: &mut Shell,
-        session_telemetry: SessionTelemetry,
+        otel_manager: OtelManager,
     ) -> watch::Sender<Option<Arc<ShellSnapshot>>> {
         let (shell_snapshot_tx, shell_snapshot_rx) = watch::channel(None);
         shell.shell_snapshot = shell_snapshot_rx;
@@ -51,7 +51,7 @@ impl ShellSnapshot {
             session_cwd,
             shell.clone(),
             shell_snapshot_tx.clone(),
-            session_telemetry,
+            otel_manager,
         );
 
         shell_snapshot_tx
@@ -63,7 +63,7 @@ impl ShellSnapshot {
         session_cwd: PathBuf,
         shell: Shell,
         shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
-        session_telemetry: SessionTelemetry,
+        otel_manager: OtelManager,
     ) {
         Self::spawn_snapshot_task(
             codex_home,
@@ -71,7 +71,7 @@ impl ShellSnapshot {
             session_cwd,
             shell,
             shell_snapshot_tx,
-            session_telemetry,
+            otel_manager,
         );
     }
 
@@ -81,12 +81,12 @@ impl ShellSnapshot {
         session_cwd: PathBuf,
         snapshot_shell: Shell,
         shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
-        session_telemetry: SessionTelemetry,
+        otel_manager: OtelManager,
     ) {
         let snapshot_span = info_span!("shell_snapshot", thread_id = %session_id);
         tokio::spawn(
             async move {
-                let timer = session_telemetry.start_timer("codex.shell_snapshot.duration_ms", &[]);
+                let timer = otel_manager.start_timer("codex.shell_snapshot.duration_ms", &[]);
                 let snapshot = ShellSnapshot::try_new(
                     &codex_home,
                     session_id,
@@ -102,7 +102,7 @@ impl ShellSnapshot {
                 if let Some(failure_reason) = snapshot.as_ref().err() {
                     counter_tags.push(("failure_reason", *failure_reason));
                 }
-                session_telemetry.counter("codex.shell_snapshot", 1, &counter_tags);
+                otel_manager.counter("codex.shell_snapshot", 1, &counter_tags);
                 let _ = shell_snapshot_tx.send(snapshot.ok());
             }
             .instrument(snapshot_span),
@@ -548,6 +548,8 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     #[cfg(unix)]
+    use serial_test::serial;
+    #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
     #[cfg(unix)]
     use std::process::Command;
@@ -735,6 +737,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[serial(stdin_fd)]
     async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
         let _stdin_guard = BlockingStdinPipe::install()?;
 
