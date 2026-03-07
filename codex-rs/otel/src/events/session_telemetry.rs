@@ -64,7 +64,7 @@ const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine
 const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
 
 #[derive(Debug, Clone)]
-pub struct OtelEventMetadata {
+pub struct SessionTelemetryMetadata {
     pub(crate) conversation_id: ThreadId,
     pub(crate) auth_mode: Option<String>,
     pub(crate) account_id: Option<String>,
@@ -80,13 +80,13 @@ pub struct OtelEventMetadata {
 }
 
 #[derive(Debug, Clone)]
-pub struct OtelManager {
-    pub(crate) metadata: OtelEventMetadata,
+pub struct SessionTelemetry {
+    pub(crate) metadata: SessionTelemetryMetadata,
     pub(crate) metrics: Option<MetricsClient>,
     pub(crate) metrics_use_metadata_tags: bool,
 }
 
-impl OtelManager {
+impl SessionTelemetry {
     pub fn with_model(mut self, model: &str, slug: &str) -> Self {
         self.metadata.model = model.to_owned();
         self.metadata.slug = slug.to_owned();
@@ -276,9 +276,9 @@ impl OtelManager {
         log_user_prompts: bool,
         terminal_type: String,
         session_source: SessionSource,
-    ) -> OtelManager {
+    ) -> SessionTelemetry {
         Self {
-            metadata: OtelEventMetadata {
+            metadata: SessionTelemetryMetadata {
                 conversation_id,
                 auth_mode: auth_mode.map(|m| m.to_string()),
                 account_id,
@@ -298,7 +298,7 @@ impl OtelManager {
     }
 
     pub fn record_responses(&self, handle_responses_span: &Span, event: &ResponseEvent) {
-        handle_responses_span.record("otel.name", OtelManager::responses_type(event));
+        handle_responses_span.record("otel.name", SessionTelemetry::responses_type(event));
 
         match event {
             ResponseEvent::OutputItemDone(item) => {
@@ -902,7 +902,7 @@ impl OtelManager {
         match event {
             ResponseEvent::Created => "created".into(),
             ResponseEvent::OutputItemDone(item) | ResponseEvent::OutputItemAdded(item) => {
-                OtelManager::responses_item_type(item)
+                SessionTelemetry::responses_item_type(item)
             }
             ResponseEvent::Completed { .. } => "completed".into(),
             ResponseEvent::OutputTextDelta(_) => "text_delta".into(),

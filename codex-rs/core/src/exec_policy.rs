@@ -104,7 +104,7 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
 /// `prompt_is_rule` distinguishes policy-rule prompts from sandbox/escalation
 /// prompts so `Reject.rules` and `Reject.sandbox_approval` are honored
 /// independently. When both are present, policy-rule prompts take precedence.
-fn prompt_is_rejected_by_policy(
+pub(crate) fn prompt_is_rejected_by_policy(
     approval_policy: AskForApproval,
     prompt_is_rule: bool,
 ) -> Option<&'static str> {

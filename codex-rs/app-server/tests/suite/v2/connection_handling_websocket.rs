@@ -265,7 +265,7 @@ async fn read_error_for_id(stream: &mut WsClient, id: i64) -> Result<JSONRPCErro
     }
 }
 
-async fn read_jsonrpc_message(stream: &mut WsClient) -> Result<JSONRPCMessage> {
+pub(super) async fn read_jsonrpc_message(stream: &mut WsClient) -> Result<JSONRPCMessage> {
     loop {
         let frame = timeout(DEFAULT_READ_TIMEOUT, stream.next())
             .await
