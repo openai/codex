@@ -12,6 +12,7 @@ pub use js_runtime::JsRuntime;
 pub use js_runtime::JsRuntimeKind;
 pub use js_runtime::can_manage_artifact_runtime;
 pub use js_runtime::is_js_runtime_available;
+pub use js_runtime::system_node_path;
 pub use manager::ArtifactRuntimeManager;
 pub use manager::ArtifactRuntimeManagerConfig;
 pub use manager::ArtifactRuntimeReleaseLocator;

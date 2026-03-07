@@ -79,11 +79,7 @@ fn load_cached_runtime_reads_installed_runtime() {
         .join(DEFAULT_CACHE_ROOT_RELATIVE)
         .join(runtime_version)
         .join(platform.as_str());
-    write_installed_runtime(
-        &install_dir,
-        runtime_version,
-        Some(PathBuf::from("node/bin/node")),
-    );
+    write_installed_runtime(&install_dir, runtime_version, Some(node_relative_path()));
 
     let runtime = load_cached_runtime(
         &codex_home.path().join(DEFAULT_CACHE_ROOT_RELATIVE),
@@ -93,7 +89,7 @@ fn load_cached_runtime_reads_installed_runtime() {
 
     assert_eq!(runtime.runtime_version(), runtime_version);
     assert_eq!(runtime.platform(), platform);
-    assert!(runtime.node_path().ends_with(Path::new("node/bin/node")));
+    assert!(runtime.node_path().ends_with(node_relative_path()));
     assert!(
         runtime
             .build_js_path()
@@ -141,11 +137,7 @@ fn load_cached_runtime_requires_build_entrypoint() {
         .join(DEFAULT_CACHE_ROOT_RELATIVE)
         .join(runtime_version)
         .join(platform.as_str());
-    write_installed_runtime(
-        &install_dir,
-        runtime_version,
-        Some(PathBuf::from("node/bin/node")),
-    );
+    write_installed_runtime(&install_dir, runtime_version, Some(node_relative_path()));
     fs::remove_file(install_dir.join("artifact-tool/dist/artifact_tool.mjs"))
         .unwrap_or_else(|error| panic!("{error}"));
 
@@ -225,7 +217,7 @@ async fn ensure_installed_downloads_and_extracts_zip_runtime() {
 
     assert_eq!(runtime.runtime_version(), runtime_version);
     assert_eq!(runtime.platform(), platform);
-    assert!(runtime.node_path().ends_with(Path::new("node/bin/node")));
+    assert!(runtime.node_path().ends_with(node_relative_path()));
     assert_eq!(
         runtime.resolve_js_runtime().expect("resolve js runtime"),
         JsRuntime::node(runtime.node_path().to_path_buf())
@@ -242,11 +234,7 @@ fn load_cached_runtime_uses_custom_cache_root() {
     let install_dir = custom_cache_root
         .join(runtime_version)
         .join(platform.as_str());
-    write_installed_runtime(
-        &install_dir,
-        runtime_version,
-        Some(PathBuf::from("node/bin/node")),
-    );
+    write_installed_runtime(&install_dir, runtime_version, Some(node_relative_path()));
 
     let config = ArtifactRuntimeManagerConfig::with_default_release(
         codex_home.path().to_path_buf(),
@@ -262,7 +250,6 @@ fn load_cached_runtime_uses_custom_cache_root() {
 }
 
 #[tokio::test]
-#[cfg(unix)]
 async fn artifacts_client_execute_build_writes_wrapped_script_and_env() {
     let temp = TempDir::new().unwrap_or_else(|error| panic!("{error}"));
     let output_path = temp.path().join("build-output.txt");
@@ -301,7 +288,6 @@ async fn artifacts_client_execute_build_writes_wrapped_script_and_env() {
 }
 
 #[tokio::test]
-#[cfg(unix)]
 async fn artifacts_client_execute_render_passes_expected_args() {
     let temp = TempDir::new().unwrap_or_else(|error| panic!("{error}"));
     let output_path = temp.path().join("render-output.txt");
@@ -353,11 +339,11 @@ fn spreadsheet_render_target_to_args_includes_optional_range() {
             "xlsx".to_string(),
             "render".to_string(),
             "--in".to_string(),
-            "/tmp/input.xlsx".to_string(),
+            target_input_display(&target),
             "--sheet".to_string(),
             "Summary".to_string(),
             "--out".to_string(),
-            "/tmp/output.png".to_string(),
+            target_output_display(&target),
             "--range".to_string(),
             "A1:C8".to_string(),
         ]
@@ -369,16 +355,16 @@ fn assert_success(output: &ArtifactCommandOutput) {
     assert_eq!(output.exit_code, Some(0));
 }
 
-#[cfg(unix)]
 fn fake_installed_runtime(
     root: &Path,
     output_path: &Path,
     wrapped_script_path: &Path,
 ) -> InstalledArtifactRuntime {
     let runtime_root = root.join("runtime");
-    write_installed_runtime(&runtime_root, "0.1.0", Some(PathBuf::from("node/bin/node")));
+    let node_relative = node_relative_path();
+    write_installed_runtime(&runtime_root, "0.1.0", Some(node_relative.clone()));
     write_fake_node_script(
-        &runtime_root.join("node/bin/node"),
+        &runtime_root.join(&node_relative),
         output_path,
         wrapped_script_path,
     );
@@ -394,18 +380,25 @@ fn write_installed_runtime(
     runtime_version: &str,
     node_relative: Option<PathBuf>,
 ) {
-    fs::create_dir_all(install_dir.join("node/bin")).unwrap_or_else(|error| panic!("{error}"));
+    let node_relative = node_relative.unwrap_or_else(node_relative_path);
+    let node_parent = node_relative
+        .parent()
+        .unwrap_or_else(|| panic!("node relative path should have a parent: {node_relative:?}"));
+    fs::create_dir_all(install_dir.join(node_parent)).unwrap_or_else(|error| panic!("{error}"));
     fs::create_dir_all(install_dir.join("artifact-tool/dist"))
         .unwrap_or_else(|error| panic!("{error}"));
     fs::create_dir_all(install_dir.join("granola-render/dist"))
         .unwrap_or_else(|error| panic!("{error}"));
-    let node_relative = node_relative.unwrap_or_else(|| PathBuf::from("node/bin/node"));
     fs::write(
         install_dir.join("manifest.json"),
-        serde_json::json!(sample_extracted_manifest(runtime_version, node_relative)).to_string(),
+        serde_json::json!(sample_extracted_manifest(
+            runtime_version,
+            node_relative.clone()
+        ))
+        .to_string(),
     )
     .unwrap_or_else(|error| panic!("{error}"));
-    fs::write(install_dir.join("node/bin/node"), "#!/bin/sh\n")
+    fs::write(install_dir.join(node_relative), placeholder_node_script())
         .unwrap_or_else(|error| panic!("{error}"));
     fs::write(
         install_dir.join("artifact-tool/dist/artifact_tool.mjs"),
@@ -419,36 +412,62 @@ fn write_installed_runtime(
     .unwrap_or_else(|error| panic!("{error}"));
 }
 
-#[cfg(unix)]
 fn write_fake_node_script(script_path: &Path, output_path: &Path, wrapped_script_path: &Path) {
-    fs::write(
-        script_path,
-        format!(
-            concat!(
-                "#!/bin/sh\n",
-                "printf 'arg0=%s\\n' \"$1\" > \"{}\"\n",
-                "cp \"$1\" \"{}\"\n",
-                "shift\n",
-                "i=1\n",
-                "for arg in \"$@\"; do\n",
-                "  printf 'arg%s=%s\\n' \"$i\" \"$arg\" >> \"{}\"\n",
-                "  i=$((i + 1))\n",
-                "done\n",
-                "printf 'CODEX_ARTIFACT_BUILD_ENTRYPOINT=%s\\n' \"$CODEX_ARTIFACT_BUILD_ENTRYPOINT\" >> \"{}\"\n",
-                "printf 'CODEX_ARTIFACT_RENDER_ENTRYPOINT=%s\\n' \"$CODEX_ARTIFACT_RENDER_ENTRYPOINT\" >> \"{}\"\n",
-                "printf 'CUSTOM_ENV=%s\\n' \"$CUSTOM_ENV\" >> \"{}\"\n",
-                "echo stdout-ok\n",
-                "echo stderr-ok >&2\n"
-            ),
-            output_path.display(),
-            wrapped_script_path.display(),
-            output_path.display(),
-            output_path.display(),
-            output_path.display(),
-            output_path.display(),
+    #[cfg(windows)]
+    let script = format!(
+        concat!(
+            "@echo off\r\n",
+            "setlocal EnableDelayedExpansion\r\n",
+            "> \"{}\" echo arg0=%~1\r\n",
+            "copy /Y \"%~1\" \"{}\" >NUL\r\n",
+            "shift\r\n",
+            "set i=1\r\n",
+            ":args\r\n",
+            "if \"%~1\"==\"\" goto done_args\r\n",
+            ">> \"{}\" echo arg!i!=%~1\r\n",
+            "shift\r\n",
+            "set /a i+=1\r\n",
+            "goto args\r\n",
+            ":done_args\r\n",
+            ">> \"{}\" echo CODEX_ARTIFACT_BUILD_ENTRYPOINT=%CODEX_ARTIFACT_BUILD_ENTRYPOINT%\r\n",
+            ">> \"{}\" echo CODEX_ARTIFACT_RENDER_ENTRYPOINT=%CODEX_ARTIFACT_RENDER_ENTRYPOINT%\r\n",
+            ">> \"{}\" echo CUSTOM_ENV=%CUSTOM_ENV%\r\n",
+            "echo stdout-ok\r\n",
+            "echo stderr-ok 1>&2\r\n"
         ),
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
+        output_path.display(),
+        wrapped_script_path.display(),
+        output_path.display(),
+        output_path.display(),
+        output_path.display(),
+        output_path.display(),
+    );
+    #[cfg(not(windows))]
+    let script = format!(
+        concat!(
+            "#!/bin/sh\n",
+            "printf 'arg0=%s\\n' \"$1\" > \"{}\"\n",
+            "cp \"$1\" \"{}\"\n",
+            "shift\n",
+            "i=1\n",
+            "for arg in \"$@\"; do\n",
+            "  printf 'arg%s=%s\\n' \"$i\" \"$arg\" >> \"{}\"\n",
+            "  i=$((i + 1))\n",
+            "done\n",
+            "printf 'CODEX_ARTIFACT_BUILD_ENTRYPOINT=%s\\n' \"$CODEX_ARTIFACT_BUILD_ENTRYPOINT\" >> \"{}\"\n",
+            "printf 'CODEX_ARTIFACT_RENDER_ENTRYPOINT=%s\\n' \"$CODEX_ARTIFACT_RENDER_ENTRYPOINT\" >> \"{}\"\n",
+            "printf 'CUSTOM_ENV=%s\\n' \"$CUSTOM_ENV\" >> \"{}\"\n",
+            "echo stdout-ok\n",
+            "echo stderr-ok >&2\n"
+        ),
+        output_path.display(),
+        wrapped_script_path.display(),
+        output_path.display(),
+        output_path.display(),
+        output_path.display(),
+        output_path.display(),
+    );
+    fs::write(script_path, script).unwrap_or_else(|error| panic!("{error}"));
     #[cfg(unix)]
     {
         let mut permissions = fs::metadata(script_path)
@@ -464,9 +483,10 @@ fn build_zip_archive(runtime_version: &str) -> Vec<u8> {
     {
         let mut zip = ZipWriter::new(&mut bytes);
         let options = SimpleFileOptions::default();
+        let node_relative = node_relative_path();
         let manifest = serde_json::to_vec(&sample_extracted_manifest(
             runtime_version,
-            PathBuf::from("node/bin/node"),
+            node_relative.clone(),
         ))
         .unwrap_or_else(|error| panic!("{error}"));
         zip.start_file("artifact-runtime/manifest.json", options)
@@ -474,11 +494,11 @@ fn build_zip_archive(runtime_version: &str) -> Vec<u8> {
         zip.write_all(&manifest)
             .unwrap_or_else(|error| panic!("{error}"));
         zip.start_file(
-            "artifact-runtime/node/bin/node",
+            format!("artifact-runtime/{}", node_relative.display()),
             options.unix_permissions(0o755),
         )
         .unwrap_or_else(|error| panic!("{error}"));
-        zip.write_all(b"#!/bin/sh\n")
+        zip.write_all(placeholder_node_script().as_bytes())
             .unwrap_or_else(|error| panic!("{error}"));
         zip.start_file(
             "artifact-runtime/artifact-tool/dist/artifact_tool.mjs",
@@ -517,5 +537,35 @@ fn sample_extracted_manifest(
                 relative_path: "granola-render/dist/render_cli.mjs".to_string(),
             },
         },
+    }
+}
+
+fn node_relative_path() -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from("node/bin/node.cmd")
+    } else {
+        PathBuf::from("node/bin/node")
+    }
+}
+
+fn placeholder_node_script() -> &'static str {
+    if cfg!(windows) {
+        "@echo off\r\n"
+    } else {
+        "#!/bin/sh\n"
+    }
+}
+
+fn target_input_display(target: &ArtifactRenderTarget) -> String {
+    match target {
+        ArtifactRenderTarget::Spreadsheet(target) => target.input_path.display().to_string(),
+        ArtifactRenderTarget::Presentation(_) => panic!("expected spreadsheet target"),
+    }
+}
+
+fn target_output_display(target: &ArtifactRenderTarget) -> String {
+    match target {
+        ArtifactRenderTarget::Spreadsheet(target) => target.output_path.display().to_string(),
+        ArtifactRenderTarget::Presentation(_) => panic!("expected spreadsheet target"),
     }
 }

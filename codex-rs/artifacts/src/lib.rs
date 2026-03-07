@@ -1,6 +1,6 @@
 mod client;
 mod runtime;
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 mod tests;
 
 pub use client::ArtifactBuildRequest;
@@ -29,3 +29,4 @@ pub use runtime::RuntimePathEntry;
 pub use runtime::can_manage_artifact_runtime;
 pub use runtime::is_js_runtime_available;
 pub use runtime::load_cached_runtime;
+pub use runtime::system_node_path;

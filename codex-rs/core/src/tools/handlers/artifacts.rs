@@ -1,21 +1,20 @@
 use async_trait::async_trait;
-use codex_artifacts::ArtifactBuildRequest;
-use codex_artifacts::ArtifactCommandOutput;
 use codex_artifacts::ArtifactRuntimeManager;
 use codex_artifacts::ArtifactRuntimeManagerConfig;
-use codex_artifacts::ArtifactsClient;
-use codex_artifacts::ArtifactsError;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
-use std::time::Instant;
+use tempfile::TempDir;
+use tokio::fs;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::StreamOutput;
+use crate::exec_policy::ExecApprovalRequest;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::ExecCommandSource;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -23,14 +22,38 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
+use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::runtimes::artifacts::ArtifactApprovalKey;
+use crate::tools::runtimes::artifacts::ArtifactExecRequest;
+use crate::tools::runtimes::artifacts::ArtifactRuntime;
+use crate::tools::sandboxing::ToolError;
 use codex_protocol::models::FunctionCallOutputBody;
 
 const ARTIFACTS_TOOL_NAME: &str = "artifacts";
 const ARTIFACTS_PRAGMA_PREFIXES: [&str; 2] = ["// codex-artifacts:", "// codex-artifact-tool:"];
 pub(crate) const PINNED_ARTIFACT_RUNTIME_VERSION: &str = "2.4.0";
 const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
+const ARTIFACT_BUILD_LAUNCHER_RELATIVE: &str = "runtime-scripts/artifacts/build-launcher.mjs";
+const ARTIFACT_BUILD_LAUNCHER_SOURCE: &str = concat!(
+    "import { pathToFileURL } from \"node:url\";\n",
+    "const [sourcePath] = process.argv.slice(2);\n",
+    "if (!sourcePath) {\n",
+    "  throw new Error(\"missing artifact source path\");\n",
+    "}\n",
+    "const artifactTool = await import(pathToFileURL(process.env.CODEX_ARTIFACT_BUILD_ENTRYPOINT).href);\n",
+    "globalThis.artifactTool = artifactTool;\n",
+    "globalThis.artifacts = artifactTool;\n",
+    "globalThis.codexArtifacts = artifactTool;\n",
+    "for (const [name, value] of Object.entries(artifactTool)) {\n",
+    "  if (name === \"default\" || Object.prototype.hasOwnProperty.call(globalThis, name)) {\n",
+    "    continue;\n",
+    "  }\n",
+    "  globalThis[name] = value;\n",
+    "}\n",
+    "await import(pathToFileURL(sourcePath).href);\n",
+);
 
 pub struct ArtifactsHandler;
 
@@ -38,6 +61,11 @@ pub struct ArtifactsHandler;
 struct ArtifactsToolArgs {
     source: String,
     timeout_ms: Option<u64>,
+}
+
+struct PreparedArtifactBuild {
+    request: ArtifactExecRequest,
+    _source_dir: TempDir,
 }
 
 #[async_trait]
@@ -78,44 +106,58 @@ impl ToolHandler for ArtifactsHandler {
             }
         };
 
-        let client = ArtifactsClient::from_runtime_manager(default_runtime_manager(
-            turn.config.codex_home.clone(),
-        ));
-
-        let started_at = Instant::now();
-        emit_exec_begin(session.as_ref(), turn.as_ref(), &call_id).await;
-
-        let result = client
-            .execute_build(ArtifactBuildRequest {
-                source: args.source,
-                cwd: turn.cwd.clone(),
-                timeout: Some(Duration::from_millis(
-                    args.timeout_ms
-                        .unwrap_or(DEFAULT_EXECUTION_TIMEOUT.as_millis() as u64),
-                )),
-                env: Default::default(),
-            })
+        let runtime = default_runtime_manager(turn.config.codex_home.clone())
+            .ensure_installed()
             .await;
-
-        let (success, output) = match result {
-            Ok(output) => (output.success(), output),
-            Err(error) => (false, error_output(&error)),
+        let runtime = match runtime {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                return Ok(ToolOutput::Function {
+                    body: FunctionCallOutputBody::Text(error.to_string()),
+                    success: Some(false),
+                });
+            }
         };
 
-        emit_exec_end(
+        let prepared = prepare_artifact_build(
             session.as_ref(),
             turn.as_ref(),
-            &call_id,
-            &output,
-            started_at.elapsed(),
-            success,
+            runtime,
+            args.source,
+            args.timeout_ms
+                .unwrap_or(DEFAULT_EXECUTION_TIMEOUT.as_millis() as u64),
         )
-        .await;
+        .await?;
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(format_artifact_output(&output)),
-            success: Some(success),
-        })
+        let emitter = ToolEmitter::shell(
+            artifact_display_command(),
+            prepared.request.cwd.clone(),
+            ExecCommandSource::Agent,
+            true,
+        );
+        let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
+        emitter.begin(event_ctx).await;
+
+        let mut orchestrator = ToolOrchestrator::new();
+        let mut runtime = ArtifactRuntime;
+        let tool_ctx = crate::tools::sandboxing::ToolCtx {
+            session: session.clone(),
+            turn: turn.clone(),
+            call_id: call_id.clone(),
+            tool_name: ARTIFACTS_TOOL_NAME.to_string(),
+        };
+        let result = orchestrator
+            .run(
+                &mut runtime,
+                &prepared.request,
+                &tool_ctx,
+                &turn,
+                turn.approval_policy.value(),
+            )
+            .await
+            .map(|result| result.output);
+
+        Ok(finish_artifact_execution(&emitter, event_ctx, result).await)
     }
 }
 
@@ -219,83 +261,298 @@ fn default_runtime_manager(codex_home: std::path::PathBuf) -> ArtifactRuntimeMan
     ))
 }
 
-async fn emit_exec_begin(session: &Session, turn: &TurnContext, call_id: &str) {
-    let emitter = ToolEmitter::shell(
-        vec![ARTIFACTS_TOOL_NAME.to_string()],
-        turn.cwd.clone(),
-        ExecCommandSource::Agent,
-        true,
+async fn prepare_artifact_build(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    installed_runtime: codex_artifacts::InstalledArtifactRuntime,
+    source: String,
+    timeout_ms: u64,
+) -> Result<PreparedArtifactBuild, FunctionCallError> {
+    let launcher_path = ensure_artifact_build_launcher(turn.config.codex_home.as_path()).await?;
+    let source_dir = TempDir::new().map_err(|error| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to create artifact source staging directory: {error}"
+        ))
+    })?;
+    let source_path = source_dir.path().join("artifact-source.mjs");
+    fs::write(&source_path, source).await.map_err(|error| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to write artifact source at `{}`: {error}",
+            source_path.display()
+        ))
+    })?;
+
+    let js_runtime = installed_runtime
+        .resolve_js_runtime()
+        .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
+    let command =
+        build_artifact_build_command(js_runtime.executable_path(), &launcher_path, &source_path);
+    let approval_key = ArtifactApprovalKey {
+        command_prefix: artifact_prefix_rule(&command),
+        cwd: turn.cwd.clone(),
+        staged_script: source_path.clone(),
+    };
+    let initial_approval_requirement = session
+        .services
+        .exec_policy
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: turn.approval_policy.value(),
+            sandbox_policy: turn.sandbox_policy.get(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+    let escalation_approval_requirement = session
+        .services
+        .exec_policy
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: turn.approval_policy.value(),
+            sandbox_policy: turn.sandbox_policy.get(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: None,
+        })
+        .await;
+    let initial_approval_requirement =
+        clear_proposed_execpolicy_amendment(initial_approval_requirement);
+    let escalation_approval_requirement =
+        clear_proposed_execpolicy_amendment(escalation_approval_requirement);
+
+    let env = build_artifact_env(
+        &installed_runtime,
+        js_runtime.executable_path(),
+        js_runtime.requires_electron_run_as_node(),
+        codex_artifacts::system_node_path().as_deref(),
     );
-    let ctx = ToolEventCtx::new(session, turn, call_id, None);
-    emitter.emit(ctx, ToolEventStage::Begin).await;
+
+    Ok(PreparedArtifactBuild {
+        request: ArtifactExecRequest {
+            command,
+            cwd: turn.cwd.clone(),
+            timeout_ms: Some(timeout_ms),
+            env,
+            approval_key,
+            initial_approval_requirement,
+            escalation_approval_requirement,
+        },
+        _source_dir: source_dir,
+    })
 }
 
-async fn emit_exec_end(
-    session: &Session,
-    turn: &TurnContext,
-    call_id: &str,
-    output: &ArtifactCommandOutput,
-    duration: Duration,
-    success: bool,
-) {
-    let exec_output = ExecToolCallOutput {
-        exit_code: output.exit_code.unwrap_or(1),
-        stdout: StreamOutput::new(output.stdout.clone()),
-        stderr: StreamOutput::new(output.stderr.clone()),
-        aggregated_output: StreamOutput::new(format_artifact_output(output)),
-        duration,
-        timed_out: false,
-    };
-    let emitter = ToolEmitter::shell(
-        vec![ARTIFACTS_TOOL_NAME.to_string()],
-        turn.cwd.clone(),
-        ExecCommandSource::Agent,
-        true,
-    );
-    let ctx = ToolEventCtx::new(session, turn, call_id, None);
-    let stage = if success {
-        ToolEventStage::Success(exec_output)
-    } else {
-        ToolEventStage::Failure(ToolEventFailure::Output(exec_output))
-    };
-    emitter.emit(ctx, stage).await;
+fn clear_proposed_execpolicy_amendment(
+    requirement: crate::tools::sandboxing::ExecApprovalRequirement,
+) -> crate::tools::sandboxing::ExecApprovalRequirement {
+    match requirement {
+        crate::tools::sandboxing::ExecApprovalRequirement::Skip { bypass_sandbox, .. } => {
+            crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+                bypass_sandbox,
+                proposed_execpolicy_amendment: None,
+            }
+        }
+        crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval { reason, .. } => {
+            crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+                reason,
+                proposed_execpolicy_amendment: None,
+            }
+        }
+        crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { reason } => {
+            crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { reason }
+        }
+    }
 }
 
-fn format_artifact_output(output: &ArtifactCommandOutput) -> String {
-    let stdout = output.stdout.trim();
-    let stderr = output.stderr.trim();
-    let mut sections = vec![format!(
-        "exit_code: {}",
-        output
-            .exit_code
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "null".to_string())
-    )];
+async fn ensure_artifact_build_launcher(codex_home: &Path) -> Result<PathBuf, FunctionCallError> {
+    let launcher_path = artifact_build_launcher_path(codex_home);
+    match fs::read_to_string(&launcher_path).await {
+        Ok(existing) if existing == ARTIFACT_BUILD_LAUNCHER_SOURCE => return Ok(launcher_path),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "failed to read artifact launcher `{}`: {error}",
+                launcher_path.display()
+            )));
+        }
+    }
+
+    if let Some(parent) = launcher_path.parent() {
+        fs::create_dir_all(parent).await.map_err(|error| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to create artifact launcher directory `{}`: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    fs::write(&launcher_path, ARTIFACT_BUILD_LAUNCHER_SOURCE)
+        .await
+        .map_err(|error| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to write artifact launcher `{}`: {error}",
+                launcher_path.display()
+            ))
+        })?;
+
+    Ok(launcher_path)
+}
+
+fn artifact_build_launcher_path(codex_home: &Path) -> PathBuf {
+    codex_home.join(ARTIFACT_BUILD_LAUNCHER_RELATIVE)
+}
+
+fn build_artifact_build_command(
+    executable_path: &Path,
+    launcher_path: &Path,
+    source_path: &Path,
+) -> Vec<String> {
+    vec![
+        executable_path.display().to_string(),
+        launcher_path.display().to_string(),
+        source_path.display().to_string(),
+    ]
+}
+
+fn artifact_prefix_rule(command: &[String]) -> Vec<String> {
+    command.iter().take(2).cloned().collect()
+}
+
+fn artifact_display_command() -> Vec<String> {
+    vec![ARTIFACTS_TOOL_NAME.to_string()]
+}
+
+fn build_artifact_env(
+    installed_runtime: &codex_artifacts::InstalledArtifactRuntime,
+    selected_runtime_path: &Path,
+    requires_electron_run_as_node: bool,
+    host_node_path: Option<&Path>,
+) -> HashMap<String, String> {
+    let mut env = HashMap::from([
+        (
+            "CODEX_ARTIFACT_BUILD_ENTRYPOINT".to_string(),
+            installed_runtime.build_js_path().display().to_string(),
+        ),
+        (
+            "CODEX_ARTIFACT_RENDER_ENTRYPOINT".to_string(),
+            installed_runtime.render_cli_path().display().to_string(),
+        ),
+    ]);
+    if requires_electron_run_as_node {
+        env.insert("ELECTRON_RUN_AS_NODE".to_string(), "1".to_string());
+    }
+    if selected_runtime_path == installed_runtime.node_path()
+        && let Some(host_node_path) = host_node_path
+    {
+        env.insert(
+            "CODEX_ARTIFACT_NODE_PATH".to_string(),
+            host_node_path.display().to_string(),
+        );
+    }
+    env
+}
+
+async fn finish_artifact_execution(
+    emitter: &ToolEmitter,
+    event_ctx: ToolEventCtx<'_>,
+    result: Result<ExecToolCallOutput, ToolError>,
+) -> ToolOutput {
+    let (body, success, stage) = match result {
+        Ok(output) => {
+            let success = output.exit_code == 0;
+            let body = format_artifact_output(&output);
+            let stage = if success {
+                ToolEventStage::Success(output)
+            } else {
+                ToolEventStage::Failure(ToolEventFailure::Output(output))
+            };
+            (body, success, stage)
+        }
+        Err(ToolError::Codex(crate::error::CodexErr::Sandbox(
+            crate::error::SandboxErr::Timeout { output },
+        )))
+        | Err(ToolError::Codex(crate::error::CodexErr::Sandbox(
+            crate::error::SandboxErr::Denied { output, .. },
+        ))) => {
+            let output = *output;
+            let body = format_artifact_output(&output);
+            (
+                body,
+                false,
+                ToolEventStage::Failure(ToolEventFailure::Output(output)),
+            )
+        }
+        Err(ToolError::Codex(error)) => {
+            let message = format!("execution error: {error:?}");
+            (
+                message.clone(),
+                false,
+                ToolEventStage::Failure(ToolEventFailure::Message(message)),
+            )
+        }
+        Err(ToolError::Rejected(message)) => {
+            let normalized = if message == "rejected by user" {
+                "artifact command rejected by user".to_string()
+            } else {
+                message
+            };
+            (
+                normalized.clone(),
+                false,
+                ToolEventStage::Failure(ToolEventFailure::Rejected(normalized)),
+            )
+        }
+    };
+    emitter.emit(event_ctx, stage).await;
+
+    ToolOutput::Function {
+        body: FunctionCallOutputBody::Text(body),
+        success: Some(success),
+    }
+}
+
+fn format_artifact_output(output: &ExecToolCallOutput) -> String {
+    let stdout = output.stdout.text.trim();
+    let stderr = format_artifact_stderr(output);
+    let mut sections = vec![format!("exit_code: {}", output.exit_code)];
     if !stdout.is_empty() {
         sections.push(format!("stdout:\n{stdout}"));
     }
     if !stderr.is_empty() {
         sections.push(format!("stderr:\n{stderr}"));
     }
-    if stdout.is_empty() && stderr.is_empty() && output.success() {
+    if stdout.is_empty() && stderr.is_empty() && output.exit_code == 0 {
         sections.push("artifact JS completed successfully.".to_string());
     }
     sections.join("\n\n")
 }
 
-fn error_output(error: &ArtifactsError) -> ArtifactCommandOutput {
-    ArtifactCommandOutput {
-        exit_code: Some(1),
-        stdout: String::new(),
-        stderr: error.to_string(),
+fn format_artifact_stderr(output: &ExecToolCallOutput) -> String {
+    let stderr = output.stderr.text.trim();
+    if output.timed_out {
+        let timeout_message = format!(
+            "command timed out after {} milliseconds",
+            output.duration.as_millis()
+        );
+        if stderr.is_empty() {
+            timeout_message
+        } else {
+            format!("{timeout_message}\n{stderr}")
+        }
+    } else {
+        stderr.to_string()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::make_session_and_context;
+    use crate::config::Constrained;
+    use crate::exec::StreamOutput;
+    use crate::protocol::AskForApproval;
+    use crate::protocol::SandboxPolicy;
     use codex_artifacts::RuntimeEntrypoints;
     use codex_artifacts::RuntimePathEntry;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     #[test]
@@ -411,11 +668,245 @@ mod tests {
 
     #[test]
     fn format_artifact_output_includes_success_message_when_silent() {
-        let formatted = format_artifact_output(&ArtifactCommandOutput {
-            exit_code: Some(0),
-            stdout: String::new(),
-            stderr: String::new(),
+        let formatted = format_artifact_output(&ExecToolCallOutput {
+            exit_code: 0,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::ZERO,
+            timed_out: false,
         });
         assert!(formatted.contains("artifact JS completed successfully."));
+    }
+
+    #[test]
+    fn format_artifact_output_includes_timeout_message() {
+        let formatted = format_artifact_output(&ExecToolCallOutput {
+            exit_code: 124,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new("render hung".to_string()),
+            aggregated_output: StreamOutput::new("render hung".to_string()),
+            duration: Duration::from_millis(1_500),
+            timed_out: true,
+        });
+
+        assert!(formatted.contains("command timed out after 1500 milliseconds"));
+        assert!(formatted.contains("render hung"));
+    }
+
+    #[test]
+    fn artifact_prefix_rule_uses_stable_launcher_prefix() {
+        let command = build_artifact_build_command(
+            Path::new("/runtime/node"),
+            Path::new("/codex/home/runtime-scripts/artifacts/build-launcher.mjs"),
+            Path::new("/tmp/artifact-source.mjs"),
+        );
+
+        assert_eq!(
+            artifact_prefix_rule(&command),
+            vec![
+                "/runtime/node".to_string(),
+                "/codex/home/runtime-scripts/artifacts/build-launcher.mjs".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn artifact_display_command_is_user_facing() {
+        assert_eq!(artifact_display_command(), vec!["artifacts".to_string()]);
+    }
+
+    #[test]
+    fn build_artifact_env_includes_host_node_override_for_bundled_wrapper() {
+        let runtime = codex_artifacts::InstalledArtifactRuntime::new(
+            PathBuf::from("/runtime"),
+            PINNED_ARTIFACT_RUNTIME_VERSION.to_string(),
+            codex_artifacts::ArtifactRuntimePlatform::detect_current().expect("detect platform"),
+            codex_artifacts::ExtractedRuntimeManifest {
+                schema_version: 1,
+                runtime_version: PINNED_ARTIFACT_RUNTIME_VERSION.to_string(),
+                node: RuntimePathEntry {
+                    relative_path: "node/bin/node".to_string(),
+                },
+                entrypoints: RuntimeEntrypoints {
+                    build_js: RuntimePathEntry {
+                        relative_path: "artifact-tool/dist/artifact_tool.mjs".to_string(),
+                    },
+                    render_cli: RuntimePathEntry {
+                        relative_path: "granola-render/dist/render_cli.mjs".to_string(),
+                    },
+                },
+            },
+            PathBuf::from("/runtime/node/bin/node"),
+            PathBuf::from("/runtime/artifact-tool/dist/artifact_tool.mjs"),
+            PathBuf::from("/runtime/granola-render/dist/render_cli.mjs"),
+        );
+
+        let env = build_artifact_env(
+            &runtime,
+            Path::new("/runtime/node/bin/node"),
+            false,
+            Some(Path::new("/opt/homebrew/bin/node")),
+        );
+
+        assert_eq!(
+            env.get("CODEX_ARTIFACT_NODE_PATH"),
+            Some(&"/opt/homebrew/bin/node".to_string())
+        );
+    }
+
+    #[test]
+    fn build_artifact_env_skips_host_node_override_for_machine_runtime() {
+        let runtime = codex_artifacts::InstalledArtifactRuntime::new(
+            PathBuf::from("/runtime"),
+            PINNED_ARTIFACT_RUNTIME_VERSION.to_string(),
+            codex_artifacts::ArtifactRuntimePlatform::detect_current().expect("detect platform"),
+            codex_artifacts::ExtractedRuntimeManifest {
+                schema_version: 1,
+                runtime_version: PINNED_ARTIFACT_RUNTIME_VERSION.to_string(),
+                node: RuntimePathEntry {
+                    relative_path: "node/bin/node".to_string(),
+                },
+                entrypoints: RuntimeEntrypoints {
+                    build_js: RuntimePathEntry {
+                        relative_path: "artifact-tool/dist/artifact_tool.mjs".to_string(),
+                    },
+                    render_cli: RuntimePathEntry {
+                        relative_path: "granola-render/dist/render_cli.mjs".to_string(),
+                    },
+                },
+            },
+            PathBuf::from("/runtime/node/bin/node"),
+            PathBuf::from("/runtime/artifact-tool/dist/artifact_tool.mjs"),
+            PathBuf::from("/runtime/granola-render/dist/render_cli.mjs"),
+        );
+
+        let env = build_artifact_env(
+            &runtime,
+            Path::new("/opt/homebrew/bin/node"),
+            false,
+            Some(Path::new("/opt/homebrew/bin/node")),
+        );
+
+        assert!(!env.contains_key("CODEX_ARTIFACT_NODE_PATH"));
+    }
+
+    #[tokio::test]
+    async fn ensure_artifact_build_launcher_writes_expected_source() {
+        let codex_home = TempDir::new().expect("create temp codex home");
+
+        let launcher_path = ensure_artifact_build_launcher(codex_home.path())
+            .await
+            .expect("write launcher");
+
+        assert_eq!(
+            launcher_path,
+            codex_home.path().join(ARTIFACT_BUILD_LAUNCHER_RELATIVE)
+        );
+        let launcher_source =
+            std::fs::read_to_string(&launcher_path).expect("read artifact launcher source");
+        assert!(launcher_source.contains("globalThis.artifacts = artifactTool;"));
+        assert!(launcher_source.contains("await import(pathToFileURL(sourcePath).href);"));
+    }
+
+    #[tokio::test]
+    async fn prepare_artifact_build_uses_script_specific_approval_key_without_execpolicy_rule() {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        turn.sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+        let runtime = codex_artifacts::InstalledArtifactRuntime::new(
+            PathBuf::from("/runtime"),
+            PINNED_ARTIFACT_RUNTIME_VERSION.to_string(),
+            codex_artifacts::ArtifactRuntimePlatform::detect_current().expect("detect platform"),
+            codex_artifacts::ExtractedRuntimeManifest {
+                schema_version: 1,
+                runtime_version: PINNED_ARTIFACT_RUNTIME_VERSION.to_string(),
+                node: RuntimePathEntry {
+                    relative_path: "node/bin/node".to_string(),
+                },
+                entrypoints: RuntimeEntrypoints {
+                    build_js: RuntimePathEntry {
+                        relative_path: "artifact-tool/dist/artifact_tool.mjs".to_string(),
+                    },
+                    render_cli: RuntimePathEntry {
+                        relative_path: "granola-render/dist/render_cli.mjs".to_string(),
+                    },
+                },
+            },
+            PathBuf::from("/runtime/node/bin/node"),
+            PathBuf::from("/runtime/artifact-tool/dist/artifact_tool.mjs"),
+            PathBuf::from("/runtime/granola-render/dist/render_cli.mjs"),
+        );
+
+        let prepared = prepare_artifact_build(
+            &session,
+            &turn,
+            runtime,
+            "console.log('ok');".to_string(),
+            5_000,
+        )
+        .await
+        .expect("prepare artifact build");
+
+        assert_eq!(
+            prepared.request.approval_key.command_prefix,
+            vec![
+                prepared.request.command[0].clone(),
+                turn.config
+                    .codex_home
+                    .join(ARTIFACT_BUILD_LAUNCHER_RELATIVE)
+                    .display()
+                    .to_string(),
+            ]
+        );
+        assert_eq!(
+            prepared.request.approval_key.staged_script,
+            PathBuf::from(&prepared.request.command[2])
+        );
+        assert!(
+            prepared
+                .request
+                .escalation_approval_requirement
+                .proposed_execpolicy_amendment()
+                .is_none()
+        );
+        match prepared.request.initial_approval_requirement {
+            crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+                reason,
+                proposed_execpolicy_amendment,
+            } => {
+                assert_eq!(reason, None);
+                assert_eq!(proposed_execpolicy_amendment, None);
+            }
+            crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+                bypass_sandbox,
+                proposed_execpolicy_amendment,
+            } => {
+                assert!(!bypass_sandbox);
+                assert_eq!(proposed_execpolicy_amendment, None);
+            }
+            crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { reason } => {
+                panic!("unexpected forbidden initial requirement: {reason}");
+            }
+        }
+        match prepared.request.escalation_approval_requirement {
+            crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+                reason,
+                proposed_execpolicy_amendment,
+            } => {
+                assert_eq!(reason, None);
+                assert_eq!(proposed_execpolicy_amendment, None);
+            }
+            crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+                bypass_sandbox,
+                proposed_execpolicy_amendment,
+            } => {
+                assert!(!bypass_sandbox);
+                assert_eq!(proposed_execpolicy_amendment, None);
+            }
+            crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { reason } => {
+                panic!("unexpected forbidden escalation requirement: {reason}");
+            }
+        }
     }
 }

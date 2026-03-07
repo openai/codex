@@ -13,6 +13,8 @@ const sheet = workbook.worksheets.add("Sheet1");
 - `await SpreadsheetFile.importXlsx(await FileBlob.load("book.xlsx"))` imports an existing workbook.
 - `workbook.recalculate()` evaluates formulas.
 - `await SpreadsheetFile.exportXlsx(workbook)` exports a saveable `.xlsx` blob.
+- When using this skill operationally, start by authoring with these APIs rather than checking local runtime package directories first.
+- If the first `artifacts` run fails before workbook code executes, ask for approval to install Node or the required artifact runtime, then retry once.
 
 ## Worksheets
 

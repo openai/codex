@@ -12,8 +12,9 @@ const presentation = Presentation.create({
 
 - `Presentation.create()` creates a new empty deck.
 - `await PresentationFile.importPptx(await FileBlob.load("deck.pptx"))` imports an existing deck.
-- `await PresentationFile.exportPptx(presentation)` exports the deck as a saveable blob.
-- When using this skill operationally, start by authoring with these APIs rather than checking local runtime package directories first. Runtime or package-cache inspection is a fallback for cases where the `artifacts` tool itself fails before deck code executes.
+- `await PresentationFile.exportPptx(presentation)` exports the deck as a saveable PowerPoint blob with the current runtime.
+- When using this skill operationally, start by authoring with these APIs rather than checking local runtime package directories first.
+- If the first `artifacts` run fails before deck code executes, ask for approval to install Node or the required artifact runtime, then retry once.
 
 ## Slides
 
@@ -150,3 +151,5 @@ await fs.writeFile("artifacts/slide-1.png", previewBytes);
 ## Output
 
 Prefer saving artifacts into an `artifacts/` directory in the current working tree so the user can inspect outputs easily.
+
+Before handoff, render PNG previews for visual QA. When validating a new runtime build or debugging export issues, also verify the exported `.pptx` signature with a local tool such as `file` or `xxd`.

@@ -63,6 +63,11 @@ pub fn is_js_runtime_available(codex_home: &Path, runtime_version: &str) -> bool
         .is_some()
 }
 
+/// Returns the absolute path to a machine Node executable if one is available.
+pub fn system_node_path() -> Option<PathBuf> {
+    system_node_runtime().map(|runtime| runtime.executable_path().to_path_buf())
+}
+
 /// Returns `true` when this machine can use the managed artifact runtime flow.
 ///
 /// This is a platform capability check, not a cache or binary availability check.

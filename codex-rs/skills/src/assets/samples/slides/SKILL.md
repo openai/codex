@@ -19,6 +19,10 @@ Use this skill when the user wants to create or modify presentation decks with t
 - The full module is also available as `artifactTool`, `artifacts`, and `codexArtifacts`.
 - You may still import Node built-ins such as `node:fs/promises` when you need to write preview bytes to disk.
 - Save outputs under a user-visible path such as `artifacts/quarterly-update.pptx` or `artifacts/slide-1.png`.
+- `await PresentationFile.exportPptx(presentation)` should produce a real PowerPoint file with the current runtime.
+- Render PNG previews for visual QA before handoff.
+- When validating a new runtime build or debugging export issues, verify the exported `.pptx` signature with a local check such as `file artifacts/name.pptx` or `xxd -l 8 artifacts/name.pptx`.
+- End every artifact run with a concise user-facing log that lists every file the script created or updated. Keep the message short and formatted for direct display, for example `Saved files` followed by one path per line.
 
 ## Quick Start
 
@@ -44,7 +48,13 @@ const subtitle = slide.shapes.add({
 subtitle.text = "Launch status, reliability, and next milestones";
 
 const pptxBlob = await PresentationFile.exportPptx(presentation);
-await pptxBlob.save("artifacts/q2-product-update.pptx");
+const pptxPath = "artifacts/q2-product-update.pptx";
+await pptxBlob.save(pptxPath);
+
+console.log([
+  "Saved files",
+  `- ${pptxPath}`,
+].join("\n"));
 ```
 
 ## Runtime Guardrails
@@ -112,13 +122,19 @@ for (const slide of presentation.slides.items) {
 - Add content with `slide.shapes.add(...)`, `slide.tables.add(...)`, `slide.elements.charts.add(...)`, and `slide.elements.images.add(...)` when you need preview-safe embedded images.
 - Render a preview with `await presentation.export({ slide, format: "png", scale: 2 })`, then write `new Uint8Array(await blob.arrayBuffer())` with `node:fs/promises`.
 - Export a `.pptx` with `await PresentationFile.exportPptx(presentation)`.
+- Treat rendered PNG previews as the primary visual QA step, and use file-signature checks when validating runtime behavior.
 
 ## Workflow
 
 - Start with the smallest script that creates or imports the deck.
 - Do not begin by checking whether the local artifacts runtime package or cache exists. Assume the `artifacts` tool is ready and start authoring immediately; only investigate runtime installation or packaging if the tool fails before your slide code runs.
+- If the first `artifacts` run fails before your slide code executes, treat it as runtime setup failure.
+- Ask for approval to install Node or the required artifact runtime, explaining that a JavaScript runtime is required to build presentation artifacts.
+- After approval, install it and retry once. Do not loop on the same failed script.
 - If the API surface is unclear, do a tiny probe first: create one slide, add one shape, set `text` or `textStyle`, export one PNG, and inspect the result before scaling up to the full deck.
 - Save the `.pptx` after meaningful milestones so the user can inspect output.
+- After saving a `.pptx`, verify the on-disk file type when you are validating a runtime build or investigating an export issue.
+- End the script with a final `console.log(...)` summary that names every file the run touched, using a compact user-facing format with one path per line.
 - Prefer short copy and a reusable component system over text-heavy layouts; the preview loop is much faster than rescuing a dense slide after export.
 - Text boxes do not reliably auto-fit. If copy might wrap, give the shape extra height up front, then shorten the copy or enlarge the box until the rendered PNG shows clear padding on every edge.
 - Deliberately check text contrast against the actual fill or image behind it. Do not leave dark text on dark fills, light text on light fills, or any pairing that is hard to read at presentation distance.
@@ -129,6 +145,7 @@ for (const slide of presentation.slides.items) {
 - If layout is repetitive, use `slide.autoLayout(...)` rather than hand-tuning every coordinate.
 - QA with rendered PNG previews before handoff. In practice this is a more reliable quick check than importing the generated `.pptx` back into the runtime and inspecting round-tripped objects.
 - Final QA means checking every rendered slide for contrast, intentional alignment, text superposition, clipped text, overflowing text, and inherited placeholder boxes. If text is hard to read against its background, if one text box overlaps another, if stacked text becomes hard to read, if any line touches a box edge, if text looks misaligned inside its box, or if PowerPoint shows `Click to add ...` placeholders, fix the layout or delete the inherited placeholder shapes and re-export before handoff.
+- Final export QA can also include verifying that the nominal `.pptx` is a PowerPoint container when you are testing runtime correctness rather than only deck layout.
 - When editing an existing file, load it first, mutate only the requested slides or elements, then export a new `.pptx`.
 
 ## Reference Map

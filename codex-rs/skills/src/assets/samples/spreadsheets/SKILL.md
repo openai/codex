@@ -18,6 +18,7 @@ Use this skill when the user wants to create or modify workbooks with the `artif
 - Named exports such as `Workbook`, `SpreadsheetFile`, and `FileBlob` are available directly.
 - The full module is also available as `artifactTool`, `artifacts`, and `codexArtifacts`.
 - Save outputs under a user-visible path such as `artifacts/revenue-model.xlsx`.
+- End every artifact run with a concise user-facing log that lists every file the script created or updated. Keep the message short and formatted for direct display, for example `Saved files` followed by one path per line.
 
 ## Quick Start
 
@@ -38,7 +39,13 @@ sheet.getRange("E2").formulas = [["=SUM(C2:C4)"]];
 workbook.recalculate();
 
 const xlsxBlob = await SpreadsheetFile.exportXlsx(workbook);
-await xlsxBlob.save("artifacts/revenue-model.xlsx");
+const xlsxPath = "artifacts/revenue-model.xlsx";
+await xlsxBlob.save(xlsxPath);
+
+console.log([
+  "Saved files",
+  `- ${xlsxPath}`,
+].join("\n"));
 ```
 
 ## Common Patterns
@@ -55,8 +62,13 @@ await xlsxBlob.save("artifacts/revenue-model.xlsx");
 ## Workflow
 
 - Model the workbook structure first: sheets, headers, and key formulas.
+- Do not begin by checking whether the local artifacts runtime package or cache exists. Assume the `artifacts` tool is ready and start authoring immediately; only investigate runtime installation or packaging if the tool fails before your workbook code runs.
+- If the first `artifacts` run fails before your workbook code executes, treat it as runtime setup failure.
+- Ask for approval to install Node or the required artifact runtime, explaining that a JavaScript runtime is required to build spreadsheet artifacts.
+- After approval, install it and retry once. Do not loop on the same failed script.
 - Use formulas instead of copying computed values when the sheet should remain editable.
 - Recalculate before exporting or reading formula results.
+- End the script with a final `console.log(...)` summary that names every file the run touched, using a compact user-facing format with one path per line.
 - If the workbook includes charts or images, verify layout after export, not just in memory. A sheet-level render pass such as `await workbook.render({ sheet: index, format: "png" })` is a good QA step before handoff.
 - Check where drawings land on the actual sheet. Merged cells and very tall autofit rows can push visible content far below the fold, so QA should confirm not only that a chart exists, but that it appears in an obvious on-sheet location.
 - When editing an existing workbook, load it first and preserve unaffected sheets.
