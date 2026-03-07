@@ -89,6 +89,16 @@ pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
         && turn.features.enabled(Feature::GuardianApproval)
 }
 
+pub(crate) fn is_guardian_subagent_source(
+    session_source: &codex_protocol::protocol::SessionSource,
+) -> bool {
+    matches!(
+        session_source,
+        codex_protocol::protocol::SessionSource::SubAgent(SubAgentSource::Other(name))
+            if name == GUARDIAN_SUBAGENT_NAME
+    )
+}
+
 /// Canonical description of the action the guardian is being asked to review.
 #[derive(Debug, Clone)]
 pub(crate) struct GuardianReviewRequest {

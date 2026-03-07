@@ -409,11 +409,7 @@ impl Codex {
         )
         .await;
 
-        let exec_policy = if matches!(
-            &session_source,
-            SessionSource::SubAgent(SubAgentSource::Other(name))
-                if name == crate::guardian::GUARDIAN_SUBAGENT_NAME
-        ) {
+        let exec_policy = if crate::guardian::is_guardian_subagent_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
             // not on caller-provided exec-policy rules that could shape the
             // reviewer or silently auto-approve commands.
@@ -3183,6 +3179,8 @@ impl Session {
                 state.session_configuration.base_instructions.clone(),
             )
         };
+        let is_guardian_subagent =
+            crate::guardian::is_guardian_subagent_source(&turn_context.session_source);
         if let Some(model_switch_message) =
             crate::context_manager::updates::build_model_instructions_update_item(
                 previous_turn_settings.as_ref(),
@@ -3255,7 +3253,9 @@ impl Session {
         {
             developer_sections.push(commit_message_instruction);
         }
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
+        if !is_guardian_subagent
+            && let Some(user_instructions) = turn_context.user_instructions.as_deref()
+        {
             contextual_user_sections.push(
                 UserInstructions {
                     text: user_instructions.to_string(),
@@ -3264,16 +3264,18 @@ impl Session {
                 .serialize_to_text(),
             );
         }
-        let subagents = self
-            .services
-            .agent_control
-            .format_environment_context_subagents(self.conversation_id)
-            .await;
-        contextual_user_sections.push(
-            EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
-                .with_subagents(subagents)
-                .serialize_to_xml(),
-        );
+        if !is_guardian_subagent {
+            let subagents = self
+                .services
+                .agent_control
+                .format_environment_context_subagents(self.conversation_id)
+                .await;
+            contextual_user_sections.push(
+                EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                    .with_subagents(subagents)
+                    .serialize_to_xml(),
+            );
+        }
 
         let mut items = Vec::with_capacity(2);
         if let Some(developer_message) =
