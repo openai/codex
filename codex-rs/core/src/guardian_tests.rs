@@ -42,7 +42,7 @@ fn build_guardian_transcript_keeps_original_numbering() {
         },
     ];
 
-    let (transcript, omission) = build_guardian_transcript(&entries[..2]);
+    let (transcript, omission) = render_guardian_transcript_entries(&entries[..2]);
 
     assert_eq!(
         transcript,
@@ -200,7 +200,7 @@ fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
         },
     ];
 
-    let (transcript, omission) = build_guardian_transcript(&entries);
+    let (transcript, omission) = render_guardian_transcript_entries(&entries);
 
     assert!(
         transcript

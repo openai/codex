@@ -234,7 +234,7 @@ async fn run_guardian_review(
     }
 }
 
-/// Adapter used by callsites that already traffic in `ReviewDecision`.
+/// Public entrypoint for approval requests that should be reviewed by guardian.
 pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
@@ -262,7 +262,7 @@ async fn build_guardian_prompt_items(
     let planned_action_json = format_guardian_action_pretty(&request.action);
 
     let (transcript_entries, omission_note) =
-        build_guardian_transcript(transcript_entries.as_slice());
+        render_guardian_transcript_entries(transcript_entries.as_slice());
     let mut items = Vec::new();
     let mut push_text = |text: String| {
         items.push(UserInput::Text {
@@ -308,7 +308,9 @@ async fn build_guardian_prompt_items(
 ///   conversation
 ///
 /// User messages are never dropped unless the entire transcript must be omitted.
-fn build_guardian_transcript(entries: &[GuardianTranscriptEntry]) -> (Vec<String>, Option<String>) {
+fn render_guardian_transcript_entries(
+    entries: &[GuardianTranscriptEntry],
+) -> (Vec<String>, Option<String>) {
     if entries.is_empty() {
         return (vec!["<no retained transcript entries>".to_string()], None);
     }
