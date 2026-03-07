@@ -1142,6 +1142,42 @@ async fn append_execpolicy_amendment_rejects_empty_prefix() {
 }
 
 #[tokio::test]
+async fn concurrent_execpolicy_amendments_preserve_both_rules() {
+    let codex_home = tempdir().expect("create temp dir");
+    let manager = Arc::new(ExecPolicyManager::default());
+    let echo = ExecPolicyAmendment::new(vec!["echo".to_string()]);
+    let cargo = ExecPolicyAmendment::new(vec!["cargo".to_string(), "test".to_string()]);
+
+    let (echo_result, cargo_result) = tokio::join!(
+        manager.append_amendment_and_update(codex_home.path(), &echo),
+        manager.append_amendment_and_update(codex_home.path(), &cargo),
+    );
+    echo_result.expect("update echo policy");
+    cargo_result.expect("update cargo policy");
+
+    let updated_policy = manager.current();
+    let echo_evaluation = updated_policy.check(&["echo".to_string()], &|_| Decision::Forbidden);
+    assert_eq!(echo_evaluation.decision, Decision::Allow);
+    assert!(echo_evaluation.matched_rules.iter().any(|rule_match| {
+        is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+    }));
+
+    let cargo_evaluation =
+        updated_policy.check(&["cargo".to_string(), "test".to_string()], &|_| {
+            Decision::Forbidden
+        });
+    assert_eq!(cargo_evaluation.decision, Decision::Allow);
+    assert!(cargo_evaluation.matched_rules.iter().any(|rule_match| {
+        is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+    }));
+
+    let contents = fs::read_to_string(default_policy_path(codex_home.path()))
+        .expect("policy file should have been created");
+    assert!(contents.contains(r#"prefix_rule(pattern=["echo"], decision="allow")"#));
+    assert!(contents.contains(r#"prefix_rule(pattern=["cargo", "test"], decision="allow")"#));
+}
+
+#[tokio::test]
 async fn proposed_execpolicy_amendment_is_present_for_single_command_without_policy_match() {
     let command = vec!["cargo".to_string(), "build".to_string()];
 
