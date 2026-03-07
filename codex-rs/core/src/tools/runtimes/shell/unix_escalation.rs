@@ -10,6 +10,7 @@ use crate::features::Feature;
 use crate::guardian::GuardianAction;
 use crate::guardian::GuardianExecveAction;
 use crate::guardian::GuardianReviewRequest;
+use crate::guardian::guardian_json_field;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecRequest;
@@ -392,10 +393,9 @@ impl CoreShellActionProvider {
                             program: program.clone(),
                             argv: argv.to_vec(),
                             cwd: workdir,
-                            additional_permissions: additional_permissions.as_ref().map(|value| {
-                                serde_json::to_value(value)
-                                    .expect("execve additional permissions should serialize")
-                            }),
+                            additional_permissions: additional_permissions
+                                .as_ref()
+                                .map(|value| guardian_json_field("additional_permissions", value)),
                         }),
                     };
                     return review_approval_request(&session, &turn, request).await;

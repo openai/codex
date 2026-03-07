@@ -14,6 +14,7 @@ use crate::features::Feature;
 use crate::guardian::GuardianAction;
 use crate::guardian::GuardianCommandAction;
 use crate::guardian::GuardianReviewRequest;
+use crate::guardian::guardian_json_field;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
@@ -160,12 +161,14 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         tool: "shell",
                         command,
                         cwd,
-                        sandbox_permissions: serde_json::to_value(req.sandbox_permissions)
-                            .expect("shell sandbox permissions should serialize"),
-                        additional_permissions: req.additional_permissions.as_ref().map(|value| {
-                            serde_json::to_value(value)
-                                .expect("shell additional permissions should serialize")
-                        }),
+                        sandbox_permissions: guardian_json_field(
+                            "sandbox_permissions",
+                            req.sandbox_permissions,
+                        ),
+                        additional_permissions: req
+                            .additional_permissions
+                            .as_ref()
+                            .map(|value| guardian_json_field("additional_permissions", value)),
                         justification: reason,
                         tty: None,
                     }),

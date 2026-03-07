@@ -861,9 +861,12 @@ fn format_guardian_action_pretty_at_indent(action: &GuardianAction, indent: usiz
     match action {
         GuardianAction::Command(action) => format_guardian_object_fields_at_indent(
             &[
-                ("tool", Some(json_field(action.tool))),
-                ("command", Some(json_field(&action.command))),
-                ("cwd", Some(json_field(&action.cwd))),
+                ("tool", Some(guardian_json_field("tool", action.tool))),
+                (
+                    "command",
+                    Some(guardian_json_field("command", &action.command)),
+                ),
+                ("cwd", Some(guardian_json_field("cwd", &action.cwd))),
                 (
                     "sandbox_permissions",
                     Some(sanitize_guardian_value(action.sandbox_permissions.clone())),
@@ -877,18 +880,27 @@ fn format_guardian_action_pretty_at_indent(action: &GuardianAction, indent: usiz
                 ),
                 (
                     "justification",
-                    action.justification.as_ref().map(json_field),
+                    action
+                        .justification
+                        .as_ref()
+                        .map(|value| guardian_json_field("justification", value)),
                 ),
-                ("tty", action.tty.map(json_field)),
+                (
+                    "tty",
+                    action.tty.map(|value| guardian_json_field("tty", value)),
+                ),
             ],
             indent,
         ),
         GuardianAction::Execve(action) => format_guardian_object_fields_at_indent(
             &[
-                ("tool", Some(json_field(action.tool))),
-                ("program", Some(json_field(&action.program))),
-                ("argv", Some(json_field(&action.argv))),
-                ("cwd", Some(json_field(&action.cwd))),
+                ("tool", Some(guardian_json_field("tool", action.tool))),
+                (
+                    "program",
+                    Some(guardian_json_field("program", &action.program)),
+                ),
+                ("argv", Some(guardian_json_field("argv", &action.argv))),
+                ("cwd", Some(guardian_json_field("cwd", &action.cwd))),
                 (
                     "additional_permissions",
                     action
@@ -901,24 +913,30 @@ fn format_guardian_action_pretty_at_indent(action: &GuardianAction, indent: usiz
         ),
         GuardianAction::ApplyPatch(action) => format_guardian_object_fields_at_indent(
             &[
-                ("tool", Some(json_field(action.tool))),
-                ("cwd", Some(json_field(&action.cwd))),
-                ("files", Some(json_field(&action.files))),
-                ("change_count", Some(json_field(action.change_count))),
-                ("patch", Some(json_field(&action.patch))),
+                ("tool", Some(guardian_json_field("tool", action.tool))),
+                ("cwd", Some(guardian_json_field("cwd", &action.cwd))),
+                ("files", Some(guardian_json_field("files", &action.files))),
+                (
+                    "change_count",
+                    Some(guardian_json_field("change_count", action.change_count)),
+                ),
+                ("patch", Some(guardian_json_field("patch", &action.patch))),
             ],
             indent,
         ),
         GuardianAction::NetworkAccess(action) => format_guardian_object_fields_at_indent(
             &[
-                ("tool", Some(json_field(action.tool))),
-                ("target", Some(json_field(&action.target))),
-                ("host", Some(json_field(&action.host))),
+                ("tool", Some(guardian_json_field("tool", action.tool))),
+                (
+                    "target",
+                    Some(guardian_json_field("target", &action.target)),
+                ),
+                ("host", Some(guardian_json_field("host", &action.host))),
                 (
                     "protocol",
                     Some(sanitize_guardian_value(action.protocol.clone())),
                 ),
-                ("port", Some(json_field(action.port))),
+                ("port", Some(guardian_json_field("port", action.port))),
             ],
             indent,
         ),
@@ -1006,8 +1024,20 @@ fn format_guardian_json_value_at_indent(value: &Value, indent: usize) -> String 
     }
 }
 
-fn json_field<T: Serialize>(value: T) -> Value {
-    serde_json::to_value(value).expect("guardian action fields should serialize")
+pub(crate) fn guardian_json_field<T: Serialize>(field_name: &'static str, value: T) -> Value {
+    match serde_json::to_value(value) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(
+                field_name,
+                ?err,
+                "guardian action field serialization failed"
+            );
+            Value::String(format!(
+                "<guardian_serialization_failed field=\"{field_name}\" />"
+            ))
+        }
+    }
 }
 
 fn guardian_truncate_text(content: &str, token_cap: usize) -> String {
@@ -1493,7 +1523,10 @@ mod tests {
                     "guardian-approval-mvp".to_string(),
                 ],
                 cwd: PathBuf::from("/repo/codex-rs/core"),
-                sandbox_permissions: json_field(crate::sandboxing::SandboxPermissions::UseDefault),
+                sandbox_permissions: guardian_json_field(
+                    "sandbox_permissions",
+                    crate::sandboxing::SandboxPermissions::UseDefault,
+                ),
                 additional_permissions: None,
                 justification: Some(
                     "Need to push the reviewed docs fix to the repo remote.".to_string(),
