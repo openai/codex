@@ -28,6 +28,51 @@ def multiplatform_binaries(name, platforms = PLATFORMS):
         tags = ["manual"],
     )
 
+def _workspace_root_test_impl(ctx):
+    launcher = ctx.actions.declare_file(ctx.label.name)
+    test_bin = ctx.executable.test_bin
+    ctx.actions.write(
+        output = launcher,
+        is_executable = True,
+        content = """#!/usr/bin/env bash
+set -euo pipefail
+
+runfiles_root="${{TEST_SRCDIR:?}}/${{TEST_WORKSPACE:?}}"
+cd "${{runfiles_root}}/{workspace_dir}"
+exec "${{runfiles_root}}/{test_bin}" "$@"
+""".format(
+            workspace_dir = ctx.attr.workspace_dir,
+            test_bin = test_bin.short_path,
+        ),
+    )
+
+    runfiles = ctx.runfiles(files = [test_bin]).merge(ctx.attr.test_bin[DefaultInfo].default_runfiles)
+
+    return [
+        DefaultInfo(
+            executable = launcher,
+            files = depset([launcher]),
+            runfiles = runfiles,
+        ),
+        RunEnvironmentInfo(
+            environment = ctx.attr.env,
+        ),
+    ]
+
+workspace_root_test = rule(
+    implementation = _workspace_root_test_impl,
+    test = True,
+    attrs = {
+        "env": attr.string_dict(),
+        "test_bin": attr.label(
+            cfg = "target",
+            executable = True,
+            mandatory = True,
+        ),
+        "workspace_dir": attr.string(mandatory = True),
+    },
+)
+
 def codex_rust_crate(
         name,
         crate_name,
@@ -124,10 +169,10 @@ def codex_rust_crate(
             visibility = ["//visibility:public"],
         )
 
+        unit_test_binary = name + "-unit-tests-bin"
         rust_test(
-            name = name + "-unit-tests",
+            name = unit_test_binary,
             crate = name,
-            env = test_env,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
             # Bazel has emitted both `codex-rs/<crate>/...` and
             # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
@@ -138,6 +183,14 @@ def codex_rust_crate(
             ],
             rustc_env = rustc_env,
             data = test_data_extra,
+            tags = test_tags + ["manual"],
+        )
+
+        workspace_root_test(
+            name = name + "-unit-tests",
+            env = test_env,
+            test_bin = ":" + unit_test_binary,
+            workspace_dir = "codex-rs",
             tags = test_tags,
         )
 
