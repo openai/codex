@@ -1436,7 +1436,6 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-utils-json-to-toml",
- "codex-utils-pty",
  "core_test_support",
  "futures",
  "owo-colors",
@@ -2395,6 +2394,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "codex-otel",
  "codex-protocol",
  "dirs",
  "log",
@@ -2414,7 +2414,6 @@ name = "codex-stdio-to-uds"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert_cmd",
  "codex-utils-cargo-bin",
  "pretty_assertions",
  "tempfile",
