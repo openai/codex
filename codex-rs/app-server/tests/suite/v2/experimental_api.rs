@@ -3,6 +3,7 @@ use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCError;
@@ -118,6 +119,42 @@ async fn thread_start_mock_field_requires_experimental_api_capability() -> Resul
     )
     .await??;
     assert_experimental_capability_error(error, "thread/start.mockExperimentalField");
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_guardian_approval_requires_experimental_api_capability() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let init = mcp
+        .initialize_with_capabilities(
+            default_client_info(),
+            Some(InitializeCapabilities {
+                experimental_api: false,
+                opt_out_notification_methods: None,
+            }),
+        )
+        .await?;
+    let JSONRPCMessage::Response(_) = init else {
+        anyhow::bail!("expected initialize response, got {init:?}");
+    };
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            approval_policy: Some(AskForApproval::Guardian),
+            ..Default::default()
+        })
+        .await?;
+
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_experimental_capability_error(error, "approvalPolicy.guardian");
     Ok(())
 }
 
