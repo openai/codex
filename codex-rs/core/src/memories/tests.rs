@@ -406,6 +406,7 @@ task_outcome: success
     assert!(raw_memories.contains(&format!(
         "rollout_summary_file: {canonical_rollout_summary_file}"
     )));
+    assert!(raw_memories.contains("git_branch: unknown"));
     assert!(raw_memories.contains("description: Added a migration test"));
     assert!(raw_memories.contains("### Task 1: migration-test"));
     assert!(raw_memories.contains("task: add-migration-test"));
