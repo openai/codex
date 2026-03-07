@@ -1874,20 +1874,45 @@ impl Session {
                 }
             }
             InitialHistory::Resumed(resumed_history) => {
-                let rollout_source = if resumed_history.history.is_empty() {
-                    let rollout = self.services.rollout.lock().await;
-                    match rollout.as_ref() {
-                        Some(rollout) => rollout.source.lock().await.clone(),
-                        None => InMemoryRolloutSource::new(Vec::new()),
-                    }
-                } else {
-                    InMemoryRolloutSource::new(resumed_history.history)
-                };
-                let restored_tool_selection =
-                    Self::extract_mcp_tool_selection_from_rollout_source(&rollout_source);
-
-                let reconstructed_rollout =
-                    self.reconstruct_history_from_rollout(&turn_context, &rollout_source);
+                let (reconstructed_rollout, restored_tool_selection, token_info) =
+                    if resumed_history.history.is_empty() {
+                        let rollout = self.services.rollout.lock().await;
+                        match rollout.as_ref() {
+                            Some(rollout) => {
+                                let rollout_source = rollout.source.lock().await;
+                                (
+                                    self.reconstruct_history_from_rollout(
+                                        &turn_context,
+                                        &rollout_source,
+                                    ),
+                                    Self::extract_mcp_tool_selection_from_rollout_source(
+                                        &rollout_source,
+                                    ),
+                                    Self::last_token_info_from_rollout_source(&rollout_source),
+                                )
+                            }
+                            None => {
+                                let rollout_source = InMemoryRolloutSource::new(Vec::new());
+                                (
+                                    self.reconstruct_history_from_rollout(
+                                        &turn_context,
+                                        &rollout_source,
+                                    ),
+                                    Self::extract_mcp_tool_selection_from_rollout_source(
+                                        &rollout_source,
+                                    ),
+                                    Self::last_token_info_from_rollout_source(&rollout_source),
+                                )
+                            }
+                        }
+                    } else {
+                        let rollout_source = InMemoryRolloutSource::new(resumed_history.history);
+                        (
+                            self.reconstruct_history_from_rollout(&turn_context, &rollout_source),
+                            Self::extract_mcp_tool_selection_from_rollout_source(&rollout_source),
+                            Self::last_token_info_from_rollout_source(&rollout_source),
+                        )
+                    };
                 let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
                 self.set_previous_turn_settings(previous_turn_settings.clone())
                     .await;
@@ -1925,7 +1950,7 @@ impl Session {
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout_source(&rollout_source) {
+                if let Some(info) = token_info {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
