@@ -165,7 +165,7 @@ mod spawn {
             .spawn_mode
             .or_else(|| (args.fork_context && args.spawn_mode.is_none()).then_some(SpawnMode::Fork))
             .unwrap_or(default_spawn_mode);
-        let input_items = parse_collab_input(args.message, args.items)?;
+        let input_items = parse_collab_input(args.message.clone(), args.items.clone())?;
         let prompt = input_preview(&input_items);
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
@@ -414,7 +414,7 @@ mod send_input {
                 )
             })?,
         };
-        let input_items = parse_collab_input(args.message, args.items)?;
+        let input_items = parse_collab_input(args.message.clone(), args.items.clone())?;
         let prompt = input_preview(&input_items);
         let (receiver_agent_nickname, receiver_agent_role) = session
             .services

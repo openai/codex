@@ -1,10 +1,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Context;
+use codex_core::resolve_fork_reference_rollout_path;
+use codex_core::RolloutRecorder;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::RolloutItem;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::test_codex_exec::test_codex_exec;
 use serde_json::Value;
+use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 use std::string::ToString;
+use tokio::runtime::Runtime;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -74,6 +82,68 @@ fn exec_fixture() -> anyhow::Result<std::path::PathBuf> {
     Ok(find_resource!("tests/fixtures/cli_responses_fixture.sse")?)
 }
 
+fn rollout_items_contain_marker(
+    rollout_items: &[RolloutItem],
+    codex_home: &Path,
+    marker: &str,
+    runtime: &Runtime,
+    visited_paths: &mut HashSet<PathBuf>,
+) -> anyhow::Result<bool> {
+    for item in rollout_items {
+        match item {
+            RolloutItem::ResponseItem(ResponseItem::Message { content, .. })
+                if serde_json::to_string(content)?.contains(marker) =>
+            {
+                return Ok(true);
+            }
+            RolloutItem::ForkReference(reference) => {
+                let resolved_path = runtime.block_on(resolve_fork_reference_rollout_path(
+                    codex_home,
+                    &reference.rollout_path,
+                ))?;
+                if !visited_paths.insert(resolved_path.clone()) {
+                    continue;
+                }
+                let parent_history =
+                    runtime.block_on(RolloutRecorder::get_rollout_history(&resolved_path))?;
+                if rollout_items_contain_marker(
+                    &parent_history.get_rollout_items(),
+                    codex_home,
+                    marker,
+                    runtime,
+                    visited_paths,
+                )? {
+                    return Ok(true);
+                }
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::ResponseItem(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::EventMsg(_) => {}
+        }
+    }
+
+    Ok(false)
+}
+
+fn session_history_contains_marker(
+    session_path: &Path,
+    codex_home: &Path,
+    marker: &str,
+) -> anyhow::Result<bool> {
+    let runtime = Runtime::new()?;
+    let history = runtime.block_on(RolloutRecorder::get_rollout_history(session_path))?;
+    let mut visited_paths = HashSet::from([session_path.to_path_buf()]);
+    rollout_items_contain_marker(
+        &history.get_rollout_items(),
+        codex_home,
+        marker,
+        &runtime,
+        &mut visited_paths,
+    )
+}
+
 #[test]
 fn exec_fork_by_id_creates_new_session_with_copied_history() -> anyhow::Result<()> {
     let test = test_codex_exec();
@@ -116,9 +186,16 @@ fn exec_fork_by_id_creates_new_session_with_copied_history() -> anyhow::Result<(
         "fork should create a new session file"
     );
 
-    let forked_content = std::fs::read_to_string(&forked_path)?;
-    assert!(forked_content.contains(&marker));
-    assert!(forked_content.contains(&marker2));
+    assert!(session_history_contains_marker(
+        &forked_path,
+        test.home_path(),
+        &marker
+    )?);
+    assert!(session_history_contains_marker(
+        &forked_path,
+        test.home_path(),
+        &marker2
+    )?);
 
     let original_content = std::fs::read_to_string(&original_path)?;
     assert!(original_content.contains(&marker));

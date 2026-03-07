@@ -151,12 +151,6 @@ pub(crate) fn test_config() -> Config {
     .expect("load default test config")
 }
 
-impl Config {
-    pub(crate) fn custom_model_alias(&self, alias: &str) -> Option<&CustomModelConfig> {
-        self.custom_models.get(alias)
-    }
-}
-
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Permissions {
@@ -1405,29 +1399,6 @@ pub struct RealtimeAudioToml {
     pub speaker: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CustomModelConfig {
-    /// Provider-facing model slug used on API requests.
-    pub model: String,
-    /// Optional context window override applied when this alias is selected.
-    pub model_context_window: Option<i64>,
-    /// Optional auto-compaction token limit override applied when this alias is selected.
-    pub model_auto_compact_token_limit: Option<i64>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct CustomModelToml {
-    /// User-facing alias shown in the model picker.
-    pub name: String,
-    /// Provider-facing model slug used on API requests.
-    pub model: String,
-    /// Optional context window override applied when this alias is selected.
-    pub model_context_window: Option<i64>,
-    /// Optional auto-compaction token limit override applied when this alias is selected.
-    pub model_auto_compact_token_limit: Option<i64>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
@@ -1970,25 +1941,6 @@ impl Config {
             );
         }
 
-        let mut custom_models = HashMap::new();
-        for custom in cfg.custom_models {
-            let alias = custom.name;
-            if custom_models.contains_key(&alias) {
-                return Err(std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("duplicate custom model alias: {alias}"),
-                ));
-            }
-            custom_models.insert(
-                alias,
-                CustomModelConfig {
-                    model: custom.model,
-                    model_context_window: custom.model_context_window,
-                    model_auto_compact_token_limit: custom.model_auto_compact_token_limit,
-                },
-            );
-        }
-
         let model_provider_id = model_provider
             .or(config_profile.model_provider)
             .or(cfg.model_provider)
@@ -2342,7 +2294,6 @@ impl Config {
             memories: cfg.memories.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
             agent_use_function_call_inbox,
-            watchdog_interval_s,
             codex_home,
             sqlite_home,
             log_dir,

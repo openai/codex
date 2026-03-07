@@ -1378,10 +1378,14 @@ pub async fn resolve_fork_reference_rollout_path(
     };
     let thread_id = thread_uuid.to_string();
 
-    if let Some(active_path) = find_thread_path_by_id_str(codex_home, &thread_id).await? {
+    if let Some(active_path) =
+        find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, &thread_id).await?
+    {
         return Ok(active_path);
     }
-    if let Some(archived_path) = find_archived_thread_path_by_id_str(codex_home, &thread_id).await?
+    if let Some(archived_path) =
+        find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, &thread_id)
+            .await?
     {
         return Ok(archived_path);
     }
