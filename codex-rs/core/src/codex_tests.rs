@@ -78,6 +78,9 @@ use std::sync::Arc;
 use std::sync::Once;
 use std::time::Duration as StdDuration;
 
+#[path = "codex_tests_guardian.rs"]
+mod guardian_tests;
+
 struct InstructionsTestCase {
     slug: &'static str,
     expects_apply_patch_instructions: bool,

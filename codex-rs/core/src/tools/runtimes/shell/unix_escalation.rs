@@ -7,6 +7,9 @@ use crate::exec::SandboxType;
 use crate::exec::is_likely_sandbox_denied;
 use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::features::Feature;
+use crate::guardian::GuardianReviewRequest;
+use crate::guardian::review_approval_request;
+use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
@@ -46,6 +49,7 @@ use codex_shell_escalation::PreparedExec;
 use codex_shell_escalation::ShellCommandExecutor;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -163,6 +167,7 @@ pub(super) async fn try_run_zsh_fork(
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
+        tool_name: "shell",
         approval_policy: ctx.turn.approval_policy.value(),
         sandbox_policy: command_executor.sandbox_policy.clone(),
         file_system_sandbox_policy: command_executor.file_system_sandbox_policy.clone(),
@@ -262,6 +267,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
+        tool_name: "exec_command",
         approval_policy: ctx.turn.approval_policy.value(),
         sandbox_policy: exec_request.sandbox_policy.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
@@ -292,6 +298,7 @@ struct CoreShellActionProvider {
     session: Arc<crate::codex::Session>,
     turn: Arc<crate::codex::TurnContext>,
     call_id: String,
+    tool_name: &'static str,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
@@ -374,8 +381,21 @@ impl CoreShellActionProvider {
         let turn = self.turn.clone();
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
+        let tool_name = self.tool_name;
         Ok(stopwatch
             .pause_for(async move {
+                if routes_approval_to_guardian(&turn) {
+                    let request = GuardianReviewRequest {
+                        action: json!({
+                            "tool": tool_name,
+                            "program": program,
+                            "argv": argv,
+                            "cwd": workdir,
+                            "additional_permissions": additional_permissions,
+                        }),
+                    };
+                    return review_approval_request(&session, &turn, request, None).await;
+                }
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),
                     // Currently, ApprovedForSession is only honored for skills,

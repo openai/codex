@@ -362,6 +362,9 @@
             "fast_mode": {
               "type": "boolean"
             },
+            "guardian_approval": {
+              "type": "boolean"
+            },
             "image_detail_original": {
               "type": "boolean"
             },
@@ -1829,6 +1832,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "guardian_approval": {
           "type": "boolean"
         },
         "image_detail_original": {

@@ -3227,7 +3227,8 @@ pub struct TurnStartParams {
     /// Override the personality for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
-    /// Optional JSON Schema used to constrain the final assistant message for this turn.
+    /// Optional JSON Schema used to constrain the final assistant message for
+    /// this turn.
     #[ts(optional = nullable)]
     pub output_schema: Option<JsonValue>,
 
