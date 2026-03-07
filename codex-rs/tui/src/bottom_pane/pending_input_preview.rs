@@ -15,12 +15,10 @@ use crate::wrapping::adaptive_wrap_lines;
 /// The widget renders pending steers first, then queued user messages, as two
 /// labeled sections. Pending steers explain that they will be submitted after
 /// the next tool/result boundary unless the user presses Esc to interrupt and
-/// send them immediately. Queued follow-up messages explain that Tab queues
-/// more follow-ups for later in the turn. The edit hint at the bottom only
-/// appears when there are actual queued user messages to pop back into the
-/// composer. Because some terminals intercept certain modifier-key
-/// combinations, the displayed binding is configurable via
-/// [`set_edit_binding`](Self::set_edit_binding).
+/// send them immediately. The edit hint at the bottom only appears when there
+/// are actual queued user messages to pop back into the composer. Because some
+/// terminals intercept certain modifier-key combinations, the displayed
+/// binding is configurable via [`set_edit_binding`](Self::set_edit_binding).
 pub(crate) struct PendingInputPreview {
     pub pending_steers: Vec<String>,
     pub queued_messages: Vec<String>,
@@ -89,7 +87,7 @@ impl PendingInputPreview {
                 let wrapped = adaptive_wrap_lines(
                     steer.lines().map(|line| Line::from(line.dim())),
                     RtOptions::new(width as usize)
-                        .initial_indent(Line::from("  ! ".dim()))
+                        .initial_indent(Line::from("  ↳ ".dim()))
                         .subsequent_indent(Line::from("    ")),
                 );
                 Self::push_truncated_preview_lines(&mut lines, wrapped, Line::from("    …".dim()));

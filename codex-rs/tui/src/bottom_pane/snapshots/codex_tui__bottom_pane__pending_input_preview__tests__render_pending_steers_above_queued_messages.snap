@@ -7,8 +7,8 @@ Buffer {
     content: [
         "Messages to be submitted after next tool call (press",
         "  esc to interrupt and send immediately):           ",
-        "  ! Please continue.                                ",
-        "  ! Check the last command output.                  ",
+        "  ↳ Please continue.                                ",
+        "  ↳ Check the last command output.                  ",
         "                                                    ",
         "Queued follow-up messages:                          ",
         "  ↳ Queued follow-up question                       ",
