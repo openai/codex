@@ -341,15 +341,16 @@ impl ShellHandler {
         )
         .map_err(FunctionCallError::RespondToModel)?;
 
-        // Approval policy guard for the sandboxed additional-permissions flow.
-        if exec_params
-            .sandbox_permissions
-            .uses_additional_permissions()
-            && turn.approval_policy.value() != codex_protocol::protocol::AskForApproval::OnRequest
+        // Approval policy guard for explicit escalation in non-OnRequest modes.
+        if exec_params.sandbox_permissions.requests_sandbox_override()
+            && !matches!(
+                turn.approval_policy.value(),
+                codex_protocol::protocol::AskForApproval::OnRequest
+            )
         {
             let approval_policy = turn.approval_policy.value();
             return Err(FunctionCallError::RespondToModel(format!(
-                "approval policy is {approval_policy:?}; reject command — you should not ask for additional sandbox permissions if the approval policy is not OnRequest"
+                "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
         }
 
