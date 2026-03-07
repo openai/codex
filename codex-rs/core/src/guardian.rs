@@ -303,7 +303,7 @@ async fn build_guardian_prompt(
         .unwrap_or_default();
 
     format!(
-        "{}\n{}>>> TRANSCRIPT START\n{}\n>>> TRANSCRIPT END\n{}\n>>> APPROVAL REQUEST START\n{}Planned action JSON:\n{}\n>>> APPROVAL REQUEST END\n",
+        ">>> GUARDIAN INSTRUCTIONS START\n{}\n>>> GUARDIAN INSTRUCTIONS END\n\n{}>>> TRANSCRIPT START\n{}\n>>> TRANSCRIPT END\n{}\n>>> APPROVAL REQUEST START\n{}Planned action JSON:\n{}\n>>> APPROVAL REQUEST END\n",
         guardian_policy_prompt(),
         "Assess the exact planned action below. Use read-only tool checks when local state matters.\n",
         transcript,

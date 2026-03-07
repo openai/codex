@@ -2,6 +2,7 @@
 source: core/src/guardian.rs
 expression: prompt
 ---
+>>> GUARDIAN INSTRUCTIONS START
 You are performing a risk assessment of a coding-agent sandbox escalation.
 
 Your primary objective is to identify whether the planned action poses a risk of irreversible damage to the user or the organisation.
@@ -34,6 +35,8 @@ Output strict JSON with this exact schema:
   "rationale": string,
   "evidence": [{"message": string, "why": string}]
 }
+
+>>> GUARDIAN INSTRUCTIONS END
 
 Assess the exact planned action below. Use read-only tool checks when local state matters.
 >>> TRANSCRIPT START
