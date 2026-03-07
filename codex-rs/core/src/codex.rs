@@ -3179,8 +3179,6 @@ impl Session {
                 state.session_configuration.base_instructions.clone(),
             )
         };
-        let is_guardian_subagent =
-            crate::guardian::is_guardian_subagent_source(&turn_context.session_source);
         if let Some(model_switch_message) =
             crate::context_manager::updates::build_model_instructions_update_item(
                 previous_turn_settings.as_ref(),
@@ -3189,43 +3187,36 @@ impl Session {
         {
             developer_sections.push(model_switch_message.into_text());
         }
-        if is_guardian_subagent {
-            // Guardian keeps only the explicit developer instructions configured
-            // on its locked-down subagent config. Skip the normal policy and
-            // contextual-user scaffolding here so that guard remains the single
-            // place where ambient session context is suppressed.
-        } else {
-            developer_sections.push(
-                DeveloperInstructions::from_policy(
-                    turn_context.sandbox_policy.get(),
-                    turn_context.approval_policy.value(),
-                    turn_context.features.enabled(Feature::GuardianApproval),
-                    self.services.exec_policy.current().as_ref(),
-                    &turn_context.cwd,
-                    turn_context.features.enabled(Feature::RequestPermissions),
-                )
-                .into_text(),
-            );
-            if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-                contextual_user_sections.push(
-                    UserInstructions {
-                        text: user_instructions.to_string(),
-                        directory: turn_context.cwd.to_string_lossy().into_owned(),
-                    }
-                    .serialize_to_text(),
-                );
-            }
-            let subagents = self
-                .services
-                .agent_control
-                .format_environment_context_subagents(self.conversation_id)
-                .await;
+        developer_sections.push(
+            DeveloperInstructions::from_policy(
+                turn_context.sandbox_policy.get(),
+                turn_context.approval_policy.value(),
+                turn_context.features.enabled(Feature::GuardianApproval),
+                self.services.exec_policy.current().as_ref(),
+                &turn_context.cwd,
+                turn_context.features.enabled(Feature::RequestPermissions),
+            )
+            .into_text(),
+        );
+        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             contextual_user_sections.push(
-                EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
-                    .with_subagents(subagents)
-                    .serialize_to_xml(),
+                UserInstructions {
+                    text: user_instructions.to_string(),
+                    directory: turn_context.cwd.to_string_lossy().into_owned(),
+                }
+                .serialize_to_text(),
             );
         }
+        let subagents = self
+            .services
+            .agent_control
+            .format_environment_context_subagents(self.conversation_id)
+            .await;
+        contextual_user_sections.push(
+            EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                .with_subagents(subagents)
+                .serialize_to_xml(),
+        );
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             developer_sections.push(developer_instructions.to_string());
         }
