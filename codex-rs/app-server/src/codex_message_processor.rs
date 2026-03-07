@@ -6653,7 +6653,10 @@ impl CodexMessageProcessor {
         let config = Arc::clone(&self.config);
         let cli_overrides = self.cli_overrides.clone();
         let cloud_requirements = self.current_cloud_requirements();
-        let command_cwd = params.cwd.unwrap_or_else(|| config.cwd.clone());
+        let command_cwd = params
+            .cwd
+            .map(PathBuf::from)
+            .unwrap_or_else(|| config.cwd.clone());
         let outgoing = Arc::clone(&self.outgoing);
         let connection_id = request_id.connection_id;
 
