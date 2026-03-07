@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/compact.rs
-assertion_line: 3188
 expression: "format_labeled_requests_snapshot(\"Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.\",\n&[(\"Initial Request (Previous Model)\", &requests[0]),\n(\"Local Compaction Request\", &requests[1]),\n(\"Local Post-Compaction History Layout\", &requests[2]),])"
 ---
 Scenario: Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.
@@ -10,7 +9,9 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <collaboration_mode># Collaboration Mode: Default\n\nYou are now...
 03:message/user:BEFORE_SWITCH_USER
 
 ## Local Compaction Request
@@ -18,7 +19,9 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <collaboration_mode># Collaboration Mode: Default\n\nYou are now...
 03:message/user:BEFORE_SWITCH_USER
 04:message/assistant:BEFORE_SWITCH_REPLY
 05:message/user:<SUMMARIZATION_PROMPT>
@@ -26,10 +29,11 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 ## Local Post-Compaction History Layout
 00:message/user:BEFORE_SWITCH_USER
 01:message/user:<COMPACTION_SUMMARY>\nPRETURN_SWITCH_SUMMARY
-02:message/developer[3]:
+02:message/developer[4]:
     [01] <model_switch>\nThe user was previously using a different model....
     [02] <PERMISSIONS_INSTRUCTIONS>
-    [03] <personality_spec> The user has requested a new communication st...
+    [03] <collaboration_mode># Collaboration Mode: Default\n\nYou are now...
+    [04] <personality_spec> The user has requested a new communication st...
 03:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>

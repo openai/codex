@@ -1754,6 +1754,7 @@ async fn make_chatwidget_manual(
         auth_manager.clone(),
         None,
         CollaborationModesConfig::default(),
+        None,
     ));
     let reasoning_effort = None;
     let base_mode = CollaborationMode {
@@ -1884,6 +1885,7 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
         chat.auth_manager.clone(),
         None,
         CollaborationModesConfig::default(),
+        None,
     ));
 }
 

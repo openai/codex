@@ -186,12 +186,14 @@ impl TestCodexBuilder {
                 SessionSource::Exec,
                 Some(model_catalog),
                 CollaborationModesConfig::default(),
+                config.plan_mode_developer_instructions.clone(),
             )
         } else {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
                 auth.clone(),
                 config.model_provider.clone(),
                 config.codex_home.clone(),
+                config.plan_mode_developer_instructions.clone(),
             )
         };
         let thread_manager = Arc::new(thread_manager);

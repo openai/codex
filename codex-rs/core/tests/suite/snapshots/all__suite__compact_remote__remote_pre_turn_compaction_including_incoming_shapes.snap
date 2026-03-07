@@ -18,7 +18,9 @@ Scenario: Remote pre-turn auto-compaction with a context override emits the cont
 00:message/user:USER_ONE
 01:message/user:USER_TWO
 02:compaction:encrypted=true
-03:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <collaboration_mode># Collaboration Mode: Default\n\nYou are now...
 04:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>

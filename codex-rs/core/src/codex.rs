@@ -302,6 +302,7 @@ use codex_async_utils::OrCancelExt;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
@@ -973,6 +974,26 @@ impl SessionConfiguration {
     }
 }
 
+fn merge_collaboration_mode_with_preset(
+    collaboration_mode: CollaborationMode,
+    preset: &CollaborationModeMask,
+) -> CollaborationMode {
+    CollaborationMode {
+        mode: collaboration_mode.mode,
+        settings: Settings {
+            model: collaboration_mode.settings.model,
+            reasoning_effort: collaboration_mode
+                .settings
+                .reasoning_effort
+                .or(preset.reasoning_effort.flatten()),
+            developer_instructions: collaboration_mode
+                .settings
+                .developer_instructions
+                .or_else(|| preset.developer_instructions.clone().flatten()),
+        },
+    }
+}
+
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
     pub(crate) cwd: Option<PathBuf>,
@@ -988,6 +1009,23 @@ pub(crate) struct SessionSettingsUpdate {
 }
 
 impl Session {
+    fn resolve_session_settings_update(
+        &self,
+        mut updates: SessionSettingsUpdate,
+    ) -> SessionSettingsUpdate {
+        updates.collaboration_mode = updates.collaboration_mode.map(|collaboration_mode| {
+            self.services
+                .models_manager
+                .list_collaboration_modes()
+                .into_iter()
+                .find(|preset| preset.mode == Some(collaboration_mode.mode))
+                .map_or(collaboration_mode.clone(), |preset| {
+                    merge_collaboration_mode_with_preset(collaboration_mode, &preset)
+                })
+        });
+        updates
+    }
+
     /// Builds the `x-codex-beta-features` header value for this session.
     ///
     /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so
@@ -2081,6 +2119,7 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
+        let updates = self.resolve_session_settings_update(updates);
         let mut state = self.state.lock().await;
 
         match state.session_configuration.apply(&updates) {
@@ -2113,6 +2152,7 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
+        let updates = self.resolve_session_settings_update(updates);
         let (
             session_configuration,
             sandbox_policy_changed,

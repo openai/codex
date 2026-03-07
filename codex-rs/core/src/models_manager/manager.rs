@@ -61,6 +61,7 @@ pub struct ModelsManager {
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
     provider: ModelProviderInfo,
+    plan_mode_developer_instructions: Option<String>,
 }
 
 impl ModelsManager {
@@ -74,6 +75,7 @@ impl ModelsManager {
         auth_manager: Arc<AuthManager>,
         model_catalog: Option<ModelsResponse>,
         collaboration_modes_config: CollaborationModesConfig,
+        plan_mode_developer_instructions: Option<String>,
     ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
@@ -96,6 +98,7 @@ impl ModelsManager {
             etag: RwLock::new(None),
             cache_manager,
             provider: ModelProviderInfo::create_openai_provider(),
+            plan_mode_developer_instructions,
         }
     }
 
@@ -121,7 +124,10 @@ impl ModelsManager {
         &self,
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Vec<CollaborationModeMask> {
-        builtin_collaboration_mode_presets(collaboration_modes_config)
+        builtin_collaboration_mode_presets(
+            collaboration_modes_config,
+            self.plan_mode_developer_instructions.as_deref(),
+        )
     }
 
     /// Attempt to list models without blocking, using the current cached state.
@@ -381,6 +387,20 @@ impl ModelsManager {
         auth_manager: Arc<AuthManager>,
         provider: ModelProviderInfo,
     ) -> Self {
+        Self::with_provider_and_plan_instructions_for_tests(
+            codex_home,
+            auth_manager,
+            provider,
+            None,
+        )
+    }
+
+    pub(crate) fn with_provider_and_plan_instructions_for_tests(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        provider: ModelProviderInfo,
+        plan_mode_developer_instructions: Option<String>,
+    ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         Self {
@@ -394,6 +414,7 @@ impl ModelsManager {
             etag: RwLock::new(None),
             cache_manager,
             provider,
+            plan_mode_developer_instructions,
         }
     }
 
@@ -522,6 +543,7 @@ mod tests {
             auth_manager,
             None,
             CollaborationModesConfig::default(),
+            None,
         );
         let known_slug = manager
             .get_remote_models()
@@ -562,6 +584,7 @@ mod tests {
                 models: vec![overlay],
             }),
             CollaborationModesConfig::default(),
+            None,
         );
 
         let model_info = manager
@@ -595,6 +618,7 @@ mod tests {
                 models: vec![remote],
             }),
             CollaborationModesConfig::default(),
+            None,
         );
         let namespaced_model = "custom/gpt-image".to_string();
 
@@ -620,6 +644,7 @@ mod tests {
             auth_manager,
             None,
             CollaborationModesConfig::default(),
+            None,
         );
         let known_slug = manager
             .get_remote_models()

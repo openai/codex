@@ -60,8 +60,14 @@ pub fn thread_manager_with_models_provider_and_home(
     auth: CodexAuth,
     provider: ModelProviderInfo,
     codex_home: PathBuf,
+    plan_mode_developer_instructions: Option<String>,
 ) -> ThreadManager {
-    ThreadManager::with_models_provider_and_home_for_tests(auth, provider, codex_home)
+    ThreadManager::with_models_provider_and_home_and_plan_instructions_for_tests(
+        auth,
+        provider,
+        codex_home,
+        plan_mode_developer_instructions,
+    )
 }
 
 pub fn models_manager_with_provider(
@@ -87,5 +93,6 @@ pub fn all_model_presets() -> &'static Vec<ModelPreset> {
 pub fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
     collaboration_mode_presets::builtin_collaboration_mode_presets(
         collaboration_mode_presets::CollaborationModesConfig::default(),
+        None,
     )
 }

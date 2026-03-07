@@ -1585,6 +1585,7 @@ impl App {
                     .features
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
+            config.plan_mode_developer_instructions.clone(),
         ));
         let mut model = thread_manager
             .get_models_manager()

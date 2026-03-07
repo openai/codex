@@ -19,7 +19,9 @@ Scenario: Pre-turn auto-compaction with a context override emits the context dif
 00:message/user:USER_ONE
 01:message/user:USER_TWO
 02:message/user:<COMPACTION_SUMMARY>\nPRE_TURN_SUMMARY
-03:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <collaboration_mode># Collaboration Mode: Default\n\nYou are now...
 04:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
