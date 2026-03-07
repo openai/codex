@@ -108,11 +108,12 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
     };
     if shell.program.is_empty() {
         command.arg(&handler.command);
-        return command;
+        command
+    } else {
+        command.args(&shell.args);
+        command.arg(&handler.command);
+        command
     }
-    command.args(&shell.args);
-    command.arg(&handler.command);
-    command
 }
 
 fn default_shell_command() -> Command {
@@ -121,7 +122,7 @@ fn default_shell_command() -> Command {
         let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
         let mut command = Command::new(comspec);
         command.arg("/C");
-        return command;
+        command
     }
 
     #[cfg(not(windows))]
