@@ -1,6 +1,6 @@
-use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
+use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
@@ -20,7 +20,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         MetricsConfig::in_memory("test", "codex-cli", env!("CARGO_PKG_VERSION"), exporter)
             .with_runtime_reader(),
     )?;
-    let manager = OtelManager::new(
+    let manager = SessionTelemetry::new(
         ThreadId::new(),
         "gpt-5.1",
         "gpt-5.1",

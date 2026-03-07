@@ -144,24 +144,27 @@ Example with notification opt-out:
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
+- `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
+- `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
+- `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
+- `command/exec/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `command/exec` session.
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
-- `plugin/list` — list discovered marketplaces reachable from optional `cwds` (unioned into a single list). When `cwds` is omitted, only home-scoped marketplaces are considered. Includes each plugin's current `enabled` state from config (**under development; do not call from production clients yet**).
+- `plugin/list` — list discovered plugin marketplaces, including plugin id, installed/enabled state, and optional interface metadata (**under development; do not call from production clients yet**).
 - `skills/changed` — notification emitted when watched local skill files change.
 - `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
 - `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
-- `plugin/install` — install a plugin from a discovered marketplace entry by `pluginName` and `marketplacePath`; on success it returns `appsNeedingAuth` for any plugin-declared apps that still are not accessible in the current ChatGPT auth context (**under development; do not call from production clients yet**).
+- `plugin/install` — install a plugin from a discovered marketplace entry and return any apps that still need auth (**under development; do not call from production clients yet**).
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
 - `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); accepts an optional `cwd` to target setup for a specific workspace, returns `{ started: true }` immediately, and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
-- `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `config/read` — fetch the effective config on disk after resolving config layering.
 - `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome` and optional `cwds`; each detected item includes `cwd` (`null` for home).
 - `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home).
@@ -613,11 +616,21 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 ```json
 { "method": "command/exec", "id": 32, "params": {
     "command": ["ls", "-la"],
+    "processId": "ls-1",                           // optional string; required for streaming and ability to terminate the process
     "cwd": "/Users/me/project",                    // optional; defaults to server cwd
+    "env": { "FOO": "override" },                  // optional; merges into the server env and overrides matching names
+    "size": { "rows": 40, "cols": 120 },           // optional; PTY size in character cells, only valid with tty=true
     "sandboxPolicy": { "type": "workspaceWrite" }, // optional; defaults to user config
-    "timeoutMs": 10000                             // optional; ms timeout; defaults to server timeout
+    "outputBytesCap": 1048576,                     // optional; per-stream capture cap
+    "disableOutputCap": false,                     // optional; cannot be combined with outputBytesCap
+    "timeoutMs": 10000,                            // optional; ms timeout; defaults to server timeout
+    "disableTimeout": false                        // optional; cannot be combined with timeoutMs
 } }
-{ "id": 32, "result": { "exitCode": 0, "stdout": "...", "stderr": "" } }
+{ "id": 32, "result": {
+    "exitCode": 0,
+    "stdout": "...",
+    "stderr": ""
+} }
 ```
 
 - For clients that are already sandboxed externally, set `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Codex will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
@@ -626,7 +639,70 @@ Notes:
 
 - Empty `command` arrays are rejected.
 - `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`).
+- `env` merges into the environment produced by the server's shell environment policy. Matching names are overridden; unspecified variables are left intact.
 - When omitted, `timeoutMs` falls back to the server default.
+- When omitted, `outputBytesCap` falls back to the server default of 1 MiB per stream.
+- `disableOutputCap: true` disables stdout/stderr capture truncation for that `command/exec` request. It cannot be combined with `outputBytesCap`.
+- `disableTimeout: true` disables the timeout entirely for that `command/exec` request. It cannot be combined with `timeoutMs`.
+- `processId` is optional for buffered execution. When omitted, Codex generates an internal id for lifecycle tracking, but `tty`, `streamStdin`, and `streamStdoutStderr` must stay disabled and follow-up `command/exec/write` / `command/exec/terminate` calls are not available for that command.
+- `size` is only valid when `tty: true`. It sets the initial PTY size in character cells.
+- Buffered Windows sandbox execution accepts `processId` for correlation, but `command/exec/write` and `command/exec/terminate` are still unsupported for those requests.
+- Buffered Windows sandbox execution also requires the default output cap; custom `outputBytesCap` and `disableOutputCap` are unsupported there.
+- `tty`, `streamStdin`, and `streamStdoutStderr` are optional booleans. Legacy requests that omit them continue to use buffered execution.
+- `tty: true` implies PTY mode plus `streamStdin: true` and `streamStdoutStderr: true`.
+- `tty` and `streamStdin` do not disable the timeout on their own; omit `timeoutMs` to use the server default timeout, or set `disableTimeout: true` to keep the process alive until exit or explicit termination.
+- `outputBytesCap` applies independently to `stdout` and `stderr`, and streamed bytes are not duplicated into the final response.
+- The `command/exec` response is deferred until the process exits and is sent only after all `command/exec/outputDelta` notifications for that connection have been emitted.
+- `command/exec/outputDelta` notifications are connection-scoped. If the originating connection closes, the server terminates the process.
+
+Streaming stdin/stdout uses base64 so PTY sessions can carry arbitrary bytes:
+
+```json
+{ "method": "command/exec", "id": 33, "params": {
+    "command": ["bash", "-i"],
+    "processId": "bash-1",
+    "tty": true,
+    "outputBytesCap": 32768
+} }
+{ "method": "command/exec/outputDelta", "params": {
+    "processId": "bash-1",
+    "stream": "stdout",
+    "deltaBase64": "YmFzaC00LjQkIA==",
+    "capReached": false
+} }
+{ "method": "command/exec/write", "id": 34, "params": {
+    "processId": "bash-1",
+    "deltaBase64": "cHdkCg=="
+} }
+{ "id": 34, "result": {} }
+{ "method": "command/exec/write", "id": 35, "params": {
+    "processId": "bash-1",
+    "closeStdin": true
+} }
+{ "id": 35, "result": {} }
+{ "method": "command/exec/resize", "id": 36, "params": {
+    "processId": "bash-1",
+    "size": { "rows": 48, "cols": 160 }
+} }
+{ "id": 36, "result": {} }
+{ "method": "command/exec/terminate", "id": 37, "params": {
+    "processId": "bash-1"
+} }
+{ "id": 37, "result": {} }
+{ "id": 33, "result": {
+    "exitCode": 137,
+    "stdout": "",
+    "stderr": ""
+} }
+```
+
+- `command/exec/write` accepts either `deltaBase64`, `closeStdin`, or both.
+- Clients may supply a connection-scoped string `processId` in `command/exec`; `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` only accept those client-supplied string ids.
+- `command/exec/outputDelta.processId` is always the client-supplied string id from the original `command/exec` request.
+- `command/exec/outputDelta.stream` is `stdout` or `stderr`. PTY mode multiplexes terminal output through `stdout`.
+- `command/exec/outputDelta.capReached` is `true` on the final streamed chunk for a stream when `outputBytesCap` truncates that stream; later output on that stream is dropped.
+- `command/exec.params.env` overrides the server-computed environment per key; set a key to `null` to unset an inherited variable.
+- `command/exec/resize` is only supported for PTY-backed `command/exec` sessions.
 
 ## Events
 
