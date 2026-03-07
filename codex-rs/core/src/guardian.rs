@@ -50,8 +50,12 @@ pub(crate) const GUARDIAN_SUBAGENT_NAME: &str = "guardian";
 // other.
 const GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
-const GUARDIAN_MESSAGE_ENTRY_TOKEN_CAP: usize = 2_000;
-const GUARDIAN_TOOL_ENTRY_TOKEN_CAP: usize = 1_000;
+// Cap any single rendered conversation message so one long user/assistant turn
+// cannot crowd out the rest of the retained transcript.
+const GUARDIAN_MAX_MESSAGE_ENTRY_TOKENS: usize = 2_000;
+// Cap any single rendered tool call/result more aggressively because tool
+// payloads are often verbose and lower-signal than the human conversation.
+const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
 const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 1_000;
 // Fail closed for scores at or above this threshold.
 const GUARDIAN_APPROVAL_RISK_THRESHOLD: u8 = 80;
@@ -314,9 +318,9 @@ fn build_guardian_transcript(entries: &[GuardianTranscriptEntry]) -> (Vec<String
         .enumerate()
         .map(|(index, entry)| {
             let token_cap = if entry.kind.is_tool() {
-                GUARDIAN_TOOL_ENTRY_TOKEN_CAP
+                GUARDIAN_MAX_TOOL_ENTRY_TOKENS
             } else {
-                GUARDIAN_MESSAGE_ENTRY_TOKEN_CAP
+                GUARDIAN_MAX_MESSAGE_ENTRY_TOKENS
             };
             let text = guardian_truncate_text(&entry.text, token_cap);
             let rendered = format!("[{}] {}: {}", index + 1, entry.kind.role(), text);
