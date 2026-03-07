@@ -381,10 +381,9 @@ impl CoreShellActionProvider {
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
         let tool_name = self.tool_name;
-        let approval_policy = self.approval_policy;
         Ok(stopwatch
             .pause_for(async move {
-                if routes_approval_to_guardian(&turn, approval_policy) {
+                if routes_approval_to_guardian(&turn) {
                     let request = GuardianReviewRequest {
                         tool_name,
                         action: serde_json::json!({

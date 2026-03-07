@@ -144,7 +144,7 @@ impl ToolOrchestrator {
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
-                        let reason = if routes_approval_to_guardian(turn_ctx, approval_policy) {
+                        let reason = if routes_approval_to_guardian(turn_ctx) {
                             GUARDIAN_REJECTION_MESSAGE.to_string()
                         } else {
                             "rejected by user".to_string()
@@ -283,7 +283,7 @@ impl ToolOrchestrator {
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
-                            let reason = if routes_approval_to_guardian(turn_ctx, approval_policy) {
+                            let reason = if routes_approval_to_guardian(turn_ctx) {
                                 GUARDIAN_REJECTION_MESSAGE.to_string()
                             } else {
                                 "rejected by user".to_string()

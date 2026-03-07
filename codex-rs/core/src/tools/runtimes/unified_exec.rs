@@ -117,7 +117,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .clone()
             .or_else(|| req.justification.clone());
         Box::pin(async move {
-            if routes_approval_to_guardian(turn, turn.approval_policy.value()) {
+            if routes_approval_to_guardian(turn) {
                 let request = GuardianReviewRequest {
                     tool_name: "exec_command",
                     action: serde_json::json!({

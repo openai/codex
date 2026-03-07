@@ -135,7 +135,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
         Box::pin(async move {
-            if routes_approval_to_guardian(turn, turn.approval_policy.value()) {
+            if routes_approval_to_guardian(turn) {
                 let request = ApplyPatchRuntime::build_guardian_review_request(req);
                 return review_escalation(session, turn, request).await;
             }

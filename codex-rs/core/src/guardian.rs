@@ -62,11 +62,9 @@ pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = "Guardian rejected this acti
 
 /// Whether this turn should route `on-request` approval prompts through the
 /// guardian reviewer instead of surfacing them to the user.
-pub(crate) fn routes_approval_to_guardian(
-    turn: &TurnContext,
-    approval_policy: AskForApproval,
-) -> bool {
-    approval_policy == AskForApproval::OnRequest && turn.features.enabled(Feature::GuardianApproval)
+pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
+    turn.approval_policy.value() == AskForApproval::OnRequest
+        && turn.features.enabled(Feature::GuardianApproval)
 }
 
 /// Canonical description of the action the guardian is being asked to review.

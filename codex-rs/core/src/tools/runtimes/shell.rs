@@ -152,7 +152,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
-            if routes_approval_to_guardian(turn, turn.approval_policy.value()) {
+            if routes_approval_to_guardian(turn) {
                 let request = GuardianReviewRequest {
                     tool_name: "shell",
                     action: serde_json::json!({
