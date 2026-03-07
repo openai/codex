@@ -3,6 +3,8 @@
 # ```
 # git tag -a rust-v0.1.0 -m "Release 0.1.0"
 # git push origin rust-v0.1.0
+# # Exomind fork releases use the upstream version with an `-exomind` suffix.
+# # Example: rust-v0.112.0-alpha.11-exomind
 # ```
 
 name: rust-release
@@ -30,7 +32,7 @@ jobs:
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
             || { echo "❌  Not a tag push"; exit 1; }
-          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+((-(alpha|beta)\.[0-9]+)?-exomind(\.[0-9]+)?|-(alpha|beta)\.[0-9]+)?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
           # 2. Extract versions
@@ -395,6 +397,7 @@ jobs:
       tag: ${{ github.ref_name }}
       should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
       npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
+      is_exomind_release: ${{ steps.release_flags.outputs.is_exomind_release }}
 
     steps:
       - name: Checkout repository
@@ -453,6 +456,18 @@ jobs:
           version="${GITHUB_REF_NAME#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
 
+      - name: Compute release flags
+        id: release_flags
+        env:
+          VERSION: ${{ steps.release_name.outputs.name }}
+        run: |
+          set -euo pipefail
+          if [[ "${VERSION}" == *-exomind* ]]; then
+            echo "is_exomind_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_exomind_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Determine npm publish settings
         id: npm_publish_settings
         env:
@@ -473,21 +488,26 @@ jobs:
           fi
 
       - name: Setup pnpm
+        if: ${{ steps.release_flags.outputs.is_exomind_release != 'true' }}
         uses: pnpm/action-setup@v4
         with:
           run_install: false
 
       - name: Setup Node.js for npm packaging
+        if: ${{ steps.release_flags.outputs.is_exomind_release != 'true' }}
         uses: actions/setup-node@v6
         with:
           node-version: 22
 
       - name: Install dependencies
+        if: ${{ steps.release_flags.outputs.is_exomind_release != 'true' }}
         run: pnpm install --frozen-lockfile
 
       # stage_npm_packages.py requires DotSlash when staging releases.
       - uses: facebook/install-dotslash@v2
+        if: ${{ steps.release_flags.outputs.is_exomind_release != 'true' }}
       - name: Stage npm packages
+        if: ${{ steps.release_flags.outputs.is_exomind_release != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -514,6 +534,7 @@ jobs:
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
       - uses: facebook/dotslash-publish-release@v2
+        if: ${{ steps.release_flags.outputs.is_exomind_release != 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -668,6 +689,7 @@ jobs:
 
   update-branch:
     name: Update latest-alpha-cli branch
+    if: ${{ needs.release.outputs.is_exomind_release != 'true' && contains(needs.release.outputs.version, '-alpha.') }}
     permissions:
       contents: write
     needs: release
