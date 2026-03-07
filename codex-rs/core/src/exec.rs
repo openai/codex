@@ -723,11 +723,15 @@ async fn exec(
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
-    if should_use_windows_restricted_token_sandbox(
-        sandbox,
-        sandbox_policy,
-        file_system_sandbox_policy,
-    ) {
+    if sandbox == SandboxType::WindowsRestrictedToken {
+        if let Some(reason) = unsupported_windows_restricted_token_sandbox_reason(
+            sandbox,
+            sandbox_policy,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+        ) {
+            return Err(CodexErr::Io(io::Error::other(reason)));
+        }
         return exec_windows_sandbox(params, sandbox_policy).await;
     }
     let ExecParams {
@@ -783,6 +787,29 @@ fn should_use_windows_restricted_token_sandbox(
             sandbox_policy,
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn unsupported_windows_restricted_token_sandbox_reason(
+    sandbox: SandboxType,
+    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+) -> Option<String> {
+    if should_use_windows_restricted_token_sandbox(
+        sandbox,
+        sandbox_policy,
+        file_system_sandbox_policy,
+    ) {
+        return None;
+    }
+
+    (sandbox == SandboxType::WindowsRestrictedToken).then(|| {
+        format!(
+            "windows sandbox backend cannot enforce file_system={:?}, network={network_sandbox_policy:?}, legacy_policy={sandbox_policy:?}; refusing to run unsandboxed",
+            file_system_sandbox_policy.kind,
+        )
+    })
 }
 
 /// Consumes the output of a child process, truncating it so it is suitable for
@@ -1166,6 +1193,42 @@ mod tests {
                 &file_system_policy,
             ),
             true
+        );
+    }
+
+    #[test]
+    fn windows_restricted_token_rejects_network_only_restrictions() {
+        let policy = SandboxPolicy::ExternalSandbox {
+            network_access: codex_protocol::protocol::NetworkAccess::Restricted,
+        };
+        let file_system_policy = FileSystemSandboxPolicy::unrestricted();
+
+        assert_eq!(
+            unsupported_windows_restricted_token_sandbox_reason(
+                SandboxType::WindowsRestrictedToken,
+                &policy,
+                &file_system_policy,
+                NetworkSandboxPolicy::Restricted,
+            ),
+            Some(
+                "windows sandbox backend cannot enforce file_system=Unrestricted, network=Restricted, legacy_policy=ExternalSandbox { network_access: Restricted }; refusing to run unsandboxed".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn windows_restricted_token_allows_legacy_restricted_policies() {
+        let policy = SandboxPolicy::new_read_only_policy();
+        let file_system_policy = FileSystemSandboxPolicy::restricted(vec![]);
+
+        assert_eq!(
+            unsupported_windows_restricted_token_sandbox_reason(
+                SandboxType::WindowsRestrictedToken,
+                &policy,
+                &file_system_policy,
+                NetworkSandboxPolicy::Restricted,
+            ),
+            None
         );
     }
 

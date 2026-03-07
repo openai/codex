@@ -31,9 +31,10 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
-#[cfg(target_os = "macos")]
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
-#[cfg(target_os = "macos")]
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SkillScope;
 use codex_shell_escalation::EscalationExecution;
@@ -227,6 +228,21 @@ fn shell_request_escalation_execution_is_explicit() {
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::from_absolute_path("/tmp/original/output").unwrap(),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::from_absolute_path("/tmp/secret").unwrap(),
+            },
+            access: FileSystemAccessMode::None,
+        },
+    ]);
+    let network_sandbox_policy = NetworkSandboxPolicy::Restricted;
     let macos_seatbelt_profile_extensions = MacOsSeatbeltProfileExtensions {
         macos_preferences: MacOsPreferencesPermission::ReadWrite,
         ..Default::default()
@@ -236,6 +252,8 @@ fn shell_request_escalation_execution_is_explicit() {
         CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::UseDefault,
             &sandbox_policy,
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
             None,
             Some(&macos_seatbelt_profile_extensions),
         ),
@@ -245,6 +263,8 @@ fn shell_request_escalation_execution_is_explicit() {
         CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::RequireEscalated,
             &sandbox_policy,
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
             None,
             Some(&macos_seatbelt_profile_extensions),
         ),
@@ -254,12 +274,16 @@ fn shell_request_escalation_execution_is_explicit() {
         CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::WithAdditionalPermissions,
             &sandbox_policy,
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
             Some(&requested_permissions),
             Some(&macos_seatbelt_profile_extensions),
         ),
         EscalationExecution::Permissions(EscalationPermissions::Permissions(
             EscalatedPermissions {
                 sandbox_policy,
+                file_system_sandbox_policy,
+                network_sandbox_policy,
                 macos_seatbelt_profile_extensions: Some(macos_seatbelt_profile_extensions),
             },
         )),
@@ -570,6 +594,8 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
             EscalationExecution::Permissions(EscalationPermissions::Permissions(
                 EscalatedPermissions {
                     sandbox_policy: permissions.sandbox_policy.get().clone(),
+                    file_system_sandbox_policy: permissions.file_system_sandbox_policy.clone(),
+                    network_sandbox_policy: permissions.network_sandbox_policy,
                     macos_seatbelt_profile_extensions: permissions
                         .macos_seatbelt_profile_extensions
                         .clone(),
