@@ -72,23 +72,26 @@ impl PendingInputPreview {
         for steer in &self.pending_steers {
             let wrapped = if steer.repeating {
                 adaptive_wrap_lines(
-                    steer.text.lines().map(|line| Line::from(line.cyan())),
+                    steer
+                        .text
+                        .lines()
+                        .map(|line| Line::from(line.cyan().bold())),
                     RtOptions::new(width as usize)
-                        .initial_indent(Line::from("  ! repeat steer: ".cyan()))
+                        .initial_indent(Line::from("  ! repeat steer: ".cyan().bold()))
                         .subsequent_indent(Line::from("    ")),
                 )
             } else {
                 adaptive_wrap_lines(
-                    steer.text.lines().map(|line| Line::from(line.blue())),
+                    steer.text.lines().map(|line| Line::from(line.light_blue())),
                     RtOptions::new(width as usize)
-                        .initial_indent(Line::from("  ! pending steer: ".blue()))
+                        .initial_indent(Line::from("  ! pending steer: ".light_blue()))
                         .subsequent_indent(Line::from("    ")),
                 )
             };
             let overflow_line = if steer.repeating {
-                Line::from("    …".cyan())
+                Line::from("    …".cyan().bold())
             } else {
-                Line::from("    …".blue())
+                Line::from("    …".light_blue())
             };
             Self::push_truncated_preview_lines(&mut lines, wrapped, overflow_line);
         }
@@ -100,48 +103,45 @@ impl PendingInputPreview {
                         message
                             .text
                             .lines()
-                            .map(|line| Line::from(line.cyan().italic())),
+                            .map(|line| Line::from(line.cyan().bold().italic())),
                         RtOptions::new(width as usize)
-                            .initial_indent(Line::from("  ↻ ! ".cyan()))
+                            .initial_indent(Line::from("  ↻ ! ".cyan().bold()))
                             .subsequent_indent(Line::from("    ")),
                     ),
-                    Line::from("    …".cyan().italic()),
+                    Line::from("    …".cyan().bold().italic()),
                 ),
                 (true, false) => (
                     adaptive_wrap_lines(
                         message
                             .text
                             .lines()
-                            .map(|line| Line::from(line.blue().italic())),
+                            .map(|line| Line::from(line.light_blue().italic())),
                         RtOptions::new(width as usize)
-                            .initial_indent(Line::from("  ↳ ! ".blue()))
+                            .initial_indent(Line::from("  ↳ ! ".light_blue()))
                             .subsequent_indent(Line::from("    ")),
                     ),
-                    Line::from("    …".blue().italic()),
+                    Line::from("    …".light_blue().italic()),
                 ),
                 (false, true) => (
                     adaptive_wrap_lines(
                         message
                             .text
                             .lines()
-                            .map(|line| Line::from(line.yellow().italic())),
+                            .map(|line| Line::from(line.green().bold().italic())),
                         RtOptions::new(width as usize)
-                            .initial_indent(Line::from("  ↻ ".yellow()))
+                            .initial_indent(Line::from("  ↻ ".green().bold()))
                             .subsequent_indent(Line::from("    ")),
                     ),
-                    Line::from("    …".yellow().italic()),
+                    Line::from("    …".green().bold().italic()),
                 ),
                 (false, false) => (
                     adaptive_wrap_lines(
-                        message
-                            .text
-                            .lines()
-                            .map(|line| Line::from(line.green().italic())),
+                        message.text.lines().map(|line| Line::from(line.italic())),
                         RtOptions::new(width as usize)
-                            .initial_indent(Line::from("  ↳ ".green()))
+                            .initial_indent(Line::from("  ↳ "))
                             .subsequent_indent(Line::from("    ")),
                     ),
-                    Line::from("    …".green().italic()),
+                    Line::from("    …".italic()),
                 ),
             };
             Self::push_truncated_preview_lines(&mut lines, wrapped, overflow_line);
