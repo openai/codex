@@ -1,6 +1,5 @@
 use crate::codex::Session;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
-use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::denied_network_policy_message;
@@ -344,15 +343,13 @@ impl NetworkApprovalService {
             review_approval_request(
                 &session,
                 &turn_context,
-                GuardianReviewRequest {
-                    action: json!({
-                        "tool": "network_access",
-                        "target": target,
-                        "host": request.host,
-                        "protocol": key.protocol,
-                        "port": key.port,
-                    }),
-                },
+                json!({
+                    "tool": "network_access",
+                    "target": target,
+                    "host": request.host,
+                    "protocol": key.protocol,
+                    "port": key.port,
+                }),
                 Some(policy_denial_message.clone()),
             )
             .await

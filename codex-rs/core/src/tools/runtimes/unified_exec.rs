@@ -9,7 +9,6 @@ use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecExpiration;
 use crate::features::Feature;
-use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
@@ -136,8 +135,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         action.remove("justification");
                     }
                 }
-                let request = GuardianReviewRequest { action };
-                return review_approval_request(session, turn, request, reason).await;
+                return review_approval_request(session, turn, action, reason).await;
             }
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 let available_decisions = None;

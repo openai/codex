@@ -89,12 +89,6 @@ pub(crate) fn is_guardian_subagent_source(
     )
 }
 
-/// Canonical description of the action the guardian is being asked to review.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GuardianReviewRequest {
-    pub(crate) action: Value,
-}
-
 /// Coarse risk label paired with the numeric `risk_score`.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -164,14 +158,14 @@ impl GuardianTranscriptEntryKind {
 async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
-    request: GuardianReviewRequest,
+    action: Value,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
     session
         .notify_background_event(turn.as_ref(), "Reviewing sandbox escalation...".to_string())
         .await;
 
-    let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
+    let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, action).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
     let review = tokio::select! {
@@ -236,10 +230,10 @@ async fn run_guardian_review(
 pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
-    request: GuardianReviewRequest,
+    action: Value,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
-    run_guardian_review(Arc::clone(session), Arc::clone(turn), request, retry_reason).await
+    run_guardian_review(Arc::clone(session), Arc::clone(turn), action, retry_reason).await
 }
 
 /// Builds the guardian user content items from:
@@ -253,11 +247,11 @@ pub(crate) async fn review_approval_request(
 async fn build_guardian_prompt_items(
     session: &Session,
     retry_reason: Option<String>,
-    request: GuardianReviewRequest,
+    action: Value,
 ) -> Vec<UserInput> {
     let history = session.clone_history().await;
     let transcript_entries = collect_guardian_transcript_entries(history.raw_items());
-    let planned_action_json = format_guardian_action_pretty(&request.action);
+    let planned_action_json = format_guardian_action_pretty(&action);
 
     let (transcript_entries, omission_note) =
         render_guardian_transcript_entries(transcript_entries.as_slice());
@@ -397,6 +391,13 @@ fn render_guardian_transcript_entries(
 fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();
+    let non_empty_entry = |kind, text: String| {
+        (!text.trim().is_empty()).then_some(GuardianTranscriptEntry { kind, text })
+    };
+    let content_entry =
+        |kind, content| content_items_to_text(content).and_then(|text| non_empty_entry(kind, text));
+    let serialized_entry =
+        |kind, serialized: Option<String>| serialized.and_then(|text| non_empty_entry(kind, text));
 
     for item in items {
         let entry = match item {
@@ -404,25 +405,16 @@ fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTr
                 if is_contextual_user_message_content(content) {
                     None
                 } else {
-                    content_items_to_text(content).map(|text| GuardianTranscriptEntry {
-                        kind: GuardianTranscriptEntryKind::User,
-                        text,
-                    })
+                    content_entry(GuardianTranscriptEntryKind::User, content)
                 }
             }
             ResponseItem::Message { role, content, .. } if role == "assistant" => {
-                content_items_to_text(content).map(|text| GuardianTranscriptEntry {
-                    kind: GuardianTranscriptEntryKind::Assistant,
-                    text,
-                })
+                content_entry(GuardianTranscriptEntryKind::Assistant, content)
             }
-            ResponseItem::LocalShellCall { action, .. } => serde_json::to_string(action)
-                .ok()
-                .filter(|text| !text.trim().is_empty())
-                .map(|text| GuardianTranscriptEntry {
-                    kind: GuardianTranscriptEntryKind::Tool("tool shell call".to_string()),
-                    text,
-                }),
+            ResponseItem::LocalShellCall { action, .. } => serialized_entry(
+                GuardianTranscriptEntryKind::Tool("tool shell call".to_string()),
+                serde_json::to_string(action).ok(),
+            ),
             ResponseItem::FunctionCall {
                 call_id,
                 name,
@@ -447,28 +439,26 @@ fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTr
                     text: input.clone(),
                 })
             }
-            ResponseItem::WebSearchCall { action, .. } => action
-                .as_ref()
-                .and_then(|action| serde_json::to_string(action).ok())
-                .filter(|text| !text.trim().is_empty())
-                .map(|text| GuardianTranscriptEntry {
-                    kind: GuardianTranscriptEntryKind::Tool("tool web_search call".to_string()),
-                    text,
-                }),
+            ResponseItem::WebSearchCall { action, .. } => action.as_ref().and_then(|action| {
+                serialized_entry(
+                    GuardianTranscriptEntryKind::Tool("tool web_search call".to_string()),
+                    serde_json::to_string(action).ok(),
+                )
+            }),
             ResponseItem::FunctionCallOutput { call_id, output }
-            | ResponseItem::CustomToolCallOutput { call_id, output } => output
-                .body
-                .to_text()
-                .filter(|text| !text.trim().is_empty())
-                .map(|text| GuardianTranscriptEntry {
-                    kind: GuardianTranscriptEntryKind::Tool(
-                        tool_names_by_call_id.get(call_id).map_or_else(
-                            || "tool result".to_string(),
-                            |name| format!("tool {name} result"),
+            | ResponseItem::CustomToolCallOutput { call_id, output } => {
+                output.body.to_text().and_then(|text| {
+                    non_empty_entry(
+                        GuardianTranscriptEntryKind::Tool(
+                            tool_names_by_call_id.get(call_id).map_or_else(
+                                || "tool result".to_string(),
+                                |name| format!("tool {name} result"),
+                            ),
                         ),
-                    ),
-                    text,
-                }),
+                        text,
+                    )
+                })
+            }
             _ => None,
         };
 
@@ -503,6 +493,13 @@ async fn run_guardian_subagent(
         .models_manager
         .list_models(crate::models_manager::manager::RefreshStrategy::Offline)
         .await;
+    let preferred_reasoning_effort = |supports_low: bool, fallback| {
+        if supports_low {
+            Some(codex_protocol::openai_models::ReasoningEffort::Low)
+        } else {
+            fallback
+        }
+    };
     // Prefer `GUARDIAN_PREFERRED_MODEL` when the active provider exposes it,
     // but fall back to the parent turn's active model so guardian does not
     // become a blanket deny on providers or test environments that do not
@@ -511,28 +508,23 @@ async fn run_guardian_subagent(
         .iter()
         .find(|preset| preset.model == GUARDIAN_PREFERRED_MODEL);
     let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = preferred_model {
-        let reasoning_effort = if preset
-            .supported_reasoning_efforts
-            .iter()
-            .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low)
-        {
-            Some(codex_protocol::openai_models::ReasoningEffort::Low)
-        } else {
-            Some(preset.default_reasoning_effort)
-        };
+        let reasoning_effort = preferred_reasoning_effort(
+            preset
+                .supported_reasoning_efforts
+                .iter()
+                .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
+            Some(preset.default_reasoning_effort),
+        );
         (GUARDIAN_PREFERRED_MODEL.to_string(), reasoning_effort)
     } else {
-        let reasoning_effort = if turn
-            .model_info
-            .supported_reasoning_levels
-            .iter()
-            .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low)
-        {
-            Some(codex_protocol::openai_models::ReasoningEffort::Low)
-        } else {
+        let reasoning_effort = preferred_reasoning_effort(
+            turn.model_info
+                .supported_reasoning_levels
+                .iter()
+                .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
             turn.reasoning_effort
-                .or(turn.model_info.default_reasoning_level)
-        };
+                .or(turn.model_info.default_reasoning_level),
+        );
         (turn.model_info.slug.clone(), reasoning_effort)
     };
     let guardian_config = build_guardian_subagent_config(

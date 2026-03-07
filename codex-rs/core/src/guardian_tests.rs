@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
@@ -253,7 +254,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
-    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+    let models_manager = Arc::new(test_support::models_manager_with_provider(
         config.codex_home.clone(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
@@ -307,20 +308,18 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let prompt = build_guardian_prompt_items(
         session.as_ref(),
         Some("Sandbox denied outbound git push to github.com.".to_string()),
-        GuardianReviewRequest {
-            action: serde_json::json!({
-                "tool": "shell",
-                "command": [
-                    "git",
-                    "push",
-                    "origin",
-                    "guardian-approval-mvp"
-                ],
-                "cwd": "/repo/codex-rs/core",
-                "sandbox_permissions": crate::sandboxing::SandboxPermissions::UseDefault,
-                "justification": "Need to push the reviewed docs fix to the repo remote.",
-            }),
-        },
+        serde_json::json!({
+            "tool": "shell",
+            "command": [
+                "git",
+                "push",
+                "origin",
+                "guardian-approval-mvp"
+            ],
+            "cwd": "/repo/codex-rs/core",
+            "sandbox_permissions": crate::sandboxing::SandboxPermissions::UseDefault,
+            "justification": "Need to push the reviewed docs fix to the repo remote.",
+        }),
     )
     .await;
 

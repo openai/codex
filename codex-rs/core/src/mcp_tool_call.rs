@@ -18,7 +18,6 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppToolApproval;
 use crate::connectors;
 use crate::features::Feature;
-use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -574,7 +573,7 @@ fn persistent_mcp_tool_approval_key(
 fn build_guardian_mcp_tool_review_request(
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
-) -> GuardianReviewRequest {
+) -> serde_json::Value {
     let mut action = serde_json::Map::from_iter([
         (
             "tool".to_string(),
@@ -654,9 +653,7 @@ fn build_guardian_mcp_tool_review_request(
         }
     }
 
-    GuardianReviewRequest {
-        action: serde_json::Value::Object(action),
-    }
+    serde_json::Value::Object(action)
 }
 
 fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpToolApprovalDecision {
@@ -1599,21 +1596,19 @@ mod tests {
 
         assert_eq!(
             request,
-            GuardianReviewRequest {
-                action: serde_json::json!({
-                    "tool": "mcp_tool_call",
-                    "server": CODEX_APPS_MCP_SERVER_NAME,
-                    "tool_name": "browser_navigate",
-                    "arguments": {
-                        "url": "https://example.com",
-                    },
-                    "connector_id": "playwright",
-                    "connector_name": "Playwright",
-                    "connector_description": "Browser automation",
-                    "tool_title": "Navigate",
-                    "tool_description": "Open a page",
-                }),
-            }
+            serde_json::json!({
+                "tool": "mcp_tool_call",
+                "server": CODEX_APPS_MCP_SERVER_NAME,
+                "tool_name": "browser_navigate",
+                "arguments": {
+                    "url": "https://example.com",
+                },
+                "connector_id": "playwright",
+                "connector_name": "Playwright",
+                "connector_description": "Browser automation",
+                "tool_title": "Navigate",
+                "tool_description": "Open a page",
+            })
         );
     }
 
@@ -1637,18 +1632,16 @@ mod tests {
 
         assert_eq!(
             request,
-            GuardianReviewRequest {
-                action: serde_json::json!({
-                    "tool": "mcp_tool_call",
-                    "server": "custom_server",
-                    "tool_name": "dangerous_tool",
-                    "annotations": {
-                        "destructive_hint": true,
-                        "open_world_hint": true,
-                        "read_only_hint": false,
-                    },
-                }),
-            }
+            serde_json::json!({
+                "tool": "mcp_tool_call",
+                "server": "custom_server",
+                "tool_name": "dangerous_tool",
+                "annotations": {
+                    "destructive_hint": true,
+                    "open_world_hint": true,
+                    "read_only_hint": false,
+                },
+            })
         );
     }
 

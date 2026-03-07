@@ -7,7 +7,6 @@ use crate::exec::SandboxType;
 use crate::exec::is_likely_sandbox_denied;
 use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::features::Feature;
-use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecRequest;
@@ -385,16 +384,14 @@ impl CoreShellActionProvider {
         Ok(stopwatch
             .pause_for(async move {
                 if routes_approval_to_guardian(&turn) {
-                    let request = GuardianReviewRequest {
-                        action: json!({
-                            "tool": tool_name,
-                            "program": program,
-                            "argv": argv,
-                            "cwd": workdir,
-                            "additional_permissions": additional_permissions,
-                        }),
-                    };
-                    return review_approval_request(&session, &turn, request, None).await;
+                    let action = json!({
+                        "tool": tool_name,
+                        "program": program,
+                        "argv": argv,
+                        "cwd": workdir,
+                        "additional_permissions": additional_permissions,
+                    });
+                    return review_approval_request(&session, &turn, action, None).await;
                 }
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),

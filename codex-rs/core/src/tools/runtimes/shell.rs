@@ -11,7 +11,6 @@ pub(crate) mod zsh_fork_backend;
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
-use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
@@ -170,8 +169,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         action.remove("justification");
                     }
                 }
-                let request = GuardianReviewRequest { action };
-                return review_approval_request(session, turn, request, reason).await;
+                return review_approval_request(session, turn, action, reason).await;
             }
             with_cached_approval(&session.services, "shell", keys, move || async move {
                 let available_decisions = None;
