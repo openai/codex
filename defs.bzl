@@ -79,8 +79,13 @@ def codex_rust_crate(
         extra_binaries: Additional binary labels to surface as test data and
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
+    package_segments = native.package_name().split("/")
+    insta_workspace_root = "." if len(package_segments) <= 1 else "/".join([".."] * (len(package_segments) - 1))
     test_env = {
-        "INSTA_WORKSPACE_ROOT": ".",
+        # Bazel unit tests run with the package directory as cwd, so `.` points
+        # at `codex-rs/<crate>` instead of the shared `codex-rs` workspace root.
+        # Point Insta back at `codex-rs` to keep snapshot paths aligned with Cargo.
+        "INSTA_WORKSPACE_ROOT": insta_workspace_root,
         "INSTA_SNAPSHOT_PATH": "src",
     }
 
