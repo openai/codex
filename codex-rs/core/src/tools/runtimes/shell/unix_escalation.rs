@@ -5,6 +5,7 @@ use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::is_likely_sandbox_denied;
+use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::features::Feature;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
@@ -26,7 +27,6 @@ use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
-use codex_protocol::protocol::RejectConfig;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
@@ -433,11 +433,12 @@ impl CoreShellActionProvider {
                 EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
             }
             Decision::Prompt => {
-                if matches!(
+                if prompt_is_rejected_by_policy(
                     self.approval_policy,
-                    AskForApproval::Never
-                        | AskForApproval::Reject(RejectConfig { rules: true, .. })
-                ) {
+                    matches!(decision_source, DecisionSource::PrefixRule),
+                )
+                .is_some()
+                {
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {
                     match self
