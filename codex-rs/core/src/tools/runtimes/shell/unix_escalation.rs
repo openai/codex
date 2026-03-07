@@ -164,7 +164,9 @@ pub(super) async fn try_run_zsh_fork(
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
         approval_policy: ctx.turn.approval_policy.value(),
-        sandbox_policy: attempt.policy.clone(),
+        sandbox_policy: command_executor.sandbox_policy.clone(),
+        file_system_sandbox_policy: command_executor.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: command_executor.network_sandbox_policy,
         sandbox_permissions: req.sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
         stopwatch: stopwatch.clone(),
@@ -186,7 +188,7 @@ pub(super) async fn try_run_zsh_fork(
 
 pub(crate) async fn prepare_unified_exec_zsh_fork(
     req: &crate::tools::runtimes::unified_exec::UnifiedExecRequest,
-    attempt: &SandboxAttempt<'_>,
+    _attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
     exec_request: ExecRequest,
 ) -> Result<Option<PreparedUnifiedExecZshFork>, ToolError> {
@@ -261,7 +263,9 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
         approval_policy: ctx.turn.approval_policy.value(),
-        sandbox_policy: attempt.policy.clone(),
+        sandbox_policy: exec_request.sandbox_policy.clone(),
+        file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: exec_request.network_sandbox_policy,
         sandbox_permissions: req.sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
         stopwatch: Stopwatch::unlimited(),
@@ -290,6 +294,8 @@ struct CoreShellActionProvider {
     call_id: String,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_permissions: SandboxPermissions,
     prompt_permissions: Option<PermissionProfile>,
     stopwatch: Stopwatch,
@@ -316,6 +322,8 @@ impl CoreShellActionProvider {
     fn shell_request_escalation_execution(
         sandbox_permissions: SandboxPermissions,
         sandbox_policy: &SandboxPolicy,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        network_sandbox_policy: NetworkSandboxPolicy,
         additional_permissions: Option<&PermissionProfile>,
         macos_seatbelt_profile_extensions: Option<&MacOsSeatbeltProfileExtensions>,
     ) -> EscalationExecution {
@@ -329,6 +337,8 @@ impl CoreShellActionProvider {
                     EscalationExecution::Permissions(EscalationPermissions::Permissions(
                         EscalatedPermissions {
                             sandbox_policy: sandbox_policy.clone(),
+                            file_system_sandbox_policy: file_system_sandbox_policy.clone(),
+                            network_sandbox_policy,
                             macos_seatbelt_profile_extensions: macos_seatbelt_profile_extensions
                                 .cloned(),
                         },
@@ -578,9 +588,22 @@ impl EscalationPolicy for CoreShellActionProvider {
         // In the usual case, the execve wrapper reports the command being
         // executed in `program`, so a direct skill lookup is sufficient.
         if let Some(skill) = self.find_skill(program).await {
-            // For now, we always prompt for scripts that look like they belong
-            // to skills, which means we ignore exec policy rules for those
-            // scripts.
+            // For now, scripts that look like they belong to skills bypass
+            // general exec policy evaluation. Permissionless skills inherit the
+            // turn sandbox directly; skills with declared permissions still
+            // prompt here before applying their permission profile.
+            let prompt_permissions = skill.permission_profile.clone();
+            if prompt_permissions
+                .as_ref()
+                .is_none_or(PermissionProfile::is_empty)
+            {
+                tracing::debug!(
+                    "Matched {program:?} to permissionless skill {skill:?}, inheriting turn sandbox"
+                );
+                return Ok(EscalationDecision::escalate(
+                    EscalationExecution::TurnDefault,
+                ));
+            }
             tracing::debug!("Matched {program:?} to skill {skill:?}, prompting for approval");
             let needs_escalation = true;
             let decision_source = DecisionSource::SkillScript {
@@ -593,7 +616,7 @@ impl EscalationPolicy for CoreShellActionProvider {
                     program,
                     argv,
                     workdir,
-                    skill.permission_profile.clone(),
+                    prompt_permissions,
                     Self::skill_escalation_execution(&skill),
                     decision_source,
                 )
@@ -629,6 +652,8 @@ impl EscalationPolicy for CoreShellActionProvider {
             DecisionSource::UnmatchedCommandFallback => Self::shell_request_escalation_execution(
                 self.sandbox_permissions,
                 &self.sandbox_policy,
+                &self.file_system_sandbox_policy,
+                self.network_sandbox_policy,
                 self.prompt_permissions.as_ref(),
                 self.turn
                     .config
@@ -872,17 +897,13 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
             }
             EscalationExecution::Permissions(EscalationPermissions::Permissions(permissions)) => {
                 // Use a fully specified sandbox policy instead of merging into the turn policy.
-                let file_system_sandbox_policy =
-                    FileSystemSandboxPolicy::from(&permissions.sandbox_policy);
-                let network_sandbox_policy =
-                    NetworkSandboxPolicy::from(&permissions.sandbox_policy);
                 self.prepare_sandboxed_exec(PrepareSandboxedExecParams {
                     command,
                     workdir,
                     env,
                     sandbox_policy: &permissions.sandbox_policy,
-                    file_system_sandbox_policy: &file_system_sandbox_policy,
-                    network_sandbox_policy,
+                    file_system_sandbox_policy: &permissions.file_system_sandbox_policy,
+                    network_sandbox_policy: permissions.network_sandbox_policy,
                     additional_permissions: None,
                     #[cfg(target_os = "macos")]
                     macos_seatbelt_profile_extensions: permissions

@@ -9,7 +9,7 @@ use codex_core::WireApi;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
 use codex_core::ws_version_from_features;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
@@ -56,7 +56,7 @@ struct WebsocketTestHarness {
     model_info: ModelInfo,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummary,
-    otel_manager: OtelManager,
+    session_telemetry: SessionTelemetry,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -105,7 +105,7 @@ async fn responses_websocket_preconnect_reuses_connection() {
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .preconnect_websocket(&harness.otel_manager, &harness.model_info)
+        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -134,7 +134,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
         .prewarm_websocket(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
             None,
@@ -207,7 +207,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .preconnect_websocket(&harness.otel_manager, &harness.model_info)
+        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -215,7 +215,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
         .stream(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
             None,
@@ -253,7 +253,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
         .prewarm_websocket(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
             None,
@@ -265,7 +265,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
         .stream(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
             None,
@@ -318,7 +318,7 @@ async fn responses_websocket_prewarm_uses_v2_when_model_prefers_websockets_and_f
         .prewarm_websocket(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
             None,
@@ -371,7 +371,7 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
     let harness = websocket_harness_with_options(&server, false, false, true, false).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .preconnect_websocket(&harness.otel_manager, &harness.model_info)
+        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
         .await
         .expect("websocket preconnect failed");
 
@@ -551,7 +551,7 @@ async fn responses_websocket_emits_websocket_telemetry_events() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    harness.otel_manager.reset_runtime_metrics();
+    harness.session_telemetry.reset_runtime_metrics();
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
@@ -560,7 +560,7 @@ async fn responses_websocket_emits_websocket_telemetry_events() {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let summary = harness
-        .otel_manager
+        .session_telemetry
         .runtime_metrics_summary()
         .expect("runtime metrics summary");
     assert_eq!(summary.api_calls.count, 0);
@@ -593,7 +593,7 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
     .await;
 
     let harness = websocket_harness_with_runtime_metrics(&server, true).await;
-    harness.otel_manager.reset_runtime_metrics();
+    harness.session_telemetry.reset_runtime_metrics();
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
@@ -607,7 +607,7 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
     );
 
     let summary = harness
-        .otel_manager
+        .session_telemetry
         .runtime_metrics_summary()
         .expect("runtime metrics summary");
     assert_eq!(summary.responses_api_overhead_ms, 120);
@@ -664,7 +664,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
         .stream(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
             None,
@@ -736,7 +736,7 @@ async fn responses_websocket_emits_rate_limit_events() {
         .stream(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
             None,
@@ -1316,7 +1316,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
         .stream(
             &prompt_two,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
             None,
@@ -1515,7 +1515,7 @@ async fn websocket_harness_with_options(
             .with_runtime_reader(),
     )
     .expect("in-memory metrics client");
-    let otel_manager = OtelManager::new(
+    let session_telemetry = SessionTelemetry::new(
         conversation_id,
         MODEL,
         model_info.slug.as_str(),
@@ -1548,7 +1548,7 @@ async fn websocket_harness_with_options(
         model_info,
         effort,
         summary,
-        otel_manager,
+        session_telemetry,
     }
 }
 
@@ -1581,7 +1581,7 @@ async fn stream_until_complete_with_turn_metadata(
         .stream(
             prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
             service_tier,
