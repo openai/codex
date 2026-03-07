@@ -351,12 +351,8 @@ stream_max_retries = 0
         .join("\n")
             + "\n",
     )?;
-    let state_db = StateRuntime::init(
-        codex_home.path().to_path_buf(),
-        "mock_provider".into(),
-        None,
-    )
-    .await?;
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
     state_db.mark_backfill_complete(None).await?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
