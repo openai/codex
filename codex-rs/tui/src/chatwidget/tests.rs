@@ -7305,6 +7305,106 @@ async fn transient_connection_error_retries_current_message_before_advancing_que
 }
 
 #[tokio::test]
+async fn repeated_retry_limit_errors_do_not_advance_queue_during_retry_gap() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message(UserMessage::from("first".to_string()));
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.handle_codex_event(Event {
+        id: "turn-start-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.queue_user_message(UserMessage::from("second".to_string()));
+
+    chat.handle_codex_event(Event {
+        id: "err-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "exceeded retry limit, last status: 429 Too Many Requests".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ResponseTooManyFailedAttempts {
+                http_status_code: Some(429),
+            }),
+        }),
+    });
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.maybe_send_next_queued_input();
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(
+        chat.queued_user_messages
+            .iter()
+            .map(|message| message.text.clone())
+            .collect::<Vec<_>>(),
+        vec!["second".to_string()]
+    );
+
+    chat.handle_codex_event(Event {
+        id: "err-2".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "exceeded retry limit, last status: 429 Too Many Requests".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ResponseTooManyFailedAttempts {
+                http_status_code: Some(429),
+            }),
+        }),
+    });
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.maybe_send_next_queued_input();
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(
+        chat.queued_user_messages
+            .iter()
+            .map(|message| message.text.clone())
+            .collect::<Vec<_>>(),
+        vec!["second".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn queue_user_message_during_retry_gap_stays_queued() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message(UserMessage::from("first".to_string()));
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.handle_codex_event(Event {
+        id: "turn-start-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "err-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "exceeded retry limit, last status: 429 Too Many Requests".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ResponseTooManyFailedAttempts {
+                http_status_code: Some(429),
+            }),
+        }),
+    });
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.queue_user_message(UserMessage::from("late queued".to_string()));
+
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(
+        chat.queued_user_messages
+            .iter()
+            .map(|message| message.text.clone())
+            .collect::<Vec<_>>(),
+        vec!["late queued".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn transient_steer_retry_does_not_duplicate_pending_steers() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
