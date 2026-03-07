@@ -114,9 +114,6 @@ enum NetworkApprovalOutcome {
 }
 
 /// Whether an allowlist miss may be reviewed instead of hard-denied.
-///
-/// Guardian uses the same inline decision path as user approvals, even though
-/// it is not an interactive prompt.
 fn allows_network_approval_flow(policy: AskForApproval) -> bool {
     !matches!(policy, AskForApproval::Never)
 }

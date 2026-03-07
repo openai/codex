@@ -11,7 +11,6 @@ use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
-use crate::guardian::routes_approval_to_guardian;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
@@ -411,16 +410,6 @@ impl ShellHandler {
             match shell_runtime_backend {
                 Generic => ShellRuntime::new(),
                 backend @ (ShellCommandClassic | ShellCommandZshFork) => {
-                    // Guardian review is only implemented in the standard
-                    // ShellRuntime approval path. The zsh-fork backend has its
-                    // own escalation/approval stack, so keep feature-routed
-                    // guardian approvals on the classic shell_command backend.
-                    let backend =
-                        if routes_approval_to_guardian(&turn, turn.approval_policy.value()) {
-                            ShellRuntimeBackend::ShellCommandClassic
-                        } else {
-                            backend
-                        };
                     ShellRuntime::for_shell_command(backend)
                 }
             }
