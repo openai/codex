@@ -203,6 +203,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::guardian::format_guardian_json_pretty;
     use codex_protocol::protocol::RejectConfig;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -311,7 +312,7 @@ mod tests {
 
         assert_snapshot!(
             "guardian_apply_patch_review_request",
-            serde_json::to_string_pretty(&snapshot).expect("snapshot should serialize")
+            format_guardian_json_pretty(&snapshot)
         );
     }
 }

@@ -59,6 +59,26 @@ const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 1_000;
 // agent was trying to do immediately before the escalation.
 const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 const GUARDIAN_TRUNCATION_TAG: &str = "guardian_truncated";
+const GUARDIAN_ACTION_KEY_PRIORITY: &[&str] = &[
+    "tool_name",
+    "action",
+    "tool",
+    "command",
+    "program",
+    "argv",
+    "cwd",
+    "target",
+    "host",
+    "protocol",
+    "port",
+    "files",
+    "change_count",
+    "sandbox_permissions",
+    "additional_permissions",
+    "justification",
+    "tty",
+    "patch",
+];
 
 pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = "Guardian rejected this action due to unacceptable risk. The agent must not attempt to achieve the same outcome via workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or stop and request user input.";
 
@@ -287,7 +307,7 @@ async fn build_guardian_prompt(
         .map(|rollout| rollout.rollout_path().display().to_string());
     let planned_action_json = planned_action
         .map(sanitize_guardian_action)
-        .map(|action| serde_json::to_string_pretty(&action).unwrap_or_else(|_| "{}".to_string()))
+        .map(|action| format_guardian_json_pretty(&action))
         .unwrap_or_else(|| "{}".to_string());
 
     let (transcript, omission_note) = build_guardian_transcript(
@@ -766,6 +786,73 @@ fn sanitize_guardian_action(value: Value) -> Value {
         ),
         other => other,
     }
+}
+
+pub(crate) fn format_guardian_json_pretty(value: &Value) -> String {
+    format_guardian_json_pretty_at_indent(value, 0)
+}
+
+fn format_guardian_json_pretty_at_indent(value: &Value, indent: usize) -> String {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
+            serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+        }
+        Value::Array(values) => {
+            if values.is_empty() {
+                return "[]".to_string();
+            }
+
+            let next_indent = indent + 2;
+            let child_indent = " ".repeat(next_indent);
+            let closing_indent = " ".repeat(indent);
+            let lines = values
+                .iter()
+                .map(|value| {
+                    format!(
+                        "{child_indent}{}",
+                        format_guardian_json_pretty_at_indent(value, next_indent)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",\n");
+            format!("[\n{lines}\n{closing_indent}]")
+        }
+        Value::Object(values) => {
+            if values.is_empty() {
+                return "{}".to_string();
+            }
+
+            let next_indent = indent + 2;
+            let child_indent = " ".repeat(next_indent);
+            let closing_indent = " ".repeat(indent);
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_by(|(left_key, _), (right_key, _)| {
+                guardian_action_key_rank(left_key)
+                    .cmp(&guardian_action_key_rank(right_key))
+                    .then_with(|| left_key.cmp(right_key))
+            });
+            let lines = entries
+                .into_iter()
+                .map(|(key, value)| {
+                    let rendered_key =
+                        serde_json::to_string(key).unwrap_or_else(|_| "\"<invalid>\"".to_string());
+                    format!(
+                        "{child_indent}{rendered_key}: {}",
+                        format_guardian_json_pretty_at_indent(value, next_indent)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",\n");
+            format!("{{\n{lines}\n{closing_indent}}}")
+        }
+    }
+}
+
+fn guardian_action_key_rank(key: &str) -> usize {
+    GUARDIAN_ACTION_KEY_PRIORITY
+        .iter()
+        .position(|candidate| *candidate == key)
+        .unwrap_or(GUARDIAN_ACTION_KEY_PRIORITY.len())
 }
 
 fn guardian_truncate_text(content: &str, token_cap: usize) -> String {
