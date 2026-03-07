@@ -387,39 +387,25 @@ fn build_guardian_parent_instruction_items(turn: &TurnContext) -> Vec<UserInput>
     }
 
     items.push(UserInput::Text {
-        text: ">>> PARENT SESSION INSTRUCTIONS START\n".to_string(),
+        text: ">>> PARENT TURN CONTEXT START\n".to_string(),
         text_elements: Vec::new(),
     });
+    let mut entry_number = 1usize;
     if let Some(developer_instructions) = developer_instructions {
         items.push(UserInput::Text {
-            text: ">>> PARENT DEVELOPER INSTRUCTIONS START\n".to_string(),
+            text: format!("[{entry_number}] developer:\n{developer_instructions}\n"),
             text_elements: Vec::new(),
         });
-        items.push(UserInput::Text {
-            text: format!("{developer_instructions}\n"),
-            text_elements: Vec::new(),
-        });
-        items.push(UserInput::Text {
-            text: ">>> PARENT DEVELOPER INSTRUCTIONS END\n".to_string(),
-            text_elements: Vec::new(),
-        });
+        entry_number += 1;
     }
     if let Some(user_instructions) = user_instructions {
         items.push(UserInput::Text {
-            text: ">>> PARENT USER INSTRUCTIONS START\n".to_string(),
-            text_elements: Vec::new(),
-        });
-        items.push(UserInput::Text {
-            text: format!("{user_instructions}\n"),
-            text_elements: Vec::new(),
-        });
-        items.push(UserInput::Text {
-            text: ">>> PARENT USER INSTRUCTIONS END\n".to_string(),
+            text: format!("[{entry_number}] user:\n{user_instructions}\n"),
             text_elements: Vec::new(),
         });
     }
     items.push(UserInput::Text {
-        text: ">>> PARENT SESSION INSTRUCTIONS END\n".to_string(),
+        text: ">>> PARENT TURN CONTEXT END\n".to_string(),
         text_elements: Vec::new(),
     });
     items
