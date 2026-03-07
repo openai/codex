@@ -405,6 +405,18 @@ struct McpToolApprovalKey {
     tool_name: String,
 }
 
+fn mcp_tool_approval_prompt_options(
+    session_approval_key: Option<&McpToolApprovalKey>,
+    persistent_approval_key: Option<&McpToolApprovalKey>,
+    tool_call_mcp_elicitation_enabled: bool,
+) -> McpToolApprovalPromptOptions {
+    McpToolApprovalPromptOptions {
+        allow_session_remember: session_approval_key.is_some(),
+        allow_persistent_approval: tool_call_mcp_elicitation_enabled
+            && persistent_approval_key.is_some(),
+    }
+}
+
 async fn maybe_request_mcp_tool_approval(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -434,6 +446,10 @@ async fn maybe_request_mcp_tool_approval(
     {
         return Some(McpToolApprovalDecision::Accept);
     }
+    let tool_call_mcp_elicitation_enabled = turn_context
+        .config
+        .features
+        .enabled(Feature::ToolCallMcpElicitation);
 
     if routes_approval_to_guardian(turn_context) {
         let decision = review_approval_request(
@@ -455,10 +471,11 @@ async fn maybe_request_mcp_tool_approval(
         return Some(decision);
     }
 
-    let prompt_options = McpToolApprovalPromptOptions {
-        allow_session_remember: session_approval_key.is_some(),
-        allow_persistent_approval: persistent_approval_key.is_some(),
-    };
+    let prompt_options = mcp_tool_approval_prompt_options(
+        session_approval_key.as_ref(),
+        persistent_approval_key.as_ref(),
+        tool_call_mcp_elicitation_enabled,
+    );
     let question_id = format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}");
     let question = build_mcp_tool_approval_question(
         question_id.clone(),
@@ -469,11 +486,7 @@ async fn maybe_request_mcp_tool_approval(
         annotations,
         prompt_options,
     );
-    if turn_context
-        .config
-        .features
-        .enabled(Feature::ToolCallMcpElicitation)
-    {
+    if tool_call_mcp_elicitation_enabled {
         let request_id = rmcp::model::RequestId::String(
             format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}").into(),
         );
@@ -1332,6 +1345,39 @@ mod tests {
                 MCP_TOOL_APPROVAL_ACCEPT.to_string(),
                 MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION.to_string(),
                 MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER.to_string(),
+                MCP_TOOL_APPROVAL_CANCEL.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_apps_tool_question_without_elicitation_omits_always_allow() {
+        let session_key = McpToolApprovalKey {
+            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            connector_id: Some("calendar".to_string()),
+            tool_name: "run_action".to_string(),
+        };
+        let persistent_key = session_key.clone();
+        let question = build_mcp_tool_approval_question(
+            "q".to_string(),
+            CODEX_APPS_MCP_SERVER_NAME,
+            "run_action",
+            Some("Run Action"),
+            Some("Calendar"),
+            Some(&annotations(Some(false), Some(true), None)),
+            mcp_tool_approval_prompt_options(Some(&session_key), Some(&persistent_key), false),
+        );
+
+        assert_eq!(
+            question
+                .options
+                .expect("options")
+                .into_iter()
+                .map(|option| option.label)
+                .collect::<Vec<_>>(),
+            vec![
+                MCP_TOOL_APPROVAL_ACCEPT.to_string(),
+                MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION.to_string(),
                 MCP_TOOL_APPROVAL_CANCEL.to_string(),
             ]
         );
