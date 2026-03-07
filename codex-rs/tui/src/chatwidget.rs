@@ -4903,7 +4903,9 @@ impl ChatWidget {
                     });
                 }
             }
-            EventMsg::RawResponseItem(_) | EventMsg::ItemStarted(_) | EventMsg::AgentMessageContentDelta(_)
+            EventMsg::RawResponseItem(_)
+            | EventMsg::ItemStarted(_)
+            | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
