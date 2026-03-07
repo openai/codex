@@ -22,6 +22,7 @@ codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 landlock = { workspace = true }
 libc = { workspace = true }
+procfs = "0.18"
 seccompiler = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

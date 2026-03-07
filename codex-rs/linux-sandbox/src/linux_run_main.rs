@@ -1,4 +1,5 @@
 use clap::Parser;
+use procfs::process::Process;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::Read;
@@ -90,6 +91,20 @@ pub fn run_main() -> ! {
     }
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_bwrap_sandbox);
 
+    let disable_nested_managed_proxy =
+        allow_network_for_proxy && !apply_seccomp_then_exec && has_bwrap_ancestor();
+    if disable_nested_managed_proxy {
+        eprintln!(
+            "codex-linux-sandbox: nested Codex bubblewrap sandbox detected; \
+             skipping inner managed-proxy network namespace setup and relying on outer sandbox network restrictions"
+        );
+    }
+    let allow_network_for_proxy = if disable_nested_managed_proxy {
+        false
+    } else {
+        allow_network_for_proxy
+    };
+
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
     if apply_seccomp_then_exec {
@@ -173,6 +188,66 @@ fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_san
     if apply_seccomp_then_exec && !use_bwrap_sandbox {
         panic!("--apply-seccomp-then-exec requires --use-bwrap-sandbox");
     }
+}
+
+fn has_bwrap_ancestor() -> bool {
+    const MAX_ANCESTOR_DEPTH: usize = 32;
+    let mut pid = match parent_pid_of(std::process::id()) {
+        Some(parent_pid) => parent_pid,
+        None => return false,
+    };
+
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        if pid == 0 {
+            return false;
+        }
+        if is_codex_bwrap_process(pid) {
+            return true;
+        }
+        pid = match parent_pid_of(pid) {
+            Some(parent_pid) if parent_pid != pid => parent_pid,
+            _ => return false,
+        };
+    }
+
+    false
+}
+
+fn is_codex_bwrap_process(pid: u32) -> bool {
+    if process_comm(pid).as_deref() != Some("bwrap") {
+        return false;
+    }
+    let cmdline = match process_cmdline(pid) {
+        Some(cmdline) => cmdline,
+        None => return false,
+    };
+    is_codex_bwrap_cmdline(cmdline.as_slice())
+}
+
+fn is_codex_bwrap_cmdline(cmdline: &[String]) -> bool {
+    cmdline
+        .windows(2)
+        .any(|pair| pair[0] == "--argv0" && pair[1] == "codex-linux-sandbox")
+}
+
+fn process_comm(pid: u32) -> Option<String> {
+    let pid = i32::try_from(pid).ok()?;
+    let process = Process::new(pid).ok()?;
+    let stat = process.stat().ok()?;
+    Some(stat.comm)
+}
+
+fn process_cmdline(pid: u32) -> Option<Vec<String>> {
+    let pid = i32::try_from(pid).ok()?;
+    let process = Process::new(pid).ok()?;
+    process.cmdline().ok()
+}
+
+fn parent_pid_of(pid: u32) -> Option<u32> {
+    let pid = i32::try_from(pid).ok()?;
+    let process = Process::new(pid).ok()?;
+    let stat = process.stat().ok()?;
+    u32::try_from(stat.ppid).ok()
 }
 
 fn run_bwrap_with_proc_fallback(
