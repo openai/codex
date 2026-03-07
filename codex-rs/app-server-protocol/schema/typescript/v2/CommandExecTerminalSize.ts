@@ -5,11 +5,11 @@
 /**
  * PTY size in character cells for `command/exec` PTY sessions.
  */
-export type CommandExecTerminalSize = {
+export type CommandExecTerminalSize = { 
 /**
  * Terminal height in character cells.
  */
-rows: number,
+rows: number, 
 /**
  * Terminal width in character cells.
  */
