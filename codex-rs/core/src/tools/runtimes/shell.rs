@@ -36,7 +36,6 @@ use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -46,7 +45,6 @@ use std::path::PathBuf;
 pub struct ShellRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
-    pub approval_policy: AskForApproval,
     pub timeout_ms: Option<u64>,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
@@ -154,7 +152,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
-            if routes_approval_to_guardian(turn, req.approval_policy) {
+            if routes_approval_to_guardian(turn, turn.approval_policy.value()) {
                 let request = GuardianReviewRequest {
                     tool_name: "shell",
                     action: serde_json::json!({

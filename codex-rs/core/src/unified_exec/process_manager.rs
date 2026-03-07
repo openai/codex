@@ -590,7 +590,6 @@ impl UnifiedExecProcessManager {
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             cwd,
-            approval_policy: context.turn.approval_policy.value(),
             env,
             explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
             network: request.network.clone(),

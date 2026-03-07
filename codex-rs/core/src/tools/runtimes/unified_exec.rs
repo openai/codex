@@ -39,7 +39,6 @@ use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -49,7 +48,6 @@ use std::path::PathBuf;
 pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
-    pub approval_policy: AskForApproval,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
@@ -119,7 +117,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .clone()
             .or_else(|| req.justification.clone());
         Box::pin(async move {
-            if routes_approval_to_guardian(turn, req.approval_policy) {
+            if routes_approval_to_guardian(turn, turn.approval_policy.value()) {
                 let request = GuardianReviewRequest {
                     tool_name: "exec_command",
                     action: serde_json::json!({

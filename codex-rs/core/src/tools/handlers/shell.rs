@@ -395,7 +395,6 @@ impl ShellHandler {
         let req = ShellRequest {
             command: exec_params.command.clone(),
             cwd: exec_params.cwd.clone(),
-            approval_policy: turn.approval_policy.value(),
             timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),
             explicit_env_overrides,
