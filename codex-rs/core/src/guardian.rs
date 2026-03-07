@@ -28,13 +28,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::codex_delegate::run_codex_thread_one_shot;
+use crate::codex_delegate::run_codex_thread_interactive;
 use crate::compact::content_items_to_text;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::NetworkProxySpec;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::features::Feature;
+use crate::protocol::Op;
 use crate::protocol::SandboxPolicy;
 use crate::truncate::approx_bytes_for_tokens;
 use crate::truncate::approx_token_count;
@@ -544,21 +545,20 @@ async fn run_guardian_subagent(
         guardian_reasoning_effort,
     )?;
 
-    // `run_codex_thread_one_shot` is already the subagent runner used elsewhere
-    // in core. Reusing it here keeps the MVP aligned with the existing review
-    // subagent model instead of introducing a guardian-specific execution path.
+    // Reuse the standard interactive subagent runner so we can seed inherited
+    // session-scoped network approvals before the guardian's first turn is
+    // submitted.
     // The guardian subagent source is also how session startup recognizes this
     // reviewer and disables inherited exec-policy rules.
-    let codex = run_codex_thread_one_shot(
+    let child_cancel = cancel_token.child_token();
+    let codex = run_codex_thread_interactive(
         guardian_config,
         session.services.auth_manager.clone(),
         session.services.models_manager.clone(),
-        prompt_items,
         Arc::clone(&session),
         turn,
-        cancel_token,
+        child_cancel.clone(),
         SubAgentSource::Other(GUARDIAN_SUBAGENT_NAME.to_string()),
-        Some(schema),
         None,
     )
     .await?;
@@ -570,6 +570,12 @@ async fn run_guardian_subagent(
         .network_approval
         .copy_session_approved_hosts_to(&codex.session.services.network_approval)
         .await;
+    codex
+        .submit(Op::UserInput {
+            items: prompt_items,
+            final_output_json_schema: Some(schema),
+        })
+        .await?;
 
     let mut last_agent_message = None;
     while let Ok(event) = codex.next_event().await {
@@ -582,6 +588,8 @@ async fn run_guardian_subagent(
             _ => {}
         }
     }
+    let _ = codex.submit(Op::Shutdown {}).await;
+    child_cancel.cancel();
 
     parse_guardian_assessment(last_agent_message.as_deref())
 }
