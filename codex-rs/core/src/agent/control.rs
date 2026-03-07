@@ -15,6 +15,7 @@ use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ForkReferenceItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -169,6 +170,21 @@ impl AgentControl {
                         RolloutRecorder::get_rollout_history(&rollout_path)
                             .await?
                             .get_rollout_items();
+                    if forked_rollout_items
+                        .iter()
+                        .any(|item| matches!(item, RolloutItem::ForkReference(_)))
+                    {
+                        forked_rollout_items =
+                            crate::rollout::truncation::materialize_rollout_items_for_replay(
+                                config.codex_home.as_path(),
+                                &forked_rollout_items,
+                            )
+                            .await;
+                    }
+                    forked_rollout_items.push(RolloutItem::ForkReference(ForkReferenceItem {
+                        rollout_path: rollout_path.clone(),
+                        nth_user_message: usize::MAX,
+                    }));
                     let mut output = FunctionCallOutputPayload::from_text(
                         FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string(),
                     );
@@ -1090,6 +1106,117 @@ mod tests {
         let injected_output_index = injected_output_index
             .expect("forked child should include synthetic output for the parent spawn_agent call");
         assert!(parent_call_index < injected_output_index);
+
+        let _ = harness
+            .control
+            .shutdown_agent(child_thread_id)
+            .await
+            .expect("child shutdown should submit");
+        let _ = parent_thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("parent shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_fork_persists_fork_reference_instead_of_parent_history() {
+        let harness = AgentControlHarness::new().await;
+        let (parent_thread_id, parent_thread) = harness.start_thread().await;
+        parent_thread
+            .inject_user_message_without_turn("parent seed context".to_string())
+            .await;
+        let turn_context = parent_thread.codex.session.new_default_turn().await;
+        let parent_spawn_call_id = "spawn-call-dedup".to_string();
+        let parent_spawn_call = ResponseItem::FunctionCall {
+            id: None,
+            name: "spawn_agent".to_string(),
+            arguments: "{}".to_string(),
+            call_id: parent_spawn_call_id.clone(),
+        };
+        parent_thread
+            .codex
+            .session
+            .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
+            .await;
+        parent_thread
+            .codex
+            .session
+            .ensure_rollout_materialized()
+            .await;
+        parent_thread.codex.session.flush_rollout().await;
+        let parent_rollout_path = parent_thread
+            .rollout_path()
+            .expect("parent rollout path should be available");
+
+        let child_thread_id = harness
+            .control
+            .spawn_agent_with_options(
+                harness.config.clone(),
+                text_input("child task"),
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth: 1,
+                    agent_nickname: None,
+                    agent_role: None,
+                })),
+                SpawnAgentOptions {
+                    fork_parent_spawn_call_id: Some(parent_spawn_call_id),
+                },
+            )
+            .await
+            .expect("forked spawn should succeed");
+
+        let child_thread = harness
+            .manager
+            .get_thread(child_thread_id)
+            .await
+            .expect("child thread should be registered");
+        let child_rollout_path = child_thread
+            .rollout_path()
+            .expect("child rollout path should be available");
+        let InitialHistory::Resumed(resumed) =
+            RolloutRecorder::get_rollout_history(child_rollout_path.as_path())
+                .await
+                .expect("child rollout should load")
+        else {
+            panic!("child rollout should include session metadata");
+        };
+
+        assert!(
+            resumed.history.iter().any(|item| {
+                matches!(
+                    item,
+                    RolloutItem::ForkReference(ForkReferenceItem {
+                        rollout_path,
+                        nth_user_message,
+                    }) if rollout_path == &parent_rollout_path && *nth_user_message == usize::MAX
+                )
+            }),
+            "child rollout should persist a fork reference to the parent rollout"
+        );
+
+        let raw_response_items: Vec<ResponseItem> = resumed
+            .history
+            .iter()
+            .filter_map(|item| match item {
+                RolloutItem::ResponseItem(response_item) => Some(response_item.clone()),
+                RolloutItem::SessionMeta(_)
+                | RolloutItem::ForkReference(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
+            })
+            .collect();
+        assert!(
+            !history_contains_text(&raw_response_items, "parent seed context"),
+            "child rollout should not duplicate the parent's raw transcript"
+        );
+
+        let history = child_thread.codex.session.clone_history().await;
+        assert!(history_contains_text(
+            history.raw_items(),
+            "parent seed context"
+        ));
 
         let _ = harness
             .control

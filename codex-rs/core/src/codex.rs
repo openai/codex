@@ -1860,8 +1860,17 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
+                let hydrated_rollout_items = if rollout_items
+                    .iter()
+                    .any(|item| matches!(item, RolloutItem::ForkReference(_)))
+                {
+                    self.materialize_rollout_items_for_replay(&rollout_items)
+                        .await
+                } else {
+                    rollout_items.clone()
+                };
                 let restored_tool_selection =
-                    Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
+                    Self::extract_mcp_tool_selection_from_rollout(&hydrated_rollout_items);
 
                 let reconstructed_rollout = self
                     .reconstruct_history_from_rollout(&turn_context, &rollout_items)
@@ -1903,7 +1912,7 @@ impl Session {
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                if let Some(info) = Self::last_token_info_from_rollout(&hydrated_rollout_items) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
@@ -1918,11 +1927,24 @@ impl Session {
                 }
             }
             InitialHistory::Forked(rollout_items) => {
+                let persisted_rollout_items = rollout_items
+                    .iter()
+                    .position(|item| matches!(item, RolloutItem::ForkReference(_)))
+                    .map(|index| rollout_items[index..].to_vec());
+                let hydrated_rollout_items = if rollout_items
+                    .iter()
+                    .any(|item| matches!(item, RolloutItem::ForkReference(_)))
+                {
+                    self.materialize_rollout_items_for_replay(&rollout_items)
+                        .await
+                } else {
+                    rollout_items.clone()
+                };
                 let restored_tool_selection =
-                    Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
+                    Self::extract_mcp_tool_selection_from_rollout(&hydrated_rollout_items);
 
                 let reconstructed_rollout = self
-                    .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+                    .reconstruct_history_from_rollout(&turn_context, &hydrated_rollout_items)
                     .await;
                 self.set_previous_turn_settings(
                     reconstructed_rollout.previous_turn_settings.clone(),
@@ -1944,7 +1966,7 @@ impl Session {
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                if let Some(info) = Self::last_token_info_from_rollout(&hydrated_rollout_items) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
@@ -1952,8 +1974,11 @@ impl Session {
                     self.set_mcp_tool_selection(selected_tools).await;
                 }
 
-                // If persisting, persist all rollout items as-is (recorder filters)
-                if !rollout_items.is_empty() {
+                // Persist only the compact fork reference suffix so child rollouts do not
+                // duplicate the full parent history they inherited in memory.
+                if let Some(persisted_rollout_items) = persisted_rollout_items {
+                    self.persist_rollout_items(&persisted_rollout_items).await;
+                } else if !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
 
