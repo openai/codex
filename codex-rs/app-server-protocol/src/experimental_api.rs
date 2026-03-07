@@ -23,6 +23,36 @@ pub fn experimental_fields() -> Vec<&'static ExperimentalField> {
     inventory::iter::<ExperimentalField>.into_iter().collect()
 }
 
+/// Describes how an experimental enum variant appears on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExperimentalEnumVariantEncoding {
+    /// A plain string-literal union arm, such as `"chatgptAuthTokens"`.
+    StringLiteral,
+    /// A tagged object arm, such as `{ "type": "chatgptAuthTokens", ... }`.
+    TaggedObject { tag_name: &'static str },
+    /// An externally tagged object arm, such as `{ "reject": { ... } }`.
+    ExternallyTaggedObject,
+}
+
+/// Describes an experimental enum variant on a specific type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExperimentalEnumVariant {
+    pub type_name: &'static str,
+    pub serialized_name: &'static str,
+    pub reason: &'static str,
+    pub encoding: ExperimentalEnumVariantEncoding,
+}
+
+inventory::collect!(ExperimentalEnumVariant);
+
+/// Returns all experimental enum variants registered across the protocol
+/// types.
+pub fn experimental_enum_variants() -> Vec<&'static ExperimentalEnumVariant> {
+    inventory::iter::<ExperimentalEnumVariant>
+        .into_iter()
+        .collect()
+}
+
 /// Constructs a consistent error message for experimental gating.
 pub fn experimental_required_message(reason: &str) -> String {
     format!("{reason} requires experimentalApi capability")
@@ -31,8 +61,11 @@ pub fn experimental_required_message(reason: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::ExperimentalApi as ExperimentalApiTrait;
+    use super::ExperimentalEnumVariantEncoding;
+    use super::experimental_enum_variants;
     use codex_experimental_api_macros::ExperimentalApi;
     use pretty_assertions::assert_eq;
+    use serde::Serialize;
 
     #[allow(dead_code)]
     #[derive(ExperimentalApi)]
@@ -65,6 +98,33 @@ mod tests {
         assert_eq!(
             ExperimentalApiTrait::experimental_reason(&EnumVariantShapes::StableTuple(1)),
             None
+        );
+    }
+
+    #[allow(dead_code)]
+    #[derive(ExperimentalApi, Serialize)]
+    #[serde(tag = "type", rename_all = "camelCase")]
+    enum TaggedEnumVariantShapes {
+        Stable,
+        #[experimental("tagged/experimental")]
+        ExperimentalVariant,
+    }
+
+    #[test]
+    fn derive_registers_experimental_enum_variants_with_wire_shape_metadata() {
+        let variant = experimental_enum_variants()
+            .into_iter()
+            .find(|variant| variant.reason == "tagged/experimental")
+            .expect("tagged experimental variant should be registered");
+
+        assert_eq!(
+            *variant,
+            crate::experimental_api::ExperimentalEnumVariant {
+                type_name: "TaggedEnumVariantShapes",
+                serialized_name: "experimentalVariant",
+                reason: "tagged/experimental",
+                encoding: ExperimentalEnumVariantEncoding::TaggedObject { tag_name: "type" },
+            }
         );
     }
 }
