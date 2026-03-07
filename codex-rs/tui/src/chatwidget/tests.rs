@@ -62,6 +62,7 @@ use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -1837,6 +1838,8 @@ async fn make_chatwidget_manual(
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
         next_queued_message_seq: 0,
+        in_flight_user_message: None,
+        retry_current_user_message: None,
         pending_rlph_exec_commands: VecDeque::new(),
         active_rlph_exec_commands: HashMap::new(),
         pending_steers: VecDeque::new(),
@@ -7169,6 +7172,187 @@ async fn server_overloaded_error_does_not_switch_models() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn transient_retry_limit_error_retries_current_message_before_advancing_queue() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message(UserMessage::from("first".to_string()));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "first".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    chat.handle_codex_event(Event {
+        id: "turn-start-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.queue_user_message(UserMessage::from("second".to_string()));
+
+    chat.handle_codex_event(Event {
+        id: "err-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "exceeded retry limit, last status: 429 Too Many Requests".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ResponseTooManyFailedAttempts {
+                http_status_code: Some(429),
+            }),
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "first".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn retry, got {other:?}"),
+    }
+    assert_eq!(
+        chat.queued_user_messages
+            .iter()
+            .map(|message| message.text.clone())
+            .collect::<Vec<_>>(),
+        vec!["second".to_string()]
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-start-2".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-2".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-complete-2".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-2".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "second".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued Op::UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn transient_connection_error_retries_current_message_before_advancing_queue() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message(UserMessage::from("alpha".to_string()));
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.handle_codex_event(Event {
+        id: "turn-start-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.queue_user_message(UserMessage::from("beta".to_string()));
+
+    chat.handle_codex_event(Event {
+        id: "err-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "connection failed while streaming response".to_string(),
+            codex_error_info: Some(CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: Some(502),
+            }),
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "alpha".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn retry, got {other:?}"),
+    }
+    assert_eq!(
+        chat.queued_user_messages
+            .iter()
+            .map(|message| message.text.clone())
+            .collect::<Vec<_>>(),
+        vec!["beta".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn transient_steer_retry_does_not_duplicate_pending_steers() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message(UserMessage {
+        text: "retry steer".to_string(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        text_elements: Vec::new(),
+        mention_bindings: Vec::new(),
+        repeat_mode: false,
+        steer_mode: true,
+        enqueue_seq: 0,
+    });
+    let _ = next_submit_op(&mut op_rx);
+    assert_eq!(chat.pending_steers.len(), 1);
+
+    chat.handle_codex_event(Event {
+        id: "err-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "response stream disconnected".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ResponseStreamDisconnected {
+                http_status_code: Some(502),
+            }),
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "retry steer".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn retry, got {other:?}"),
+    }
+    assert_eq!(chat.pending_steers.len(), 1);
+
+    complete_user_message_for_inputs(
+        &mut chat,
+        "user-1",
+        vec![UserInput::Text {
+            text: "retry steer".to_string(),
+            text_elements: Vec::new(),
+        }],
+    );
+    assert!(chat.pending_steers.is_empty());
 }
 
 #[tokio::test]

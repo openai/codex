@@ -522,6 +522,43 @@ fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
     }
 }
 
+fn is_transient_turn_failure(codex_error_info: Option<&CodexErrorInfo>, message: &str) -> bool {
+    match codex_error_info {
+        Some(
+            CodexErrorInfo::ServerOverloaded
+            | CodexErrorInfo::HttpConnectionFailed { .. }
+            | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
+            | CodexErrorInfo::InternalServerError
+            | CodexErrorInfo::ResponseStreamDisconnected { .. }
+            | CodexErrorInfo::ResponseTooManyFailedAttempts { .. },
+        ) => true,
+        Some(
+            CodexErrorInfo::ContextWindowExceeded
+            | CodexErrorInfo::UsageLimitExceeded
+            | CodexErrorInfo::Unauthorized
+            | CodexErrorInfo::BadRequest
+            | CodexErrorInfo::SandboxError
+            | CodexErrorInfo::ThreadRollbackFailed,
+        ) => false,
+        Some(CodexErrorInfo::Other) | None => {
+            let message = message.to_ascii_lowercase();
+            [
+                "429",
+                "too many requests",
+                "retry limit",
+                "connection failed",
+                "temporarily unavailable",
+                "timeout",
+                "timed out",
+                "server overloaded",
+                "stream disconnected",
+            ]
+            .iter()
+            .any(|pattern| message.contains(pattern))
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ExternalEditorState {
     #[default]
@@ -633,6 +670,10 @@ pub(crate) struct ChatWidget {
     queued_user_messages: VecDeque<UserMessage>,
     // Monotonic sequence source used when enqueuing `queued_user_messages`.
     next_queued_message_seq: u64,
+    // User message most recently submitted to core and still awaiting a terminal turn outcome.
+    in_flight_user_message: Option<UserMessage>,
+    // Retries the failed in-flight message before advancing queued drafts after transient failures.
+    retry_current_user_message: Option<UserMessage>,
     // RLPH `/exec` commands are submitted as user shell commands and bridged
     // back into a follow-up prompt on command completion.
     pending_rlph_exec_commands: VecDeque<String>,
@@ -1626,6 +1667,8 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.request_redraw();
+        self.in_flight_user_message = None;
+        self.retry_current_user_message = None;
 
         let had_pending_steers = !self.pending_steers.is_empty();
         self.refresh_pending_input_preview();
@@ -1921,13 +1964,20 @@ impl ChatWidget {
 
         self.add_to_history(history_cell::new_warning_event(message));
         self.request_redraw();
+        self.retry_current_user_message = self.in_flight_user_message.take();
         self.maybe_send_next_queued_input();
     }
 
-    fn on_error(&mut self, message: String) {
+    fn on_error(&mut self, message: String, retry_current_message: bool) {
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
+        if retry_current_message {
+            self.retry_current_user_message = self.in_flight_user_message.take();
+        } else {
+            self.in_flight_user_message = None;
+            self.retry_current_user_message = None;
+        }
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
@@ -2012,6 +2062,8 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
+        self.in_flight_user_message = None;
+        self.retry_current_user_message = None;
         if reason == TurnAbortReason::Interrupted {
             self.clear_unified_exec_processes();
         }
@@ -2187,6 +2239,8 @@ impl ChatWidget {
             self.queued_user_messages = input_state.pending_steers;
             self.queued_user_messages
                 .extend(input_state.queued_user_messages);
+            self.in_flight_user_message = None;
+            self.retry_current_user_message = None;
             self.pending_rlph_exec_commands.clear();
             self.active_rlph_exec_commands.clear();
         } else {
@@ -2201,6 +2255,8 @@ impl ChatWidget {
             );
             self.bottom_pane.set_composer_pending_pastes(Vec::new());
             self.queued_user_messages.clear();
+            self.in_flight_user_message = None;
+            self.retry_current_user_message = None;
             self.pending_rlph_exec_commands.clear();
             self.active_rlph_exec_commands.clear();
         }
@@ -3223,6 +3279,8 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             next_queued_message_seq: 0,
+            in_flight_user_message: None,
+            retry_current_user_message: None,
             pending_rlph_exec_commands: VecDeque::new(),
             active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
@@ -3412,6 +3470,8 @@ impl ChatWidget {
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
             next_queued_message_seq: 0,
+            in_flight_user_message: None,
+            retry_current_user_message: None,
             pending_rlph_exec_commands: VecDeque::new(),
             active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
@@ -3585,6 +3645,8 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             next_queued_message_seq: 0,
+            in_flight_user_message: None,
+            retry_current_user_message: None,
             pending_rlph_exec_commands: VecDeque::new(),
             active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
@@ -4613,6 +4675,10 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_internal(user_message, false);
+    }
+
+    fn submit_user_message_internal(&mut self, user_message: UserMessage, is_retry: bool) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.push_queued_user_message_front(user_message);
@@ -4625,6 +4691,7 @@ impl ChatWidget {
             return;
         }
 
+        let submitted_user_message = user_message.clone();
         let UserMessage {
             text,
             local_images,
@@ -4814,6 +4881,13 @@ impl ChatWidget {
         };
 
         if !self.submit_op(op) {
+            return;
+        }
+        self.in_flight_user_message = Some(submitted_user_message);
+        self.retry_current_user_message = None;
+
+        if is_retry {
+            self.needs_final_message_separator = false;
             return;
         }
 
@@ -5016,19 +5090,21 @@ impl ChatWidget {
                 message,
                 codex_error_info,
             }) => {
-                if let Some(info) = codex_error_info
-                    && let Some(kind) = rate_limit_error_kind(&info)
+                let retry_current_message =
+                    is_transient_turn_failure(codex_error_info.as_ref(), &message);
+                if let Some(info) = codex_error_info.as_ref()
+                    && let Some(kind) = rate_limit_error_kind(info)
                 {
                     match kind {
                         RateLimitErrorKind::ServerOverloaded => {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_error(message)
+                            self.on_error(message, retry_current_message)
                         }
                     }
                 } else {
-                    self.on_error(message);
+                    self.on_error(message, retry_current_message);
                 }
             }
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
@@ -5040,7 +5116,7 @@ impl ChatWidget {
                 TurnAbortReason::Replaced => {
                     self.pending_steers.clear();
                     self.refresh_pending_input_preview();
-                    self.on_error("Turn aborted: replaced by a new task".to_owned())
+                    self.on_error("Turn aborted: replaced by a new task".to_owned(), false)
                 }
                 TurnAbortReason::ReviewEnded => {
                     self.on_interrupted_turn(ev.reason);
@@ -5345,6 +5421,13 @@ impl ChatWidget {
     // If idle and there are queued inputs, submit exactly one to start the next turn.
     pub(crate) fn maybe_send_next_queued_input(&mut self) {
         if self.suppress_queue_autosend {
+            return;
+        }
+        if !self.bottom_pane.is_task_running()
+            && let Some(user_message) = self.retry_current_user_message.take()
+        {
+            self.submit_user_message_internal(user_message, true);
+            self.refresh_pending_input_preview();
             return;
         }
         if self.bottom_pane.is_task_running()
