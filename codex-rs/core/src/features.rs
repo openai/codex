@@ -93,6 +93,8 @@ pub enum Feature {
     ApplyPatchFreeform,
     /// Allow requesting additional filesystem permissions while staying sandboxed.
     RequestPermissions,
+    /// Start the network proxy even without explicit `[permissions.<profile>.network]` config.
+    EnableNetworkProxy,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -582,6 +584,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::EnableNetworkProxy,
+        key: "enable_network_proxy",
+        stage: Stage::Experimental {
+            name: "Network proxy",
+            menu_description: "Start Codex's network proxy with default settings even without explicit [permissions.<profile>.network] config. Use the selected permissions profile's [network] table to override the proxy defaults.",
+            announcement: "NEW: Network proxy can now be enabled from /experimental. Restart Codex after enabling it.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
         key: "use_linux_sandbox_bwrap",
         #[cfg(target_os = "linux")]
@@ -924,6 +936,15 @@ mod tests {
     fn image_generation_is_under_development() {
         assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
         assert_eq!(Feature::ImageGeneration.default_enabled(), false);
+    }
+
+    #[test]
+    fn enable_network_proxy_is_experimental() {
+        assert!(matches!(
+            Feature::EnableNetworkProxy.stage(),
+            Stage::Experimental { .. }
+        ));
+        assert_eq!(Feature::EnableNetworkProxy.default_enabled(), false);
     }
 
     #[test]

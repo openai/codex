@@ -324,7 +324,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     let mut parts = Vec::new();
 
     let NetworkConstraints {
-        enabled,
         http_port,
         socks_port,
         allow_upstream_proxy,
@@ -337,9 +336,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         allow_local_binding,
     } = network;
 
-    if let Some(enabled) = enabled {
-        parts.push(format!("enabled={enabled}"));
-    }
     if let Some(http_port) = http_port {
         parts.push(format!("http_port={http_port}"));
     }
@@ -512,7 +508,6 @@ mod tests {
             ),
             network: Some(Sourced::new(
                 NetworkConstraints {
-                    enabled: Some(true),
                     allowed_domains: Some(vec!["example.com".to_string()]),
                     ..Default::default()
                 },
@@ -575,7 +570,7 @@ mod tests {
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(rendered.contains(
-            "experimental_network: enabled=true, allowed_domains=[example.com] (source: cloud requirements)"
+            "experimental_network: allowed_domains=[example.com] (source: cloud requirements)"
         ));
         assert!(!rendered.contains("  - rules:"));
     }

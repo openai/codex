@@ -83,7 +83,7 @@ pub struct ConfigRequirements {
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
-    /// Managed network constraints derived from requirements.
+    /// Network constraints derived from requirements.
     pub network: Option<Sourced<NetworkConstraints>>,
 }
 
@@ -130,8 +130,8 @@ pub struct McpServerRequirement {
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct NetworkRequirementsToml {
-    pub enabled: Option<bool>,
     pub http_port: Option<u16>,
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,
@@ -149,7 +149,6 @@ pub struct NetworkRequirementsToml {
 /// Normalized network constraints derived from requirements TOML.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkConstraints {
-    pub enabled: Option<bool>,
     pub http_port: Option<u16>,
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,
@@ -167,7 +166,6 @@ pub struct NetworkConstraints {
 impl From<NetworkRequirementsToml> for NetworkConstraints {
     fn from(value: NetworkRequirementsToml) -> Self {
         let NetworkRequirementsToml {
-            enabled,
             http_port,
             socks_port,
             allow_upstream_proxy,
@@ -180,7 +178,6 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             allow_local_binding,
         } = value;
         Self {
-            enabled,
             http_port,
             socks_port,
             allow_upstream_proxy,
@@ -1122,7 +1119,6 @@ mod tests {
     fn network_requirements_are_preserved_as_constraints_with_source() -> Result<()> {
         let toml_str = r#"
             [experimental_network]
-            enabled = true
             allow_upstream_proxy = false
             dangerously_allow_all_unix_sockets = true
             allowed_domains = ["api.example.com", "*.openai.com"]
@@ -1142,7 +1138,6 @@ mod tests {
             .expect("network requirements should be preserved as constraints");
 
         assert_eq!(sourced_network.source, source);
-        assert_eq!(sourced_network.value.enabled, Some(true));
         assert_eq!(sourced_network.value.allow_upstream_proxy, Some(false));
         assert_eq!(
             sourced_network.value.dangerously_allow_all_unix_sockets,
@@ -1170,6 +1165,21 @@ mod tests {
         assert_eq!(sourced_network.value.allow_local_binding, Some(false));
 
         Ok(())
+    }
+
+    #[test]
+    fn network_requirements_reject_enabled_flag() {
+        let toml_str = r#"
+            [experimental_network]
+            enabled = true
+        "#;
+
+        let err =
+            from_str::<ConfigRequirementsToml>(toml_str).expect_err("enabled flag should fail");
+        assert!(
+            err.to_string().contains("unknown field `enabled`"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

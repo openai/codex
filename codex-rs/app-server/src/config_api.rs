@@ -158,7 +158,6 @@ fn map_network_requirements_to_api(
     network: codex_core::config_loader::NetworkRequirementsToml,
 ) -> NetworkRequirements {
     NetworkRequirements {
-        enabled: network.enabled,
         http_port: network.http_port,
         socks_port: network.socks_port,
         allow_upstream_proxy: network.allow_upstream_proxy,
@@ -224,7 +223,6 @@ mod tests {
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
             network: Some(CoreNetworkRequirementsToml {
-                enabled: Some(true),
                 http_port: Some(8080),
                 socks_port: Some(1080),
                 allow_upstream_proxy: Some(false),
@@ -269,7 +267,6 @@ mod tests {
         assert_eq!(
             mapped.network,
             Some(NetworkRequirements {
-                enabled: Some(true),
                 http_port: Some(8080),
                 socks_port: Some(1080),
                 allow_upstream_proxy: Some(false),

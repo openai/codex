@@ -150,12 +150,13 @@ fn parse_managed_config_base64(encoded: &str) -> io::Result<ManagedAdminConfigLa
 }
 
 fn parse_managed_requirements_base64(encoded: &str) -> io::Result<ConfigRequirementsToml> {
-    toml::from_str::<ConfigRequirementsToml>(&decode_managed_preferences_base64(encoded)?).map_err(
-        |err| {
-            tracing::error!("Failed to parse managed requirements TOML: {err}");
-            io::Error::new(io::ErrorKind::InvalidData, err)
-        },
+    super::parse_requirements_toml_with_legacy_network_enabled_compat(
+        &decode_managed_preferences_base64(encoded)?,
     )
+    .map_err(|err| {
+        tracing::error!("Failed to parse managed requirements TOML: {err}");
+        io::Error::new(io::ErrorKind::InvalidData, err)
+    })
 }
 
 fn decode_managed_preferences_base64(encoded: &str) -> io::Result<String> {

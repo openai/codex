@@ -625,7 +625,6 @@ pub struct ConfigRequirements {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct NetworkRequirements {
-    pub enabled: Option<bool>,
     pub http_port: Option<u16>,
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,

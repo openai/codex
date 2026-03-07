@@ -442,6 +442,45 @@ allowed_sandbox_modes = ["read-only"]
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+async fn managed_preferences_requirements_ignore_legacy_network_enabled() -> anyhow::Result<()> {
+    use base64::Engine;
+
+    let tmp = tempdir()?;
+
+    let state = load_config_layers_state(
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            managed_config_path: Some(tmp.path().join("managed_config.toml")),
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    r#"
+[experimental_network]
+enabled = true
+allow_local_binding = true
+"#
+                    .as_bytes(),
+                ),
+            ),
+        },
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let network = state
+        .requirements()
+        .network
+        .as_ref()
+        .expect("network requirements");
+    assert_eq!(network.value.allow_local_binding, Some(true));
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 async fn managed_preferences_requirements_take_precedence() -> anyhow::Result<()> {
     use base64::Engine;
 
@@ -629,6 +668,54 @@ allowed_approval_policies = ["on-request"]
             requirement_source: RequirementSource::CloudRequirements,
         })
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn load_requirements_toml_ignores_legacy_network_enabled() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+[experimental_network]
+enabled = true
+allow_local_binding = true
+"#,
+    )
+    .await?;
+
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+
+    let network = config_requirements_toml
+        .network
+        .as_ref()
+        .expect("network requirements");
+    assert_eq!(network.value.allow_local_binding, Some(true));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn load_requirements_toml_ignores_disabled_legacy_network_table() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+[experimental_network]
+enabled = false
+allow_local_binding = true
+"#,
+    )
+    .await?;
+
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+
+    assert_eq!(config_requirements_toml.network, None);
 
     Ok(())
 }
