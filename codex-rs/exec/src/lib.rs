@@ -479,6 +479,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         auth_manager.clone(),
         SessionSource::Exec,
         config.model_catalog.clone(),
+        config.custom_models.clone(),
         CollaborationModesConfig {
             default_mode_request_user_input: config
                 .features

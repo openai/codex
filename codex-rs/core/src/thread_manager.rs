@@ -7,6 +7,7 @@ use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+use crate::config::CustomModelConfig;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
@@ -149,6 +150,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
         model_catalog: Option<ModelsResponse>,
+        custom_models: HashMap<String, CustomModelConfig>,
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
@@ -167,6 +169,7 @@ impl ThreadManager {
                     codex_home,
                     auth_manager.clone(),
                     model_catalog,
+                    custom_models,
                     collaboration_modes_config,
                 )),
                 skills_manager,
