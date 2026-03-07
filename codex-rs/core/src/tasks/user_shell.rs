@@ -36,6 +36,8 @@ use super::SessionTaskContext;
 use crate::codex::Session;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 
 const USER_SHELL_TIMEOUT_MS: u64 = 60 * 60 * 1000; // 1 hour
 
@@ -98,7 +100,7 @@ pub(crate) async fn execute_user_shell_command(
 ) {
     session
         .services
-        .otel_manager
+        .session_telemetry
         .counter("codex.task.user_shell", 1, &[]);
 
     if mode == UserShellCommandMode::StandaloneTurn {
@@ -167,6 +169,8 @@ pub(crate) async fn execute_user_shell_command(
         windows_sandbox_level: turn_context.windows_sandbox_level,
         sandbox_permissions: SandboxPermissions::UseDefault,
         sandbox_policy: sandbox_policy.clone(),
+        file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
+        network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
         justification: None,
         arg0: None,
     };

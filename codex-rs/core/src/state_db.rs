@@ -350,6 +350,7 @@ pub async fn reconcile_rollout(
             items,
             "reconcile_rollout",
             new_thread_memory_mode,
+            None,
         )
         .await;
         return;
@@ -480,6 +481,7 @@ pub async fn read_repair_rollout_path(
 }
 
 /// Apply rollout items incrementally to SQLite.
+#[allow(clippy::too_many_arguments)]
 pub async fn apply_rollout_items(
     context: Option<&codex_state::StateRuntime>,
     rollout_path: &Path,
@@ -488,6 +490,7 @@ pub async fn apply_rollout_items(
     items: &[RolloutItem],
     stage: &str,
     new_thread_memory_mode: Option<&str>,
+    updated_at_override: Option<DateTime<Utc>>,
 ) {
     let Some(ctx) = context else {
         return;
@@ -509,7 +512,7 @@ pub async fn apply_rollout_items(
     builder.rollout_path = rollout_path.to_path_buf();
     builder.cwd = normalize_cwd_for_state_db(&builder.cwd);
     if let Err(err) = ctx
-        .apply_rollout_items(&builder, items, new_thread_memory_mode)
+        .apply_rollout_items(&builder, items, new_thread_memory_mode, updated_at_override)
         .await
     {
         warn!(
@@ -517,6 +520,26 @@ pub async fn apply_rollout_items(
             rollout_path.display()
         );
     }
+}
+
+pub async fn touch_thread_updated_at(
+    context: Option<&codex_state::StateRuntime>,
+    thread_id: Option<ThreadId>,
+    updated_at: DateTime<Utc>,
+    stage: &str,
+) -> bool {
+    let Some(ctx) = context else {
+        return false;
+    };
+    let Some(thread_id) = thread_id else {
+        return false;
+    };
+    ctx.touch_thread_updated_at(thread_id, updated_at)
+        .await
+        .unwrap_or_else(|err| {
+            warn!("state db touch_thread_updated_at failed during {stage} for {thread_id}: {err}");
+            false
+        })
 }
 
 #[cfg(test)]

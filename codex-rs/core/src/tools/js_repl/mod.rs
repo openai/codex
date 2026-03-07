@@ -852,7 +852,8 @@ impl JsReplManager {
             .network
             .is_some();
         let sandbox_type = sandbox.select_initial(
-            &turn.sandbox_policy,
+            &turn.file_system_sandbox_policy,
+            turn.network_sandbox_policy,
             SandboxablePreference::Auto,
             turn.windows_sandbox_level,
             has_managed_network_requirements,
@@ -861,6 +862,8 @@ impl JsReplManager {
             .transform(crate::sandboxing::SandboxTransformRequest {
                 spec,
                 policy: &turn.sandbox_policy,
+                file_system_policy: &turn.file_system_sandbox_policy,
+                network_policy: turn.network_sandbox_policy,
                 sandbox: sandbox_type,
                 enforce_managed_network: has_managed_network_requirements,
                 network: None,

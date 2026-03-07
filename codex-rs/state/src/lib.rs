@@ -23,6 +23,7 @@ pub use runtime::StateRuntime;
 ///
 /// Most consumers should prefer [`StateRuntime`].
 pub use extract::apply_rollout_item;
+pub use extract::rollout_item_affects_thread_metadata;
 pub use model::AgentJob;
 pub use model::AgentJobCreateParams;
 pub use model::AgentJobItem;

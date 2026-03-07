@@ -530,10 +530,10 @@
         "service_tier": {
           "$ref": "#/definitions/ServiceTier"
         },
-        "tools_view_image": {
-          "type": "boolean"
+        "tools": {
+          "$ref": "#/definitions/ToolsToml"
         },
-        "tools_web_search": {
+        "tools_view_image": {
           "type": "boolean"
         },
         "web_search": {
@@ -566,6 +566,30 @@
           "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "FileSystemAccessMode": {
+      "enum": [
+        "none",
+        "read",
+        "write"
+      ],
+      "type": "string"
+    },
+    "FilesystemPermissionToml": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/FileSystemAccessMode"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/definitions/FileSystemAccessMode"
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "FilesystemPermissionsToml": {
       "type": "object"
     },
     "ForcedLoginMethod": {
@@ -1089,18 +1113,19 @@
       },
       "type": "object"
     },
-    "PermissionsToml": {
+    "PermissionProfileToml": {
       "additionalProperties": false,
       "properties": {
+        "filesystem": {
+          "$ref": "#/definitions/FilesystemPermissionsToml"
+        },
         "network": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/NetworkToml"
-            }
-          ],
-          "description": "Network proxy settings from `[permissions.network]`. User config can enable the proxy; managed requirements may still constrain values."
+          "$ref": "#/definitions/NetworkToml"
         }
       },
+      "type": "object"
+    },
+    "PermissionsToml": {
       "type": "object"
     },
     "Personality": {
@@ -1439,8 +1464,12 @@
           "type": "boolean"
         },
         "web_search": {
-          "default": null,
-          "type": "boolean"
+          "allOf": [
+            {
+              "$ref": "#/definitions/WebSearchToolConfig"
+            }
+          ],
+          "default": null
         }
       },
       "type": "object"
@@ -1548,6 +1577,32 @@
       ],
       "type": "string"
     },
+    "WebSearchContextSize": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "WebSearchLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "city": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "WebSearchMode": {
       "enum": [
         "disabled",
@@ -1555,6 +1610,24 @@
         "live"
       ],
       "type": "string"
+    },
+    "WebSearchToolConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "context_size": {
+          "$ref": "#/definitions/WebSearchContextSize"
+        },
+        "location": {
+          "$ref": "#/definitions/WebSearchLocation"
+        }
+      },
+      "type": "object"
     },
     "WindowsSandboxModeToml": {
       "enum": [
@@ -1664,6 +1737,10 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "default_permissions": {
+      "description": "Default named permissions profile to apply from the `[permissions]` table.",
+      "type": "string"
+    },
     "developer_instructions": {
       "default": null,
       "description": "Developer instructions inserted as a `developer` role message.",
@@ -1686,6 +1763,10 @@
     },
     "experimental_realtime_ws_model": {
       "description": "Experimental / do not use. Selects the realtime websocket model/snapshot used for the `Op::RealtimeConversation` connection.",
+      "type": "string"
+    },
+    "experimental_realtime_ws_startup_context": {
+      "description": "Experimental / do not use. Replaces the synthesized realtime startup context appended to websocket session instructions. An empty string disables startup context injection entirely.",
       "type": "string"
     },
     "experimental_use_freeform_apply_patch": {
@@ -2067,7 +2148,7 @@
         }
       ],
       "default": null,
-      "description": "Nested permissions settings."
+      "description": "Named permissions profiles."
     },
     "personality": {
       "allOf": [

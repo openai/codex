@@ -125,11 +125,13 @@ async fn plugin_list_accepts_omitted_cwds() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_list_includes_enabled_state_from_config() -> Result<()> {
+async fn plugin_list_includes_install_and_enabled_state_from_config() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
     std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    write_installed_plugin(&codex_home, "codex-curated", "enabled-plugin")?;
+    write_installed_plugin(&codex_home, "codex-curated", "disabled-plugin")?;
     std::fs::write(
         repo_root.path().join(".agents/plugins/marketplace.json"),
         r#"{
@@ -147,6 +149,13 @@ async fn plugin_list_includes_enabled_state_from_config() -> Result<()> {
       "source": {
         "source": "local",
         "path": "./disabled-plugin"
+      }
+    },
+    {
+      "name": "uninstalled-plugin",
+      "source": {
+        "source": "local",
+        "path": "./uninstalled-plugin"
       }
     }
   ]
@@ -185,16 +194,31 @@ enabled = false
         .marketplaces
         .into_iter()
         .find(|marketplace| {
-            marketplace.path == repo_root.path().join(".agents/plugins/marketplace.json")
+            marketplace.path
+                == AbsolutePathBuf::try_from(
+                    repo_root.path().join(".agents/plugins/marketplace.json"),
+                )
+                .expect("absolute marketplace path")
         })
         .expect("expected repo marketplace entry");
 
     assert_eq!(marketplace.name, "codex-curated");
-    assert_eq!(marketplace.plugins.len(), 2);
+    assert_eq!(marketplace.plugins.len(), 3);
+    assert_eq!(marketplace.plugins[0].id, "enabled-plugin@codex-curated");
     assert_eq!(marketplace.plugins[0].name, "enabled-plugin");
+    assert_eq!(marketplace.plugins[0].installed, true);
     assert_eq!(marketplace.plugins[0].enabled, true);
+    assert_eq!(marketplace.plugins[1].id, "disabled-plugin@codex-curated");
     assert_eq!(marketplace.plugins[1].name, "disabled-plugin");
+    assert_eq!(marketplace.plugins[1].installed, true);
     assert_eq!(marketplace.plugins[1].enabled, false);
+    assert_eq!(
+        marketplace.plugins[2].id,
+        "uninstalled-plugin@codex-curated"
+    );
+    assert_eq!(marketplace.plugins[2].name, "uninstalled-plugin");
+    assert_eq!(marketplace.plugins[2].installed, false);
+    assert_eq!(marketplace.plugins[2].enabled, false);
     Ok(())
 }
 
@@ -202,6 +226,7 @@ enabled = false
 async fn plugin_list_uses_home_config_for_enabled_state() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::create_dir_all(codex_home.path().join(".agents/plugins"))?;
+    write_installed_plugin(&codex_home, "codex-curated", "shared-plugin")?;
     std::fs::write(
         codex_home.path().join(".agents/plugins/marketplace.json"),
         r#"{
@@ -294,6 +319,141 @@ enabled = false
         .flat_map(|marketplace| marketplace.plugins.iter())
         .find(|plugin| plugin.name == "shared-plugin")
         .expect("expected shared-plugin entry");
+    assert_eq!(shared_plugin.id, "shared-plugin@codex-curated");
+    assert_eq!(shared_plugin.installed, true);
     assert_eq!(shared_plugin.enabled, true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let plugin_root = repo_root.path().join("plugins/demo-plugin");
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "demo-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugins/demo-plugin"
+      }
+    }
+  ]
+}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r##"{
+  "name": "demo-plugin",
+  "interface": {
+    "displayName": "Plugin Display Name",
+    "shortDescription": "Short description for subtitle",
+    "longDescription": "Long description for details page",
+    "developerName": "OpenAI",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://openai.com/",
+    "privacyPolicyURL": "https://openai.com/policies/row-privacy-policy/",
+    "termsOfServiceURL": "https://openai.com/policies/row-terms-of-use/",
+    "defaultPrompt": "Starter prompt for trying a plugin",
+    "brandColor": "#3B82F6",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.png",
+    "screenshots": ["./assets/screenshot1.png", "./assets/screenshot2.png"]
+  }
+}"##,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    let plugin = response
+        .marketplaces
+        .iter()
+        .flat_map(|marketplace| marketplace.plugins.iter())
+        .find(|plugin| plugin.name == "demo-plugin")
+        .expect("expected demo-plugin entry");
+
+    assert_eq!(plugin.id, "demo-plugin@codex-curated");
+    assert_eq!(plugin.installed, false);
+    assert_eq!(plugin.enabled, false);
+    let interface = plugin
+        .interface
+        .as_ref()
+        .expect("expected plugin interface");
+    assert_eq!(
+        interface.display_name.as_deref(),
+        Some("Plugin Display Name")
+    );
+    assert_eq!(
+        interface.website_url.as_deref(),
+        Some("https://openai.com/")
+    );
+    assert_eq!(
+        interface.privacy_policy_url.as_deref(),
+        Some("https://openai.com/policies/row-privacy-policy/")
+    );
+    assert_eq!(
+        interface.terms_of_service_url.as_deref(),
+        Some("https://openai.com/policies/row-terms-of-use/")
+    );
+    assert_eq!(
+        interface.composer_icon,
+        Some(AbsolutePathBuf::try_from(
+            plugin_root.join("assets/icon.png")
+        )?)
+    );
+    assert_eq!(
+        interface.logo,
+        Some(AbsolutePathBuf::try_from(
+            plugin_root.join("assets/logo.png")
+        )?)
+    );
+    assert_eq!(
+        interface.screenshots,
+        vec![
+            AbsolutePathBuf::try_from(plugin_root.join("assets/screenshot1.png"))?,
+            AbsolutePathBuf::try_from(plugin_root.join("assets/screenshot2.png"))?,
+        ]
+    );
+    Ok(())
+}
+
+fn write_installed_plugin(
+    codex_home: &TempDir,
+    marketplace_name: &str,
+    plugin_name: &str,
+) -> Result<()> {
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join(marketplace_name)
+        .join(plugin_name)
+        .join("local/.codex-plugin");
+    std::fs::create_dir_all(&plugin_root)?;
+    std::fs::write(
+        plugin_root.join("plugin.json"),
+        format!(r#"{{"name":"{plugin_name}"}}"#),
+    )?;
     Ok(())
 }

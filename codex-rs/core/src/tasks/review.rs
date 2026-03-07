@@ -57,7 +57,7 @@ impl SessionTask for ReviewTask {
         let _ = session
             .session
             .services
-            .otel_manager
+            .session_telemetry
             .counter("codex.task.review", 1, &[]);
 
         // Start sub-codex conversation and get the receiver for events.

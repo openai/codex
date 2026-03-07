@@ -3,6 +3,7 @@ use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -44,7 +45,7 @@ where
         args,
         arg0,
         cwd: command_cwd,
-        sandbox_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::from(sandbox_policy),
         network,
         stdio_policy,
         env,

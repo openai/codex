@@ -231,6 +231,7 @@ mod tests {
                 dangerously_allow_non_loopback_proxy: Some(false),
                 dangerously_allow_all_unix_sockets: Some(true),
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
+                managed_allowed_domains_only: Some(false),
                 denied_domains: Some(vec!["example.com".to_string()]),
                 allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
                 allow_local_binding: Some(true),
