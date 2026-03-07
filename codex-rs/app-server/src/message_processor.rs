@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
@@ -194,9 +192,6 @@ impl MessageProcessor {
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
         ));
-        thread_manager
-            .plugins_manager()
-            .maybe_start_curated_repo_sync_for_config(&config);
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager,
@@ -233,7 +228,6 @@ impl MessageProcessor {
         request: JSONRPCRequest,
         transport: AppServerTransport,
         session: &mut ConnectionSessionState,
-        outbound_initialized: &AtomicBool,
     ) {
         let request_span =
             crate::app_server_tracing::request_span(&request, transport, connection_id, session);
@@ -349,10 +343,6 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     session.initialized = true;
-                    outbound_initialized.store(true, Ordering::Release);
-                    self.codex_message_processor
-                        .connection_initialized(connection_id)
-                        .await;
                     return;
                 }
             }
@@ -470,10 +460,22 @@ impl MessageProcessor {
         self.codex_message_processor.thread_created_receiver()
     }
 
-    pub(crate) async fn send_initialize_notifications(&self) {
+    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+        self.codex_message_processor
+            .connection_initialized(connection_id)
+            .await;
+    }
+
+    pub(crate) async fn send_initialize_notifications_to_connection(
+        &self,
+        connection_id: ConnectionId,
+    ) {
         for notification in self.config_warnings.iter().cloned() {
             self.outgoing
-                .send_server_notification(ServerNotification::ConfigWarning(notification))
+                .send_server_notification_to_connections(
+                    &[connection_id],
+                    ServerNotification::ConfigWarning(notification),
+                )
                 .await;
         }
     }
@@ -525,13 +527,7 @@ impl MessageProcessor {
         params: ConfigValueWriteParams,
     ) {
         match self.config_api.write_value(params).await {
-            Ok(response) => {
-                self.codex_message_processor.clear_plugin_related_caches();
-                self.codex_message_processor
-                    .maybe_start_curated_repo_sync_for_latest_config()
-                    .await;
-                self.outgoing.send_response(request_id, response).await;
-            }
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }
@@ -542,13 +538,7 @@ impl MessageProcessor {
         params: ConfigBatchWriteParams,
     ) {
         match self.config_api.batch_write(params).await {
-            Ok(response) => {
-                self.codex_message_processor.clear_plugin_related_caches();
-                self.codex_message_processor
-                    .maybe_start_curated_repo_sync_for_latest_config()
-                    .await;
-                self.outgoing.send_response(request_id, response).await;
-            }
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }
