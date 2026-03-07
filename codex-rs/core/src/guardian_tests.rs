@@ -337,17 +337,34 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     assert_eq!(assessment.risk_score, 35);
 
     let request = request_log.single_request();
-    assert_snapshot!(
-        "guardian_review_request_layout",
-        context_snapshot::format_labeled_requests_snapshot(
-            "Guardian review request layout",
-            &[("Guardian Review Request", &request)],
-            &ContextSnapshotOptions::default(),
-        )
-    );
+    let snapshot_dir = guardian_snapshot_dir();
+    insta::with_settings!({ snapshot_path => snapshot_dir }, {
+        assert_snapshot!(
+            "guardian_review_request_layout",
+            context_snapshot::format_labeled_requests_snapshot(
+                "Guardian review request layout",
+                &[("Guardian Review Request", &request)],
+                &ContextSnapshotOptions::default(),
+            )
+        );
+    });
 
     Ok(())
 }
+
+fn guardian_snapshot_dir() -> PathBuf {
+    if let Ok(test_srcdir) = std::env::var("TEST_SRCDIR") {
+        let runfiles_snapshot_dir = PathBuf::from(test_srcdir)
+            .join("_main")
+            .join("codex-rs/core/src/snapshots");
+        if runfiles_snapshot_dir.is_dir() {
+            return runfiles_snapshot_dir;
+        }
+    }
+
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/snapshots")
+}
+
 #[test]
 fn guardian_subagent_config_preserves_parent_network_proxy() {
     let mut parent_config = test_config();
