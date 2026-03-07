@@ -16,6 +16,7 @@ use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
+use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -78,6 +79,56 @@ async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
         "terminated command should not succeed"
     );
     assert_eq!(response.stdout, "");
+    assert_eq!(response.stderr, "");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_response_drains_tail_output_after_parent_exit() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let helper = cargo_bin("codex-app-server-command-exec-test-helper")
+        .context("should find command_exec test helper")?;
+
+    let process_id = "post-exit-1".to_string();
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![helper.to_string_lossy().to_string()],
+            process_id: Some(process_id.clone()),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+        })
+        .await?;
+
+    assert!(
+        timeout(
+            Duration::from_millis(20),
+            mcp.read_stream_until_response_message(RequestId::Integer(command_request_id)),
+        )
+        .await
+        .is_err(),
+        "response should stay pending while post-exit tail bytes are still draining",
+    );
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(response.exit_code, 0);
+    assert_eq!(response.stdout, "tail");
     assert_eq!(response.stderr, "");
 
     Ok(())
