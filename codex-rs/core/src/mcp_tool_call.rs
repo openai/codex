@@ -815,11 +815,6 @@ fn parse_mcp_tool_approval_response(
         .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT)
     {
         McpToolApprovalDecision::Accept
-    } else if answers
-        .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_CANCEL)
-    {
-        McpToolApprovalDecision::Cancel
     } else {
         McpToolApprovalDecision::Cancel
     }
