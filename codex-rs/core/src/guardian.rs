@@ -1492,7 +1492,7 @@ mod tests {
                     "origin".to_string(),
                     "guardian-approval-mvp".to_string(),
                 ],
-                cwd: turn.cwd.clone(),
+                cwd: PathBuf::from("/repo/codex-rs/core"),
                 sandbox_permissions: json_field(crate::sandboxing::SandboxPermissions::UseDefault),
                 additional_permissions: None,
                 justification: Some(
