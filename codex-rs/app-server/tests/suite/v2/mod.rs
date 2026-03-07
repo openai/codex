@@ -2,6 +2,8 @@ mod account;
 mod analytics;
 mod app_list;
 mod collaboration_mode_list;
+#[cfg(unix)]
+mod command_exec;
 mod compaction;
 mod config_rpc;
 mod connection_handling_websocket;
@@ -28,6 +30,7 @@ mod thread_fork;
 mod thread_list;
 mod thread_loaded_list;
 mod thread_metadata_update;
+mod thread_name_websocket;
 mod thread_read;
 mod thread_resume;
 mod thread_rollback;

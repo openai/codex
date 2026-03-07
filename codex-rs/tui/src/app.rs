@@ -57,7 +57,7 @@ use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
@@ -637,7 +637,7 @@ async fn handle_model_migration_prompt_if_needed(
 
 pub(crate) struct App {
     pub(crate) server: Arc<ThreadManager>,
-    pub(crate) otel_manager: OtelManager,
+    pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -750,7 +750,7 @@ impl App {
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
-            otel_manager: self.otel_manager.clone(),
+            session_telemetry: self.session_telemetry.clone(),
         }
     }
 
@@ -790,6 +790,77 @@ impl App {
             self.chat_widget.add_error_message(format!(
                 "Failed to carry forward sandbox policy override: {err}"
             ));
+        }
+    }
+
+    async fn update_feature_flags(&mut self, updates: Vec<(Feature, bool)>) {
+        if updates.is_empty() {
+            return;
+        }
+
+        let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
+            matches!(
+                feature,
+                Feature::WindowsSandbox | Feature::WindowsSandboxElevated
+            )
+        });
+        let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_profile(self.active_profile.as_deref());
+
+        for (feature, enabled) in updates {
+            let feature_key = feature.key();
+            if let Err(err) = self.config.features.set_enabled(feature, enabled) {
+                tracing::error!(
+                    error = %err,
+                    feature = feature_key,
+                    "failed to update constrained feature flags"
+                );
+                self.chat_widget.add_error_message(format!(
+                    "Failed to update experimental feature `{feature_key}`: {err}"
+                ));
+                continue;
+            }
+            let effective_enabled = self.config.features.enabled(feature);
+            self.chat_widget
+                .set_feature_enabled(feature, effective_enabled);
+            if effective_enabled {
+                builder = builder.set_feature_enabled(feature_key, true);
+            } else if feature.default_enabled() {
+                builder = builder.set_feature_enabled(feature_key, false);
+            } else {
+                // If the feature already default to `false`, we drop the key
+                // in the config file so that the user does not miss the feature
+                // once it gets globally released.
+                builder = builder.with_edits(vec![ConfigEdit::ClearPath {
+                    segments: vec!["features".to_string(), feature_key.to_string()],
+                }]);
+            }
+        }
+
+        if windows_sandbox_changed {
+            #[cfg(target_os = "windows")]
+            {
+                let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        windows_sandbox_level: Some(windows_sandbox_level),
+                        model: None,
+                        effort: None,
+                        summary: None,
+                        service_tier: None,
+                        collaboration_mode: None,
+                        personality: None,
+                    }));
+            }
+        }
+
+        if let Err(err) = builder.apply().await {
+            tracing::error!(error = %err, "failed to persist feature flags");
+            self.chat_widget
+                .add_error_message(format!("Failed to update experimental features: {err}"));
         }
     }
 
@@ -1437,7 +1508,7 @@ impl App {
             model: Some(model),
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
-            otel_manager: self.otel_manager.clone(),
+            session_telemetry: self.session_telemetry.clone(),
         };
         self.chat_widget = ChatWidget::new(init, self.server.clone());
         self.reset_thread_event_state();
@@ -1624,7 +1695,7 @@ impl App {
         let auth_mode = auth_ref
             .map(CodexAuth::auth_mode)
             .map(TelemetryAuthMode::from);
-        let otel_manager = OtelManager::new(
+        let session_telemetry = SessionTelemetry::new(
             ThreadId::new(),
             model.as_str(),
             model.as_str(),
@@ -1641,7 +1712,7 @@ impl App {
             .as_ref()
             .is_some_and(|cmd| !cmd.is_empty())
         {
-            otel_manager.counter("codex.status_line", 1, &[]);
+            session_telemetry.counter("codex.status_line", 1, &[]);
         }
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
@@ -1673,7 +1744,7 @@ impl App {
                     model: Some(model.clone()),
                     startup_tooltip_override,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
-                    otel_manager: otel_manager.clone(),
+                    session_telemetry: session_telemetry.clone(),
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -1708,12 +1779,12 @@ impl App {
                     model: config.model.clone(),
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
-                    otel_manager: otel_manager.clone(),
+                    session_telemetry: session_telemetry.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
             SessionSelection::Fork(target_session) => {
-                otel_manager.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
+                session_telemetry.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
                 let forked = thread_manager
                     .fork_thread(
                         usize::MAX,
@@ -1745,7 +1816,7 @@ impl App {
                     model: config.model.clone(),
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
-                    otel_manager: otel_manager.clone(),
+                    session_telemetry: session_telemetry.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
@@ -1760,7 +1831,7 @@ impl App {
 
         let mut app = Self {
             server: thread_manager.clone(),
-            otel_manager: otel_manager.clone(),
+            session_telemetry: session_telemetry.clone(),
             app_event_tx,
             chat_widget,
             auth_manager: auth_manager.clone(),
@@ -2081,8 +2152,11 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ForkCurrentSession => {
-                self.otel_manager
-                    .counter("codex.thread.fork", 1, &[("source", "slash_command")]);
+                self.session_telemetry.counter(
+                    "codex.thread.fork",
+                    1,
+                    &[("source", "slash_command")],
+                );
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.thread_id(),
@@ -2343,11 +2417,14 @@ impl App {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
             AppEvent::OpenWindowsSandboxFallbackPrompt { preset } => {
-                self.otel_manager
-                    .counter("codex.windows_sandbox.fallback_prompt_shown", 1, &[]);
+                self.session_telemetry.counter(
+                    "codex.windows_sandbox.fallback_prompt_shown",
+                    1,
+                    &[],
+                );
                 self.chat_widget.clear_windows_sandbox_setup_status();
                 if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
-                    self.otel_manager.record_duration(
+                    self.session_telemetry.record_duration(
                         "codex.windows_sandbox.elevated_setup_duration_ms",
                         started_at.elapsed(),
                         &[("result", "failure")],
@@ -2380,7 +2457,7 @@ impl App {
 
                     self.chat_widget.show_windows_sandbox_setup_status();
                     self.windows_sandbox.setup_started_at = Some(Instant::now());
-                    let otel_manager = self.otel_manager.clone();
+                    let session_telemetry = self.session_telemetry.clone();
                     tokio::task::spawn_blocking(move || {
                         let result = codex_core::windows_sandbox::run_elevated_setup(
                             &policy,
@@ -2391,7 +2468,7 @@ impl App {
                         );
                         let event = match result {
                             Ok(()) => {
-                                otel_manager.counter(
+                                session_telemetry.counter(
                                     "codex.windows_sandbox.elevated_setup_success",
                                     1,
                                     &[],
@@ -2419,7 +2496,7 @@ impl App {
                                 if let Some(message) = message_tag.as_deref() {
                                     tags.push(("message", message));
                                 }
-                                otel_manager.counter(
+                                session_telemetry.counter(
                                     codex_core::windows_sandbox::elevated_setup_failure_metric_name(
                                         &err,
                                     ),
@@ -2451,7 +2528,7 @@ impl App {
                         std::env::vars().collect();
                     let codex_home = self.config.codex_home.clone();
                     let tx = self.app_event_tx.clone();
-                    let otel_manager = self.otel_manager.clone();
+                    let session_telemetry = self.session_telemetry.clone();
 
                     self.chat_widget.show_windows_sandbox_setup_status();
                     tokio::task::spawn_blocking(move || {
@@ -2462,7 +2539,7 @@ impl App {
                             &env_map,
                             codex_home.as_path(),
                         ) {
-                            otel_manager.counter(
+                            session_telemetry.counter(
                                 "codex.windows_sandbox.legacy_setup_preflight_failed",
                                 1,
                                 &[],
@@ -2545,7 +2622,7 @@ impl App {
                 {
                     self.chat_widget.clear_windows_sandbox_setup_status();
                     if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
-                        self.otel_manager.record_duration(
+                        self.session_telemetry.record_duration(
                             "codex.windows_sandbox.elevated_setup_duration_ms",
                             started_at.elapsed(),
                             &[("result", "success")],
@@ -2870,71 +2947,7 @@ impl App {
                 }
             }
             AppEvent::UpdateFeatureFlags { updates } => {
-                if updates.is_empty() {
-                    return Ok(AppRunControl::Continue);
-                }
-                let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
-                    matches!(
-                        feature,
-                        Feature::WindowsSandbox | Feature::WindowsSandboxElevated
-                    )
-                });
-                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(self.active_profile.as_deref());
-                for (feature, enabled) in &updates {
-                    let feature_key = feature.key();
-                    if let Err(err) = self.config.features.set_enabled(*feature, *enabled) {
-                        tracing::error!(
-                            error = %err,
-                            feature = feature_key,
-                            "failed to update constrained feature flags"
-                        );
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to update experimental feature `{feature_key}`: {err}"
-                        ));
-                        continue;
-                    }
-                    let effective_enabled = self.config.features.enabled(*feature);
-                    self.chat_widget
-                        .set_feature_enabled(*feature, effective_enabled);
-                    if effective_enabled {
-                        builder = builder.set_feature_enabled(feature_key, true);
-                    } else if feature.default_enabled() {
-                        builder = builder.set_feature_enabled(feature_key, false);
-                    } else {
-                        // If the feature already default to `false`, we drop the key
-                        // in the config file so that the user does not miss the feature
-                        // once it gets globally released.
-                        builder = builder.with_edits(vec![ConfigEdit::ClearPath {
-                            segments: vec!["features".to_string(), feature_key.to_string()],
-                        }]);
-                    }
-                }
-                if windows_sandbox_changed {
-                    #[cfg(target_os = "windows")]
-                    {
-                        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                        self.app_event_tx
-                            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                                cwd: None,
-                                approval_policy: None,
-                                sandbox_policy: None,
-                                windows_sandbox_level: Some(windows_sandbox_level),
-                                model: None,
-                                effort: None,
-                                summary: None,
-                                service_tier: None,
-                                collaboration_mode: None,
-                                personality: None,
-                            }));
-                    }
-                }
-                if let Err(err) = builder.apply().await {
-                    tracing::error!(error = %err, "failed to persist feature flags");
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to update experimental features: {err}"
-                    ));
-                }
+                self.update_feature_flags(updates).await;
             }
             AppEvent::SkipNextWorldWritableScan => {
                 self.windows_sandbox.skip_world_writable_scan_once = true;
@@ -3713,7 +3726,7 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::types::ModelAvailabilityNuxConfig;
-    use codex_otel::OtelManager;
+    use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::CollaborationModeMask;
@@ -4869,6 +4882,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_feature_flags_enabling_guardian_persists_only_the_feature_flag() -> Result<()> {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        let current_session_policy = app
+            .chat_widget
+            .config_ref()
+            .permissions
+            .approval_policy
+            .value();
+
+        app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
+            .await;
+
+        assert!(app.config.features.enabled(Feature::GuardianApproval));
+        assert!(
+            app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::GuardianApproval)
+        );
+        assert_eq!(
+            app.config.permissions.approval_policy.value(),
+            current_session_policy
+        );
+        assert_eq!(
+            app.chat_widget
+                .config_ref()
+                .permissions
+                .approval_policy
+                .value(),
+            current_session_policy
+        );
+        assert_eq!(app.runtime_approval_policy_override, None);
+        assert!(
+            op_rx.try_recv().is_err(),
+            "feature toggle should not patch the active session"
+        );
+
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert!(config.contains("guardian_approval = true"));
+        assert!(!config.contains("approval_policy"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_feature_flags_disabling_guardian_clears_only_the_feature_flag() -> Result<()> {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "[features]\nguardian_approval = true\n",
+        )?;
+        app.config
+            .features
+            .set_enabled(Feature::GuardianApproval, true)?;
+        app.chat_widget
+            .set_feature_enabled(Feature::GuardianApproval, true);
+        let current_session_policy = app.config.permissions.approval_policy.value();
+
+        app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+            .await;
+
+        assert!(!app.config.features.enabled(Feature::GuardianApproval));
+        assert!(
+            !app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::GuardianApproval)
+        );
+        assert_eq!(
+            app.config.permissions.approval_policy.value(),
+            current_session_policy
+        );
+        assert_eq!(app.runtime_approval_policy_override, None);
+        assert!(
+            op_rx.try_recv().is_err(),
+            "feature toggle should not patch the active session"
+        );
+
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert!(!config.contains("guardian_approval = true"));
+        assert!(!config.contains("approval_policy"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled() -> Result<()>
     {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
@@ -5276,11 +5377,11 @@ mod tests {
         );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
-        let otel_manager = test_otel_manager(&config, model.as_str());
+        let session_telemetry = test_session_telemetry(&config, model.as_str());
 
         App {
             server,
-            otel_manager,
+            session_telemetry,
             app_event_tx,
             chat_widget,
             auth_manager,
@@ -5335,12 +5436,12 @@ mod tests {
         );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
-        let otel_manager = test_otel_manager(&config, model.as_str());
+        let session_telemetry = test_session_telemetry(&config, model.as_str());
 
         (
             App {
                 server,
-                otel_manager,
+                session_telemetry,
                 app_event_tx,
                 chat_widget,
                 auth_manager,
@@ -5391,9 +5492,9 @@ mod tests {
         panic!("expected UserTurn op, saw: {seen:?}");
     }
 
-    fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
+    fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
         let model_info = codex_core::test_support::construct_model_info_offline(model, config);
-        OtelManager::new(
+        SessionTelemetry::new(
             ThreadId::new(),
             model,
             model_info.slug.as_str(),

@@ -1,4 +1,4 @@
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::otel_provider::OtelProvider;
 use opentelemetry::KeyValue;
@@ -103,7 +103,7 @@ fn otel_export_routing_policy_routes_user_prompt_log_and_trace_events() {
 
     tracing::subscriber::with_default(subscriber, || {
         tracing::callsite::rebuild_interest_cache();
-        let manager = OtelManager::new(
+        let manager = SessionTelemetry::new(
             ThreadId::new(),
             "gpt-5.1",
             "gpt-5.1",
@@ -212,7 +212,7 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
 
     tracing::subscriber::with_default(subscriber, || {
         tracing::callsite::rebuild_interest_cache();
-        let manager = OtelManager::new(
+        let manager = SessionTelemetry::new(
             ThreadId::new(),
             "gpt-5.1",
             "gpt-5.1",

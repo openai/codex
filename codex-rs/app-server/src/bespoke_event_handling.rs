@@ -1590,7 +1590,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                     thread_name: thread_name_event.thread_name,
                 };
                 outgoing
-                    .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
+                    .send_global_server_notification(ServerNotification::ThreadNameUpdated(
+                        notification,
+                    ))
                     .await;
             }
         }

@@ -239,7 +239,7 @@ fn shell_event_with_prefix_rule(
         "command": command,
         "timeout_ms": timeout_ms,
     });
-    if sandbox_permissions.requires_additional_permissions() {
+    if sandbox_permissions.requests_sandbox_override() {
         args["sandbox_permissions"] = json!(sandbox_permissions);
     }
     if let Some(prefix_rule) = prefix_rule {
@@ -262,7 +262,7 @@ fn exec_command_event(
     if let Some(yield_time_ms) = yield_time_ms {
         args["yield_time_ms"] = json!(yield_time_ms);
     }
-    if sandbox_permissions.requires_additional_permissions() {
+    if sandbox_permissions.requests_sandbox_override() {
         args["sandbox_permissions"] = json!(sandbox_permissions);
         let reason = justification.unwrap_or(DEFAULT_UNIFIED_EXEC_JUSTIFICATION);
         args["justification"] = json!(reason);
@@ -2234,7 +2234,12 @@ async fn denying_network_policy_amendment_persists_policy_and_skips_future_netwo
     let home = Arc::new(TempDir::new()?);
     fs::write(
         home.path().join("config.toml"),
-        r#"[permissions.network]
+        r#"default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
 enabled = true
 mode = "limited"
 allow_local_binding = true
