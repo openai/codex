@@ -2257,7 +2257,8 @@ impl ChatWidget {
             return;
         };
 
-        let cell = if let Some(command) = action
+        let tool = action.get("tool").and_then(serde_json::Value::as_str);
+        let command = action
             .get("command")
             .and_then(serde_json::Value::as_array)
             .map(|command| {
@@ -2267,54 +2268,64 @@ impl ChatWidget {
                     .map(ToOwned::to_owned)
                     .collect::<Vec<_>>()
             })
-            .filter(|command| !command.is_empty())
-        {
+            .filter(|command| !command.is_empty());
+
+        let cell = if let Some(command) = command {
             history_cell::new_approval_decision_cell(
                 command,
                 codex_protocol::protocol::ReviewDecision::Denied,
                 history_cell::ApprovalDecisionActor::Guardian,
             )
-        } else if action.get("tool").and_then(serde_json::Value::as_str) == Some("apply_patch") {
-            let files = action
-                .get("files")
-                .and_then(serde_json::Value::as_array)
-                .map(|files| {
-                    files
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let change_count = action
-                .get("change_count")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|count| usize::try_from(count).ok())
-                .unwrap_or(files.len());
-            history_cell::new_guardian_denied_patch_request(files, change_count)
-        } else if action.get("tool").and_then(serde_json::Value::as_str) == Some("mcp_tool_call") {
-            let server = action
-                .get("server")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown server");
-            let tool = action
-                .get("tool_name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown tool");
-            history_cell::new_guardian_denied_action_request(format!(
-                "codex to call MCP tool {server}.{tool}"
-            ))
-        } else if action.get("tool").and_then(serde_json::Value::as_str) == Some("network_access") {
-            let target = action
-                .get("target")
-                .and_then(serde_json::Value::as_str)
-                .or_else(|| action.get("host").and_then(serde_json::Value::as_str))
-                .unwrap_or("network target");
-            history_cell::new_guardian_denied_action_request(format!("codex to access {target}"))
         } else {
-            let summary = serde_json::to_string(&action)
-                .unwrap_or_else(|_| "<unrenderable guardian action>".to_string());
-            history_cell::new_guardian_denied_action_request(summary)
+            match tool {
+                Some("apply_patch") => {
+                    let files = action
+                        .get("files")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|files| {
+                            files
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .map(ToOwned::to_owned)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let change_count = action
+                        .get("change_count")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|count| usize::try_from(count).ok())
+                        .unwrap_or(files.len());
+                    history_cell::new_guardian_denied_patch_request(files, change_count)
+                }
+                Some("mcp_tool_call") => {
+                    let server = action
+                        .get("server")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown server");
+                    let tool_name = action
+                        .get("tool_name")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown tool");
+                    history_cell::new_guardian_denied_action_request(format!(
+                        "codex to call MCP tool {server}.{tool_name}"
+                    ))
+                }
+                Some("network_access") => {
+                    let target = action
+                        .get("target")
+                        .and_then(serde_json::Value::as_str)
+                        .or_else(|| action.get("host").and_then(serde_json::Value::as_str))
+                        .unwrap_or("network target");
+                    history_cell::new_guardian_denied_action_request(format!(
+                        "codex to access {target}"
+                    ))
+                }
+                _ => {
+                    let summary = serde_json::to_string(&action)
+                        .unwrap_or_else(|_| "<unrenderable guardian action>".to_string());
+                    history_cell::new_guardian_denied_action_request(summary)
+                }
+            }
         };
 
         self.add_boxed_history(cell);
