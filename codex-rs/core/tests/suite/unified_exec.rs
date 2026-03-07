@@ -192,7 +192,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(harness.server(), responses).await;
+    let request_log = mount_sse_sequence(harness.server(), responses).await;
 
     let test = harness.test();
     let codex = test.codex.clone();
@@ -222,33 +222,54 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     let mut patch_end = None;
     let mut saw_exec_begin = false;
     let mut saw_exec_end = false;
-    wait_for_event(&codex, |event| match event {
-        EventMsg::PatchApplyBegin(begin) if begin.call_id == call_id => {
-            saw_patch_begin = true;
-            assert!(
-                begin
-                    .changes
-                    .keys()
-                    .any(|path| path.file_name() == Some(OsStr::new("uexec_apply.txt"))),
-                "expected apply_patch changes to target uexec_apply.txt",
-            );
-            false
-        }
-        EventMsg::PatchApplyEnd(end) if end.call_id == call_id => {
-            patch_end = Some(end.clone());
-            false
-        }
-        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => {
-            saw_exec_begin = true;
-            false
-        }
-        EventMsg::ExecCommandEnd(event) if event.call_id == call_id => {
-            saw_exec_end = true;
-            false
-        }
-        EventMsg::TurnComplete(_) => true,
-        _ => false,
-    })
+    wait_for_event_with_timeout(
+        &codex,
+        |event| match event {
+            EventMsg::PatchApplyBegin(begin) if begin.call_id == call_id => {
+                saw_patch_begin = true;
+                assert!(
+                    begin
+                        .changes
+                        .keys()
+                        .any(|path| path.file_name() == Some(OsStr::new("uexec_apply.txt"))),
+                    "expected apply_patch changes to target uexec_apply.txt",
+                );
+                false
+            }
+            EventMsg::PatchApplyEnd(end) if end.call_id == call_id => {
+                patch_end = Some(end.clone());
+                true
+            }
+            EventMsg::ExecCommandBegin(event) if event.call_id == call_id => {
+                saw_exec_begin = true;
+                false
+            }
+            EventMsg::ExecCommandEnd(event) if event.call_id == call_id => {
+                saw_exec_end = true;
+                false
+            }
+            _ => false,
+        },
+        Duration::from_secs(30),
+    )
+    .await;
+
+    wait_for_event_with_timeout(
+        &codex,
+        |event| match event {
+            EventMsg::ExecCommandBegin(event) if event.call_id == call_id => {
+                saw_exec_begin = true;
+                false
+            }
+            EventMsg::ExecCommandEnd(event) if event.call_id == call_id => {
+                saw_exec_end = true;
+                false
+            }
+            EventMsg::TurnComplete(_) => true,
+            _ => false,
+        },
+        Duration::from_secs(30),
+    )
     .await;
 
     assert!(
@@ -270,7 +291,19 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
         "apply_patch should not emit exec_command end events"
     );
 
-    let output = harness.function_call_stdout(call_id).await;
+    let output = {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(output) = request_log.function_call_output_text(call_id) {
+                break output;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for apply_patch output for {call_id}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
     assert!(
         output.contains("Success. Updated the following files:"),
         "expected apply_patch output, got: {output:?}"

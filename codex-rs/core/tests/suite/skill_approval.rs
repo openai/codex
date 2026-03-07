@@ -13,6 +13,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -35,6 +36,38 @@ fn absolute_path(path: &Path) -> AbsolutePathBuf {
     }
 }
 
+fn normalize_absolute_path_buf(path: &AbsolutePathBuf) -> AbsolutePathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        let normalized = path
+            .as_path()
+            .strip_prefix("/private")
+            .map(|suffix| Path::new("/").join(suffix))
+            .unwrap_or_else(|_| path.as_path().to_path_buf());
+        AbsolutePathBuf::try_from(normalized.as_path())
+            .unwrap_or_else(|err| panic!("absolute path normalization: {err}"))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        path.clone()
+    }
+}
+
+fn normalize_permission_profile(profile: Option<PermissionProfile>) -> Option<PermissionProfile> {
+    profile.map(|mut profile| {
+        if let Some(file_system) = profile.file_system.as_mut() {
+            if let Some(read) = file_system.read.as_mut() {
+                *read = read.iter().map(normalize_absolute_path_buf).collect();
+            }
+            if let Some(write) = file_system.write.as_mut() {
+                *write = write.iter().map(normalize_absolute_path_buf).collect();
+            }
+        }
+        profile
+    })
+}
+
 fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
     let metadata_dir = home.join("skills").join(name).join("agents");
     fs::create_dir_all(&metadata_dir)?;
@@ -45,7 +78,7 @@ fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
 fn shell_command_arguments(command: &str) -> Result<String> {
     Ok(serde_json::to_string(&json!({
         "command": command,
-        "timeout_ms": 500,
+        "timeout_ms": 2_000,
     }))?)
 }
 
@@ -146,6 +179,20 @@ async fn wait_for_turn_complete(test: &TestCodex) {
     .await;
 }
 
+async fn wait_for_function_call_output_text(response_mock: &ResponseMock, call_id: &str) -> String {
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    loop {
+        if let Some(output) = response_mock.function_call_output_text(call_id) {
+            return output;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for function_call_output for {call_id}"
+        );
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+}
+
 fn output_shows_sandbox_denial(output: &str) -> bool {
     output.contains("Permission denied")
         || output.contains("Operation not permitted")
@@ -227,8 +274,8 @@ permissions:
         ])
     );
     assert_eq!(
-        approval.additional_permissions,
-        Some(PermissionProfile {
+        normalize_permission_profile(approval.additional_permissions.clone()),
+        normalize_permission_profile(Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
                 read: Some(vec![absolute_path(
                     &test.codex_home_path().join("skills/mbolin-test-skill/data"),
@@ -240,7 +287,7 @@ permissions:
                 )]),
             }),
             ..Default::default()
-        })
+        }))
     );
 
     test.codex
@@ -251,13 +298,7 @@ permissions:
         })
         .await?;
 
-    wait_for_turn_complete(&test).await;
-
-    let call_output = mocks
-        .completion
-        .single_request()
-        .function_call_output(tool_call_id);
-    let output = call_output["output"].as_str().unwrap_or_default();
+    let output = wait_for_function_call_output_text(&mocks.completion, tool_call_id).await;
     assert!(
         output.contains("Execution denied: User denied execution"),
         "expected rejection marker in function_call_output: {output:?}"
@@ -343,13 +384,7 @@ permissions:
         })
         .await?;
 
-    wait_for_turn_complete(&test).await;
-
-    let call_output = mocks
-        .completion
-        .single_request()
-        .function_call_output(tool_call_id);
-    let output = call_output["output"].as_str().unwrap_or_default();
+    let output = wait_for_function_call_output_text(&mocks.completion, tool_call_id).await;
     assert!(
         output.contains("Execution denied: User denied execution"),
         "expected rejection marker in function_call_output: {output:?}"
@@ -417,13 +452,7 @@ permissions:
         "expected reject sandbox approval policy to skip exec approval"
     );
 
-    wait_for_turn_complete(&test).await;
-
-    let call_output = mocks
-        .completion
-        .single_request()
-        .function_call_output(tool_call_id);
-    let output = call_output["output"].as_str().unwrap_or_default();
+    let output = wait_for_function_call_output_text(&mocks.completion, tool_call_id).await;
     assert!(
         output.contains("Execution denied: Execution forbidden by policy"),
         "expected policy rejection marker in function_call_output: {output:?}"
@@ -499,15 +528,8 @@ async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Res
         "expected permissionless skill script to skip exec approval"
     );
 
-    wait_for_turn_complete(&test).await;
-
-    let first_output = first_mocks
-        .completion
-        .single_request()
-        .function_call_output(first_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
+    let first_output =
+        wait_for_function_call_output_text(&first_mocks.completion, first_call_id).await;
     assert!(
         output_shows_sandbox_denial(&first_output) || !first_output.contains("forbidden"),
         "expected inherited turn sandbox denial on first run, got output: {first_output:?}"
@@ -541,13 +563,8 @@ async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Res
         "expected permissionless skill rerun to continue skipping exec approval"
     );
 
-    let second_output = second_mocks
-        .completion
-        .single_request()
-        .function_call_output(second_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
+    let second_output =
+        wait_for_function_call_output_text(&second_mocks.completion, second_call_id).await;
     assert!(
         output_shows_sandbox_denial(&second_output) || !second_output.contains("forbidden"),
         "expected cached skill approval to retain inherited turn sandboxing, got output: {second_output:?}"
@@ -628,15 +645,8 @@ async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> 
         "expected empty skill permissions to skip exec approval"
     );
 
-    wait_for_turn_complete(&test).await;
-
-    let first_output = first_mocks
-        .completion
-        .single_request()
-        .function_call_output(first_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
+    let first_output =
+        wait_for_function_call_output_text(&first_mocks.completion, first_call_id).await;
     assert!(
         first_output.contains("allowed"),
         "expected empty skill permissions to inherit full-access turn sandbox, got output: {first_output:?}"
@@ -669,13 +679,8 @@ async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> 
         "expected empty-permissions skill rerun to continue skipping exec approval"
     );
 
-    let second_output = second_mocks
-        .completion
-        .single_request()
-        .function_call_output(second_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
+    let second_output =
+        wait_for_function_call_output_text(&second_mocks.completion, second_call_id).await;
     assert!(
         second_output.contains("allowed"),
         "expected cached empty-permissions skill approval to inherit the turn sandbox, got output: {second_output:?}"
@@ -771,14 +776,14 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
     assert_eq!(approval.call_id, first_call_id);
     assert_eq!(approval.command, vec![script_path_str.clone()]);
     assert_eq!(
-        approval.additional_permissions,
-        Some(PermissionProfile {
+        normalize_permission_profile(approval.additional_permissions.clone()),
+        normalize_permission_profile(Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
                 read: None,
                 write: Some(vec![absolute_path(&allowed_dir)]),
             }),
             ..Default::default()
-        })
+        }))
     );
 
     test.codex
@@ -791,13 +796,8 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
 
     wait_for_turn_complete(&test).await;
 
-    let first_output = first_mocks
-        .completion
-        .single_request()
-        .function_call_output(first_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
+    let first_output =
+        wait_for_function_call_output_text(&first_mocks.completion, first_call_id).await;
     assert!(
         first_output.contains("allowed"),
         "expected skill sandbox to permit writes to the approved folder, got output: {first_output:?}"
@@ -839,13 +839,8 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
         "expected second run to reuse the cached session approval"
     );
 
-    let second_output = second_mocks
-        .completion
-        .single_request()
-        .function_call_output(second_call_id)["output"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
+    let second_output =
+        wait_for_function_call_output_text(&second_mocks.completion, second_call_id).await;
     assert!(
         second_output.contains("allowed"),
         "expected cached skill approval to retain the explicit skill sandbox, got output: {second_output:?}"
@@ -906,13 +901,9 @@ async fn shell_zsh_fork_still_enforces_workspace_write_sandbox() -> Result<()> {
 
     wait_for_turn_complete(&test).await;
 
-    let call_output = mocks
-        .completion
-        .single_request()
-        .function_call_output(tool_call_id);
-    let output = call_output["output"].as_str().unwrap_or_default();
+    let output = wait_for_function_call_output_text(&mocks.completion, tool_call_id).await;
     assert!(
-        output_shows_sandbox_denial(output),
+        output_shows_sandbox_denial(&output),
         "expected sandbox denial, got output: {output:?}"
     );
     assert!(

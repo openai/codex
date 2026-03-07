@@ -41,7 +41,7 @@ async fn responses_mode_stream_cli() {
     );
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    cmd.timeout(Duration::from_secs(90));
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")

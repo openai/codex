@@ -3,6 +3,7 @@ use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use codex_utils_string::normalize_markdown_hash_location_suffix;
+use dirs::home_dir;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
 use pulldown_cmark::Event;
@@ -16,7 +17,10 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
 use regex_lite::Regex;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::LazyLock;
+use url::Url;
 
 struct MarkdownStyles {
     h1: Style,
@@ -80,10 +84,19 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
 }
 
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
+    let cwd = std::env::current_dir().ok();
+    render_markdown_text_with_width_and_cwd(input, width, cwd.as_deref())
+}
+
+pub(crate) fn render_markdown_text_with_width_and_cwd(
+    input: &str,
+    width: Option<usize>,
+    cwd: Option<&Path>,
+) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(parser, width);
+    let mut w = Writer::new(parser, width, cwd.map(Path::to_path_buf));
     w.run();
     w.text
 }
@@ -92,9 +105,7 @@ pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>)
 struct LinkState {
     destination: String,
     show_destination: bool,
-    hidden_location_suffix: Option<String>,
-    label_start_span_idx: usize,
-    label_styled: bool,
+    local_target_display: Option<String>,
 }
 
 fn should_render_link_destination(dest_url: &str) -> bool {
@@ -130,6 +141,148 @@ fn is_local_path_like_link(dest_url: &str) -> bool {
         )
 }
 
+fn render_local_link_target(dest_url: &str, cwd: Option<&Path>) -> Option<String> {
+    let (path_text, location_suffix) = parse_local_link_target(dest_url)?;
+    let mut rendered = display_local_link_path(&path_text, cwd);
+    if let Some(location_suffix) = location_suffix {
+        rendered.push_str(&location_suffix);
+    }
+    Some(rendered)
+}
+
+fn parse_local_link_target(dest_url: &str) -> Option<(String, Option<String>)> {
+    if dest_url.starts_with("file://") {
+        let url = Url::parse(dest_url).ok()?;
+        let path_text = file_url_to_local_path_text(&url)?;
+        let location_suffix = url
+            .fragment()
+            .and_then(normalize_hash_location_suffix_fragment);
+        return Some((path_text, location_suffix));
+    }
+
+    let mut path_text = dest_url;
+    let mut location_suffix = None;
+    if let Some((candidate_path, fragment)) = dest_url.rsplit_once('#')
+        && let Some(normalized) = normalize_hash_location_suffix_fragment(fragment)
+    {
+        path_text = candidate_path;
+        location_suffix = Some(normalized);
+    }
+    if location_suffix.is_none()
+        && let Some(suffix) = extract_colon_location_suffix(path_text)
+    {
+        let path_len = path_text.len().saturating_sub(suffix.len());
+        path_text = &path_text[..path_len];
+        location_suffix = Some(suffix);
+    }
+
+    Some((expand_local_link_path(path_text), location_suffix))
+}
+
+fn normalize_hash_location_suffix_fragment(fragment: &str) -> Option<String> {
+    HASH_LOCATION_SUFFIX_RE
+        .is_match(fragment)
+        .then(|| format!("#{fragment}"))
+        .and_then(|suffix| normalize_markdown_hash_location_suffix(&suffix))
+}
+
+fn extract_colon_location_suffix(path_text: &str) -> Option<String> {
+    COLON_LOCATION_SUFFIX_RE
+        .find(path_text)
+        .filter(|matched| matched.end() == path_text.len())
+        .map(|matched| matched.as_str().to_string())
+}
+
+fn expand_local_link_path(path_text: &str) -> String {
+    if let Some(rest) = path_text.strip_prefix("~/")
+        && let Some(home) = home_dir()
+    {
+        return normalize_local_link_path_text(&home.join(rest).to_string_lossy());
+    }
+
+    normalize_local_link_path_text(path_text)
+}
+
+fn file_url_to_local_path_text(url: &Url) -> Option<String> {
+    if let Ok(path) = url.to_file_path() {
+        return Some(normalize_local_link_path_text(&path.to_string_lossy()));
+    }
+
+    let mut path_text = url.path().to_string();
+    if let Some(host) = url.host_str()
+        && !host.is_empty()
+        && host != "localhost"
+    {
+        path_text = format!("//{host}{path_text}");
+    } else if matches!(
+        path_text.as_bytes(),
+        [b'/', drive, b':', b'/', ..] if drive.is_ascii_alphabetic()
+    ) {
+        path_text.remove(0);
+    }
+
+    Some(normalize_local_link_path_text(&path_text))
+}
+
+fn normalize_local_link_path_text(path_text: &str) -> String {
+    if let Some(rest) = path_text.strip_prefix("\\\\") {
+        format!("//{}", rest.replace('\\', "/").trim_start_matches('/'))
+    } else {
+        path_text.replace('\\', "/")
+    }
+}
+
+fn is_absolute_local_link_path(path_text: &str) -> bool {
+    path_text.starts_with('/')
+        || path_text.starts_with("//")
+        || matches!(
+            path_text.as_bytes(),
+            [drive, b':', b'/', ..] if drive.is_ascii_alphabetic()
+        )
+}
+
+fn trim_trailing_local_path_separator(path_text: &str) -> &str {
+    if path_text == "/" || path_text == "//" {
+        return path_text;
+    }
+    if matches!(path_text.as_bytes(), [drive, b':', b'/'] if drive.is_ascii_alphabetic()) {
+        return path_text;
+    }
+    path_text.trim_end_matches('/')
+}
+
+fn strip_local_path_prefix<'a>(path_text: &'a str, cwd_text: &str) -> Option<&'a str> {
+    let path_text = trim_trailing_local_path_separator(path_text);
+    let cwd_text = trim_trailing_local_path_separator(cwd_text);
+    if path_text == cwd_text {
+        return None;
+    }
+
+    if cwd_text == "/" || cwd_text == "//" {
+        return path_text.strip_prefix('/');
+    }
+
+    path_text
+        .strip_prefix(cwd_text)
+        .and_then(|rest| rest.strip_prefix('/'))
+}
+
+fn display_local_link_path(path_text: &str, cwd: Option<&Path>) -> String {
+    let path_text = normalize_local_link_path_text(path_text);
+    if !is_absolute_local_link_path(&path_text) {
+        return path_text;
+    }
+
+    if let Some(cwd) = cwd {
+        let cwd_text = normalize_local_link_path_text(&cwd.to_string_lossy());
+        if let Some(stripped) = strip_local_path_prefix(&path_text, &cwd_text) {
+            return stripped.to_string();
+        }
+    }
+
+    path_text
+}
+
 struct Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
@@ -148,6 +301,7 @@ where
     code_block_lang: Option<String>,
     code_block_buffer: String,
     wrap_width: Option<usize>,
+    cwd: Option<PathBuf>,
     current_line_content: Option<Line<'static>>,
     current_initial_indent: Vec<Span<'static>>,
     current_subsequent_indent: Vec<Span<'static>>,
@@ -159,7 +313,7 @@ impl<'a, I> Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
 {
-    fn new(iter: I, wrap_width: Option<usize>) -> Self {
+    fn new(iter: I, wrap_width: Option<usize>, cwd: Option<PathBuf>) -> Self {
         Self {
             iter,
             text: Text::default(),
@@ -175,6 +329,7 @@ where
             code_block_lang: None,
             code_block_buffer: String::new(),
             wrap_width,
+            cwd,
             current_line_content: None,
             current_initial_indent: Vec::new(),
             current_subsequent_indent: Vec::new(),
@@ -324,6 +479,9 @@ where
     }
 
     fn text(&mut self, text: CowStr<'a>) {
+        if self.suppressing_local_link_label() {
+            return;
+        }
         if self.pending_marker_line {
             self.push_line(Line::default());
         }
@@ -373,6 +531,9 @@ where
     }
 
     fn code(&mut self, code: CowStr<'a>) {
+        if self.suppressing_local_link_label() {
+            return;
+        }
         if self.pending_marker_line {
             self.push_line(Line::default());
             self.pending_marker_line = false;
@@ -382,6 +543,9 @@ where
     }
 
     fn html(&mut self, html: CowStr<'a>, inline: bool) {
+        if self.suppressing_local_link_label() {
+            return;
+        }
         self.pending_marker_line = false;
         for (i, line) in html.lines().enumerate() {
             if self.needs_newline {
@@ -398,10 +562,16 @@ where
     }
 
     fn hard_break(&mut self) {
+        if self.suppressing_local_link_label() {
+            return;
+        }
         self.push_line(Line::default());
     }
 
     fn soft_break(&mut self) {
+        if self.suppressing_local_link_label() {
+            return;
+        }
         self.push_line(Line::default());
     }
 
@@ -513,36 +683,13 @@ where
 
     fn push_link(&mut self, dest_url: String) {
         let show_destination = should_render_link_destination(&dest_url);
-        let label_styled = !show_destination;
-        let label_start_span_idx = self
-            .current_line_content
-            .as_ref()
-            .map(|line| line.spans.len())
-            .unwrap_or(0);
-        if label_styled {
-            self.push_inline_style(self.styles.code);
-        }
         self.link = Some(LinkState {
             show_destination,
-            hidden_location_suffix: if is_local_path_like_link(&dest_url) {
-                dest_url
-                    .rsplit_once('#')
-                    .and_then(|(_, fragment)| {
-                        HASH_LOCATION_SUFFIX_RE
-                            .is_match(fragment)
-                            .then(|| format!("#{fragment}"))
-                    })
-                    .and_then(|suffix| normalize_markdown_hash_location_suffix(&suffix))
-                    .or_else(|| {
-                        COLON_LOCATION_SUFFIX_RE
-                            .find(&dest_url)
-                            .map(|m| m.as_str().to_string())
-                    })
+            local_target_display: if is_local_path_like_link(&dest_url) {
+                render_local_link_target(&dest_url, self.cwd.as_deref())
             } else {
                 None
             },
-            label_start_span_idx,
-            label_styled,
             destination: dest_url,
         });
     }
@@ -550,41 +697,26 @@ where
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
             if link.show_destination {
-                if link.label_styled {
-                    self.pop_inline_style();
-                }
                 self.push_span(" (".into());
                 self.push_span(Span::styled(link.destination, self.styles.link));
                 self.push_span(")".into());
-            } else if let Some(location_suffix) = link.hidden_location_suffix.as_deref() {
-                let label_text = self
-                    .current_line_content
-                    .as_ref()
-                    .and_then(|line| {
-                        line.spans.get(link.label_start_span_idx..).map(|spans| {
-                            spans
-                                .iter()
-                                .map(|span| span.content.as_ref())
-                                .collect::<String>()
-                        })
-                    })
-                    .unwrap_or_default();
-                if label_text
-                    .rsplit_once('#')
-                    .is_some_and(|(_, fragment)| HASH_LOCATION_SUFFIX_RE.is_match(fragment))
-                    || COLON_LOCATION_SUFFIX_RE.find(&label_text).is_some()
-                {
-                    // The label already carries a location suffix; don't duplicate it.
-                } else {
-                    self.push_span(Span::styled(location_suffix.to_string(), self.styles.code));
-                }
-                if link.label_styled {
-                    self.pop_inline_style();
-                }
-            } else if link.label_styled {
-                self.pop_inline_style();
+            } else if let Some(local_target_display) = link.local_target_display {
+                let style = self
+                    .inline_styles
+                    .last()
+                    .copied()
+                    .unwrap_or_default()
+                    .patch(self.styles.code);
+                self.push_span(Span::styled(local_target_display, style));
             }
         }
+    }
+
+    fn suppressing_local_link_label(&self) -> bool {
+        self.link
+            .as_ref()
+            .and_then(|link| link.local_target_display.as_ref())
+            .is_some()
     }
 
     fn flush_current_line(&mut self) {
