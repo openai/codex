@@ -2120,9 +2120,8 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
     )
     .await;
 
-    let _ = mount_sse_once_match(
+    let _ = mount_sse_once(
         &server,
-        |req: &Request| body_contains(req, "parent reruns child command"),
         sse(vec![
             ev_response_created("resp-parent-3"),
             ev_function_call(PARENT_CALL_ID_2, "shell_command", &child_cmd_args),
@@ -2131,9 +2130,8 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
     )
     .await;
 
-    let _ = mount_sse_once_match(
+    let parent_repeat_completion = mount_sse_once(
         &server,
-        |req: &Request| body_contains(req, PARENT_CALL_ID_2),
         sse(vec![
             ev_response_created("resp-parent-4"),
             ev_assistant_message("msg-parent-4", "parent rerun done"),
@@ -2221,6 +2219,13 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
     )
     .await?;
     wait_for_completion_without_approval(&test).await;
+
+    let second_output = parse_result(
+        &parent_repeat_completion
+            .single_request()
+            .function_call_output(PARENT_CALL_ID_2),
+    );
+    assert_eq!(second_output.exit_code.unwrap_or(0), 0);
     assert!(
         child_file.exists(),
         "expected parent rerun to recreate child file without prompting"
