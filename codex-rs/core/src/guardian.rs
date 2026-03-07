@@ -283,12 +283,12 @@ pub(crate) async fn review_approval_request_with_reason(
     }
 }
 
-/// Builds the guardian prompt from three pieces:
-/// - the policy prompt
+/// Builds the guardian user message from:
 /// - a compact transcript for authorization and local context
-/// - the exact action JSON being proposed for escalation
+/// - the exact action JSON being proposed for approval
 ///
-/// Keep the variable request block at the end so the large prompt prefix stays
+/// The fixed guardian policy lives in the subagent developer message. Keep the
+/// variable request block at the end so the user-message prefix stays
 /// cache-friendly across repeated approval checks in the same conversation.
 async fn build_guardian_prompt(
     session: &Session,
@@ -323,8 +323,7 @@ async fn build_guardian_prompt(
         .unwrap_or_default();
 
     format!(
-        ">>> GUARDIAN INSTRUCTIONS START\n{}\n>>> GUARDIAN INSTRUCTIONS END\n\n{}>>> TRANSCRIPT START\n{}\n>>> TRANSCRIPT END\n{}\n>>> APPROVAL REQUEST START\n{}Planned action JSON:\n{}\n>>> APPROVAL REQUEST END\n",
-        guardian_policy_prompt(),
+        "{}>>> TRANSCRIPT START\n{}\n>>> TRANSCRIPT END\n{}\n>>> APPROVAL REQUEST START\n{}Planned action JSON:\n{}\n>>> APPROVAL REQUEST END\n",
         "Assess the exact planned action below. Use read-only tool checks when local state matters.\n",
         transcript,
         omission_block,
@@ -718,6 +717,7 @@ fn build_guardian_subagent_config(
     let mut guardian_config = parent_config.clone();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
+    guardian_config.developer_instructions = Some(guardian_policy_prompt());
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config.permissions.sandbox_policy =
         Constrained::allow_only(SandboxPolicy::new_read_only_policy());
