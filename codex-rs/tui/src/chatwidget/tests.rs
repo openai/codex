@@ -1866,6 +1866,7 @@ async fn make_chatwidget_manual(
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
         pending_steers: VecDeque::new(),
+        submit_pending_steers_after_interrupt: false,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
         pending_notification: None,
@@ -1909,6 +1910,17 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
+        }
+    }
+}
+
+fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::Interrupt) => return,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected interrupt op but queue was empty"),
+            Err(TryRecvError::Disconnected) => panic!("expected interrupt op but channel closed"),
         }
     }
 }
@@ -4372,6 +4384,88 @@ async fn manual_interrupt_restores_pending_steers_to_composer() {
             .iter()
             .all(|cell| !lines_to_single_string(cell).contains("queued while streaming"))
     );
+}
+
+#[tokio::test]
+async fn esc_interrupt_sends_pending_steer_immediately_and_keeps_existing_draft() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+
+    chat.bottom_pane
+        .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "pending steer".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    chat.queued_user_messages
+        .push_back(UserMessage::from("queued draft".to_string()));
+    chat.refresh_pending_input_preview();
+    chat.bottom_pane
+        .set_composer_text("still editing".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    next_interrupt_op(&mut op_rx);
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "pending steer".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued pending steer to submit, got {other:?}"),
+    }
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(chat.bottom_pane.composer_text(), "still editing");
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "queued draft"
+    );
+
+    let inserted = drain_insert_history(&mut rx);
+    assert!(
+        inserted
+            .iter()
+            .any(|cell| lines_to_single_string(cell).contains("pending steer"))
+    );
+}
+
+#[tokio::test]
+async fn esc_with_pending_steers_overrides_agent_command_interrupt_behavior() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+
+    chat.bottom_pane
+        .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    chat.bottom_pane
+        .set_composer_text("/agent ".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    next_interrupt_op(&mut op_rx);
+    assert_eq!(chat.bottom_pane.composer_text(), "/agent ");
 }
 
 #[tokio::test]

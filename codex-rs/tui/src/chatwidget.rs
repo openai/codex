@@ -630,6 +630,9 @@ pub(crate) struct ChatWidget {
     // The bottom pane shows these above queued drafts until core records the
     // corresponding user message item.
     pending_steers: VecDeque<PendingSteer>,
+    // When set, the next interrupt should turn pending steers into fresh
+    // queued inputs instead of restoring them into the composer.
+    submit_pending_steers_after_interrupt: bool,
     /// Terminal-appropriate keybinding for popping the most-recently queued
     /// message back into the composer.  Determined once at construction time via
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
@@ -1521,6 +1524,7 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+        self.submit_pending_steers_after_interrupt = false;
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
@@ -1874,6 +1878,7 @@ impl ChatWidget {
     }
 
     fn on_server_overloaded_error(&mut self, message: String) {
+        self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
 
         let message = if message.trim().is_empty() {
@@ -1888,6 +1893,7 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
+        self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
@@ -1986,12 +1992,36 @@ impl ChatWidget {
 
         // Core clears pending_input before emitting TurnAborted, so any unacknowledged steers
         // still tracked here must be restored locally instead of waiting for a later commit.
-        if let Some(combined) = self.drain_pending_messages_for_restore() {
+        let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
+        self.submit_pending_steers_after_interrupt = false;
+        if send_pending_steers_immediately && self.move_pending_steers_to_queue_front() {
+            self.maybe_send_next_queued_input();
+        } else if let Some(combined) = self.drain_pending_messages_for_restore() {
             self.restore_user_message_to_composer(combined);
         }
         self.refresh_pending_input_preview();
 
         self.request_redraw();
+    }
+
+    /// Move uncommitted pending steers ahead of older queued drafts.
+    ///
+    /// This lets Esc turn "submit after next tool call" steers into normal
+    /// queued follow-ups: the first one starts immediately after interrupt and
+    /// the rest preserve FIFO order.
+    fn move_pending_steers_to_queue_front(&mut self) -> bool {
+        if self.pending_steers.is_empty() {
+            return false;
+        }
+
+        let mut pending_inputs: VecDeque<UserMessage> = self
+            .pending_steers
+            .drain(..)
+            .map(|pending| pending.user_message)
+            .collect();
+        pending_inputs.append(&mut self.queued_user_messages);
+        self.queued_user_messages = pending_inputs;
+        true
     }
 
     /// Merge pending steers, queued drafts, and the current composer state into a single message.
@@ -3161,6 +3191,7 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
+            submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3347,6 +3378,7 @@ impl ChatWidget {
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
+            submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3517,6 +3549,7 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
+            submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
             show_welcome_banner: false,
             startup_tooltip_override: None,
@@ -3652,6 +3685,19 @@ impl ChatWidget {
                 self.restore_user_message_to_composer(user_message);
                 self.refresh_pending_input_preview();
                 self.request_redraw();
+            }
+            return;
+        }
+
+        if matches!(key_event.code, KeyCode::Esc)
+            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && !self.pending_steers.is_empty()
+            && self.bottom_pane.is_task_running()
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            self.submit_pending_steers_after_interrupt = true;
+            if !self.submit_op(Op::Interrupt) {
+                self.submit_pending_steers_after_interrupt = false;
             }
             return;
         }
@@ -4798,6 +4844,7 @@ impl ChatWidget {
                     self.on_interrupted_turn(ev.reason);
                 }
                 TurnAbortReason::Replaced => {
+                    self.submit_pending_steers_after_interrupt = false;
                     self.pending_steers.clear();
                     self.refresh_pending_input_preview();
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
