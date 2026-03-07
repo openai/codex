@@ -35,7 +35,6 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::ReadOnlyAccess;
@@ -215,7 +214,6 @@ fn additional_permission_roots(
     )
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn merge_file_system_policy_with_additional_permissions(
     file_system_policy: &FileSystemSandboxPolicy,
     extra_reads: Vec<AbsolutePathBuf>,
@@ -249,7 +247,6 @@ fn merge_file_system_policy_with_additional_permissions(
         }
     }
 }
-
 fn merge_read_only_access_with_additional_reads(
     read_only_access: &ReadOnlyAccess,
     extra_reads: Vec<AbsolutePathBuf>,
@@ -369,18 +366,10 @@ pub(crate) fn should_require_platform_sandbox(
     }
 
     match file_system_policy.kind {
-        FileSystemSandboxKind::Restricted => !file_system_policy.entries.iter().any(|entry| {
-            entry.access == FileSystemAccessMode::Write
-                && matches!(
-                    &entry.path,
-                    FileSystemPath::Special { value }
-                        if matches!(value, FileSystemSpecialPath::Root)
-                )
-        }),
+        FileSystemSandboxKind::Restricted => !file_system_policy.has_full_disk_write_access(),
         FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => false,
     }
 }
-
 #[derive(Default)]
 pub struct SandboxManager;
 
