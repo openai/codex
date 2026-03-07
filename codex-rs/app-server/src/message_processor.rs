@@ -194,6 +194,9 @@ impl MessageProcessor {
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
         ));
+        thread_manager
+            .plugins_manager()
+            .maybe_start_curated_repo_sync_for_config(&config);
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager,
@@ -522,7 +525,13 @@ impl MessageProcessor {
         params: ConfigValueWriteParams,
     ) {
         match self.config_api.write_value(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Ok(response) => {
+                self.codex_message_processor.clear_plugin_related_caches();
+                self.codex_message_processor
+                    .maybe_start_curated_repo_sync_for_latest_config()
+                    .await;
+                self.outgoing.send_response(request_id, response).await;
+            }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }
@@ -533,7 +542,13 @@ impl MessageProcessor {
         params: ConfigBatchWriteParams,
     ) {
         match self.config_api.batch_write(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Ok(response) => {
+                self.codex_message_processor.clear_plugin_related_caches();
+                self.codex_message_processor
+                    .maybe_start_curated_repo_sync_for_latest_config()
+                    .await;
+                self.outgoing.send_response(request_id, response).await;
+            }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }

@@ -13,10 +13,12 @@ It enforces an allow/deny policy and a "limited" mode intended for read-only net
 
 `codex-network-proxy` reads from Codex's merged `config.toml` (via `codex-core` config loading).
 
-Example config:
+Network settings live under the selected permissions profile. Example config:
 
 ```toml
-[network]
+default_permissions = "workspace"
+
+[permissions.workspace.network]
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 # SOCKS5 listener (enabled by default).
@@ -36,6 +38,8 @@ mitm = false
 # CA cert/key are managed internally under $CODEX_HOME/proxy/ (ca.pem + ca.key).
 
 # Hosts must match the allowlist (unless denied).
+# Use exact hosts or scoped wildcards like `*.openai.com` or `**.openai.com`.
+# The global `*` wildcard is rejected.
 # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
 allowed_domains = ["*.openai.com", "localhost", "127.0.0.1", "::1"]
 denied_domains = ["evil.example"]
@@ -43,7 +47,7 @@ denied_domains = ["evil.example"]
 # If false, local/private networking is rejected. Explicit allowlisting of local IP literals
 # (or `localhost`) is required to permit them.
 # Hostnames that resolve to local/private IPs are still blocked even if allowlisted.
-allow_local_binding = true
+allow_local_binding = false
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
 allow_unix_sockets = ["/tmp/example.sock"]
@@ -185,6 +189,7 @@ This section documents the protections implemented by `codex-network-proxy`, and
 what it can reasonably guarantee.
 
 - Allowlist-first policy: if `allowed_domains` is empty, requests are blocked until an allowlist is configured.
+- Domain patterns: exact hosts plus scoped wildcards (`*.example.com`, `**.example.com`) are supported; the global `*` wildcard is rejected.
 - Deny wins: entries in `denied_domains` always override the allowlist.
 - Local/private network protection: when `allow_local_binding = false`, the proxy blocks loopback
   and common private/link-local ranges. Explicit allowlisting of local IP literals (or `localhost`)

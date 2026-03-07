@@ -96,6 +96,7 @@ const NOTIFICATIONS_TO_OPT_OUT: &[&str] = &[
     "codex/event/item_started",
     "codex/event/item_completed",
     // v2 item deltas.
+    "command/exec/outputDelta",
     "item/agentMessage/delta",
     "item/plan/delta",
     "item/commandExecution/outputDelta",

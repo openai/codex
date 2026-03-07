@@ -543,6 +543,7 @@ impl UnifiedExecProcessManager {
                 env.cwd.as_path(),
                 &env.env,
                 &env.arg0,
+                codex_utils_pty::TerminalSize::default(),
             )
             .await
         } else {

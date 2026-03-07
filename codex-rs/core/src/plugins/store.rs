@@ -61,7 +61,7 @@ impl PluginId {
 pub struct PluginInstallResult {
     pub plugin_id: PluginId,
     pub plugin_version: String,
-    pub installed_path: PathBuf,
+    pub installed_path: AbsolutePathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -92,19 +92,25 @@ impl PluginStore {
         .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
     }
 
+    pub fn is_installed(&self, plugin_id: &PluginId) -> bool {
+        self.plugin_root(plugin_id, DEFAULT_PLUGIN_VERSION)
+            .as_path()
+            .is_dir()
+    }
+
     pub fn install(
         &self,
-        source_path: PathBuf,
+        source_path: AbsolutePathBuf,
         plugin_id: PluginId,
     ) -> Result<PluginInstallResult, PluginStoreError> {
-        if !source_path.is_dir() {
+        if !source_path.as_path().is_dir() {
             return Err(PluginStoreError::Invalid(format!(
                 "plugin source path is not a directory: {}",
                 source_path.display()
             )));
         }
 
-        let plugin_name = plugin_name_for_source(&source_path)?;
+        let plugin_name = plugin_name_for_source(source_path.as_path())?;
         if plugin_name != plugin_id.plugin_name {
             return Err(PluginStoreError::Invalid(format!(
                 "plugin manifest name `{plugin_name}` does not match marketplace plugin name `{}`",
@@ -112,18 +118,16 @@ impl PluginStore {
             )));
         }
         let plugin_version = DEFAULT_PLUGIN_VERSION.to_string();
-        let installed_path = self
-            .plugin_root(&plugin_id, &plugin_version)
-            .into_path_buf();
+        let installed_path = self.plugin_root(&plugin_id, &plugin_version);
 
         if let Some(parent) = installed_path.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
+            fs::create_dir_all(parent.as_path()).map_err(|err| {
                 PluginStoreError::io("failed to create plugin cache directory", err)
             })?;
         }
 
-        remove_existing_target(&installed_path)?;
-        copy_dir_recursive(&source_path, &installed_path)?;
+        remove_existing_target(installed_path.as_path())?;
+        copy_dir_recursive(source_path.as_path(), installed_path.as_path())?;
 
         Ok(PluginInstallResult {
             plugin_id,
@@ -257,7 +261,10 @@ mod tests {
         let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
 
         let result = PluginStore::new(tmp.path().to_path_buf())
-            .install(tmp.path().join("sample-plugin"), plugin_id.clone())
+            .install(
+                AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap(),
+                plugin_id.clone(),
+            )
             .unwrap();
 
         let installed_path = tmp.path().join("plugins/cache/debug/sample-plugin/local");
@@ -266,7 +273,7 @@ mod tests {
             PluginInstallResult {
                 plugin_id,
                 plugin_version: "local".to_string(),
-                installed_path: installed_path.clone(),
+                installed_path: AbsolutePathBuf::try_from(installed_path.clone()).unwrap(),
             }
         );
         assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
@@ -280,7 +287,10 @@ mod tests {
         let plugin_id = PluginId::new("manifest-name".to_string(), "market".to_string()).unwrap();
 
         let result = PluginStore::new(tmp.path().to_path_buf())
-            .install(tmp.path().join("source-dir"), plugin_id.clone())
+            .install(
+                AbsolutePathBuf::try_from(tmp.path().join("source-dir")).unwrap(),
+                plugin_id.clone(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -288,7 +298,10 @@ mod tests {
             PluginInstallResult {
                 plugin_id,
                 plugin_version: "local".to_string(),
-                installed_path: tmp.path().join("plugins/cache/market/manifest-name/local"),
+                installed_path: AbsolutePathBuf::try_from(
+                    tmp.path().join("plugins/cache/market/manifest-name/local"),
+                )
+                .unwrap(),
             }
         );
     }
@@ -327,7 +340,7 @@ mod tests {
 
         let err = PluginStore::new(tmp.path().to_path_buf())
             .install(
-                tmp.path().join("source-dir"),
+                AbsolutePathBuf::try_from(tmp.path().join("source-dir")).unwrap(),
                 PluginId::new("source-dir".to_string(), "debug".to_string()).unwrap(),
             )
             .unwrap_err();
@@ -355,7 +368,7 @@ mod tests {
 
         let err = PluginStore::new(tmp.path().to_path_buf())
             .install(
-                tmp.path().join("source-dir"),
+                AbsolutePathBuf::try_from(tmp.path().join("source-dir")).unwrap(),
                 PluginId::new("different-name".to_string(), "debug".to_string()).unwrap(),
             )
             .unwrap_err();

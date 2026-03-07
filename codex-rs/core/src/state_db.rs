@@ -7,7 +7,6 @@ use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
 use chrono::Utc;
-use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
@@ -26,11 +25,10 @@ pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
 /// Initialize the state runtime for thread state persistence and backfill checks. To only be used
 /// inside `core`. The initialization should not be done anywhere else.
-pub(crate) async fn init(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
+pub(crate) async fn init(config: &Config) -> Option<StateDbHandle> {
     let runtime = match codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
-        otel.cloned(),
     )
     .await
     {
@@ -40,9 +38,6 @@ pub(crate) async fn init(config: &Config, otel: Option<&OtelManager>) -> Option<
                 "failed to initialize state runtime at {}: {err}",
                 config.sqlite_home.display()
             );
-            if let Some(otel) = otel {
-                otel.counter("codex.db.init", 1, &[("status", "init_error")]);
-            }
             return None;
         }
     };
@@ -59,17 +54,15 @@ pub(crate) async fn init(config: &Config, otel: Option<&OtelManager>) -> Option<
     if backfill_state.status != codex_state::BackfillStatus::Complete {
         let runtime_for_backfill = runtime.clone();
         let config = config.clone();
-        let otel = otel.cloned();
         tokio::spawn(async move {
-            metadata::backfill_sessions(runtime_for_backfill.as_ref(), &config, otel.as_ref())
-                .await;
+            metadata::backfill_sessions(runtime_for_backfill.as_ref(), &config).await;
         });
     }
     Some(runtime)
 }
 
 /// Get the DB if the feature is enabled and the DB exists.
-pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
+pub async fn get_state_db(config: &Config) -> Option<StateDbHandle> {
     let state_path = codex_state::state_db_path(config.sqlite_home.as_path());
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
         return None;
@@ -77,7 +70,6 @@ pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option
     let runtime = codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
-        otel.cloned(),
     )
     .await
     .ok()?;
@@ -92,13 +84,10 @@ pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Optio
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
         return None;
     }
-    let runtime = codex_state::StateRuntime::init(
-        codex_home.to_path_buf(),
-        default_provider.to_string(),
-        None,
-    )
-    .await
-    .ok()?;
+    let runtime =
+        codex_state::StateRuntime::init(codex_home.to_path_buf(), default_provider.to_string())
+            .await
+            .ok()?;
     require_backfill_complete(runtime, codex_home).await
 }
 
@@ -367,7 +356,7 @@ pub async fn reconcile_rollout(
         return;
     }
     let outcome =
-        match metadata::extract_metadata_from_rollout(rollout_path, default_provider, None).await {
+        match metadata::extract_metadata_from_rollout(rollout_path, default_provider).await {
             Ok(outcome) => outcome,
             Err(err) => {
                 warn!(
@@ -523,13 +512,7 @@ pub async fn apply_rollout_items(
     builder.rollout_path = rollout_path.to_path_buf();
     builder.cwd = normalize_cwd_for_state_db(&builder.cwd);
     if let Err(err) = ctx
-        .apply_rollout_items(
-            &builder,
-            items,
-            None,
-            new_thread_memory_mode,
-            updated_at_override,
-        )
+        .apply_rollout_items(&builder, items, new_thread_memory_mode, updated_at_override)
         .await
     {
         warn!(

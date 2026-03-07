@@ -236,7 +236,7 @@ impl AgentControl {
                 // Collab resume callers rebuild a placeholder ThreadSpawn source. Rehydrate the
                 // stored nickname/role from sqlite when available; otherwise leave both unset.
                 let (resumed_agent_nickname, resumed_agent_role) =
-                    if let Some(state_db_ctx) = state_db::get_state_db(&config, None).await {
+                    if let Some(state_db_ctx) = state_db::get_state_db(&config).await {
                         match state_db_ctx.get_thread(thread_id).await {
                             Ok(Some(metadata)) => (metadata.agent_nickname, metadata.agent_role),
                             Ok(None) | Err(_) => (None, None),

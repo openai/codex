@@ -22,6 +22,7 @@ use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
@@ -51,7 +52,7 @@ pub async fn spawn_command_under_seatbelt(
         args,
         arg0,
         cwd: command_cwd,
-        sandbox_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::from(sandbox_policy),
         network,
         stdio_policy,
         env,

@@ -449,7 +449,7 @@ fn write_plugin_source(
     plugin_name: &str,
     app_ids: &[&str],
 ) -> Result<()> {
-    let plugin_root = repo_root.join(".agents/plugins").join(plugin_name);
+    let plugin_root = repo_root.join(plugin_name);
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
     std::fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),

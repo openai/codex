@@ -690,6 +690,11 @@ impl BottomPane {
         self.status.is_some()
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_line_text(&self) -> Option<String> {
+        self.composer.status_line_text()
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.esc_backtrack_hint = true;
         self.composer.set_esc_backtrack_hint(true);
