@@ -1,7 +1,13 @@
 #[cfg(test)]
 use super::*;
 #[cfg(test)]
+use codex_protocol::protocol::FileSystemSandboxPolicy;
+#[cfg(test)]
+use codex_protocol::protocol::NetworkSandboxPolicy;
+#[cfg(test)]
 use codex_protocol::protocol::SandboxPolicy;
+#[cfg(test)]
+use pretty_assertions::assert_eq;
 
 #[test]
 fn detects_proc_mount_invalid_argument_failure() {
@@ -91,22 +97,25 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
 
 #[test]
 fn proxy_only_mode_takes_precedence_over_full_network_policy() {
-    let mode = bwrap_network_mode(&SandboxPolicy::DangerFullAccess, true);
+    let mode = bwrap_network_mode(NetworkSandboxPolicy::Enabled, true);
     assert_eq!(mode, BwrapNetworkMode::ProxyOnly);
 }
 
 #[test]
 fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
-    let mode = bwrap_network_mode(&SandboxPolicy::DangerFullAccess, true);
+    let mode = bwrap_network_mode(NetworkSandboxPolicy::Enabled, true);
     let argv = build_preflight_bwrap_argv(Path::new("/"), &SandboxPolicy::DangerFullAccess, mode);
     assert!(argv.iter().any(|arg| arg == "--"));
 }
 
 #[test]
 fn managed_proxy_inner_command_includes_route_spec() {
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let args = build_inner_seccomp_command(
         Path::new("/tmp"),
-        &SandboxPolicy::new_read_only_policy(),
+        &sandbox_policy,
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        NetworkSandboxPolicy::Restricted,
         true,
         true,
         Some("{\"routes\":[]}".to_string()),
@@ -118,10 +127,31 @@ fn managed_proxy_inner_command_includes_route_spec() {
 }
 
 #[test]
-fn non_managed_inner_command_omits_route_spec() {
+fn inner_command_includes_split_policy_flags() {
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let args = build_inner_seccomp_command(
         Path::new("/tmp"),
-        &SandboxPolicy::new_read_only_policy(),
+        &sandbox_policy,
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        NetworkSandboxPolicy::Restricted,
+        true,
+        false,
+        None,
+        vec!["/bin/true".to_string()],
+    );
+
+    assert!(args.iter().any(|arg| arg == "--file-system-sandbox-policy"));
+    assert!(args.iter().any(|arg| arg == "--network-sandbox-policy"));
+}
+
+#[test]
+fn non_managed_inner_command_omits_route_spec() {
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let args = build_inner_seccomp_command(
+        Path::new("/tmp"),
+        &sandbox_policy,
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        NetworkSandboxPolicy::Restricted,
         true,
         false,
         None,
@@ -134,15 +164,71 @@ fn non_managed_inner_command_omits_route_spec() {
 #[test]
 fn managed_proxy_inner_command_requires_route_spec() {
     let result = std::panic::catch_unwind(|| {
+        let sandbox_policy = SandboxPolicy::new_read_only_policy();
         build_inner_seccomp_command(
             Path::new("/tmp"),
-            &SandboxPolicy::new_read_only_policy(),
+            &sandbox_policy,
+            &FileSystemSandboxPolicy::from(&sandbox_policy),
+            NetworkSandboxPolicy::Restricted,
             true,
             true,
             None,
             vec!["/bin/true".to_string()],
         )
     });
+    assert!(result.is_err());
+}
+
+#[test]
+fn resolve_sandbox_policies_derives_split_policies_from_legacy_policy() {
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+
+    let resolved =
+        resolve_sandbox_policies(Path::new("/tmp"), Some(sandbox_policy.clone()), None, None);
+
+    assert_eq!(resolved.sandbox_policy, sandbox_policy.clone());
+    assert_eq!(
+        resolved.file_system_sandbox_policy,
+        FileSystemSandboxPolicy::from(&sandbox_policy)
+    );
+    assert_eq!(
+        resolved.network_sandbox_policy,
+        NetworkSandboxPolicy::from(&sandbox_policy)
+    );
+}
+
+#[test]
+fn resolve_sandbox_policies_derives_legacy_policy_from_split_policies() {
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
+
+    let resolved = resolve_sandbox_policies(
+        Path::new("/tmp"),
+        None,
+        Some(file_system_sandbox_policy.clone()),
+        Some(network_sandbox_policy),
+    );
+
+    assert_eq!(resolved.sandbox_policy, sandbox_policy);
+    assert_eq!(
+        resolved.file_system_sandbox_policy,
+        file_system_sandbox_policy
+    );
+    assert_eq!(resolved.network_sandbox_policy, network_sandbox_policy);
+}
+
+#[test]
+fn resolve_sandbox_policies_rejects_partial_split_policies() {
+    let result = std::panic::catch_unwind(|| {
+        resolve_sandbox_policies(
+            Path::new("/tmp"),
+            Some(SandboxPolicy::new_read_only_policy()),
+            Some(FileSystemSandboxPolicy::default()),
+            None,
+        )
+    });
+
     assert!(result.is_err());
 }
 

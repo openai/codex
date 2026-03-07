@@ -14,6 +14,9 @@ use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
 use crate::vendored_bwrap::exec_vendored_bwrap;
 use crate::vendored_bwrap::run_vendored_bwrap_main;
+use codex_protocol::protocol::FileSystemSandboxPolicy;
+use codex_protocol::protocol::NetworkSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 
 #[derive(Debug, Parser)]
 /// CLI surface for the Linux sandbox helper.
@@ -26,8 +29,18 @@ pub struct LandlockCommand {
     #[arg(long = "sandbox-policy-cwd")]
     pub sandbox_policy_cwd: PathBuf,
 
-    #[arg(long = "sandbox-policy")]
-    pub sandbox_policy: codex_protocol::protocol::SandboxPolicy,
+    /// Legacy compatibility policy.
+    ///
+    /// Newer callers pass split filesystem/network policies as well so the
+    /// helper can migrate incrementally without breaking older invocations.
+    #[arg(long = "sandbox-policy", hide = true)]
+    pub sandbox_policy: Option<SandboxPolicy>,
+
+    #[arg(long = "file-system-sandbox-policy", hide = true)]
+    pub file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
+
+    #[arg(long = "network-sandbox-policy", hide = true)]
+    pub network_sandbox_policy: Option<NetworkSandboxPolicy>,
 
     /// Opt-in: use the bubblewrap-based Linux sandbox pipeline.
     ///
@@ -77,6 +90,8 @@ pub fn run_main() -> ! {
     let LandlockCommand {
         sandbox_policy_cwd,
         sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
         use_bwrap_sandbox,
         apply_seccomp_then_exec,
         allow_network_for_proxy,
@@ -89,6 +104,16 @@ pub fn run_main() -> ! {
         panic!("No command specified to execute.");
     }
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_bwrap_sandbox);
+    let EffectiveSandboxPolicies {
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+    } = resolve_sandbox_policies(
+        sandbox_policy_cwd.as_path(),
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+    );
 
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
@@ -104,6 +129,7 @@ pub fn run_main() -> ! {
         let proxy_routing_active = allow_network_for_proxy;
         if let Err(e) = apply_sandbox_policy_to_current_thread(
             &sandbox_policy,
+            network_sandbox_policy,
             &sandbox_policy_cwd,
             false,
             allow_network_for_proxy,
@@ -114,9 +140,10 @@ pub fn run_main() -> ! {
         exec_or_panic(command);
     }
 
-    if sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {
+    if file_system_sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {
         if let Err(e) = apply_sandbox_policy_to_current_thread(
             &sandbox_policy,
+            network_sandbox_policy,
             &sandbox_policy_cwd,
             false,
             allow_network_for_proxy,
@@ -142,6 +169,8 @@ pub fn run_main() -> ! {
         let inner = build_inner_seccomp_command(
             &sandbox_policy_cwd,
             &sandbox_policy,
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
             use_bwrap_sandbox,
             allow_network_for_proxy,
             proxy_route_spec,
@@ -150,6 +179,7 @@ pub fn run_main() -> ! {
         run_bwrap_with_proc_fallback(
             &sandbox_policy_cwd,
             &sandbox_policy,
+            network_sandbox_policy,
             inner,
             !no_proc,
             allow_network_for_proxy,
@@ -159,6 +189,7 @@ pub fn run_main() -> ! {
     // Legacy path: Landlock enforcement only, when bwrap sandboxing is not enabled.
     if let Err(e) = apply_sandbox_policy_to_current_thread(
         &sandbox_policy,
+        network_sandbox_policy,
         &sandbox_policy_cwd,
         true,
         allow_network_for_proxy,
@@ -169,6 +200,53 @@ pub fn run_main() -> ! {
     exec_or_panic(command);
 }
 
+#[derive(Debug, Clone)]
+struct EffectiveSandboxPolicies {
+    sandbox_policy: SandboxPolicy,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+}
+
+fn resolve_sandbox_policies(
+    sandbox_policy_cwd: &Path,
+    sandbox_policy: Option<SandboxPolicy>,
+    file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
+    network_sandbox_policy: Option<NetworkSandboxPolicy>,
+) -> EffectiveSandboxPolicies {
+    match (
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+    ) {
+        (Some(sandbox_policy), Some(file_system_sandbox_policy), Some(network_sandbox_policy)) => {
+            EffectiveSandboxPolicies {
+                sandbox_policy,
+                file_system_sandbox_policy,
+                network_sandbox_policy,
+            }
+        }
+        (Some(sandbox_policy), None, None) => EffectiveSandboxPolicies {
+            file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
+            network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
+            sandbox_policy,
+        },
+        (None, Some(file_system_sandbox_policy), Some(network_sandbox_policy)) => {
+            let sandbox_policy = file_system_sandbox_policy
+                .to_legacy_sandbox_policy(network_sandbox_policy, sandbox_policy_cwd)
+                .unwrap_or_else(|err| {
+                    panic!("failed to derive legacy sandbox policy from split policies: {err}")
+                });
+            EffectiveSandboxPolicies {
+                sandbox_policy,
+                file_system_sandbox_policy,
+                network_sandbox_policy,
+            }
+        }
+        (None, None, None) => panic!("missing sandbox policy configuration"),
+        _ => panic!("file-system and network sandbox policies must be provided together"),
+    }
+}
+
 fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_sandbox: bool) {
     if apply_seccomp_then_exec && !use_bwrap_sandbox {
         panic!("--apply-seccomp-then-exec requires --use-bwrap-sandbox");
@@ -177,12 +255,13 @@ fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_san
 
 fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
-    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
+    sandbox_policy: &SandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     inner: Vec<String>,
     mount_proc: bool,
     allow_network_for_proxy: bool,
 ) -> ! {
-    let network_mode = bwrap_network_mode(sandbox_policy, allow_network_for_proxy);
+    let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
     let mut mount_proc = mount_proc;
 
     if mount_proc && !preflight_proc_mount_support(sandbox_policy_cwd, sandbox_policy, network_mode)
@@ -200,12 +279,12 @@ fn run_bwrap_with_proc_fallback(
 }
 
 fn bwrap_network_mode(
-    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     allow_network_for_proxy: bool,
 ) -> BwrapNetworkMode {
     if allow_network_for_proxy {
         BwrapNetworkMode::ProxyOnly
-    } else if sandbox_policy.has_full_network_access() {
+    } else if network_sandbox_policy.is_enabled() {
         BwrapNetworkMode::FullAccess
     } else {
         BwrapNetworkMode::Isolated
@@ -214,7 +293,7 @@ fn bwrap_network_mode(
 
 fn build_bwrap_argv(
     inner: Vec<String>,
-    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
+    sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
     options: BwrapOptions,
 ) -> Vec<String> {
@@ -237,7 +316,7 @@ fn build_bwrap_argv(
 
 fn preflight_proc_mount_support(
     sandbox_policy_cwd: &Path,
-    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
+    sandbox_policy: &SandboxPolicy,
     network_mode: BwrapNetworkMode,
 ) -> bool {
     let preflight_argv =
@@ -248,7 +327,7 @@ fn preflight_proc_mount_support(
 
 fn build_preflight_bwrap_argv(
     sandbox_policy_cwd: &Path,
-    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
+    sandbox_policy: &SandboxPolicy,
     network_mode: BwrapNetworkMode,
 ) -> Vec<String> {
     let preflight_command = vec![resolve_true_command()];
@@ -361,7 +440,9 @@ fn is_proc_mount_failure(stderr: &str) -> bool {
 /// Build the inner command that applies seccomp after bubblewrap.
 fn build_inner_seccomp_command(
     sandbox_policy_cwd: &Path,
-    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
+    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     use_bwrap_sandbox: bool,
     allow_network_for_proxy: bool,
     proxy_route_spec: Option<String>,
@@ -375,6 +456,14 @@ fn build_inner_seccomp_command(
         Ok(json) => json,
         Err(err) => panic!("failed to serialize sandbox policy: {err}"),
     };
+    let file_system_policy_json = match serde_json::to_string(file_system_sandbox_policy) {
+        Ok(json) => json,
+        Err(err) => panic!("failed to serialize filesystem sandbox policy: {err}"),
+    };
+    let network_policy_json = match serde_json::to_string(&network_sandbox_policy) {
+        Ok(json) => json,
+        Err(err) => panic!("failed to serialize network sandbox policy: {err}"),
+    };
 
     let mut inner = vec![
         current_exe.to_string_lossy().to_string(),
@@ -382,6 +471,10 @@ fn build_inner_seccomp_command(
         sandbox_policy_cwd.to_string_lossy().to_string(),
         "--sandbox-policy".to_string(),
         policy_json,
+        "--file-system-sandbox-policy".to_string(),
+        file_system_policy_json,
+        "--network-sandbox-policy".to_string(),
+        network_policy_json,
     ];
     if use_bwrap_sandbox {
         inner.push("--use-bwrap-sandbox".to_string());

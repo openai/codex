@@ -8,6 +8,7 @@ use std::path::Path;
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
 use codex_core::error::SandboxErr;
+use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -40,13 +41,14 @@ use seccompiler::apply_filter;
 /// Filesystem restrictions are intentionally handled by bubblewrap.
 pub(crate) fn apply_sandbox_policy_to_current_thread(
     sandbox_policy: &SandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     cwd: &Path,
     apply_landlock_fs: bool,
     allow_network_for_proxy: bool,
     proxy_routed_network: bool,
 ) -> Result<()> {
     let network_seccomp_mode = network_seccomp_mode(
-        sandbox_policy,
+        network_sandbox_policy,
         allow_network_for_proxy,
         proxy_routed_network,
     );
@@ -91,20 +93,20 @@ enum NetworkSeccompMode {
 }
 
 fn should_install_network_seccomp(
-    sandbox_policy: &SandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     allow_network_for_proxy: bool,
 ) -> bool {
     // Managed-network sessions should remain fail-closed even for policies that
     // would normally grant full network access (for example, DangerFullAccess).
-    !sandbox_policy.has_full_network_access() || allow_network_for_proxy
+    !network_sandbox_policy.is_enabled() || allow_network_for_proxy
 }
 
 fn network_seccomp_mode(
-    sandbox_policy: &SandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     allow_network_for_proxy: bool,
     proxy_routed_network: bool,
 ) -> Option<NetworkSeccompMode> {
-    if !should_install_network_seccomp(sandbox_policy, allow_network_for_proxy) {
+    if !should_install_network_seccomp(network_sandbox_policy, allow_network_for_proxy) {
         None
     } else if proxy_routed_network {
         Some(NetworkSeccompMode::ProxyRouted)
