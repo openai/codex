@@ -703,7 +703,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "guardian_approval",
         stage: Stage::Experimental {
             name: "Guardian approvals",
-            menu_description: "Let a guardian subagent review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access. Try `codex -a on-request -s workspace-write`.",
+            menu_description: "Let a guardian subagent review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access.",
             announcement: "",
         },
         default_enabled: false,
@@ -913,7 +913,7 @@ mod tests {
         assert_eq!(
             stage.experimental_menu_description().map(str::to_owned),
             Some(
-                "Let a guardian subagent review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access. Try `codex -a on-request -s workspace-write`.".to_string()
+                "Let a guardian subagent review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access.".to_string()
             )
         );
         assert_eq!(stage.experimental_announcement(), None);

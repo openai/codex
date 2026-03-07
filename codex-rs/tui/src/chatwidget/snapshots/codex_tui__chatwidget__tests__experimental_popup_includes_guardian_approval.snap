@@ -12,8 +12,7 @@ expression: popup
   [ ] Apps                         Use a connected ChatGPT App using "$". Install Apps via /apps command. Restart
                                    Codex after enabling.
   [ ] Guardian approvals           Let a guardian subagent review `on-request` approval prompts instead of showing
-                                   them to you, including sandbox escapes and blocked network access. Try `codex -a
-                                   on-request -s workspace-write`.
+                                   them to you, including sandbox escapes and blocked network access.
   [ ] Prevent sleep while running  Keep your computer awake while Codex is running a thread.
 
   Press space to select or enter to save for next conversation
