@@ -151,12 +151,6 @@ pub(crate) fn test_config() -> Config {
     .expect("load default test config")
 }
 
-impl Config {
-    pub(crate) fn custom_model_alias(&self, alias: &str) -> Option<&CustomModelConfig> {
-        self.custom_models.get(alias)
-    }
-}
-
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Permissions {
@@ -1403,29 +1397,6 @@ pub struct RealtimeAudioConfig {
 pub struct RealtimeAudioToml {
     pub microphone: Option<String>,
     pub speaker: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CustomModelConfig {
-    /// Provider-facing model slug used on API requests.
-    pub model: String,
-    /// Optional context window override applied when this alias is selected.
-    pub model_context_window: Option<i64>,
-    /// Optional auto-compaction token limit override applied when this alias is selected.
-    pub model_auto_compact_token_limit: Option<i64>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct CustomModelToml {
-    /// User-facing alias shown in the model picker.
-    pub name: String,
-    /// Provider-facing model slug used on API requests.
-    pub model: String,
-    /// Optional context window override applied when this alias is selected.
-    pub model_context_window: Option<i64>,
-    /// Optional auto-compaction token limit override applied when this alias is selected.
-    pub model_auto_compact_token_limit: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
