@@ -938,6 +938,9 @@ fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<GuardianAsses
 
 /// JSON schema supplied as `final_output_json_schema` to force a structured
 /// final answer from the guardian subagent.
+///
+/// Keep this next to `guardian_output_contract_prompt()` so the prompt text and
+/// enforced schema stay aligned.
 fn guardian_output_schema() -> Value {
     serde_json::json!({
         "type": "object",
@@ -972,12 +975,26 @@ fn guardian_output_schema() -> Value {
     })
 }
 
+/// Prompt fragment that describes the exact JSON contract enforced by
+/// `guardian_output_schema()`.
+fn guardian_output_contract_prompt() -> &'static str {
+    r#"Output strict JSON with this exact schema:
+{
+  "risk_level": "low" | "medium" | "high",
+  "risk_score": 0-100,
+  "rationale": string,
+  "evidence": [{"message": string, "why": string}]
+}"#
+}
+
 /// Guardian policy prompt.
 ///
 /// Keep the prompt in a dedicated markdown file so reviewers can audit prompt
-/// changes directly without diffing through code.
-fn guardian_policy_prompt() -> &'static str {
-    include_str!("guardian_prompt.md")
+/// changes directly without diffing through code. The output contract is
+/// appended from code so it stays near `guardian_output_schema()`.
+fn guardian_policy_prompt() -> String {
+    let prompt = include_str!("guardian_prompt.md").trim_end();
+    format!("{prompt}\n\n{}\n", guardian_output_contract_prompt())
 }
 
 impl GuardianRiskLevel {
