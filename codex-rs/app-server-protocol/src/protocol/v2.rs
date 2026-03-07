@@ -59,6 +59,8 @@ use codex_protocol::protocol::HookOutputEntryKind as CoreHookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus as CoreHookRunStatus;
 use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use codex_protocol::protocol::HookScope as CoreHookScope;
+use codex_protocol::protocol::GuardianAssessmentStatus as CoreAutomaticReviewStatus;
+use codex_protocol::protocol::GuardianRiskLevel as CoreRiskLevel;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
@@ -4163,6 +4165,17 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    GuardianAssessment {
+        id: String,
+        status: GuardianAssessmentStatus,
+        #[ts(type = "number | null")]
+        risk_score: Option<u8>,
+        risk_level: Option<GuardianRiskLevel>,
+        rationale: Option<String>,
+        action: Option<JsonValue>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     EnteredReviewMode { id: String, review: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4187,9 +4200,48 @@ impl ThreadItem {
             | ThreadItem::WebSearch { id, .. }
             | ThreadItem::ImageView { id, .. }
             | ThreadItem::ImageGeneration { id, .. }
+            | ThreadItem::GuardianAssessment { id, .. }
             | ThreadItem::EnteredReviewMode { id, .. }
             | ThreadItem::ExitedReviewMode { id, .. }
             | ThreadItem::ContextCompaction { id, .. } => id,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum GuardianAssessmentStatus {
+    InProgress,
+    Approved,
+    Denied,
+}
+
+impl From<CoreGuardianAssessmentStatus> for GuardianAssessmentStatus {
+    fn from(value: CoreGuardianAssessmentStatus) -> Self {
+        match value {
+            CoreGuardianAssessmentStatus::InProgress => Self::InProgress,
+            CoreGuardianAssessmentStatus::Approved => Self::Approved,
+            CoreGuardianAssessmentStatus::Denied => Self::Denied,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum GuardianRiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
+    fn from(value: CoreGuardianRiskLevel) -> Self {
+        match value {
+            CoreGuardianRiskLevel::Low => Self::Low,
+            CoreGuardianRiskLevel::Medium => Self::Medium,
+            CoreGuardianRiskLevel::High => Self::High,
         }
     }
 }

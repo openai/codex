@@ -45,6 +45,7 @@ use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GrantedPermissionProfile as V2GrantedPermissionProfile;
 use codex_app_server_protocol::HookCompletedNotification;
 use codex_app_server_protocol::HookStartedNotification;
+use codex_app_server_protocol::GuardianAssessmentStatus;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -245,6 +246,45 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
         }
         EventMsg::Warning(_warning_event) => {}
+        EventMsg::GuardianAssessment(assessment) => {
+            if let ApiVersion::V2 = api_version {
+                let turn_id = assessment.turn_id.clone();
+                let status = assessment.status;
+                let item = ThreadItem::GuardianAssessment {
+                    id: assessment.id.clone(),
+                    status: GuardianAssessmentStatus::from(status),
+                    risk_score: assessment.risk_score,
+                    risk_level: assessment.risk_level.map(Into::into),
+                    rationale: assessment.rationale.clone(),
+                    action: assessment.action.clone(),
+                };
+                match status {
+                    codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
+                        let notification = ItemStartedNotification {
+                            item,
+                            thread_id: conversation_id.to_string(),
+                            turn_id,
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ItemStarted(notification))
+                            .await;
+                    }
+                    codex_protocol::protocol::GuardianAssessmentStatus::Approved
+                    | codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
+                        let notification = ItemCompletedNotification {
+                            item,
+                            thread_id: conversation_id.to_string(),
+                            turn_id,
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ItemCompleted(
+                                notification,
+                            ))
+                            .await;
+                    }
+                }
+            }
+        }
         EventMsg::ModelReroute(event) => {
             if let ApiVersion::V2 = api_version {
                 let notification = ModelReroutedNotification {

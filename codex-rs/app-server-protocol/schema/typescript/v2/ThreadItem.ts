@@ -12,6 +12,8 @@ import type { CommandExecutionStatus } from "./CommandExecutionStatus";
 import type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 import type { DynamicToolCallStatus } from "./DynamicToolCallStatus";
 import type { FileUpdateChange } from "./FileUpdateChange";
+import type { GuardianAssessmentStatus } from "./GuardianAssessmentStatus";
+import type { GuardianRiskLevel } from "./GuardianRiskLevel";
 import type { McpToolCallError } from "./McpToolCallError";
 import type { McpToolCallResult } from "./McpToolCallResult";
 import type { McpToolCallStatus } from "./McpToolCallStatus";
@@ -94,4 +96,4 @@ reasoningEffort: ReasoningEffort | null,
 /**
  * Last known status of the target agents, when available.
  */
-agentsStates: { [key in string]?: CollabAgentState }, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null, } | { "type": "imageView", id: string, path: string, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, } | { "type": "enteredReviewMode", id: string, review: string, } | { "type": "exitedReviewMode", id: string, review: string, } | { "type": "contextCompaction", id: string, };
+agentsStates: { [key in string]?: CollabAgentState }, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null, } | { "type": "imageView", id: string, path: string, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, } | { "type": "guardianAssessment", id: string, status: GuardianAssessmentStatus, riskScore: number | null, riskLevel: GuardianRiskLevel | null, rationale: string | null, action: JsonValue | null, } | { "type": "enteredReviewMode", id: string, review: string, } | { "type": "exitedReviewMode", id: string, review: string, } | { "type": "contextCompaction", id: string, };

@@ -21,6 +21,9 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentEvent;
+use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -29,6 +32,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -77,6 +81,14 @@ pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
     "or if the user explicitly approves the action after being informed of the risk. ",
     "Otherwise, stop and request user input.",
 );
+
+fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
+    match level {
+        GuardianRiskLevel::Low => "low",
+        GuardianRiskLevel::Medium => "medium",
+        GuardianRiskLevel::High => "high",
+    }
+}
 
 /// Whether this turn should route `on-request` approval prompts through the
 /// guardian reviewer instead of surfacing them to the user.
@@ -227,10 +239,26 @@ async fn run_guardian_review(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
+    let assessment_id = Uuid::new_v4().to_string();
     session
         .notify_background_event(turn.as_ref(), "Reviewing approval request...".to_string())
         .await;
+    session
+        .send_event(
+            turn.as_ref(),
+            EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                id: assessment_id.clone(),
+                turn_id: turn.sub_id.clone(),
+                status: GuardianAssessmentStatus::InProgress,
+                risk_score: None,
+                risk_level: None,
+                rationale: None,
+                action: None,
+            }),
+        )
+        .await;
 
+    let denied_action = request.action.clone();
     let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
@@ -282,6 +310,26 @@ async fn run_guardian_review(
         .send_event(
             turn.as_ref(),
             EventMsg::Warning(WarningEvent { message: warning }),
+        )
+        .await;
+    let status = if approved {
+        GuardianAssessmentStatus::Approved
+    } else {
+        GuardianAssessmentStatus::Denied
+    };
+    let action = (!approved).then_some(denied_action);
+    session
+        .send_event(
+            turn.as_ref(),
+            EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                id: assessment_id,
+                turn_id: turn.sub_id.clone(),
+                status,
+                risk_score: Some(assessment.risk_score),
+                risk_level: Some(assessment.risk_level),
+                rationale: Some(assessment.rationale.clone()),
+                action,
+            }),
         )
         .await;
 
@@ -1025,16 +1073,6 @@ fn guardian_output_contract_prompt() -> &'static str {
 fn guardian_policy_prompt() -> String {
     let prompt = include_str!("guardian_prompt.md").trim_end();
     format!("{prompt}\n\n{}\n", guardian_output_contract_prompt())
-}
-
-impl GuardianRiskLevel {
-    fn as_str(self) -> &'static str {
-        match self {
-            GuardianRiskLevel::Low => "low",
-            GuardianRiskLevel::Medium => "medium",
-            GuardianRiskLevel::High => "high",
-        }
-    }
 }
 
 #[cfg(test)]

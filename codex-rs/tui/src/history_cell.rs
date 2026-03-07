@@ -794,6 +794,7 @@ fn exec_snippet(command: &[String]) -> String {
 pub fn new_approval_decision_cell(
     command: Vec<String>,
     decision: codex_protocol::protocol::ReviewDecision,
+    actor: ApprovalDecisionActor,
 ) -> Box<dyn HistoryCell> {
     use codex_protocol::protocol::NetworkPolicyRuleAction;
     use codex_protocol::protocol::ReviewDecision::*;
@@ -804,7 +805,7 @@ pub fn new_approval_decision_cell(
             (
                 "✔ ".green(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "approved".bold(),
                     " codex to run ".into(),
                     snippet,
@@ -819,7 +820,7 @@ pub fn new_approval_decision_cell(
             (
                 "✔ ".green(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "approved".bold(),
                     " codex to always run commands that start with ".into(),
                     snippet,
@@ -831,7 +832,7 @@ pub fn new_approval_decision_cell(
             (
                 "✔ ".green(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "approved".bold(),
                     " codex to run ".into(),
                     snippet,
@@ -845,7 +846,7 @@ pub fn new_approval_decision_cell(
             NetworkPolicyRuleAction::Allow => (
                 "✔ ".green(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "persisted".bold(),
                     " Codex network access to ".into(),
                     Span::from(network_policy_amendment.host).dim(),
@@ -854,7 +855,7 @@ pub fn new_approval_decision_cell(
             NetworkPolicyRuleAction::Deny => (
                 "✗ ".red(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "denied".bold(),
                     " codex network access to ".into(),
                     Span::from(network_policy_amendment.host).dim(),
@@ -867,7 +868,7 @@ pub fn new_approval_decision_cell(
             (
                 "✗ ".red(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "did not approve".bold(),
                     " codex to run ".into(),
                     snippet,
@@ -879,7 +880,7 @@ pub fn new_approval_decision_cell(
             (
                 "✗ ".red(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "canceled".bold(),
                     " the request to run ".into(),
                     snippet,
@@ -893,6 +894,56 @@ pub fn new_approval_decision_cell(
         symbol,
         "  ",
     ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecisionActor {
+    User,
+    Guardian,
+}
+
+impl ApprovalDecisionActor {
+    fn subject(self) -> &'static str {
+        match self {
+            Self::User => "You ",
+            Self::Guardian => "Guardian ",
+        }
+    }
+}
+
+pub fn new_guardian_denied_patch_request(
+    files: Vec<String>,
+    change_count: usize,
+) -> Box<dyn HistoryCell> {
+    let mut summary = vec![
+        ApprovalDecisionActor::Guardian.subject().into(),
+        "did not approve".bold(),
+        " codex to apply ".into(),
+    ];
+    if files.len() == 1 {
+        summary.push("a patch touching ".into());
+        summary.push(Span::from(files[0].clone()).dim());
+    } else {
+        summary.push(format!("a patch touching {change_count} changes across ").into());
+        summary.push(Span::from(files.len().to_string()).dim());
+        summary.push(" files".into());
+    }
+
+    Box::new(PrefixedWrappedHistoryCell::new(
+        Line::from(summary),
+        "✗ ".red(),
+        "  ",
+    ))
+}
+
+pub fn new_guardian_denied_action_request(summary: String) -> Box<dyn HistoryCell> {
+    let line = Line::from(vec![
+        ApprovalDecisionActor::Guardian.subject().into(),
+        "did not approve".bold(),
+        " ".into(),
+        Span::from(summary).dim(),
+    ]);
+    Box::new(PrefixedWrappedHistoryCell::new(line, "✗ ".red(), "  "))
 }
 
 /// Cyan history cell line showing the current review status.

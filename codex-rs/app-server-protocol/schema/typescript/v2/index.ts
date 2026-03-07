@@ -116,6 +116,8 @@ export type { GetAccountResponse } from "./GetAccountResponse";
 export type { GitInfo } from "./GitInfo";
 export type { GrantedMacOsPermissions } from "./GrantedMacOsPermissions";
 export type { GrantedPermissionProfile } from "./GrantedPermissionProfile";
+export type { GuardianAssessmentStatus } from "./GuardianAssessmentStatus";
+export type { GuardianRiskLevel } from "./GuardianRiskLevel";
 export type { HazelnutScope } from "./HazelnutScope";
 export type { HookCompletedNotification } from "./HookCompletedNotification";
 export type { HookEventName } from "./HookEventName";
