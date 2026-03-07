@@ -92,6 +92,9 @@ pub(crate) enum StatusLineItem {
 
     /// Full session UUID.
     SessionId,
+
+    /// Whether Fast mode is currently active.
+    FastMode,
 }
 
 impl StatusLineItem {
@@ -125,6 +128,7 @@ impl StatusLineItem {
             StatusLineItem::SessionId => {
                 "Current session identifier (omitted until session starts)"
             }
+            StatusLineItem::FastMode => "Whether Fast mode is currently active",
         }
     }
 }

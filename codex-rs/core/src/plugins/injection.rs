@@ -19,7 +19,7 @@ pub(crate) fn build_plugin_injections(
         return Vec::new();
     }
 
-    // Turn each explicit @plugin mention into a developer hint that points the
+    // Turn each explicit plugin mention into a developer hint that points the
     // model at the plugin's visible MCP servers, enabled apps, and skill prefix.
     mentioned_plugins
         .iter()

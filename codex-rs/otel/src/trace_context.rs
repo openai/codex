@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::env;
+use std::sync::OnceLock;
 
 use codex_protocol::protocol::W3cTraceContext;
 use opentelemetry::Context;
@@ -6,7 +8,13 @@ use opentelemetry::propagation::TextMapPropagator;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use tracing::Span;
+use tracing::debug;
+use tracing::warn;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+const TRACEPARENT_ENV_VAR: &str = "TRACEPARENT";
+const TRACESTATE_ENV_VAR: &str = "TRACESTATE";
+static TRACEPARENT_CONTEXT: OnceLock<Option<Context>> = OnceLock::new();
 
 pub fn current_span_w3c_trace_context() -> Option<W3cTraceContext> {
     let context = Span::current().context();
@@ -51,6 +59,12 @@ pub fn set_parent_from_context(span: &Span, context: Context) {
     let _ = span.set_parent(context);
 }
 
+pub fn traceparent_context_from_env() -> Option<Context> {
+    TRACEPARENT_CONTEXT
+        .get_or_init(load_traceparent_context)
+        .clone()
+}
+
 pub(crate) fn context_from_trace_headers(
     traceparent: Option<&str>,
     tracestate: Option<&str>,
@@ -67,6 +81,22 @@ pub(crate) fn context_from_trace_headers(
         return None;
     }
     Some(context)
+}
+
+fn load_traceparent_context() -> Option<Context> {
+    let traceparent = env::var(TRACEPARENT_ENV_VAR).ok()?;
+    let tracestate = env::var(TRACESTATE_ENV_VAR).ok();
+
+    match context_from_trace_headers(Some(&traceparent), tracestate.as_deref()) {
+        Some(context) => {
+            debug!("TRACEPARENT detected; continuing trace from parent context");
+            Some(context)
+        }
+        None => {
+            warn!("TRACEPARENT is set but invalid; ignoring trace context");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
