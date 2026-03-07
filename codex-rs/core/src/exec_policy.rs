@@ -167,6 +167,7 @@ pub enum ExecPolicyUpdateError {
 
 pub(crate) struct ExecPolicyManager {
     policy: ArcSwap<Policy>,
+    update_lock: tokio::sync::Mutex<()>,
 }
 
 pub(crate) struct ExecApprovalRequest<'a> {
@@ -181,6 +182,7 @@ impl ExecPolicyManager {
     pub(crate) fn new(policy: Arc<Policy>) -> Self {
         Self {
             policy: ArcSwap::from(policy),
+            update_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -285,6 +287,7 @@ impl ExecPolicyManager {
         codex_home: &Path,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
+        let _update_guard = self.update_lock.lock().await;
         let policy_path = default_policy_path(codex_home);
         spawn_blocking({
             let policy_path = policy_path.clone();
@@ -298,14 +301,6 @@ impl ExecPolicyManager {
             source,
         })?;
 
-        self.apply_amendment_in_memory(amendment)?;
-        Ok(())
-    }
-
-    pub(crate) fn apply_amendment_in_memory(
-        &self,
-        amendment: &ExecPolicyAmendment,
-    ) -> Result<(), ExecPolicyUpdateError> {
         let current_policy = self.current();
         let match_options = MatchOptions {
             resolve_host_executables: true,
@@ -323,7 +318,7 @@ impl ExecPolicyManager {
             return Ok(());
         }
 
-        let mut updated_policy = self.current().as_ref().clone();
+        let mut updated_policy = current_policy.as_ref().clone();
         updated_policy.add_prefix_rule(&amendment.command, Decision::Allow)?;
         self.policy.store(Arc::new(updated_policy));
         Ok(())
@@ -337,6 +332,7 @@ impl ExecPolicyManager {
         decision: Decision,
         justification: Option<String>,
     ) -> Result<(), ExecPolicyUpdateError> {
+        let _update_guard = self.update_lock.lock().await;
         let policy_path = default_policy_path(codex_home);
         let host = host.to_string();
         spawn_blocking({
@@ -1921,6 +1917,42 @@ prefix_rule(pattern=["git"], decision="prompt")
                 ..
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn concurrent_execpolicy_amendments_preserve_both_rules() {
+        let codex_home = tempdir().expect("create temp dir");
+        let manager = Arc::new(ExecPolicyManager::default());
+        let echo = ExecPolicyAmendment::new(vec!["echo".to_string()]);
+        let cargo = ExecPolicyAmendment::new(vec!["cargo".to_string(), "test".to_string()]);
+
+        let (echo_result, cargo_result) = tokio::join!(
+            manager.append_amendment_and_update(codex_home.path(), &echo),
+            manager.append_amendment_and_update(codex_home.path(), &cargo),
+        );
+        echo_result.expect("update echo policy");
+        cargo_result.expect("update cargo policy");
+
+        let updated_policy = manager.current();
+        let echo_evaluation = updated_policy.check(&["echo".to_string()], &|_| Decision::Forbidden);
+        assert_eq!(echo_evaluation.decision, Decision::Allow);
+        assert!(echo_evaluation.matched_rules.iter().any(|rule_match| {
+            is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+        }));
+
+        let cargo_evaluation = updated_policy
+            .check(&["cargo".to_string(), "test".to_string()], &|_| {
+                Decision::Forbidden
+            });
+        assert_eq!(cargo_evaluation.decision, Decision::Allow);
+        assert!(cargo_evaluation.matched_rules.iter().any(|rule_match| {
+            is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+        }));
+
+        let contents = fs::read_to_string(default_policy_path(codex_home.path()))
+            .expect("policy file should have been created");
+        assert!(contents.contains(r#"prefix_rule(pattern=["echo"], decision="allow")"#));
+        assert!(contents.contains(r#"prefix_rule(pattern=["cargo", "test"], decision="allow")"#));
     }
 
     #[tokio::test]
