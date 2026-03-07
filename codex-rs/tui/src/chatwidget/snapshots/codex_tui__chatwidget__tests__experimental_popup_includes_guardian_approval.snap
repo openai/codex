@@ -12,7 +12,7 @@ expression: popup
   [ ] Apps                         Use a connected ChatGPT App using "$". Install Apps via /apps command. Restart
                                    Codex after enabling.
   [ ] Automatic approval review    Dispatch `on-request` approval prompts (for e.g. sandbox
-                                   escapes and blocked network access) to a carefully-prompted
+                                   escapes or blocked network access) to a carefully-prompted
                                    security reviewer subagent rather than blocking the agent on
                                    your input.
   [ ] Prevent sleep while running  Keep your computer awake while Codex is running a thread.
