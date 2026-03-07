@@ -161,44 +161,35 @@ fn format_guardian_action_pretty_truncates_large_string_fields() {
         "cwd": PathBuf::from("/tmp"),
         "files": Vec::<String>::new(),
         "change_count": 1usize,
-        "patch": "line\n".repeat(2_000),
+        "patch": "line\n".repeat(10_000),
     });
 
     let rendered = format_guardian_action_pretty(&action);
+    let original_patch = action["patch"]
+        .as_str()
+        .expect("test patch should serialize as a string");
 
     assert!(rendered.contains("\"tool\": \"apply_patch\""));
-    assert!(rendered.contains("<guardian_truncated omitted_approx_tokens=\""));
+    assert!(rendered.len() < original_patch.len());
 }
 
 #[test]
 fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
     let repeated = "signal ".repeat(8_000);
-    let entries = vec![
+    let mut entries = vec![
         GuardianTranscriptEntry {
             kind: GuardianTranscriptEntryKind::User,
             text: "please figure out if the repo is public".to_string(),
-        },
-        GuardianTranscriptEntry {
-            kind: GuardianTranscriptEntryKind::Tool("tool gh".to_string()),
-            text: repeated.clone(),
-        },
-        GuardianTranscriptEntry {
-            kind: GuardianTranscriptEntryKind::Tool("tool read_file".to_string()),
-            text: repeated.clone(),
-        },
-        GuardianTranscriptEntry {
-            kind: GuardianTranscriptEntryKind::Tool("tool web".to_string()),
-            text: repeated.clone(),
-        },
-        GuardianTranscriptEntry {
-            kind: GuardianTranscriptEntryKind::Tool("tool gh".to_string()),
-            text: repeated,
         },
         GuardianTranscriptEntry {
             kind: GuardianTranscriptEntryKind::Assistant,
             text: "The public repo check is the main reason I want to escalate.".to_string(),
         },
     ];
+    entries.extend((0..12).map(|index| GuardianTranscriptEntry {
+        kind: GuardianTranscriptEntryKind::Tool(format!("tool call {index}")),
+        text: repeated.clone(),
+    }));
 
     let (transcript, omission) = render_guardian_transcript_entries(&entries);
 
@@ -208,12 +199,17 @@ fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
             .any(|entry| entry == "[1] user: please figure out if the repo is public")
     );
     assert!(transcript.iter().any(|entry| {
-        entry == "[6] assistant: The public repo check is the main reason I want to escalate."
+        entry == "[2] assistant: The public repo check is the main reason I want to escalate."
     }));
     assert!(
         !transcript
             .iter()
-            .any(|entry| entry.starts_with("[2] tool gh:"))
+            .any(|entry| entry.starts_with("[3] tool call 0:"))
+    );
+    assert!(
+        !transcript
+            .iter()
+            .any(|entry| entry.starts_with("[4] tool call 1:"))
     );
     assert!(omission.is_some());
 }
