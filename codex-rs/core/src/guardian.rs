@@ -59,6 +59,13 @@ const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 20;
 
 pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = "Guardian rejected this action due to unacceptable risk. The agent must not attempt to achieve the same outcome via workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or stop and request user input.";
 
+pub(crate) fn routes_approval_to_guardian(
+    turn: &TurnContext,
+    approval_policy: AskForApproval,
+) -> bool {
+    approval_policy == AskForApproval::OnRequest && turn.features.enabled(Feature::GuardianApproval)
+}
+
 /// Canonical description of the action the guardian is being asked to review.
 #[derive(Debug, Clone)]
 pub(crate) struct GuardianReviewRequest {

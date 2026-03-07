@@ -7,6 +7,7 @@
 use crate::exec::ExecToolCallOutput;
 use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_escalation;
+use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -120,7 +121,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
         Box::pin(async move {
-            if matches!(turn.approval_policy.value(), AskForApproval::Guardian) {
+            if routes_approval_to_guardian(turn, turn.approval_policy.value()) {
                 let request = GuardianReviewRequest {
                     tool_name: "apply_patch",
                     action: serde_json::json!({
@@ -157,7 +158,6 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         match policy {
             AskForApproval::Never => false,
-            AskForApproval::Guardian => true,
             AskForApproval::Reject(reject_config) => !reject_config.rejects_sandbox_approval(),
             AskForApproval::OnFailure => true,
             AskForApproval::OnRequest => true,

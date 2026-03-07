@@ -112,7 +112,6 @@ pub(crate) fn prompt_is_rejected_by_policy(
         AskForApproval::Never => Some(PROMPT_CONFLICT_REASON),
         AskForApproval::OnFailure => None,
         AskForApproval::OnRequest => None,
-        AskForApproval::Guardian => None,
         AskForApproval::UnlessTrusted => None,
         AskForApproval::Reject(reject_config) => {
             if prompt_is_rule {
@@ -513,7 +512,6 @@ pub fn render_decision_for_unmatched_command(
             AskForApproval::Never => Decision::Forbidden,
             AskForApproval::OnFailure
             | AskForApproval::OnRequest
-            | AskForApproval::Guardian
             | AskForApproval::UnlessTrusted
             | AskForApproval::Reject(_) => Decision::Prompt,
         };
@@ -530,7 +528,7 @@ pub fn render_decision_for_unmatched_command(
             // returned false, so we must prompt.
             Decision::Prompt
         }
-        AskForApproval::OnRequest | AskForApproval::Guardian => {
+        AskForApproval::OnRequest => {
             match sandbox_policy {
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                     // The user has indicated we should "just run" commands
@@ -1578,47 +1576,6 @@ prefix_rule(pattern=["git"], decision="prompt")
                 SandboxPermissions::RequireEscalated,
                 false,
             )
-        );
-    }
-
-    #[test]
-    fn guardian_matches_on_request_for_unmatched_restricted_commands() {
-        let dangerous_command = vec!["rm".to_string(), "-rf".to_string(), "/tmp/demo".to_string()];
-        let restricted_sandbox = SandboxPolicy::new_read_only_policy();
-
-        assert_eq!(
-            render_decision_for_unmatched_command(
-                AskForApproval::Guardian,
-                &restricted_sandbox,
-                &dangerous_command,
-                SandboxPermissions::UseDefault,
-                false,
-            ),
-            render_decision_for_unmatched_command(
-                AskForApproval::OnRequest,
-                &restricted_sandbox,
-                &dangerous_command,
-                SandboxPermissions::UseDefault,
-                false,
-            ),
-        );
-
-        let escalated_command = vec!["madeup-cmd".to_string()];
-        assert_eq!(
-            render_decision_for_unmatched_command(
-                AskForApproval::Guardian,
-                &restricted_sandbox,
-                &escalated_command,
-                SandboxPermissions::RequireEscalated,
-                false,
-            ),
-            render_decision_for_unmatched_command(
-                AskForApproval::OnRequest,
-                &restricted_sandbox,
-                &escalated_command,
-                SandboxPermissions::RequireEscalated,
-                false,
-            ),
         );
     }
 

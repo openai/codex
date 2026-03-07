@@ -497,10 +497,6 @@ pub enum AskForApproval {
     #[default]
     OnRequest,
 
-    /// Mirror `OnRequest` approval semantics, but route approval prompts to a
-    /// guardian subagent instead of the user.
-    Guardian,
-
     /// Fine-grained rejection controls for approval prompts.
     ///
     /// When a field is `true`, prompts of that category are automatically

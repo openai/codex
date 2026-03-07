@@ -29,8 +29,12 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
     let (mut session, mut turn_context_raw) = make_session_and_context().await;
     turn_context_raw
         .approval_policy
-        .set(AskForApproval::Guardian)
+        .set(AskForApproval::OnRequest)
         .expect("test setup should allow updating approval policy");
+    turn_context_raw
+        .features
+        .enable(Feature::GuardianApproval)
+        .expect("test setup should allow enabling guardian approvals");
     session
         .features
         .enable(Feature::RequestPermissions)
@@ -125,8 +129,12 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
     let (mut session, mut turn_context_raw) = make_session_and_context().await;
     turn_context_raw
         .approval_policy
-        .set(AskForApproval::Guardian)
+        .set(AskForApproval::OnRequest)
         .expect("test setup should allow updating approval policy");
+    turn_context_raw
+        .features
+        .enable(Feature::GuardianApproval)
+        .expect("test setup should allow enabling guardian approvals");
     session
         .features
         .enable(Feature::RequestPermissions)

@@ -11,6 +11,7 @@ use crate::exec::ExecExpiration;
 use crate::features::Feature;
 use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_escalation;
+use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
@@ -118,7 +119,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .clone()
             .or_else(|| req.justification.clone());
         Box::pin(async move {
-            if matches!(req.approval_policy, AskForApproval::Guardian) {
+            if routes_approval_to_guardian(turn, req.approval_policy) {
                 let request = GuardianReviewRequest {
                     tool_name: "exec_command",
                     action: serde_json::json!({

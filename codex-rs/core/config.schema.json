@@ -230,13 +230,6 @@
           "type": "string"
         },
         {
-          "description": "Mirror `OnRequest` approval semantics, but route approval prompts to a guardian subagent instead of the user.",
-          "enum": [
-            "guardian"
-          ],
-          "type": "string"
-        },
-        {
           "additionalProperties": false,
           "description": "Fine-grained rejection controls for approval prompts.\n\nWhen a field is `true`, prompts of that category are automatically rejected instead of shown to the user.",
           "properties": {

@@ -24,7 +24,6 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
-use crate::config::ensure_guardian_approval_feature_enabled;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
@@ -963,10 +962,6 @@ impl SessionConfiguration {
             next_configuration.personality = Some(personality);
         }
         if let Some(approval_policy) = updates.approval_policy {
-            ensure_guardian_approval_feature_enabled(
-                &next_configuration.original_config_do_not_use.features,
-                approval_policy,
-            )?;
             next_configuration.approval_policy.set(approval_policy)?;
         }
         if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
@@ -3200,6 +3195,7 @@ impl Session {
             DeveloperInstructions::from_policy(
                 turn_context.sandbox_policy.get(),
                 turn_context.approval_policy.value(),
+                turn_context.features.enabled(Feature::GuardianApproval),
                 self.services.exec_policy.current().as_ref(),
                 &turn_context.cwd,
                 turn_context.features.enabled(Feature::RequestPermissions),

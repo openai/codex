@@ -173,9 +173,7 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
     }
 }
 
-#[derive(
-    Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, ExperimentalApi,
-)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "kebab-case")]
 #[ts(rename_all = "kebab-case", export_to = "v2/")]
 pub enum AskForApproval {
@@ -184,8 +182,6 @@ pub enum AskForApproval {
     UnlessTrusted,
     OnFailure,
     OnRequest,
-    #[experimental("approvalPolicy.guardian")]
-    Guardian,
     Reject {
         sandbox_approval: bool,
         rules: bool,
@@ -200,7 +196,6 @@ impl AskForApproval {
             AskForApproval::UnlessTrusted => CoreAskForApproval::UnlessTrusted,
             AskForApproval::OnFailure => CoreAskForApproval::OnFailure,
             AskForApproval::OnRequest => CoreAskForApproval::OnRequest,
-            AskForApproval::Guardian => CoreAskForApproval::Guardian,
             AskForApproval::Reject {
                 sandbox_approval,
                 rules,
@@ -221,7 +216,6 @@ impl From<CoreAskForApproval> for AskForApproval {
             CoreAskForApproval::UnlessTrusted => AskForApproval::UnlessTrusted,
             CoreAskForApproval::OnFailure => AskForApproval::OnFailure,
             CoreAskForApproval::OnRequest => AskForApproval::OnRequest,
-            CoreAskForApproval::Guardian => AskForApproval::Guardian,
             CoreAskForApproval::Reject(reject_config) => AskForApproval::Reject {
                 sandbox_approval: reject_config.sandbox_approval,
                 rules: reject_config.rules,
@@ -5059,7 +5053,6 @@ pub struct ConfigWarningNotification {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::experimental_api::ExperimentalApi as ExperimentalApiTrait;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::AgentMessageItem;
     use codex_protocol::items::ReasoningItem;
@@ -5081,18 +5074,6 @@ mod tests {
             "/readable"
         };
         AbsolutePathBuf::from_absolute_path(path).expect("path must be absolute")
-    }
-
-    #[test]
-    fn guardian_approval_policy_is_marked_experimental() {
-        assert_eq!(
-            ExperimentalApiTrait::experimental_reason(&AskForApproval::Guardian),
-            Some("approvalPolicy.guardian")
-        );
-        assert_eq!(
-            ExperimentalApiTrait::experimental_reason(&AskForApproval::OnRequest),
-            None
-        );
     }
 
     #[test]

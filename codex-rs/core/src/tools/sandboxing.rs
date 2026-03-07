@@ -158,7 +158,7 @@ impl ExecApprovalRequirement {
 }
 
 /// - Never, OnFailure: do not ask
-/// - OnRequest, Guardian: ask unless sandbox policy is DangerFullAccess
+/// - OnRequest: ask unless sandbox policy is DangerFullAccess
 /// - Reject: ask unless sandbox policy is DangerFullAccess, but auto-reject
 ///   when `sandbox_approval` rejection is enabled.
 /// - UnlessTrusted: always ask
@@ -168,12 +168,10 @@ pub(crate) fn default_exec_approval_requirement(
 ) -> ExecApprovalRequirement {
     let needs_approval = match policy {
         AskForApproval::Never | AskForApproval::OnFailure => false,
-        AskForApproval::OnRequest | AskForApproval::Guardian | AskForApproval::Reject(_) => {
-            !matches!(
-                sandbox_policy,
-                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-            )
-        }
+        AskForApproval::OnRequest | AskForApproval::Reject(_) => !matches!(
+            sandbox_policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        ),
         AskForApproval::UnlessTrusted => true,
     };
 
@@ -265,7 +263,7 @@ pub(crate) trait Approvable<Req> {
             AskForApproval::OnFailure => true,
             AskForApproval::UnlessTrusted => true,
             AskForApproval::Never => false,
-            AskForApproval::OnRequest | AskForApproval::Guardian => false,
+            AskForApproval::OnRequest => false,
             AskForApproval::Reject(reject_config) => !reject_config.sandbox_approval,
         }
     }
@@ -386,20 +384,6 @@ mod tests {
         assert_eq!(
             default_exec_approval_requirement(
                 AskForApproval::OnRequest,
-                &SandboxPolicy::new_read_only_policy()
-            ),
-            ExecApprovalRequirement::NeedsApproval {
-                reason: None,
-                proposed_execpolicy_amendment: None,
-            }
-        );
-    }
-
-    #[test]
-    fn restricted_sandbox_requires_exec_approval_in_guardian() {
-        assert_eq!(
-            default_exec_approval_requirement(
-                AskForApproval::Guardian,
                 &SandboxPolicy::new_read_only_policy()
             ),
             ExecApprovalRequirement::NeedsApproval {

@@ -159,17 +159,6 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
 }
 
-fn guardian_approval_policy_experimental_reason(request: &ClientRequest) -> Option<&'static str> {
-    let approval_policy = match request {
-        ClientRequest::ThreadStart { params, .. } => params.approval_policy,
-        ClientRequest::ThreadResume { params, .. } => params.approval_policy,
-        ClientRequest::ThreadFork { params, .. } => params.approval_policy,
-        ClientRequest::TurnStart { params, .. } => params.approval_policy,
-        _ => None,
-    };
-    approval_policy.and_then(|policy| policy.experimental_reason())
-}
-
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
@@ -379,8 +368,7 @@ impl MessageProcessor {
                 }
             }
             }
-            if let Some(reason) = guardian_approval_policy_experimental_reason(&codex_request)
-                .or_else(|| codex_request.experimental_reason())
+            if let Some(reason) = codex_request.experimental_reason()
                 && !session.experimental_api_enabled
             {
                 let error = JSONRPCErrorError {

@@ -1886,42 +1886,6 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
 }
 
 #[tokio::test]
-async fn session_configuration_apply_rejects_guardian_override_when_feature_disabled() {
-    let session_configuration = make_session_configuration_for_tests().await;
-
-    let err = match session_configuration.apply(&SessionSettingsUpdate {
-        approval_policy: Some(AskForApproval::Guardian),
-        ..Default::default()
-    }) {
-        Ok(_) => panic!("guardian override should remain feature-gated"),
-        Err(err) => err,
-    };
-
-    assert_eq!(
-        err.to_string(),
-        "approval_policy `guardian` requires `features.guardian_approval = true`"
-    );
-}
-
-#[tokio::test]
-async fn session_configuration_apply_allows_guardian_override_when_feature_enabled() {
-    let mut session_configuration = make_session_configuration_for_tests().await;
-    Arc::make_mut(&mut session_configuration.original_config_do_not_use)
-        .features
-        .enable(Feature::GuardianApproval)
-        .expect("test config should allow guardian_approval");
-
-    let updated = session_configuration
-        .apply(&SessionSettingsUpdate {
-            approval_policy: Some(AskForApproval::Guardian),
-            ..Default::default()
-        })
-        .expect("guardian override should be accepted when the feature is enabled");
-
-    assert_eq!(updated.approval_policy.value(), AskForApproval::Guardian);
-}
-
-#[tokio::test]
 async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;

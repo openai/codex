@@ -793,15 +793,6 @@ impl App {
         }
     }
 
-    fn set_future_session_approval_policy(
-        &mut self,
-        policy: AskForApproval,
-    ) -> codex_core::config::ConstraintResult<()> {
-        self.config.permissions.approval_policy.set(policy)?;
-        self.runtime_approval_policy_override = Some(policy);
-        Ok(())
-    }
-
     async fn update_feature_flags(&mut self, updates: Vec<(Feature, bool)>) {
         if updates.is_empty() {
             return;
@@ -815,35 +806,9 @@ impl App {
         });
         let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
             .with_profile(self.active_profile.as_deref());
-        let mut guardian_enabled = None;
 
         for (feature, enabled) in updates {
             let feature_key = feature.key();
-            if feature == Feature::GuardianApproval
-                && !enabled
-                && self.config.permissions.approval_policy.value() == AskForApproval::Guardian
-                && [
-                    AskForApproval::OnRequest,
-                    AskForApproval::OnFailure,
-                    AskForApproval::UnlessTrusted,
-                    AskForApproval::Never,
-                ]
-                .into_iter()
-                .find(|candidate| {
-                    self.config
-                        .permissions
-                        .approval_policy
-                        .can_set(candidate)
-                        .is_ok()
-                })
-                .is_none()
-            {
-                self.chat_widget.add_error_message(
-                    "Failed to disable guardian approvals for future sessions: no supported fallback approval policy is allowed."
-                        .to_string(),
-                );
-                continue;
-            }
             if let Err(err) = self.config.features.set_enabled(feature, enabled) {
                 tracing::error!(
                     error = %err,
@@ -858,9 +823,6 @@ impl App {
             let effective_enabled = self.config.features.enabled(feature);
             self.chat_widget
                 .set_feature_enabled(feature, effective_enabled);
-            if feature == Feature::GuardianApproval {
-                guardian_enabled = Some(effective_enabled);
-            }
             if effective_enabled {
                 builder = builder.set_feature_enabled(feature_key, true);
             } else if feature.default_enabled() {
@@ -872,67 +834,6 @@ impl App {
                 builder = builder.with_edits(vec![ConfigEdit::ClearPath {
                     segments: vec!["features".to_string(), feature_key.to_string()],
                 }]);
-            }
-        }
-
-        if let Some(guardian_enabled) = guardian_enabled {
-            let next_session_policy = if guardian_enabled {
-                Some(AskForApproval::Guardian)
-            } else if self.config.permissions.approval_policy.value() == AskForApproval::Guardian {
-                [
-                    AskForApproval::OnRequest,
-                    AskForApproval::OnFailure,
-                    AskForApproval::UnlessTrusted,
-                    AskForApproval::Never,
-                ]
-                .into_iter()
-                .find(|candidate| {
-                    self.config
-                        .permissions
-                        .approval_policy
-                        .can_set(candidate)
-                        .is_ok()
-                })
-            } else {
-                None
-            };
-
-            if let Some(policy) = next_session_policy {
-                if let Err(err) = self.set_future_session_approval_policy(policy) {
-                    tracing::error!(
-                        error = %err,
-                        policy = %policy,
-                        "failed to update guardian approval policy for future sessions"
-                    );
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to update guardian approvals for future sessions: {err}"
-                    ));
-                } else {
-                    let segments = if let Some(profile) = self.active_profile.as_ref() {
-                        vec![
-                            "profiles".to_string(),
-                            profile.clone(),
-                            "approval_policy".to_string(),
-                        ]
-                    } else {
-                        vec!["approval_policy".to_string()]
-                    };
-                    builder = builder.with_edits(vec![ConfigEdit::SetPath {
-                        segments,
-                        value: policy.to_string().into(),
-                    }]);
-                    let message = if guardian_enabled {
-                        "Guardian approvals will be used in the next session.".to_string()
-                    } else {
-                        format!("Guardian approvals were disabled. New sessions will use {policy}.")
-                    };
-                    self.chat_widget.add_info_message(message, None);
-                }
-            } else if !guardian_enabled {
-                self.chat_widget.add_error_message(
-                    "Failed to disable guardian approvals for future sessions: no supported fallback approval policy is allowed."
-                        .to_string(),
-                );
             }
         }
 
@@ -4981,7 +4882,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_feature_flags_enabling_guardian_updates_future_session_policy() -> Result<()> {
+    async fn update_feature_flags_enabling_guardian_persists_only_the_feature_flag() -> Result<()> {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
@@ -5004,7 +4905,7 @@ mod tests {
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
-            AskForApproval::Guardian
+            current_session_policy
         );
         assert_eq!(
             app.chat_widget
@@ -5014,10 +4915,7 @@ mod tests {
                 .value(),
             current_session_policy
         );
-        assert_eq!(
-            app.runtime_approval_policy_override,
-            Some(AskForApproval::Guardian)
-        );
+        assert_eq!(app.runtime_approval_policy_override, None);
         assert!(
             op_rx.try_recv().is_err(),
             "feature toggle should not patch the active session"
@@ -5025,22 +4923,25 @@ mod tests {
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(config.contains("guardian_approval = true"));
-        assert!(config.contains("approval_policy = \"guardian\""));
+        assert!(!config.contains("approval_policy"));
         Ok(())
     }
 
     #[tokio::test]
-    async fn update_feature_flags_disabling_guardian_restores_future_session_policy() -> Result<()>
-    {
+    async fn update_feature_flags_disabling_guardian_clears_only_the_feature_flag() -> Result<()> {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "[features]\nguardian_approval = true\n",
+        )?;
         app.config
             .features
             .set_enabled(Feature::GuardianApproval, true)?;
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, true);
-        app.set_future_session_approval_policy(AskForApproval::Guardian)?;
+        let current_session_policy = app.config.permissions.approval_policy.value();
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
             .await;
@@ -5054,12 +4955,9 @@ mod tests {
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
-            AskForApproval::OnRequest
+            current_session_policy
         );
-        assert_eq!(
-            app.runtime_approval_policy_override,
-            Some(AskForApproval::OnRequest)
-        );
+        assert_eq!(app.runtime_approval_policy_override, None);
         assert!(
             op_rx.try_recv().is_err(),
             "feature toggle should not patch the active session"
@@ -5067,55 +4965,7 @@ mod tests {
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("guardian_approval = true"));
-        assert!(config.contains("approval_policy = \"on-request\""));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn update_feature_flags_disabling_guardian_keeps_feature_enabled_without_fallback()
-    -> Result<()> {
-        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-        let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
-        std::fs::write(
-            codex_home.path().join("config.toml"),
-            "approval_policy = \"guardian\"\n\n[features]\nguardian_approval = true\n",
-        )?;
-        app.config
-            .features
-            .set_enabled(Feature::GuardianApproval, true)?;
-        app.chat_widget
-            .set_feature_enabled(Feature::GuardianApproval, true);
-        app.set_future_session_approval_policy(AskForApproval::Guardian)?;
-        app.config.permissions.approval_policy =
-            codex_core::config::Constrained::allow_only(AskForApproval::Guardian);
-
-        app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
-            .await;
-
-        assert!(app.config.features.enabled(Feature::GuardianApproval));
-        assert!(
-            app.chat_widget
-                .config_ref()
-                .features
-                .enabled(Feature::GuardianApproval)
-        );
-        assert_eq!(
-            app.config.permissions.approval_policy.value(),
-            AskForApproval::Guardian
-        );
-        assert_eq!(
-            app.runtime_approval_policy_override,
-            Some(AskForApproval::Guardian)
-        );
-        assert!(
-            op_rx.try_recv().is_err(),
-            "feature toggle should not patch the active session"
-        );
-
-        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(config.contains("guardian_approval = true"));
-        assert!(config.contains("approval_policy = \"guardian\""));
+        assert!(!config.contains("approval_policy"));
         Ok(())
     }
 

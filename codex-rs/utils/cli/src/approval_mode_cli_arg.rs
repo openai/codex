@@ -21,10 +21,6 @@ pub enum ApprovalModeCliArg {
     /// The model decides when to ask the user for approval.
     OnRequest,
 
-    /// Mirror `on-request`, but route approval prompts to a guardian
-    /// reviewer instead of the user.
-    Guardian,
-
     /// Never ask for user approval
     /// Execution failures are immediately returned to the model.
     Never,
@@ -36,7 +32,6 @@ impl From<ApprovalModeCliArg> for AskForApproval {
             ApprovalModeCliArg::Untrusted => AskForApproval::UnlessTrusted,
             ApprovalModeCliArg::OnFailure => AskForApproval::OnFailure,
             ApprovalModeCliArg::OnRequest => AskForApproval::OnRequest,
-            ApprovalModeCliArg::Guardian => AskForApproval::Guardian,
             ApprovalModeCliArg::Never => AskForApproval::Never,
         }
     }

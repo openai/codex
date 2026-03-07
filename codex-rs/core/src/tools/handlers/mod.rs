@@ -103,10 +103,7 @@ pub(super) fn normalize_and_validate_additional_permissions(
     );
 
     if sandbox_permissions.requires_escalated_permissions()
-        && !matches!(
-            approval_policy,
-            AskForApproval::OnRequest | AskForApproval::Guardian
-        )
+        && approval_policy != AskForApproval::OnRequest
     {
         return Err(format!(
             "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
@@ -123,12 +120,9 @@ pub(super) fn normalize_and_validate_additional_permissions(
     }
 
     if uses_additional_permissions {
-        if !matches!(
-            approval_policy,
-            AskForApproval::OnRequest | AskForApproval::Guardian
-        ) {
+        if approval_policy != AskForApproval::OnRequest {
             return Err(format!(
-                "approval policy is {approval_policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest or Guardian"
+                "approval policy is {approval_policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest"
             ));
         }
         let Some(additional_permissions) = additional_permissions else {

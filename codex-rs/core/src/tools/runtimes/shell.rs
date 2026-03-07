@@ -13,6 +13,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
 use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_escalation;
+use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -153,7 +154,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
-            if matches!(req.approval_policy, AskForApproval::Guardian) {
+            if routes_approval_to_guardian(turn, req.approval_policy) {
                 let request = GuardianReviewRequest {
                     tool_name: "shell",
                     action: serde_json::json!({

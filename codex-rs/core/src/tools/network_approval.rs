@@ -2,6 +2,7 @@ use crate::codex::Session;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
 use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_escalation_with_reason;
+use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::tools::sandboxing::ToolError;
 use codex_network_proxy::BlockedRequest;
@@ -335,45 +336,43 @@ impl NetworkApprovalService {
             host: request.host.clone(),
             protocol,
         };
-        let approval_decision = if matches!(
-            turn_context.approval_policy.value(),
-            AskForApproval::Guardian
-        ) {
-            review_escalation_with_reason(
-                &session,
-                &turn_context,
-                GuardianReviewRequest {
-                    tool_name: "network_access",
-                    action: serde_json::json!({
-                        "tool": "network_access",
-                        "target": target,
-                        "host": request.host,
-                        "protocol": key.protocol,
-                        "port": key.port,
-                    }),
-                },
-                Some(policy_denial_message.clone()),
-            )
-            .await
-        } else {
-            let approval_id = Self::approval_id_for_key(&key);
-            let prompt_command = vec!["network-access".to_string(), target.clone()];
-            let available_decisions = None;
-            session
-                .request_command_approval(
-                    turn_context.as_ref(),
-                    approval_id,
-                    None,
-                    prompt_command,
-                    turn_context.cwd.clone(),
-                    Some(prompt_reason),
-                    Some(network_approval_context.clone()),
-                    None,
-                    None,
-                    available_decisions,
+        let approval_decision =
+            if routes_approval_to_guardian(&turn_context, turn_context.approval_policy.value()) {
+                review_escalation_with_reason(
+                    &session,
+                    &turn_context,
+                    GuardianReviewRequest {
+                        tool_name: "network_access",
+                        action: serde_json::json!({
+                            "tool": "network_access",
+                            "target": target,
+                            "host": request.host,
+                            "protocol": key.protocol,
+                            "port": key.port,
+                        }),
+                    },
+                    Some(policy_denial_message.clone()),
                 )
                 .await
-        };
+            } else {
+                let approval_id = Self::approval_id_for_key(&key);
+                let prompt_command = vec!["network-access".to_string(), target.clone()];
+                let available_decisions = None;
+                session
+                    .request_command_approval(
+                        turn_context.as_ref(),
+                        approval_id,
+                        None,
+                        prompt_command,
+                        turn_context.cwd.clone(),
+                        Some(prompt_reason),
+                        Some(network_approval_context.clone()),
+                        None,
+                        None,
+                        available_decisions,
+                    )
+                    .await
+            };
 
         let mut cache_session_deny = false;
         let resolved = match approval_decision {
@@ -451,10 +450,8 @@ impl NetworkApprovalService {
                 }
             },
             ReviewDecision::Denied | ReviewDecision::Abort => {
-                if matches!(
-                    turn_context.approval_policy.value(),
-                    AskForApproval::Guardian
-                ) {
+                if routes_approval_to_guardian(&turn_context, turn_context.approval_policy.value())
+                {
                     self.record_outcome_for_single_active_call(
                         NetworkApprovalOutcome::DeniedByPolicy(
                             GUARDIAN_REJECTION_MESSAGE.to_string(),
@@ -674,7 +671,6 @@ mod tests {
         assert!(!allows_network_approval_flow(AskForApproval::Never));
         assert!(allows_network_approval_flow(AskForApproval::OnRequest));
         assert!(allows_network_approval_flow(AskForApproval::OnFailure));
-        assert!(allows_network_approval_flow(AskForApproval::Guardian));
         assert!(allows_network_approval_flow(AskForApproval::UnlessTrusted));
     }
 

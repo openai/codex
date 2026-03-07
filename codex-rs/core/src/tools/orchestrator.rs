@@ -11,6 +11,7 @@ use crate::error::SandboxErr;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
+use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxManager;
@@ -143,7 +144,7 @@ impl ToolOrchestrator {
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
-                        let reason = if matches!(approval_policy, AskForApproval::Guardian) {
+                        let reason = if routes_approval_to_guardian(turn_ctx, approval_policy) {
                             GUARDIAN_REJECTION_MESSAGE.to_string()
                         } else {
                             "rejected by user".to_string()
@@ -282,7 +283,7 @@ impl ToolOrchestrator {
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
-                            let reason = if matches!(approval_policy, AskForApproval::Guardian) {
+                            let reason = if routes_approval_to_guardian(turn_ctx, approval_policy) {
                                 GUARDIAN_REJECTION_MESSAGE.to_string()
                             } else {
                                 "rejected by user".to_string()
@@ -340,10 +341,8 @@ fn allows_network_retry_approval_after_sandbox_denial(
     has_network_approval_context: bool,
     sandbox_policy: &SandboxPolicy,
 ) -> bool {
-    matches!(
-        approval_policy,
-        AskForApproval::OnRequest | AskForApproval::Guardian
-    ) && has_network_approval_context
+    matches!(approval_policy, AskForApproval::OnRequest)
+        && has_network_approval_context
         && matches!(
             default_exec_approval_requirement(approval_policy, sandbox_policy),
             ExecApprovalRequirement::NeedsApproval { .. }
@@ -363,18 +362,18 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
 
     #[test]
-    fn guardian_allows_network_retry_approval_after_sandbox_denial() {
+    fn on_request_allows_network_retry_approval_after_sandbox_denial() {
         assert!(allows_network_retry_approval_after_sandbox_denial(
-            AskForApproval::Guardian,
+            AskForApproval::OnRequest,
             true,
             &SandboxPolicy::new_read_only_policy(),
         ));
     }
 
     #[test]
-    fn guardian_does_not_allow_network_retry_without_network_context() {
+    fn on_request_does_not_allow_network_retry_without_network_context() {
         assert!(!allows_network_retry_approval_after_sandbox_denial(
-            AskForApproval::Guardian,
+            AskForApproval::OnRequest,
             false,
             &SandboxPolicy::new_read_only_policy(),
         ));
