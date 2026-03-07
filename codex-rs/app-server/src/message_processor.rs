@@ -200,7 +200,7 @@ impl MessageProcessor {
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager,
-            thread_manager,
+            thread_manager: Arc::clone(&thread_manager),
             outgoing: outgoing.clone(),
             arg0_paths,
             config: Arc::clone(&config),
@@ -214,6 +214,7 @@ impl MessageProcessor {
             cli_overrides,
             loader_overrides,
             cloud_requirements,
+            thread_manager,
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
 

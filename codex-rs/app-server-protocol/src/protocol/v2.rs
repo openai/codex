@@ -734,6 +734,9 @@ pub struct ConfigBatchWriteParams {
     pub file_path: Option<String>,
     #[ts(optional = nullable)]
     pub expected_version: Option<String>,
+    /// When true, hot-reload the updated user config into all loaded threads after writing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reload_user_config: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
