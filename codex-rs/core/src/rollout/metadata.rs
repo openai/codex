@@ -595,7 +595,7 @@ mod tests {
         let mut file = File::create(&path).expect("create rollout");
         writeln!(file, "{{").expect("write invalid rollout");
 
-        let err = extract_metadata_from_rollout(&path, "openai", None)
+        let err = extract_metadata_from_rollout(&path, "openai")
             .await
             .expect_err("unparsable rollout should fail metadata extraction");
         assert_eq!(

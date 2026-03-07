@@ -1289,8 +1289,6 @@ impl Session {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>((None, None))
             } else {
-                let state_db_ctx = state_db::init(&config, None).await;
-                let rollout_store = RolloutStore::new(
                 let state_db_ctx = state_db::init(&config).await;
                 let rollout_store = RolloutStore::new(
                     &config,
