@@ -405,9 +405,17 @@ impl Codex {
             Some(&allowed_skills_for_implicit_invocation),
             Some(loaded_plugins.capability_summaries()),
         )
+        .instrument(info_span!(
+            "thread_spawn.user_instructions",
+            otel.name = "thread_spawn.user_instructions",
+        ))
         .await;
 
         let exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
+            .instrument(info_span!(
+                "thread_spawn.exec_policy",
+                otel.name = "thread_spawn.exec_policy",
+            ))
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
 
@@ -416,23 +424,43 @@ impl Codex {
             SessionSource::SubAgent(_) => crate::models_manager::manager::RefreshStrategy::Offline,
             _ => crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
         };
-        if config.model.is_none()
+        let refreshes_model_catalog = config.model.is_none()
             || !matches!(
                 refresh_strategy,
                 crate::models_manager::manager::RefreshStrategy::Offline
-            )
-        {
-            let _ = models_manager.list_models(refresh_strategy).await;
+            );
+        if refreshes_model_catalog {
+            let _ = models_manager
+                .list_models(refresh_strategy)
+                .instrument(info_span!(
+                    "thread_spawn.model_catalog",
+                    otel.name = "thread_spawn.model_catalog",
+                    thread_spawn.refreshes_model_catalog = refreshes_model_catalog,
+                ))
+                .await;
         }
         let model = models_manager
             .get_default_model(&config.model, refresh_strategy)
+            .instrument(info_span!(
+                "thread_spawn.default_model",
+                otel.name = "thread_spawn.default_model",
+                thread_spawn.refreshes_model_catalog = refreshes_model_catalog,
+                thread_spawn.has_requested_model = config.model.is_some(),
+            ))
             .await;
 
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
         // 3. base_instructions for current model
-        let model_info = models_manager.get_model_info(model.as_str(), &config).await;
+        let model_info = models_manager
+            .get_model_info(model.as_str(), &config)
+            .instrument(info_span!(
+                "thread_spawn.base_instructions",
+                otel.name = "thread_spawn.base_instructions",
+                thread_spawn.has_base_instructions_override = config.base_instructions.is_some(),
+            ))
+            .await;
         let base_instructions = config
             .base_instructions
             .clone()
@@ -441,23 +469,35 @@ impl Codex {
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
-        let persisted_tools = if dynamic_tools.is_empty() {
-            let thread_id = match &conversation_history {
-                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-                InitialHistory::Forked(_) => conversation_history.forked_from_id(),
-                InitialHistory::New => None,
-            };
-            match thread_id {
-                Some(thread_id) => {
-                    let state_db_ctx = state_db::get_state_db(&config, None).await;
-                    state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
+        let persisted_tools = async {
+            if dynamic_tools.is_empty() {
+                let thread_id = match &conversation_history {
+                    InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+                    InitialHistory::Forked(_) => conversation_history.forked_from_id(),
+                    InitialHistory::New => None,
+                };
+                match thread_id {
+                    Some(thread_id) => {
+                        let state_db_ctx = state_db::get_state_db(&config, None).await;
+                        state_db::get_dynamic_tools(
+                            state_db_ctx.as_deref(),
+                            thread_id,
+                            "codex_spawn",
+                        )
                         .await
+                    }
+                    None => None,
                 }
-                None => None,
+            } else {
+                None
             }
-        } else {
-            None
-        };
+        }
+        .instrument(info_span!(
+            "thread_spawn.dynamic_tools",
+            otel.name = "thread_spawn.dynamic_tools",
+            thread_spawn.dynamic_tool_count = dynamic_tools.len(),
+        ))
+        .await;
         let dynamic_tools = if dynamic_tools.is_empty() {
             persisted_tools
                 .or_else(|| conversation_history.get_dynamic_tools())
@@ -1265,18 +1305,29 @@ impl Session {
                 .await?;
                 Ok((Some(rollout_recorder), state_db_ctx))
             }
-        };
+        }
+        .instrument(info_span!(
+            "session_init.rollout",
+            otel.name = "session_init.rollout",
+            session_init.ephemeral = config.ephemeral,
+        ));
 
+        let is_subagent = matches!(
+            session_configuration.session_source,
+            SessionSource::SubAgent(_)
+        );
         let history_meta_fut = async {
-            if matches!(
-                session_configuration.session_source,
-                SessionSource::SubAgent(_)
-            ) {
+            if is_subagent {
                 (0, 0)
             } else {
                 crate::message_history::history_metadata(&config).await
             }
-        };
+        }
+        .instrument(info_span!(
+            "session_init.history_metadata",
+            otel.name = "session_init.history_metadata",
+            session_init.is_subagent = is_subagent,
+        ));
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
@@ -1289,7 +1340,11 @@ impl Session {
             )
             .await;
             (auth, mcp_servers, auth_statuses)
-        };
+        }
+        .instrument(info_span!(
+            "session_init.auth_mcp",
+            otel.name = "session_init.auth_mcp",
+        ));
 
         // Join all independent futures.
         let (
@@ -1447,7 +1502,12 @@ impl Session {
             tx
         };
         let thread_name =
-            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id).await
+            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id)
+                .instrument(info_span!(
+                    "session_init.thread_name_lookup",
+                    otel.name = "session_init.thread_name_lookup",
+                ))
+                .await
             {
                 Ok(name) => name,
                 Err(err) => {
@@ -1497,6 +1557,12 @@ impl Session {
                     managed_network_requirements_enabled,
                     network_proxy_audit_metadata,
                 )
+                .instrument(info_span!(
+                    "session_init.network_proxy",
+                    otel.name = "session_init.network_proxy",
+                    session_init.managed_network_requirements_enabled =
+                        managed_network_requirements_enabled,
+                ))
                 .await?;
                 (Some(network_proxy), Some(session_network_proxy))
             } else {
@@ -1623,6 +1689,8 @@ impl Session {
             .map(|(name, _)| name.clone())
             .collect();
         required_mcp_servers.sort();
+        let enabled_mcp_server_count = mcp_servers.len();
+        let required_mcp_server_count = required_mcp_servers.len();
         let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
@@ -1640,6 +1708,12 @@ impl Session {
             codex_apps_tools_cache_key(auth),
             tool_plugin_provenance,
         )
+        .instrument(info_span!(
+            "session_init.mcp_manager_init",
+            otel.name = "session_init.mcp_manager_init",
+            session_init.enabled_mcp_server_count = enabled_mcp_server_count,
+            session_init.required_mcp_server_count = required_mcp_server_count,
+        ))
         .await;
         {
             let mut manager_guard = sess.services.mcp_connection_manager.write().await;
@@ -1659,6 +1733,11 @@ impl Session {
                 .read()
                 .await
                 .required_startup_failures(&required_mcp_servers)
+                .instrument(info_span!(
+                    "session_init.required_mcp_wait",
+                    otel.name = "session_init.required_mcp_wait",
+                    session_init.required_mcp_server_count = required_mcp_server_count,
+                ))
                 .await;
             if !failures.is_empty() {
                 let details = failures
