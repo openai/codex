@@ -794,7 +794,7 @@ fn build_guardian_subagent_config(
     let mut guardian_config = parent_config.clone();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
-    guardian_config.developer_instructions = Some(guardian_developer_instructions());
+    guardian_config.developer_instructions = Some(guardian_policy_prompt());
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config.permissions.sandbox_policy =
         Constrained::allow_only(SandboxPolicy::new_read_only_policy());
@@ -1040,18 +1040,6 @@ fn guardian_output_contract_prompt() -> &'static str {
   "rationale": string,
   "evidence": [{"message": string, "why": string}]
 }"#
-}
-
-pub(crate) fn guardian_execution_instructions() -> &'static str {
-    "You are running in a read-only sandbox with `approval_policy = never`. You cannot request additional permissions or approvals from the user. Use available read-only checks to inspect local state and gather context when needed, including allowed network access that is already available in this session. Do not mutate files, change external state, or attempt side effects while investigating.\n"
-}
-
-fn guardian_developer_instructions() -> String {
-    format!(
-        "{}\n{}",
-        guardian_execution_instructions(),
-        guardian_policy_prompt()
-    )
 }
 
 /// Guardian policy prompt.
