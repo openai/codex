@@ -18,7 +18,6 @@ use core_test_support::fs_wait;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::Path;
-use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -26,6 +25,10 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(windows)]
+const DEFAULT_NOTIFY_FILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+#[cfg(not(windows))]
+const DEFAULT_NOTIFY_FILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[tokio::test]
 async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
@@ -264,7 +267,7 @@ tmp_path.replace(payload_path)
     )
     .await??;
 
-    fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
+    fs_wait::wait_for_path_exists(&notify_file, DEFAULT_NOTIFY_FILE_TIMEOUT).await?;
     let payload_raw = tokio::fs::read_to_string(&notify_file).await?;
     let payload: Value = serde_json::from_str(&payload_raw)?;
     assert_eq!(payload["client"], "xcode");
