@@ -1267,55 +1267,6 @@
         },
         {
           "properties": {
-            "action": true,
-            "id": {
-              "type": "string"
-            },
-            "rationale": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "riskLevel": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/GuardianRiskLevel"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "riskScore": {
-              "format": "uint8",
-              "minimum": 0.0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "status": {
-              "$ref": "#/definitions/GuardianAssessmentStatus"
-            },
-            "type": {
-              "enum": [
-                "guardianAssessment"
-              ],
-              "title": "GuardianAssessmentThreadItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "status",
-            "type"
-          ],
-          "title": "GuardianAssessmentThreadItem",
-          "type": "object"
-        },
-        {
-          "properties": {
             "id": {
               "type": "string"
             },
