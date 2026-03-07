@@ -4545,6 +4545,8 @@ impl ChatWidget {
         if !self.is_session_configured()
             || self.bottom_pane.is_task_running()
             || self.is_review_mode
+            || self.in_flight_user_message.is_some()
+            || self.retry_current_user_message.is_some()
         {
             self.push_queued_user_message_back(user_message);
             self.refresh_pending_input_preview();
@@ -5427,6 +5429,10 @@ impl ChatWidget {
             && let Some(user_message) = self.retry_current_user_message.take()
         {
             self.submit_user_message_internal(user_message, true);
+            self.refresh_pending_input_preview();
+            return;
+        }
+        if self.in_flight_user_message.is_some() {
             self.refresh_pending_input_preview();
             return;
         }
