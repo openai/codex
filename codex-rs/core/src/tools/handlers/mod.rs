@@ -90,7 +90,7 @@ fn resolve_workdir_base_path(
 
 /// Validates feature/policy constraints for `with_additional_permissions` and
 /// normalizes any path-based permissions. Errors if the request is invalid.
-pub(super) fn normalize_and_validate_additional_permissions(
+pub(crate) fn normalize_and_validate_additional_permissions(
     request_permission_enabled: bool,
     approval_policy: AskForApproval,
     sandbox_permissions: SandboxPermissions,
