@@ -789,7 +789,7 @@ fn guardian_output_schema() -> Value {
 /// Prompt fragment that describes the exact JSON contract enforced by
 /// `guardian_output_schema()`.
 fn guardian_output_contract_prompt() -> &'static str {
-    r#"Output strict JSON with this exact schema:
+    r#"You may use read-only tool checks to gather any additional context you need before deciding. When you are ready to answer, your final message must be strict JSON with this exact schema:
 {
   "risk_level": "low" | "medium" | "high",
   "risk_score": 0-100,
