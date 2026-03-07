@@ -729,6 +729,14 @@ fn normalize_harness_overrides_for_cwd(
     Ok(overrides)
 }
 
+fn normalize_title_context(title_override: Option<String>) -> Option<String> {
+    title_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+}
+
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
@@ -1795,6 +1803,8 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         };
+        let title_context = normalize_title_context(app.chat_widget.title_override());
+        tui.set_title_context(title_context.as_deref())?;
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -1833,6 +1843,7 @@ impl App {
                 )
                 .await?;
             if let AppRunControl::Exit(exit_reason) = control {
+                tui.set_title_context(None)?;
                 return Ok(AppExitInfo {
                     token_usage: app.token_usage(),
                     thread_id: app.chat_widget.thread_id(),
@@ -1893,6 +1904,8 @@ impl App {
                     AppRunControl::Continue
                 }
             };
+            let title_context = normalize_title_context(app.chat_widget.title_override());
+            tui.set_title_context(title_context.as_deref())?;
             if App::should_stop_waiting_for_initial_session(
                 waiting_for_initial_session_configured,
                 app.primary_thread_id,
@@ -1904,6 +1917,7 @@ impl App {
                 AppRunControl::Exit(reason) => break reason,
             }
         };
+        tui.set_title_context(None)?;
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
@@ -2174,6 +2188,10 @@ impl App {
                         tui.insert_history_lines(display);
                     }
                 }
+            }
+            AppEvent::SetTitle(title) => {
+                self.chat_widget.set_title_override(title);
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -3797,6 +3815,14 @@ mod tests {
                 }
             )),
             false
+        );
+    }
+
+    #[test]
+    fn normalize_title_context_uses_manual_title_when_present() {
+        assert_eq!(
+            normalize_title_context(Some("Named thread".to_string())),
+            Some("Named thread".to_string())
         );
     }
 

@@ -478,6 +478,18 @@ mod tests {
     }
 
     #[test]
+    fn title_shown_in_empty_filter_and_for_prefix() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/".to_string());
+        let items = popup.filtered_items();
+        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Title)));
+
+        popup.on_composer_text_change("/ti".to_string());
+        let items = popup.filtered_items();
+        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Title)));
+    }
+
+    #[test]
     fn collab_command_hidden_when_collaboration_modes_disabled() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/".to_string());
