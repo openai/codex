@@ -204,6 +204,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
 mod tests {
     use super::*;
     use codex_protocol::protocol::RejectConfig;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
 
@@ -264,6 +265,53 @@ mod tests {
                 "change_count": 1,
                 "patch": expected_patch,
             })
+        );
+    }
+
+    #[test]
+    fn guardian_review_request_snapshot() {
+        let path = if cfg!(windows) {
+            std::path::PathBuf::from(r"C:\repo\docs\guardian.txt")
+        } else {
+            std::path::PathBuf::from("/repo/docs/guardian.txt")
+        };
+        let action =
+            ApplyPatchAction::new_add_for_test(&path, "guardian snapshot content".to_string());
+        let request = ApplyPatchRequest {
+            action,
+            file_paths: vec![
+                AbsolutePathBuf::from_absolute_path(&path)
+                    .expect("snapshot path should be absolute"),
+            ],
+            changes: HashMap::from([(
+                path,
+                FileChange::Add {
+                    content: "guardian snapshot content".to_string(),
+                },
+            )]),
+            exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+                reason: Some("patch touches docs".to_string()),
+                proposed_execpolicy_amendment: None,
+            },
+            timeout_ms: None,
+            codex_exe: None,
+        };
+
+        let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request);
+        let snapshot = serde_json::json!({
+            "tool_name": guardian_request.tool_name,
+            "action": {
+                "tool": guardian_request.action["tool"],
+                "cwd": "<cwd>",
+                "files": ["<file>"],
+                "change_count": guardian_request.action["change_count"],
+                "patch": guardian_request.action["patch"],
+            },
+        });
+
+        assert_snapshot!(
+            "guardian_apply_patch_review_request",
+            serde_json::to_string_pretty(&snapshot).expect("snapshot should serialize")
         );
     }
 }

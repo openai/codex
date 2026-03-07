@@ -1,0 +1,16 @@
+---
+source: core/src/tools/runtimes/apply_patch.rs
+expression: "serde_json::to_string_pretty(&snapshot).expect(\"snapshot should serialize\")"
+---
+{
+  "action": {
+    "change_count": 1,
+    "cwd": "<cwd>",
+    "files": [
+      "<file>"
+    ],
+    "patch": "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+ guardian snapshot content\n*** End Patch",
+    "tool": "apply_patch"
+  },
+  "tool_name": "apply_patch"
+}
