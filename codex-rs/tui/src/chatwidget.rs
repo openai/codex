@@ -112,6 +112,8 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::GuardianAssessmentEvent;
+use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListCustomPromptsResponseEvent;
@@ -2164,6 +2166,78 @@ impl ChatWidget {
             |q| q.push_apply_patch_approval(ev),
             |s| s.handle_apply_patch_approval_now(ev2),
         );
+    }
+
+    fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
+        if ev.status != GuardianAssessmentStatus::Denied {
+            return;
+        }
+        let Some(action) = ev.action else {
+            return;
+        };
+
+        let cell = if let Some(command) = action
+            .get("command")
+            .and_then(serde_json::Value::as_array)
+            .map(|command| {
+                command
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|command| !command.is_empty())
+        {
+            history_cell::new_approval_decision_cell(
+                command,
+                codex_protocol::protocol::ReviewDecision::Denied,
+                history_cell::ApprovalDecisionActor::Guardian,
+            )
+        } else if action.get("tool").and_then(serde_json::Value::as_str) == Some("apply_patch") {
+            let files = action
+                .get("files")
+                .and_then(serde_json::Value::as_array)
+                .map(|files| {
+                    files
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let change_count = action
+                .get("change_count")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|count| usize::try_from(count).ok())
+                .unwrap_or(files.len());
+            history_cell::new_guardian_denied_patch_request(files, change_count)
+        } else if action.get("tool").and_then(serde_json::Value::as_str) == Some("mcp_tool_call") {
+            let server = action
+                .get("server")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown server");
+            let tool = action
+                .get("tool_name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown tool");
+            history_cell::new_guardian_denied_action_request(format!(
+                "codex to call MCP tool {server}.{tool}"
+            ))
+        } else if action.get("tool").and_then(serde_json::Value::as_str) == Some("network_access") {
+            let target = action
+                .get("target")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| action.get("host").and_then(serde_json::Value::as_str))
+                .unwrap_or("network target");
+            history_cell::new_guardian_denied_action_request(format!("codex to access {target}"))
+        } else {
+            let summary = serde_json::to_string(&action)
+                .unwrap_or_else(|_| "<unrenderable guardian action>".to_string());
+            history_cell::new_guardian_denied_action_request(summary)
+        };
+
+        self.add_boxed_history(cell);
+        self.request_redraw();
     }
 
     fn on_elicitation_request(&mut self, ev: ElicitationRequestEvent) {
@@ -4749,6 +4823,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
+            EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
             EventMsg::ModelReroute(_) => {}
             EventMsg::Error(ErrorEvent {
                 message,

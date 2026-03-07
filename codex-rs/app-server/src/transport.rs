@@ -4,8 +4,10 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
+use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -584,7 +586,9 @@ async fn send_message_to_connection(
         warn!("dropping message for disconnected connection: {connection_id:?}");
         return false;
     };
-    let message = filter_outgoing_message_for_connection(connection_state, message);
+    let Some(message) = filter_outgoing_message_for_connection(connection_state, message) else {
+        return false;
+    };
     if should_skip_notification_for_connection(connection_state, &message) {
         return false;
     }
@@ -613,7 +617,7 @@ async fn send_message_to_connection(
 fn filter_outgoing_message_for_connection(
     connection_state: &OutboundConnectionState,
     message: OutgoingMessage,
-) -> OutgoingMessage {
+) -> Option<OutgoingMessage> {
     let experimental_api_enabled = connection_state
         .experimental_api_enabled
         .load(Ordering::Acquire);
@@ -625,13 +629,98 @@ fn filter_outgoing_message_for_connection(
             if !experimental_api_enabled {
                 params.strip_experimental_fields();
             }
-            OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
-                request_id,
-                params,
-            })
+            Some(OutgoingMessage::Request(
+                ServerRequest::CommandExecutionRequestApproval { request_id, params },
+            ))
         }
-        _ => message,
+        OutgoingMessage::AppServerNotification(notification) => {
+            filter_app_server_notification_for_connection(experimental_api_enabled, notification)
+                .map(OutgoingMessage::AppServerNotification)
+        }
+        OutgoingMessage::Response(mut response) => {
+            if !experimental_api_enabled {
+                strip_experimental_thread_items_from_response(&mut response.result);
+            }
+            Some(OutgoingMessage::Response(response))
+        }
+        _ => Some(message),
     }
+}
+
+fn filter_app_server_notification_for_connection(
+    experimental_api_enabled: bool,
+    notification: ServerNotification,
+) -> Option<ServerNotification> {
+    if experimental_api_enabled {
+        return Some(notification);
+    }
+
+    match notification {
+        ServerNotification::ItemStarted(notification)
+            if notification.item.experimental_reason().is_some() =>
+        {
+            None
+        }
+        ServerNotification::ItemCompleted(notification)
+            if notification.item.experimental_reason().is_some() =>
+        {
+            None
+        }
+        ServerNotification::TurnStarted(mut notification) => {
+            notification
+                .turn
+                .items
+                .retain(|item| item.experimental_reason().is_none());
+            Some(ServerNotification::TurnStarted(notification))
+        }
+        ServerNotification::TurnCompleted(mut notification) => {
+            notification
+                .turn
+                .items
+                .retain(|item| item.experimental_reason().is_none());
+            Some(ServerNotification::TurnCompleted(notification))
+        }
+        _ => Some(notification),
+    }
+}
+
+fn strip_experimental_thread_items_from_response(result: &mut serde_json::Value) {
+    match result {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                if key == "items" {
+                    if let serde_json::Value::Array(items) = value {
+                        items.retain(|item| !is_experimental_thread_item_value(item));
+                        for item in items {
+                            strip_experimental_thread_items_from_response(item);
+                        }
+                    }
+                } else {
+                    strip_experimental_thread_items_from_response(value);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                strip_experimental_thread_items_from_response(value);
+            }
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
+    }
+}
+
+fn is_experimental_thread_item_value(value: &serde_json::Value) -> bool {
+    matches!(
+        value,
+        serde_json::Value::Object(map)
+            if matches!(
+                map.get("type"),
+                Some(serde_json::Value::String(kind)) if kind == "guardianAssessment"
+            )
+    )
 }
 
 pub(crate) async fn route_outgoing_envelope(
@@ -1078,6 +1167,116 @@ mod tests {
                 },
                 "macos": null,
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn guardian_assessment_notification_is_hidden_without_experimental_api() {
+        let connection_id = ConnectionId(10);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(RwLock::new(HashSet::new())),
+                None,
+            ),
+        );
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(ServerNotification::ItemStarted(
+                    codex_app_server_protocol::ItemStartedNotification {
+                        item: codex_app_server_protocol::ThreadItem::GuardianAssessment {
+                            id: "guardian_123".to_string(),
+                            status: codex_app_server_protocol::GuardianAssessmentStatus::InProgress,
+                            risk_score: None,
+                            risk_level: None,
+                            rationale: None,
+                            action: None,
+                        },
+                        thread_id: "thread_123".to_string(),
+                        turn_id: "turn_123".to_string(),
+                    },
+                )),
+            },
+        )
+        .await;
+
+        assert_eq!(writer_rx.try_recv().ok(), None);
+    }
+
+    #[tokio::test]
+    async fn guardian_assessment_items_are_stripped_from_responses_without_experimental_api() {
+        let connection_id = ConnectionId(11);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(RwLock::new(HashSet::new())),
+                None,
+            ),
+        );
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::Response(OutgoingResponse {
+                    id: codex_app_server_protocol::RequestId::Integer(1),
+                    result: json!({
+                        "turn": {
+                            "id": "turn_123",
+                            "items": [
+                                {
+                                    "type": "guardianAssessment",
+                                    "id": "guardian_123",
+                                    "status": "denied",
+                                    "riskScore": 92,
+                                    "riskLevel": "high",
+                                    "rationale": "nope",
+                                    "action": { "tool": "shell" }
+                                },
+                                {
+                                    "type": "agentMessage",
+                                    "id": "msg_123",
+                                    "text": "hello",
+                                    "phase": null
+                                }
+                            ],
+                            "status": "completed",
+                            "error": null
+                        }
+                    }),
+                }),
+            },
+        )
+        .await;
+
+        let message = writer_rx
+            .recv()
+            .await
+            .expect("response should be delivered to the connection");
+        let json = serde_json::to_value(message).expect("response should serialize");
+        assert_eq!(
+            json["result"]["turn"]["items"],
+            json!([{
+                "type": "agentMessage",
+                "id": "msg_123",
+                "text": "hello",
+                "phase": null
+            }])
         );
     }
 
