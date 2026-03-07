@@ -19,7 +19,7 @@ use crate::protocol::SandboxPolicy;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 #[cfg(target_os = "macos")]
-use crate::seatbelt::create_seatbelt_command_args_with_extensions;
+use crate::seatbelt::create_seatbelt_command_args_for_policies_with_extensions;
 #[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
@@ -496,9 +496,10 @@ impl SandboxManager {
             SandboxType::MacosSeatbelt => {
                 let mut seatbelt_env = HashMap::new();
                 seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
-                let mut args = create_seatbelt_command_args_with_extensions(
+                let mut args = create_seatbelt_command_args_for_policies_with_extensions(
                     command.clone(),
-                    &effective_policy,
+                    &effective_file_system_policy,
+                    effective_network_policy,
                     sandbox_policy_cwd,
                     enforce_managed_network,
                     network,
