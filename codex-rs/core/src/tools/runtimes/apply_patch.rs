@@ -49,6 +49,20 @@ impl ApplyPatchRuntime {
         Self
     }
 
+    fn build_guardian_review_request(req: &ApplyPatchRequest) -> GuardianReviewRequest {
+        GuardianReviewRequest {
+            tool_name: "apply_patch",
+            action: serde_json::json!({
+                "tool": "apply_patch",
+                "cwd": req.action.cwd.clone(),
+                "files": req.file_paths.clone(),
+                "change_count": req.changes.len(),
+                "patch": req.action.patch.clone(),
+                "changes": req.changes.clone(),
+            }),
+        }
+    }
+
     fn build_command_spec(
         req: &ApplyPatchRequest,
         _codex_home: &std::path::Path,
@@ -122,15 +136,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let changes = req.changes.clone();
         Box::pin(async move {
             if routes_approval_to_guardian(turn, turn.approval_policy.value()) {
-                let request = GuardianReviewRequest {
-                    tool_name: "apply_patch",
-                    action: serde_json::json!({
-                        "tool": "apply_patch",
-                        "cwd": req.action.cwd,
-                        "files": req.file_paths,
-                        "change_count": req.changes.len(),
-                    }),
-                };
+                let request = ApplyPatchRuntime::build_guardian_review_request(req);
                 return review_escalation(session, turn, request).await;
             }
             if let Some(reason) = retry_reason {
@@ -199,6 +205,8 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
 mod tests {
     use super::*;
     use codex_protocol::protocol::RejectConfig;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
 
     #[test]
     fn wants_no_sandbox_approval_reject_respects_sandbox_flag() {
@@ -217,6 +225,47 @@ mod tests {
                 rules: false,
                 mcp_elicitations: false,
             }))
+        );
+    }
+
+    #[test]
+    fn guardian_review_request_includes_full_patch_and_changes() {
+        let path = std::env::temp_dir().join("guardian-apply-patch-test.txt");
+        let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
+        let expected_cwd = action.cwd.clone();
+        let expected_patch = action.patch.clone();
+        let request = ApplyPatchRequest {
+            action,
+            file_paths: vec![
+                AbsolutePathBuf::from_absolute_path(&path).expect("temp path should be absolute"),
+            ],
+            changes: HashMap::from([(
+                path.clone(),
+                FileChange::Add {
+                    content: "hello".to_string(),
+                },
+            )]),
+            exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            },
+            timeout_ms: None,
+            codex_exe: None,
+        };
+
+        let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request);
+
+        assert_eq!(guardian_request.tool_name, "apply_patch");
+        assert_eq!(
+            guardian_request.action,
+            serde_json::json!({
+                "tool": "apply_patch",
+                "cwd": expected_cwd,
+                "files": request.file_paths,
+                "change_count": 1,
+                "patch": expected_patch,
+                "changes": request.changes,
+            })
         );
     }
 }
