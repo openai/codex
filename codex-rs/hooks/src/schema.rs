@@ -334,6 +334,10 @@ mod tests {
         }
     }
 
+    fn normalize_newlines(value: &str) -> String {
+        value.replace("\r\n", "\n")
+    }
+
     #[test]
     fn generated_hook_schemas_match_fixtures() {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -346,9 +350,10 @@ mod tests {
             STOP_INPUT_FIXTURE,
             STOP_OUTPUT_FIXTURE,
         ] {
-            let expected = expected_fixture(fixture);
+            let expected = normalize_newlines(expected_fixture(fixture));
             let actual = std::fs::read_to_string(schema_root.join("generated").join(fixture))
                 .unwrap_or_else(|err| panic!("read generated schema {fixture}: {err}"));
+            let actual = normalize_newlines(&actual);
             assert_eq!(expected, actual, "fixture should match generated schema");
         }
     }
