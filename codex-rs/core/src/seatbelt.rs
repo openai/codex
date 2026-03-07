@@ -428,26 +428,6 @@ pub(crate) fn create_seatbelt_command_args_for_policies_with_extensions(
     network: Option<&NetworkProxy>,
     extensions: Option<&MacOsSeatbeltProfileExtensions>,
 ) -> Vec<String> {
-    create_seatbelt_command_args_from_policies_inner(
-        command,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
-        sandbox_policy_cwd,
-        enforce_managed_network,
-        network,
-        extensions,
-    )
-}
-
-fn create_seatbelt_command_args_from_policies_inner(
-    command: Vec<String>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
-    sandbox_policy_cwd: &Path,
-    enforce_managed_network: bool,
-    network: Option<&NetworkProxy>,
-    extensions: Option<&MacOsSeatbeltProfileExtensions>,
-) -> Vec<String> {
     let unreadable_roots =
         file_system_sandbox_policy.get_unreadable_roots_with_cwd(sandbox_policy_cwd);
     let (file_write_policy, file_write_dir_params) =
