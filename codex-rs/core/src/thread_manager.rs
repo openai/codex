@@ -123,6 +123,9 @@ pub struct NewThread {
 /// them in memory.
 pub struct ThreadManager {
     state: Arc<ThreadManagerState>,
+    // AgentControl needs to be shared across clones so parent/child coordination state is visible
+    // to every code path that talks to subagents.
+    agent_control: AgentControl,
     _test_codex_home_guard: Option<TempCodexHomeGuard>,
 }
 
@@ -159,25 +162,27 @@ impl ThreadManager {
             Arc::clone(&plugins_manager),
         ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let state = Arc::new(ThreadManagerState {
+            threads: Arc::new(RwLock::new(HashMap::new())),
+            thread_created_tx,
+            models_manager: Arc::new(ModelsManager::new(
+                codex_home,
+                auth_manager.clone(),
+                model_catalog,
+                collaboration_modes_config,
+            )),
+            skills_manager,
+            plugins_manager,
+            mcp_manager,
+            file_watcher,
+            auth_manager,
+            session_source,
+            ops_log: should_use_test_thread_manager_behavior()
+                .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
+        });
         Self {
-            state: Arc::new(ThreadManagerState {
-                threads: Arc::new(RwLock::new(HashMap::new())),
-                thread_created_tx,
-                models_manager: Arc::new(ModelsManager::new(
-                    codex_home,
-                    auth_manager.clone(),
-                    model_catalog,
-                    collaboration_modes_config,
-                )),
-                skills_manager,
-                plugins_manager,
-                mcp_manager,
-                file_watcher,
-                auth_manager,
-                session_source,
-                ops_log: should_use_test_thread_manager_behavior()
-                    .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
-            }),
+            agent_control: AgentControl::new(Arc::downgrade(&state)),
+            state,
             _test_codex_home_guard: None,
         }
     }
@@ -218,24 +223,26 @@ impl ThreadManager {
             Arc::clone(&plugins_manager),
         ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let state = Arc::new(ThreadManagerState {
+            threads: Arc::new(RwLock::new(HashMap::new())),
+            thread_created_tx,
+            models_manager: Arc::new(ModelsManager::with_provider_for_tests(
+                codex_home,
+                auth_manager.clone(),
+                provider,
+            )),
+            skills_manager,
+            plugins_manager,
+            mcp_manager,
+            file_watcher,
+            auth_manager,
+            session_source: SessionSource::Exec,
+            ops_log: should_use_test_thread_manager_behavior()
+                .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
+        });
         Self {
-            state: Arc::new(ThreadManagerState {
-                threads: Arc::new(RwLock::new(HashMap::new())),
-                thread_created_tx,
-                models_manager: Arc::new(ModelsManager::with_provider_for_tests(
-                    codex_home,
-                    auth_manager.clone(),
-                    provider,
-                )),
-                skills_manager,
-                plugins_manager,
-                mcp_manager,
-                file_watcher,
-                auth_manager,
-                session_source: SessionSource::Exec,
-                ops_log: should_use_test_thread_manager_behavior()
-                    .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
-            }),
+            agent_control: AgentControl::new(Arc::downgrade(&state)),
+            state,
             _test_codex_home_guard: None,
         }
     }
@@ -423,7 +430,7 @@ impl ThreadManager {
     }
 
     pub(crate) fn agent_control(&self) -> AgentControl {
-        AgentControl::new(Arc::downgrade(&self.state))
+        self.agent_control.clone()
     }
 
     #[cfg(test)]
