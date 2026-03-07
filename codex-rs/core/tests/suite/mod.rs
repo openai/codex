@@ -122,6 +122,7 @@ mod sqlite_state;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod subagent_notifications;
+mod terminal_hyperlinks;
 mod text_encoding_fix;
 mod tool_harness;
 mod tool_parallelism;

@@ -3,6 +3,7 @@ use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
 use crate::features::Feature;
 use crate::shell::Shell;
+use crate::terminal_hyperlinks::augment_model_instructions_for_terminal_hyperlinks;
 use codex_execpolicy::Policy;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
@@ -136,7 +137,10 @@ pub(crate) fn build_model_instructions_update_item(
         return None;
     }
 
-    let model_instructions = next.model_info.get_model_instructions(next.personality);
+    let model_instructions = augment_model_instructions_for_terminal_hyperlinks(
+        next.model_info.get_model_instructions(next.personality),
+        &next.config,
+    );
     if model_instructions.is_empty() {
         return None;
     }

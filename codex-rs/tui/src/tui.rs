@@ -41,6 +41,7 @@ use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
+use crate::terminal_hyperlinks::TerminalHyperlinkSettings;
 use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
@@ -255,6 +256,7 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+    terminal_hyperlink_settings: Option<TerminalHyperlinkSettings>,
 }
 
 impl Tui {
@@ -283,6 +285,7 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             alt_screen_enabled: true,
+            terminal_hyperlink_settings: None,
         }
     }
 
@@ -293,6 +296,10 @@ impl Tui {
 
     pub fn set_notification_method(&mut self, method: NotificationMethod) {
         self.notification_backend = Some(detect_backend(method));
+    }
+
+    pub fn set_terminal_hyperlink_settings(&mut self, settings: TerminalHyperlinkSettings) {
+        self.terminal_hyperlink_settings = Some(settings);
     }
 
     pub fn frame_requester(&self) -> FrameRequester {
@@ -496,10 +503,12 @@ impl Tui {
             }
 
             if !self.pending_history_lines.is_empty() {
-                crate::insert_history::insert_history_lines(
-                    terminal,
-                    self.pending_history_lines.clone(),
-                )?;
+                let lines = if let Some(settings) = &self.terminal_hyperlink_settings {
+                    crate::terminal_hyperlinks::linkify_lines(&self.pending_history_lines, settings)
+                } else {
+                    self.pending_history_lines.clone()
+                };
+                crate::insert_history::insert_history_lines(terminal, lines)?;
                 self.pending_history_lines.clear();
             }
 

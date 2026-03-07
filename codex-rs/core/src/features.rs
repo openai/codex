@@ -157,6 +157,8 @@ pub enum Feature {
     FastMode,
     /// Enable voice transcription in the TUI composer.
     VoiceTranscription,
+    /// Make rendered web URLs and local file references clickable in the TUI.
+    TerminalHyperlinks,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
@@ -730,6 +732,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::TerminalHyperlinks,
+        key: "terminal_hyperlinks",
+        stage: Stage::Experimental {
+            name: "Terminal hyperlinks",
+            menu_description: "Turn rendered web URLs and local file references into clickable terminal hyperlinks, and steer the model toward shorter workspace-relative file refs.",
+            announcement: "NEW: Terminal hyperlinks can turn URLs and file refs into real terminal hyperlinks. Enable it in /experimental and restart Codex to try it.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::RealtimeConversation,
         key: "realtime_conversation",
         stage: Stage::UnderDevelopment,
@@ -898,5 +910,17 @@ mod tests {
     fn collab_is_legacy_alias_for_multi_agent() {
         assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
         assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+    }
+
+    #[test]
+    fn clickable_text_is_legacy_alias_for_terminal_hyperlinks() {
+        assert_eq!(
+            feature_for_key("clickable_text"),
+            Some(Feature::TerminalHyperlinks)
+        );
+        assert_eq!(
+            feature_for_key("terminal_hyperlinks"),
+            Some(Feature::TerminalHyperlinks)
+        );
     }
 }

@@ -1,8 +1,10 @@
+use crate::file_references::extract_local_path_location_suffix;
+use crate::file_references::is_local_path_like_link;
+use crate::file_references::text_has_location_suffix;
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
-use codex_utils_string::normalize_markdown_hash_location_suffix;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
 use pulldown_cmark::Event;
@@ -15,8 +17,6 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
-use regex_lite::Regex;
-use std::sync::LazyLock;
 
 struct MarkdownStyles {
     h1: Style,
@@ -99,35 +99,6 @@ struct LinkState {
 
 fn should_render_link_destination(dest_url: &str) -> bool {
     !is_local_path_like_link(dest_url)
-}
-
-static COLON_LOCATION_SUFFIX_RE: LazyLock<Regex> =
-    LazyLock::new(
-        || match Regex::new(r":\d+(?::\d+)?(?:[-–]\d+(?::\d+)?)?$") {
-            Ok(regex) => regex,
-            Err(error) => panic!("invalid location suffix regex: {error}"),
-        },
-    );
-
-// Covered by load_location_suffix_regexes.
-static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> =
-    LazyLock::new(|| match Regex::new(r"^L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?$") {
-        Ok(regex) => regex,
-        Err(error) => panic!("invalid hash location regex: {error}"),
-    });
-
-fn is_local_path_like_link(dest_url: &str) -> bool {
-    dest_url.starts_with("file://")
-        || dest_url.starts_with('/')
-        || dest_url.starts_with("~/")
-        || dest_url.starts_with("./")
-        || dest_url.starts_with("../")
-        || dest_url.starts_with("\\\\")
-        || matches!(
-            dest_url.as_bytes(),
-            [drive, b':', separator, ..]
-                if drive.is_ascii_alphabetic() && matches!(separator, b'/' | b'\\')
-        )
 }
 
 struct Writer<'a, I>
@@ -524,23 +495,7 @@ where
         }
         self.link = Some(LinkState {
             show_destination,
-            hidden_location_suffix: if is_local_path_like_link(&dest_url) {
-                dest_url
-                    .rsplit_once('#')
-                    .and_then(|(_, fragment)| {
-                        HASH_LOCATION_SUFFIX_RE
-                            .is_match(fragment)
-                            .then(|| format!("#{fragment}"))
-                    })
-                    .and_then(|suffix| normalize_markdown_hash_location_suffix(&suffix))
-                    .or_else(|| {
-                        COLON_LOCATION_SUFFIX_RE
-                            .find(&dest_url)
-                            .map(|m| m.as_str().to_string())
-                    })
-            } else {
-                None
-            },
+            hidden_location_suffix: extract_local_path_location_suffix(&dest_url),
             label_start_span_idx,
             label_styled,
             destination: dest_url,
@@ -569,11 +524,7 @@ where
                         })
                     })
                     .unwrap_or_default();
-                if label_text
-                    .rsplit_once('#')
-                    .is_some_and(|(_, fragment)| HASH_LOCATION_SUFFIX_RE.is_match(fragment))
-                    || COLON_LOCATION_SUFFIX_RE.find(&label_text).is_some()
-                {
+                if text_has_location_suffix(&label_text) {
                     // The label already carries a location suffix; don't duplicate it.
                 } else {
                     self.push_span(Span::styled(location_suffix.to_string(), self.styles.code));

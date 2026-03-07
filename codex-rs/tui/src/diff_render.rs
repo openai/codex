@@ -76,7 +76,7 @@ const LIGHT_256_GUTTER_FG_IDX: u8 = 236;
 
 use crate::color::is_light;
 use crate::color::perceptual_distance;
-use crate::exec_command::relativize_to_home;
+use crate::file_references;
 use crate::render::Insets;
 use crate::render::highlight::DiffScopeBackgroundRgbs;
 use crate::render::highlight::diff_scope_background_rgbs;
@@ -92,7 +92,6 @@ use crate::terminal_palette::default_bg;
 use crate::terminal_palette::indexed_color;
 use crate::terminal_palette::rgb_color;
 use crate::terminal_palette::stdout_color_level;
-use codex_core::git_info::get_git_repo_root;
 use codex_core::terminal::TerminalName;
 use codex_core::terminal::terminal_info;
 use codex_protocol::protocol::FileChange;
@@ -737,26 +736,7 @@ fn render_change(
 /// possible, keeping output stable in jj/no-`.git` workspaces (e.g. image
 /// tool calls should show `example.png` instead of an absolute path).
 pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
-    if path.is_relative() {
-        return path.display().to_string();
-    }
-
-    if let Ok(stripped) = path.strip_prefix(cwd) {
-        return stripped.display().to_string();
-    }
-
-    let path_in_same_repo = match (get_git_repo_root(cwd), get_git_repo_root(path)) {
-        (Some(cwd_repo), Some(path_repo)) => cwd_repo == path_repo,
-        _ => false,
-    };
-    let chosen = if path_in_same_repo {
-        pathdiff::diff_paths(path, cwd).unwrap_or_else(|| path.to_path_buf())
-    } else {
-        relativize_to_home(path)
-            .map(|p| PathBuf::from_iter([Path::new("~"), p.as_path()]))
-            .unwrap_or_else(|| path.to_path_buf())
-    };
-    chosen.display().to_string()
+    file_references::display_path_for(path, cwd)
 }
 
 pub(crate) fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {

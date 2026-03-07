@@ -47,6 +47,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::terminal;
+use crate::terminal_hyperlinks::augment_model_instructions_for_terminal_hyperlinks;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
@@ -440,6 +441,8 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let base_instructions =
+            augment_model_instructions_for_terminal_hyperlinks(base_instructions, &config);
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.

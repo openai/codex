@@ -1955,6 +1955,11 @@ impl App {
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
+                    tui.set_terminal_hyperlink_settings(
+                        crate::terminal_hyperlinks::TerminalHyperlinkSettings::from_config(
+                            &self.config,
+                        ),
+                    );
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
