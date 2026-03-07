@@ -353,12 +353,37 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
 }
 
 fn guardian_snapshot_dir() -> PathBuf {
-    if let Ok(test_srcdir) = std::env::var("TEST_SRCDIR") {
-        let runfiles_snapshot_dir = PathBuf::from(test_srcdir)
-            .join("_main")
-            .join("codex-rs/core/src/snapshots");
-        if runfiles_snapshot_dir.is_dir() {
-            return runfiles_snapshot_dir;
+    let test_workspace = std::env::var_os("TEST_WORKSPACE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("_main"));
+    let mut candidates = Vec::new();
+
+    if let Some(test_srcdir) = std::env::var_os("TEST_SRCDIR") {
+        candidates.push(
+            PathBuf::from(test_srcdir)
+                .join(&test_workspace)
+                .join("codex-rs/core/src/snapshots"),
+        );
+    }
+
+    if let Some(runfiles_dir) = std::env::var_os("RUNFILES_DIR") {
+        candidates.push(
+            PathBuf::from(runfiles_dir)
+                .join(&test_workspace)
+                .join("codex-rs/core/src/snapshots"),
+        );
+    }
+
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/snapshots"));
+
+    for candidate in candidates {
+        if let Ok(path) = candidate.canonicalize()
+            && path.is_dir()
+        {
+            return path;
+        }
+        if candidate.is_absolute() && candidate.is_dir() {
+            return candidate;
         }
     }
 
