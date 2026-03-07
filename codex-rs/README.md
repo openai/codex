@@ -32,6 +32,8 @@ Codex supports a rich set of configuration options. Note that the Rust CLI uses 
 
 Codex CLI functions as an MCP client that allows the Codex CLI and IDE extension to connect to MCP servers on startup. See the [`configuration documentation`](../docs/config.md#connecting-to-mcp-servers) for details.
 
+For OAuth MCP servers that disable dynamic client registration but support Client ID Metadata Documents (SEP-991/CIMD), Codex automatically retries login with its built-in client metadata document at [`client-metadata.json`](./client-metadata.json). By default, Codex binds the local OAuth callback listener to `127.0.0.1:33418` so the redirect URI matches the built-in metadata document.
+
 #### MCP server (experimental)
 
 Codex can be launched as an MCP _server_ by running `codex mcp-server`. This allows _other_ MCP clients to use Codex as a tool for another agent.
