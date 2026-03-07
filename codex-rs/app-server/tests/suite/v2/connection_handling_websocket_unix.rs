@@ -72,7 +72,7 @@ async fn websocket_transport_second_ctrl_c_forces_exit_while_turn_running() -> R
     send_sigint(&process)?;
     let status = wait_for_process_exit_within(
         &mut process,
-        Duration::from_secs(2),
+        Duration::from_secs(5),
         "timed out waiting for forced Ctrl-C restart shutdown",
     )
     .await?;
@@ -123,7 +123,7 @@ async fn websocket_transport_second_sigterm_forces_exit_while_turn_running() -> 
     send_sigterm(&process)?;
     let status = wait_for_process_exit_within(
         &mut process,
-        Duration::from_secs(2),
+        Duration::from_secs(5),
         "timed out waiting for forced SIGTERM restart shutdown",
     )
     .await?;

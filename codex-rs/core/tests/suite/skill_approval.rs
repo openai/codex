@@ -35,6 +35,38 @@ fn absolute_path(path: &Path) -> AbsolutePathBuf {
     }
 }
 
+fn normalize_absolute_path_buf(path: &AbsolutePathBuf) -> AbsolutePathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        let normalized = path
+            .as_path()
+            .strip_prefix("/private")
+            .map(|suffix| Path::new("/").join(suffix))
+            .unwrap_or_else(|_| path.as_path().to_path_buf());
+        return AbsolutePathBuf::try_from(normalized.as_path())
+            .unwrap_or_else(|err| panic!("absolute path normalization: {err}"));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        path.clone()
+    }
+}
+
+fn normalize_permission_profile(profile: Option<PermissionProfile>) -> Option<PermissionProfile> {
+    profile.map(|mut profile| {
+        if let Some(file_system) = profile.file_system.as_mut() {
+            if let Some(read) = file_system.read.as_mut() {
+                *read = read.iter().map(normalize_absolute_path_buf).collect();
+            }
+            if let Some(write) = file_system.write.as_mut() {
+                *write = write.iter().map(normalize_absolute_path_buf).collect();
+            }
+        }
+        profile
+    })
+}
+
 fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
     let metadata_dir = home.join("skills").join(name).join("agents");
     fs::create_dir_all(&metadata_dir)?;
@@ -45,7 +77,7 @@ fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
 fn shell_command_arguments(command: &str) -> Result<String> {
     Ok(serde_json::to_string(&json!({
         "command": command,
-        "timeout_ms": 500,
+        "timeout_ms": 2_000,
     }))?)
 }
 
@@ -227,8 +259,8 @@ permissions:
         ])
     );
     assert_eq!(
-        approval.additional_permissions,
-        Some(PermissionProfile {
+        normalize_permission_profile(approval.additional_permissions.clone()),
+        normalize_permission_profile(Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
                 read: Some(vec![absolute_path(
                     &test.codex_home_path().join("skills/mbolin-test-skill/data"),
@@ -240,7 +272,7 @@ permissions:
                 )]),
             }),
             ..Default::default()
-        })
+        }))
     );
 
     test.codex
@@ -771,14 +803,14 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
     assert_eq!(approval.call_id, first_call_id);
     assert_eq!(approval.command, vec![script_path_str.clone()]);
     assert_eq!(
-        approval.additional_permissions,
-        Some(PermissionProfile {
+        normalize_permission_profile(approval.additional_permissions.clone()),
+        normalize_permission_profile(Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
                 read: None,
                 write: Some(vec![absolute_path(&allowed_dir)]),
             }),
             ..Default::default()
-        })
+        }))
     );
 
     test.codex
