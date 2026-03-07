@@ -5,4 +5,4 @@
 /**
  * Agent lifecycle status, derived from emitted events.
  */
-export type AgentStatus = "pending_init" | "running" | { "completed": string | null } | { "errored": string } | "shutdown" | "not_found";
+export type AgentStatus = "pending_init" | "running" | "interrupted" | { "completed": string | null } | { "errored": string } | "shutdown" | "not_found";

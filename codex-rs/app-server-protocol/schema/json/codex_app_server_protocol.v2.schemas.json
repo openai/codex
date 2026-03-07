@@ -181,6 +181,13 @@
           "type": "string"
         },
         {
+          "description": "Agent's current turn was interrupted and it may receive more input.",
+          "enum": [
+            "interrupted"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "description": "Agent is done. Contains the final assistant message.",
           "properties": {
@@ -2199,6 +2206,7 @@
       "enum": [
         "pendingInit",
         "running",
+        "interrupted",
         "completed",
         "errored",
         "shutdown",

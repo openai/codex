@@ -651,7 +651,8 @@ pub(crate) mod wait {
         })
     }
 
-    async fn wait_for_final_status(
+    // Pub only for tests. Do not use.
+    pub(super) async fn wait_for_final_status(
         session: Arc<Session>,
         thread_id: ThreadId,
         mut status_rx: Receiver<AgentStatus>,
@@ -1007,6 +1008,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Mutex;
+    use tokio::sync::watch;
     use tokio::time::timeout;
 
     fn invocation(
@@ -1984,6 +1986,26 @@ mod tests {
             }
         );
         assert_eq!(success, None);
+    }
+
+    #[tokio::test]
+    async fn wait_for_final_status_ignores_interrupted_status() {
+        let (session, _turn) = make_session_and_context().await;
+        let agent_id = ThreadId::new();
+        let (status_tx, status_rx) = watch::channel(AgentStatus::Interrupted);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            status_tx.send_replace(AgentStatus::Shutdown);
+        });
+
+        let result = timeout(
+            Duration::from_secs(1),
+            wait::wait_for_final_status(Arc::new(session), agent_id, status_rx),
+        )
+        .await
+        .expect("wait should complete once a truly final status arrives");
+        assert_eq!(result, Some((agent_id, AgentStatus::Shutdown)));
     }
 
     #[tokio::test]
