@@ -18,6 +18,8 @@ use reqwest::header::ACCEPT;
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
+use reqwest::header::HeaderName;
+use reqwest::header::HeaderValue;
 use reqwest::header::WWW_AUTHENTICATE;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
@@ -97,6 +99,16 @@ impl StreamableHttpResponseClient {
     ) -> StreamableHttpError<StreamableHttpResponseClientError> {
         StreamableHttpError::Client(StreamableHttpResponseClientError::from(error))
     }
+
+    fn apply_custom_headers(
+        mut request: reqwest::RequestBuilder,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> reqwest::RequestBuilder {
+        for (name, value) in custom_headers {
+            request = request.header(name, value);
+        }
+        request
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -116,6 +128,7 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         message: rmcp::model::ClientJsonRpcMessage,
         session_id: Option<Arc<str>>,
         auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let mut request = self
             .inner
@@ -127,6 +140,7 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         if let Some(session_id_value) = session_id.as_ref() {
             request = request.header(HEADER_SESSION_ID, session_id_value.as_ref());
         }
+        request = Self::apply_custom_headers(request, custom_headers);
 
         let response = request
             .json(&message)
@@ -217,16 +231,19 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         uri: Arc<str>,
         session: Arc<str>,
         auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
         let mut request_builder = self.inner.delete(uri.as_ref());
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
-        let response = request_builder
-            .header(HEADER_SESSION_ID, session.as_ref())
-            .send()
-            .await
-            .map_err(StreamableHttpResponseClient::reqwest_error)?;
+        let response = Self::apply_custom_headers(
+            request_builder.header(HEADER_SESSION_ID, session.as_ref()),
+            custom_headers,
+        )
+        .send()
+        .await
+        .map_err(StreamableHttpResponseClient::reqwest_error)?;
 
         if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
             return Ok(());
@@ -244,6 +261,7 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         session_id: Arc<str>,
         last_event_id: Option<String>,
         auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> std::result::Result<
         BoxStream<'static, std::result::Result<Sse, sse_stream::Error>>,
         StreamableHttpError<Self::Error>,
@@ -259,6 +277,7 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
+        request_builder = Self::apply_custom_headers(request_builder, custom_headers);
 
         let response = request_builder
             .send()
