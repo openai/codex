@@ -277,6 +277,7 @@ async fn build_guardian_prompt_items(
     if let Some(note) = omission_note {
         push_text(format!("\n{note}\n"));
     }
+    push_text("Approval request:\n".to_string());
     push_text(">>> APPROVAL REQUEST START\n".to_string());
     if let Some(reason) = retry_reason {
         push_text("Retry reason:\n".to_string());
@@ -289,6 +290,7 @@ async fn build_guardian_prompt_items(
     push_text("Planned action JSON:\n".to_string());
     push_text(format!("{planned_action_json}\n"));
     push_text(">>> APPROVAL REQUEST END\n".to_string());
+    push_text("You may use read-only tool checks to gather any additional context you need to make a high-confidence determination.\n\nYour final message must be strict JSON with this exact schema:\n{\n  \"risk_level\": \"low\" | \"medium\" | \"high\",\n  \"risk_score\": 0-100,\n  \"rationale\": string,\n  \"evidence\": [{\"message\": string, \"why\": string}]\n}\n".to_string());
     items
 }
 
