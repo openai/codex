@@ -563,14 +563,16 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
         })
         .await?;
 
-    let started_delta = read_command_exec_delta(&mut mcp).await?;
-    assert_eq!(started_delta.process_id, process_id.as_str());
-    assert_eq!(started_delta.stream, CommandExecOutputStream::Stdout);
+    let started_text = read_command_exec_output_until_contains(
+        &mut mcp,
+        process_id.as_str(),
+        CommandExecOutputStream::Stdout,
+        "tty\n",
+    )
+    .await?;
     assert!(
-        String::from_utf8(STANDARD.decode(&started_delta.delta_base64)?)?
-            .replace('\r', "")
-            .contains("tty\n"),
-        "expected TTY startup output, got {started_delta:?}"
+        started_text.contains("tty\n"),
+        "expected TTY startup output, got {started_text:?}"
     );
 
     let write_request_id = mcp
@@ -585,14 +587,16 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
         .await?;
     assert_eq!(write_response.result, serde_json::json!({}));
 
-    let echoed_delta = read_command_exec_delta(&mut mcp).await?;
-    assert_eq!(echoed_delta.process_id, process_id.as_str());
-    assert_eq!(echoed_delta.stream, CommandExecOutputStream::Stdout);
+    let echoed_text = read_command_exec_output_until_contains(
+        &mut mcp,
+        process_id.as_str(),
+        CommandExecOutputStream::Stdout,
+        "echo:world\n",
+    )
+    .await?;
     assert!(
-        String::from_utf8(STANDARD.decode(&echoed_delta.delta_base64)?)?
-            .replace('\r', "")
-            .contains("echo:world\n"),
-        "expected TTY echo output, got {echoed_delta:?}"
+        echoed_text.contains("echo:world\n"),
+        "expected TTY echo output, got {echoed_text:?}"
     );
 
     let response = mcp
@@ -640,9 +644,13 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
         })
         .await?;
 
-    let started_delta = read_command_exec_delta(&mut mcp).await?;
-    let started_text =
-        String::from_utf8(STANDARD.decode(&started_delta.delta_base64)?)?.replace('\r', "");
+    let started_text = read_command_exec_output_until_contains(
+        &mut mcp,
+        process_id.as_str(),
+        CommandExecOutputStream::Stdout,
+        "start:31 101\n",
+    )
+    .await?;
     assert!(
         started_text.contains("start:31 101\n"),
         "unexpected initial size output: {started_text:?}"
@@ -674,9 +682,13 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
         .await?;
     assert_eq!(write_response.result, serde_json::json!({}));
 
-    let resized_delta = read_command_exec_delta(&mut mcp).await?;
-    let resized_text =
-        String::from_utf8(STANDARD.decode(&resized_delta.delta_base64)?)?.replace('\r', "");
+    let resized_text = read_command_exec_output_until_contains(
+        &mut mcp,
+        process_id.as_str(),
+        CommandExecOutputStream::Stdout,
+        "after:45 132\n",
+    )
+    .await?;
     assert!(
         resized_text.contains("after:45 132\n"),
         "unexpected resized output: {resized_text:?}"
@@ -777,6 +789,35 @@ async fn read_command_exec_delta(
         .read_stream_until_notification_message("command/exec/outputDelta")
         .await?;
     decode_delta_notification(notification)
+}
+
+async fn read_command_exec_output_until_contains(
+    mcp: &mut McpProcess,
+    process_id: &str,
+    stream: CommandExecOutputStream,
+    expected: &str,
+) -> Result<String> {
+    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
+    let mut collected = String::new();
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let delta = timeout(remaining, read_command_exec_delta(mcp))
+            .await
+            .with_context(|| {
+                format!(
+                    "timed out waiting for {expected:?} in command/exec output for {process_id}; collected {collected:?}"
+                )
+            })??;
+        assert_eq!(delta.process_id, process_id);
+        assert_eq!(delta.stream, stream);
+
+        let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
+        collected.push_str(&delta_text.replace('\r', ""));
+        if collected.contains(expected) {
+            return Ok(collected);
+        }
+    }
 }
 
 async fn read_command_exec_delta_ws(
