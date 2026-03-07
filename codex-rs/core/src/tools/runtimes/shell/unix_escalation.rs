@@ -7,6 +7,8 @@ use crate::exec::SandboxType;
 use crate::exec::is_likely_sandbox_denied;
 use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::features::Feature;
+use crate::guardian::GuardianAction;
+use crate::guardian::GuardianExecveAction;
 use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -385,13 +387,15 @@ impl CoreShellActionProvider {
             .pause_for(async move {
                 if routes_approval_to_guardian(&turn) {
                     let request = GuardianReviewRequest {
-                        tool_name,
-                        action: serde_json::json!({
-                            "tool": tool_name,
-                            "program": program,
-                            "argv": argv,
-                            "cwd": workdir,
-                            "additional_permissions": additional_permissions,
+                        action: GuardianAction::Execve(GuardianExecveAction {
+                            tool: tool_name,
+                            program: program.clone(),
+                            argv: argv.to_vec(),
+                            cwd: workdir,
+                            additional_permissions: additional_permissions.as_ref().map(|value| {
+                                serde_json::to_value(value)
+                                    .expect("execve additional permissions should serialize")
+                            }),
                         }),
                     };
                     return review_approval_request(&session, &turn, request).await;

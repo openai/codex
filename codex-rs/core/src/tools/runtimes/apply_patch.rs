@@ -5,6 +5,8 @@
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
 use crate::exec::ExecToolCallOutput;
+use crate::guardian::GuardianAction;
+use crate::guardian::GuardianApplyPatchAction;
 use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -51,13 +53,12 @@ impl ApplyPatchRuntime {
 
     fn build_guardian_review_request(req: &ApplyPatchRequest) -> GuardianReviewRequest {
         GuardianReviewRequest {
-            tool_name: "apply_patch",
-            action: serde_json::json!({
-                "tool": "apply_patch",
-                "cwd": req.action.cwd.clone(),
-                "files": req.file_paths.clone(),
-                "change_count": req.changes.len(),
-                "patch": req.action.patch.clone(),
+            action: GuardianAction::ApplyPatch(GuardianApplyPatchAction {
+                tool: "apply_patch",
+                cwd: req.action.cwd.clone(),
+                files: req.file_paths.clone(),
+                change_count: req.changes.len(),
+                patch: req.action.patch.clone(),
             }),
         }
     }
@@ -254,15 +255,14 @@ mod tests {
 
         let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request);
 
-        assert_eq!(guardian_request.tool_name, "apply_patch");
         assert_eq!(
             guardian_request.action,
-            serde_json::json!({
-                "tool": "apply_patch",
-                "cwd": expected_cwd,
-                "files": request.file_paths,
-                "change_count": 1,
-                "patch": expected_patch,
+            GuardianAction::ApplyPatch(GuardianApplyPatchAction {
+                tool: "apply_patch",
+                cwd: expected_cwd,
+                files: request.file_paths,
+                change_count: 1,
+                patch: expected_patch,
             })
         );
     }

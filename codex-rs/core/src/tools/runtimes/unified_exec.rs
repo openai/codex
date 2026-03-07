@@ -9,6 +9,8 @@ use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecExpiration;
 use crate::features::Feature;
+use crate::guardian::GuardianAction;
+use crate::guardian::GuardianCommandAction;
 use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -119,15 +121,18 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
                 let request = GuardianReviewRequest {
-                    tool_name: "exec_command",
-                    action: serde_json::json!({
-                        "tool": "exec_command",
-                        "command": command,
-                        "cwd": cwd,
-                        "tty": req.tty,
-                        "sandbox_permissions": req.sandbox_permissions,
-                        "additional_permissions": req.additional_permissions,
-                        "justification": reason,
+                    action: GuardianAction::Command(GuardianCommandAction {
+                        tool: "exec_command",
+                        command,
+                        cwd,
+                        sandbox_permissions: serde_json::to_value(req.sandbox_permissions)
+                            .expect("exec_command sandbox permissions should serialize"),
+                        additional_permissions: req.additional_permissions.as_ref().map(|value| {
+                            serde_json::to_value(value)
+                                .expect("exec_command additional permissions should serialize")
+                        }),
+                        justification: reason,
+                        tty: Some(req.tty),
                     }),
                 };
                 return review_approval_request(session, turn, request).await;

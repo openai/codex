@@ -14,6 +14,7 @@
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,6 +24,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -59,26 +61,6 @@ const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 1_000;
 // agent was trying to do immediately before the escalation.
 const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 const GUARDIAN_TRUNCATION_TAG: &str = "guardian_truncated";
-const GUARDIAN_ACTION_KEY_PRIORITY: &[&str] = &[
-    "tool_name",
-    "action",
-    "tool",
-    "command",
-    "program",
-    "argv",
-    "cwd",
-    "target",
-    "host",
-    "protocol",
-    "port",
-    "files",
-    "change_count",
-    "sandbox_permissions",
-    "additional_permissions",
-    "justification",
-    "tty",
-    "patch",
-];
 
 pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = "Guardian rejected this action due to unacceptable risk. The agent must not attempt to achieve the same outcome via workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or stop and request user input.";
 
@@ -100,10 +82,66 @@ pub(crate) fn is_guardian_subagent_source(
 }
 
 /// Canonical description of the action the guardian is being asked to review.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct GuardianReviewRequest {
-    pub(crate) tool_name: &'static str,
-    pub(crate) action: Value,
+    pub(crate) action: GuardianAction,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum GuardianAction {
+    Command(GuardianCommandAction),
+    Execve(GuardianExecveAction),
+    ApplyPatch(GuardianApplyPatchAction),
+    NetworkAccess(GuardianNetworkAccessAction),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GuardianCommandAction {
+    pub(crate) tool: &'static str,
+    pub(crate) command: Vec<String>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) sandbox_permissions: Value,
+    pub(crate) additional_permissions: Option<Value>,
+    pub(crate) justification: Option<String>,
+    pub(crate) tty: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GuardianExecveAction {
+    pub(crate) tool: &'static str,
+    pub(crate) program: AbsolutePathBuf,
+    pub(crate) argv: Vec<String>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) additional_permissions: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GuardianApplyPatchAction {
+    pub(crate) tool: &'static str,
+    pub(crate) cwd: PathBuf,
+    pub(crate) files: Vec<AbsolutePathBuf>,
+    pub(crate) change_count: usize,
+    pub(crate) patch: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GuardianNetworkAccessAction {
+    pub(crate) tool: &'static str,
+    pub(crate) target: String,
+    pub(crate) host: String,
+    pub(crate) protocol: Value,
+    pub(crate) port: u16,
+}
+
+impl GuardianAction {
+    fn tool_name(&self) -> &'static str {
+        match self {
+            GuardianAction::Command(action) => action.tool,
+            GuardianAction::Execve(action) => action.tool,
+            GuardianAction::ApplyPatch(action) => action.tool,
+            GuardianAction::NetworkAccess(action) => action.tool,
+        }
+    }
 }
 
 /// Coarse risk label paired with the numeric `risk_score`.
@@ -178,10 +216,13 @@ struct GuardianTranscriptTokenCount {
 async fn assess_approval_request(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
-    tool_name: &str,
-    planned_action: Option<Value>,
+    planned_action: Option<GuardianAction>,
     retry_reason: Option<String>,
 ) -> GuardianReviewResult {
+    let tool_name = planned_action
+        .as_ref()
+        .map(GuardianAction::tool_name)
+        .unwrap_or("unknown");
     session
         .notify_background_event(
             turn.as_ref(),
@@ -280,7 +321,6 @@ pub(crate) async fn review_approval_request_with_reason(
     let review = assess_approval_request(
         Arc::clone(session),
         Arc::clone(turn),
-        request.tool_name,
         Some(request.action),
         retry_reason,
     )
@@ -303,7 +343,7 @@ pub(crate) async fn review_approval_request_with_reason(
 async fn build_guardian_prompt(
     session: &Session,
     retry_reason: Option<String>,
-    planned_action: Option<Value>,
+    planned_action: Option<GuardianAction>,
 ) -> String {
     let history = session.clone_history().await;
     let transcript_entries = collect_guardian_transcript_entries(history.raw_items());
@@ -316,8 +356,8 @@ async fn build_guardian_prompt(
         .as_ref()
         .map(|rollout| rollout.rollout_path().display().to_string());
     let planned_action_json = planned_action
-        .map(sanitize_guardian_action)
-        .map(|action| format_guardian_json_pretty(&action))
+        .as_ref()
+        .map(format_guardian_action_pretty)
         .unwrap_or_else(|| "{}".to_string());
 
     let (transcript, omission_note) = build_guardian_transcript(
@@ -776,7 +816,7 @@ fn build_guardian_subagent_config(
     Ok(guardian_config)
 }
 
-fn sanitize_guardian_action(value: Value) -> Value {
+fn sanitize_guardian_value(value: Value) -> Value {
     match value {
         Value::String(text) => Value::String(guardian_truncate_text(
             &text,
@@ -785,24 +825,123 @@ fn sanitize_guardian_action(value: Value) -> Value {
         Value::Array(values) => Value::Array(
             values
                 .into_iter()
-                .map(sanitize_guardian_action)
+                .map(sanitize_guardian_value)
                 .collect::<Vec<_>>(),
         ),
         Value::Object(values) => Value::Object(
             values
                 .into_iter()
-                .map(|(key, value)| (key, sanitize_guardian_action(value)))
+                .map(|(key, value)| (key, sanitize_guardian_value(value)))
                 .collect(),
         ),
         other => other,
     }
 }
 
-pub(crate) fn format_guardian_json_pretty(value: &Value) -> String {
-    format_guardian_json_pretty_at_indent(value, 0)
+fn format_guardian_action_pretty(action: &GuardianAction) -> String {
+    format_guardian_action_pretty_at_indent(action, 0)
 }
 
-fn format_guardian_json_pretty_at_indent(value: &Value, indent: usize) -> String {
+fn format_guardian_action_pretty_at_indent(action: &GuardianAction, indent: usize) -> String {
+    match action {
+        GuardianAction::Command(action) => format_guardian_object_fields_at_indent(
+            &[
+                ("tool", Some(json_field(action.tool))),
+                ("command", Some(json_field(&action.command))),
+                ("cwd", Some(json_field(&action.cwd))),
+                (
+                    "sandbox_permissions",
+                    Some(sanitize_guardian_value(action.sandbox_permissions.clone())),
+                ),
+                (
+                    "additional_permissions",
+                    action
+                        .additional_permissions
+                        .clone()
+                        .map(sanitize_guardian_value),
+                ),
+                (
+                    "justification",
+                    action.justification.as_ref().map(json_field),
+                ),
+                ("tty", action.tty.map(json_field)),
+            ],
+            indent,
+        ),
+        GuardianAction::Execve(action) => format_guardian_object_fields_at_indent(
+            &[
+                ("tool", Some(json_field(action.tool))),
+                ("program", Some(json_field(&action.program))),
+                ("argv", Some(json_field(&action.argv))),
+                ("cwd", Some(json_field(&action.cwd))),
+                (
+                    "additional_permissions",
+                    action
+                        .additional_permissions
+                        .clone()
+                        .map(sanitize_guardian_value),
+                ),
+            ],
+            indent,
+        ),
+        GuardianAction::ApplyPatch(action) => format_guardian_object_fields_at_indent(
+            &[
+                ("tool", Some(json_field(action.tool))),
+                ("cwd", Some(json_field(&action.cwd))),
+                ("files", Some(json_field(&action.files))),
+                ("change_count", Some(json_field(action.change_count))),
+                ("patch", Some(json_field(&action.patch))),
+            ],
+            indent,
+        ),
+        GuardianAction::NetworkAccess(action) => format_guardian_object_fields_at_indent(
+            &[
+                ("tool", Some(json_field(action.tool))),
+                ("target", Some(json_field(&action.target))),
+                ("host", Some(json_field(&action.host))),
+                (
+                    "protocol",
+                    Some(sanitize_guardian_value(action.protocol.clone())),
+                ),
+                ("port", Some(json_field(action.port))),
+            ],
+            indent,
+        ),
+    }
+}
+
+fn format_guardian_object_fields_at_indent(
+    fields: &[(&str, Option<Value>)],
+    indent: usize,
+) -> String {
+    let rendered_fields = fields
+        .iter()
+        .filter_map(|(key, value)| value.as_ref().map(|value| (key, value)))
+        .map(|(key, value)| (key, sanitize_guardian_value(value.clone())))
+        .collect::<Vec<_>>();
+    if rendered_fields.is_empty() {
+        return "{}".to_string();
+    }
+
+    let next_indent = indent + 2;
+    let child_indent = " ".repeat(next_indent);
+    let closing_indent = " ".repeat(indent);
+    let lines = rendered_fields
+        .into_iter()
+        .map(|(key, value)| {
+            let rendered_key =
+                serde_json::to_string(key).unwrap_or_else(|_| "\"<invalid>\"".to_string());
+            format!(
+                "{child_indent}{rendered_key}: {}",
+                format_guardian_json_value_at_indent(&value, next_indent)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!("{{\n{lines}\n{closing_indent}}}")
+}
+
+fn format_guardian_json_value_at_indent(value: &Value, indent: usize) -> String {
     match value {
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
             serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
@@ -820,7 +959,7 @@ fn format_guardian_json_pretty_at_indent(value: &Value, indent: usize) -> String
                 .map(|value| {
                     format!(
                         "{child_indent}{}",
-                        format_guardian_json_pretty_at_indent(value, next_indent)
+                        format_guardian_json_value_at_indent(value, next_indent)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -835,20 +974,14 @@ fn format_guardian_json_pretty_at_indent(value: &Value, indent: usize) -> String
             let next_indent = indent + 2;
             let child_indent = " ".repeat(next_indent);
             let closing_indent = " ".repeat(indent);
-            let mut entries = values.iter().collect::<Vec<_>>();
-            entries.sort_by(|(left_key, _), (right_key, _)| {
-                guardian_action_key_rank(left_key)
-                    .cmp(&guardian_action_key_rank(right_key))
-                    .then_with(|| left_key.cmp(right_key))
-            });
-            let lines = entries
-                .into_iter()
+            let lines = values
+                .iter()
                 .map(|(key, value)| {
                     let rendered_key =
                         serde_json::to_string(key).unwrap_or_else(|_| "\"<invalid>\"".to_string());
                     format!(
                         "{child_indent}{rendered_key}: {}",
-                        format_guardian_json_pretty_at_indent(value, next_indent)
+                        format_guardian_json_value_at_indent(value, next_indent)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -858,11 +991,8 @@ fn format_guardian_json_pretty_at_indent(value: &Value, indent: usize) -> String
     }
 }
 
-fn guardian_action_key_rank(key: &str) -> usize {
-    GUARDIAN_ACTION_KEY_PRIORITY
-        .iter()
-        .position(|candidate| *candidate == key)
-        .unwrap_or(GUARDIAN_ACTION_KEY_PRIORITY.len())
+fn json_field<T: Serialize>(value: T) -> Value {
+    serde_json::to_value(value).expect("guardian action fields should serialize")
 }
 
 fn guardian_truncate_text(content: &str, token_cap: usize) -> String {
@@ -1165,22 +1295,19 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_guardian_action_truncates_large_string_fields() {
-        let action = serde_json::json!({
-            "tool": "apply_patch",
-            "patch": "line\n".repeat(2_000),
-            "nested": {
-                "reason": "keep this",
-            },
+    fn format_guardian_action_pretty_truncates_large_string_fields() {
+        let action = GuardianAction::ApplyPatch(GuardianApplyPatchAction {
+            tool: "apply_patch",
+            cwd: PathBuf::from("/tmp"),
+            files: vec![],
+            change_count: 1,
+            patch: "line\n".repeat(2_000),
         });
 
-        let sanitized = sanitize_guardian_action(action);
+        let rendered = format_guardian_action_pretty(&action);
 
-        let patch = sanitized["patch"]
-            .as_str()
-            .expect("patch should remain a string");
-        assert!(patch.contains("<guardian_truncated omitted_approx_tokens=\""));
-        assert_eq!(sanitized["nested"]["reason"], "keep this");
+        assert!(rendered.contains("\"tool\": \"apply_patch\""));
+        assert!(rendered.contains("<guardian_truncated omitted_approx_tokens=\""));
     }
 
     #[test]
@@ -1338,10 +1465,21 @@ mod tests {
         let prompt = build_guardian_prompt(
             session.as_ref(),
             Some("Sandbox denied outbound git push to github.com.".to_string()),
-            Some(serde_json::json!({
-                "tool": "shell",
-                "command": ["git", "push", "origin", "guardian-approval-mvp"],
-                "justification": "Need to push the reviewed docs fix to the repo remote.",
+            Some(GuardianAction::Command(GuardianCommandAction {
+                tool: "shell",
+                command: vec![
+                    "git".to_string(),
+                    "push".to_string(),
+                    "origin".to_string(),
+                    "guardian-approval-mvp".to_string(),
+                ],
+                cwd: turn.cwd.clone(),
+                sandbox_permissions: json_field(crate::sandboxing::SandboxPermissions::UseDefault),
+                additional_permissions: None,
+                justification: Some(
+                    "Need to push the reviewed docs fix to the repo remote.".to_string(),
+                ),
+                tty: None,
             })),
         )
         .await;

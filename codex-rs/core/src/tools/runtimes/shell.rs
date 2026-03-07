@@ -11,6 +11,8 @@ pub(crate) mod zsh_fork_backend;
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
+use crate::guardian::GuardianAction;
+use crate::guardian::GuardianCommandAction;
 use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -154,14 +156,18 @@ impl Approvable<ShellRequest> for ShellRuntime {
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
                 let request = GuardianReviewRequest {
-                    tool_name: "shell",
-                    action: serde_json::json!({
-                        "tool": "shell",
-                        "command": command,
-                        "cwd": cwd,
-                        "sandbox_permissions": req.sandbox_permissions,
-                        "additional_permissions": req.additional_permissions,
-                        "justification": reason,
+                    action: GuardianAction::Command(GuardianCommandAction {
+                        tool: "shell",
+                        command,
+                        cwd,
+                        sandbox_permissions: serde_json::to_value(req.sandbox_permissions)
+                            .expect("shell sandbox permissions should serialize"),
+                        additional_permissions: req.additional_permissions.as_ref().map(|value| {
+                            serde_json::to_value(value)
+                                .expect("shell additional permissions should serialize")
+                        }),
+                        justification: reason,
+                        tty: None,
                     }),
                 };
                 return review_approval_request(session, turn, request).await;

@@ -1,5 +1,7 @@
 use crate::codex::Session;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
+use crate::guardian::GuardianAction;
+use crate::guardian::GuardianNetworkAccessAction;
 use crate::guardian::GuardianReviewRequest;
 use crate::guardian::review_approval_request_with_reason;
 use crate::guardian::routes_approval_to_guardian;
@@ -349,13 +351,13 @@ impl NetworkApprovalService {
                 &session,
                 &turn_context,
                 GuardianReviewRequest {
-                    tool_name: "network_access",
-                    action: serde_json::json!({
-                        "tool": "network_access",
-                        "target": target,
-                        "host": request.host,
-                        "protocol": key.protocol,
-                        "port": key.port,
+                    action: GuardianAction::NetworkAccess(GuardianNetworkAccessAction {
+                        tool: "network_access",
+                        target,
+                        host: request.host,
+                        protocol: serde_json::to_value(key.protocol)
+                            .expect("network approval protocol should serialize"),
+                        port: key.port,
                     }),
                 },
                 Some(policy_denial_message.clone()),
