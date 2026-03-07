@@ -44,8 +44,13 @@ fn build_guardian_transcript_keeps_original_numbering() {
 
     let (transcript, omission) = build_guardian_transcript(&entries[..2]);
 
-    assert!(transcript.contains("[1] user: first"));
-    assert!(transcript.contains("[2] assistant: second"));
+    assert_eq!(
+        transcript,
+        vec![
+            "[1] user: first".to_string(),
+            "[2] assistant: second".to_string()
+        ]
+    );
     assert!(omission.is_none());
 }
 
@@ -197,13 +202,19 @@ fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
 
     let (transcript, omission) = build_guardian_transcript(&entries);
 
-    assert!(transcript.contains("[1] user: please figure out if the repo is public"));
     assert!(
-        transcript.contains(
-            "[6] assistant: The public repo check is the main reason I want to escalate."
-        )
+        transcript
+            .iter()
+            .any(|entry| entry == "[1] user: please figure out if the repo is public")
     );
-    assert!(!transcript.contains("[2] tool gh:"));
+    assert!(transcript.iter().any(|entry| {
+        entry == "[6] assistant: The public repo check is the main reason I want to escalate."
+    }));
+    assert!(
+        !transcript
+            .iter()
+            .any(|entry| entry.starts_with("[2] tool gh:"))
+    );
     assert!(omission.is_some());
 }
 
