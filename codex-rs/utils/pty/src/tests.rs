@@ -130,52 +130,36 @@ async fn collect_output_until_exit(
 }
 
 async fn wait_for_python_repl_ready(
-    writer: &tokio::sync::mpsc::Sender<Vec<u8>>,
     output_rx: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
     timeout_ms: u64,
-    newline: &str,
+    ready_marker: &str,
 ) -> anyhow::Result<Vec<u8>> {
     let mut collected = Vec::new();
-    let marker = "__codex_pty_ready__";
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
-    let probe_window = tokio::time::Duration::from_millis(if cfg!(windows) { 750 } else { 250 });
 
     while tokio::time::Instant::now() < deadline {
-        writer
-            .send(format!("print('{marker}'){newline}").into_bytes())
-            .await?;
-
-        let probe_deadline = tokio::time::Instant::now() + probe_window;
-        loop {
-            let now = tokio::time::Instant::now();
-            if now >= deadline || now >= probe_deadline {
-                break;
-            }
-            let remaining = std::cmp::min(
-                deadline.saturating_duration_since(now),
-                probe_deadline.saturating_duration_since(now),
-            );
-            match tokio::time::timeout(remaining, output_rx.recv()).await {
-                Ok(Ok(chunk)) => {
-                    collected.extend_from_slice(&chunk);
-                    if String::from_utf8_lossy(&collected).contains(marker) {
-                        return Ok(collected);
-                    }
+        let now = tokio::time::Instant::now();
+        let remaining = deadline.saturating_duration_since(now);
+        match tokio::time::timeout(remaining, output_rx.recv()).await {
+            Ok(Ok(chunk)) => {
+                collected.extend_from_slice(&chunk);
+                if String::from_utf8_lossy(&collected).contains(ready_marker) {
+                    return Ok(collected);
                 }
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
-                    anyhow::bail!(
-                        "PTY output closed while waiting for Python REPL readiness: {:?}",
-                        String::from_utf8_lossy(&collected)
-                    );
-                }
-                Err(_) => break,
             }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                anyhow::bail!(
+                    "PTY output closed while waiting for Python REPL readiness: {:?}",
+                    String::from_utf8_lossy(&collected)
+                );
+            }
+            Err(_) => break,
         }
     }
 
     anyhow::bail!(
-        "timed out waiting for Python REPL readiness in PTY: {:?}",
+        "timed out waiting for Python REPL readiness marker {ready_marker:?} in PTY: {:?}",
         String::from_utf8_lossy(&collected)
     );
 }
@@ -254,10 +238,17 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
         return Ok(());
     };
 
+    let ready_marker = "__codex_pty_ready__";
+    let args = vec![
+        "-i".to_string(),
+        "-q".to_string(),
+        "-c".to_string(),
+        format!("print('{ready_marker}')"),
+    ];
     let env_map: HashMap<String, String> = std::env::vars().collect();
     let spawned = spawn_pty_process(
         &python,
-        &[],
+        &args,
         Path::new("."),
         &env_map,
         &None,
@@ -269,7 +260,7 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
     let newline = if cfg!(windows) { "\r\n" } else { "\n" };
     let startup_timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
     let mut output =
-        wait_for_python_repl_ready(&writer, &mut output_rx, startup_timeout_ms, newline).await?;
+        wait_for_python_repl_ready(&mut output_rx, startup_timeout_ms, ready_marker).await?;
     writer
         .send(format!("print('hello from pty'){newline}").into_bytes())
         .await?;
