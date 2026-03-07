@@ -314,8 +314,25 @@ mod tests {
     use super::STOP_OUTPUT_FIXTURE;
     use super::write_schema_fixtures;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn expected_fixture(name: &str) -> &'static str {
+        match name {
+            SESSION_START_INPUT_FIXTURE => {
+                include_str!("../schema/generated/session-start.command.input.schema.json")
+            }
+            SESSION_START_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/session-start.command.output.schema.json")
+            }
+            STOP_INPUT_FIXTURE => {
+                include_str!("../schema/generated/stop.command.input.schema.json")
+            }
+            STOP_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/stop.command.output.schema.json")
+            }
+            _ => panic!("unexpected fixture name: {name}"),
+        }
+    }
 
     #[test]
     fn generated_hook_schemas_match_fixtures() {
@@ -329,13 +346,7 @@ mod tests {
             STOP_INPUT_FIXTURE,
             STOP_OUTPUT_FIXTURE,
         ] {
-            let expected = std::fs::read_to_string(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("schema")
-                    .join("generated")
-                    .join(fixture),
-            )
-            .unwrap_or_else(|err| panic!("read fixture {fixture}: {err}"));
+            let expected = expected_fixture(fixture);
             let actual = std::fs::read_to_string(schema_root.join("generated").join(fixture))
                 .unwrap_or_else(|err| panic!("read generated schema {fixture}: {err}"));
             assert_eq!(expected, actual, "fixture should match generated schema");

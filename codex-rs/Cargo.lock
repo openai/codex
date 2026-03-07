@@ -2031,7 +2031,6 @@ dependencies = [
  "chrono",
  "codex-config",
  "codex-protocol",
- "codex-utils-absolute-path",
  "futures",
  "pretty_assertions",
  "regex",

@@ -73,7 +73,7 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = serde_json::to_string(&StopCommandInput::new(
+    let input_json = match serde_json::to_string(&StopCommandInput::new(
         request.session_id.to_string(),
         request.transcript_path.clone(),
         request.cwd.display().to_string(),
@@ -81,8 +81,16 @@ pub(crate) async fn run(
         request.permission_mode.clone(),
         request.stop_hook_active,
         request.last_assistant_message.clone(),
-    ))
-    .expect("serialize stop hook input");
+    )) {
+        Ok(input_json) => input_json,
+        Err(error) => {
+            return serialization_failure_outcome(
+                matched,
+                Some(request.turn_id),
+                format!("failed to serialize stop hook input: {error}"),
+            );
+        }
+    };
 
     let results = dispatcher::execute_handlers(
         shell,
@@ -233,6 +241,39 @@ fn trimmed_non_empty(text: &str) -> Option<String> {
         return Some(trimmed.to_string());
     }
     None
+}
+
+fn serialization_failure_outcome(
+    handlers: Vec<ConfiguredHandler>,
+    turn_id: Option<String>,
+    error_message: String,
+) -> StopOutcome {
+    let hook_events = handlers
+        .into_iter()
+        .map(|handler| {
+            let mut run = dispatcher::running_summary(&handler);
+            run.status = HookRunStatus::Failed;
+            run.completed_at = Some(run.started_at);
+            run.duration_ms = Some(0);
+            run.entries = vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: error_message.clone(),
+            }];
+            HookCompletedEvent {
+                turn_id: turn_id.clone(),
+                run,
+            }
+        })
+        .collect();
+
+    StopOutcome {
+        hook_events,
+        should_stop: false,
+        stop_reason: None,
+        should_block: false,
+        block_reason: None,
+        block_message_for_model: None,
+    }
 }
 
 #[cfg(test)]

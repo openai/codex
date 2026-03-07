@@ -89,15 +89,23 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = serde_json::to_string(&SessionStartCommandInput::new(
+    let input_json = match serde_json::to_string(&SessionStartCommandInput::new(
         request.session_id.to_string(),
         request.transcript_path.clone(),
         request.cwd.display().to_string(),
         request.model.clone(),
         request.permission_mode.clone(),
         request.source.as_str().to_string(),
-    ))
-    .expect("serialize session start hook input");
+    )) {
+        Ok(input_json) => input_json,
+        Err(error) => {
+            return serialization_failure_outcome(
+                matched,
+                turn_id,
+                format!("failed to serialize session start hook input: {error}"),
+            );
+        }
+    };
 
     let results = dispatcher::execute_handlers(
         shell,
@@ -229,6 +237,37 @@ fn join_text_chunks(chunks: Vec<String>) -> Option<String> {
         None
     } else {
         Some(chunks.join("\n\n"))
+    }
+}
+
+fn serialization_failure_outcome(
+    handlers: Vec<ConfiguredHandler>,
+    turn_id: Option<String>,
+    error_message: String,
+) -> SessionStartOutcome {
+    let hook_events = handlers
+        .into_iter()
+        .map(|handler| {
+            let mut run = dispatcher::running_summary(&handler);
+            run.status = HookRunStatus::Failed;
+            run.completed_at = Some(run.started_at);
+            run.duration_ms = Some(0);
+            run.entries = vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: error_message.clone(),
+            }];
+            HookCompletedEvent {
+                turn_id: turn_id.clone(),
+                run,
+            }
+        })
+        .collect();
+
+    SessionStartOutcome {
+        hook_events,
+        should_stop: false,
+        stop_reason: None,
+        additional_context: None,
     }
 }
 
