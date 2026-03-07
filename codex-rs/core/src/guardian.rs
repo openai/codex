@@ -46,7 +46,7 @@ use codex_protocol::protocol::ReviewDecision;
 const GUARDIAN_PREFERRED_MODEL: &str = "gpt-5.4";
 const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const GUARDIAN_SUBAGENT_NAME: &str = "guardian";
-// Guardian still needs a large enough transcript budget to preserve the real
+// Guardian needs a large enough transcript budget to preserve the real
 // authorization signal and recent evidence. Keep separate budgets for
 // human-authored conversation and tool evidence so neither crowds out the
 // other.
