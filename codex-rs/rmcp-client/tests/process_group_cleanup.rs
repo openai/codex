@@ -24,8 +24,13 @@ async fn wait_for_pid_file(path: &Path) -> Result<u32> {
     for _ in 0..50 {
         match fs::read_to_string(path) {
             Ok(content) => {
-                let pid = content
-                    .trim()
+                let trimmed = content.trim();
+                if trimmed.is_empty() {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+
+                let pid = trimmed
                     .parse::<u32>()
                     .with_context(|| format!("failed to parse pid from {}", path.display()))?;
                 return Ok(pid);
