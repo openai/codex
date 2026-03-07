@@ -34,7 +34,7 @@ codex_rust_crate(
         "models.json",
         "prompt.md",
     ],
-    test_data_extra = [
+    test_data_extra = glob(["src/**/snapshots/**"]) + [
         "config.schema.json",
         # This is a bit of a hack, but empirically, some of our integration tests
         # are relying on the presence of this file as a repo root marker. When
