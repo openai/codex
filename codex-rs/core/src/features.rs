@@ -561,7 +561,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ImageDetailOriginal,
         key: "image_detail_original",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Original image detail",
+            menu_description: "Send tool-emitted images with `detail: \"original\"` on supported models so the model sees the full-resolution image instead of a resized approximation. This affects tools like `view_image` and `js_repl`, not images attached directly in the UI. It is particularly important for CUA or localization tasks that depend on small text, precise layout, or exact UI targets.",
+            announcement: "NEW: Original image detail is now available in /experimental. Enable it to preserve full-resolution screenshots for CUA and localization tasks on supported models.",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -892,6 +896,25 @@ mod tests {
     fn image_generation_is_under_development() {
         assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
         assert_eq!(Feature::ImageGeneration.default_enabled(), false);
+    }
+
+    #[test]
+    fn image_detail_original_is_experimental_and_user_toggleable() {
+        let spec = Feature::ImageDetailOriginal.info();
+        let stage = spec.stage;
+
+        assert!(matches!(stage, Stage::Experimental { .. }));
+        assert_eq!(
+            stage.experimental_menu_name(),
+            Some("Original image detail")
+        );
+        assert_eq!(
+            stage.experimental_menu_description(),
+            Some(
+                "Send tool-emitted images with `detail: \"original\"` on supported models so the model sees the full-resolution image instead of a resized approximation. This affects tools like `view_image` and `js_repl`, not images attached directly in the UI. It is particularly important for CUA or localization tasks that depend on small text, precise layout, or exact UI targets."
+            )
+        );
+        assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
     }
 
     #[test]

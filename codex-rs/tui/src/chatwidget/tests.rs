@@ -6939,6 +6939,38 @@ async fn experimental_popup_shows_js_repl_node_requirement() {
 }
 
 #[tokio::test]
+async fn experimental_features_popup_image_detail_original_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let spec = FEATURES
+        .iter()
+        .find(|spec| spec.id == Feature::ImageDetailOriginal)
+        .expect("expected image_detail_original feature spec");
+    let name = spec
+        .stage
+        .experimental_menu_name()
+        .expect("expected image_detail_original experimental name");
+    let description = spec
+        .stage
+        .experimental_menu_description()
+        .expect("expected image_detail_original experimental description");
+
+    let view = ExperimentalFeaturesView::new(
+        vec![ExperimentalFeatureItem {
+            feature: Feature::ImageDetailOriginal,
+            name: name.to_string(),
+            description: description.to_string(),
+            enabled: false,
+        }],
+        chat.app_event_tx.clone(),
+    );
+    chat.bottom_pane.show_view(Box::new(view));
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert_snapshot!("experimental_features_popup_image_detail_original", popup);
+}
+
+#[tokio::test]
 async fn multi_agent_enable_prompt_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
