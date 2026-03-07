@@ -495,7 +495,7 @@ mod tests {
     #[tokio::test]
     async fn insert_logs_use_dedicated_log_database() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 

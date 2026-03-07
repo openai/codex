@@ -1254,13 +1254,10 @@ mod tests {
             .enable(Feature::Sqlite)
             .expect("test config should allow sqlite");
 
-        let state_db = codex_state::StateRuntime::init(
-            home.path().to_path_buf(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await
-        .expect("state db should initialize");
+        let state_db =
+            StateRuntime::init(home.path().to_path_buf(), config.model_provider_id.clone())
+                .await
+                .expect("state db should initialize");
         state_db
             .mark_backfill_complete(None)
             .await
@@ -1345,13 +1342,10 @@ mod tests {
             .enable(Feature::Sqlite)
             .expect("test config should allow sqlite");
 
-        let state_db = codex_state::StateRuntime::init(
-            home.path().to_path_buf(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await
-        .expect("state db should initialize");
+        let state_db =
+            StateRuntime::init(home.path().to_path_buf(), config.model_provider_id.clone())
+                .await
+                .expect("state db should initialize");
         let thread_id = ThreadId::new();
         let rollout_path = home.path().join("rollout.jsonl");
         let builder = ThreadMetadataBuilder::new(
