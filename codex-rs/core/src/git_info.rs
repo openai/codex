@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -26,21 +27,12 @@ use tokio::time::timeout;
 /// directory. If you need Codex to work from such a checkout simply pass the
 /// `--allow-no-git-exec` CLI flag that disables the repo requirement.
 pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
-    let mut dir = base_dir.to_path_buf();
-
-    loop {
-        if dir.join(".git").exists() {
-            return Some(dir);
-        }
-
-        // Pop one component (go up one directory).  `pop` returns false when
-        // we have reached the filesystem root.
-        if !dir.pop() {
-            break;
-        }
-    }
-
-    None
+    let base = if base_dir.is_dir() {
+        base_dir
+    } else {
+        base_dir.parent()?
+    };
+    find_ancestor_git_entry(base).map(|(repo_root, _)| repo_root)
 }
 
 /// Timeout for git commands to prevent freezing on large repositories
@@ -609,30 +601,53 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
 
 /// Resolve the path that should be used for trust checks. Similar to
 /// `[get_git_repo_root]`, but resolves to the root of the main
-/// repository. Handles worktrees.
+/// repository. Handles worktrees via filesystem inspection without invoking
+/// the `git` executable.
 pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
     let base = if cwd.is_dir() { cwd } else { cwd.parent()? };
+    let (repo_root, dot_git) = find_ancestor_git_entry(base)?;
+    if dot_git.is_dir() {
+        return Some(canonicalize_or_raw(repo_root));
+    }
 
-    // TODO: we should make this async, but it's primarily used deep in
-    // callstacks of sync code, and should almost always be fast
-    let git_dir_out = std::process::Command::new("git")
-        .args(["rev-parse", "--git-common-dir"])
-        .current_dir(base)
-        .output()
-        .ok()?;
-    if !git_dir_out.status.success() {
+    let git_dir_s = std::fs::read_to_string(&dot_git).ok()?;
+    let git_dir_rel = git_dir_s.trim().strip_prefix("gitdir:")?.trim();
+    if git_dir_rel.is_empty() {
         return None;
     }
-    let git_dir_s = String::from_utf8(git_dir_out.stdout)
-        .ok()?
-        .trim()
-        .to_string();
 
-    let git_dir_path_raw = resolve_path(base, &PathBuf::from(&git_dir_s));
+    let git_dir_path = canonicalize_or_raw(resolve_path(&repo_root, &PathBuf::from(git_dir_rel)));
+    let worktrees_dir = git_dir_path.parent()?;
+    if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
+        return None;
+    }
 
-    // Normalize to handle macOS /var vs /private/var and resolve ".." segments.
-    let git_dir_path = std::fs::canonicalize(&git_dir_path_raw).unwrap_or(git_dir_path_raw);
-    git_dir_path.parent().map(Path::to_path_buf)
+    let common_dir = worktrees_dir.parent()?;
+    let main_repo_root = common_dir.parent()?;
+    Some(canonicalize_or_raw(main_repo_root.to_path_buf()))
+}
+
+fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    let mut dir = base_dir.to_path_buf();
+
+    loop {
+        let dot_git = dir.join(".git");
+        if dot_git.exists() {
+            return Some((dir, dot_git));
+        }
+
+        // Pop one component (go up one directory). `pop` returns false when
+        // we have reached the filesystem root.
+        if !dir.pop() {
+            break;
+        }
+    }
+
+    None
+}
+
+fn canonicalize_or_raw(path: PathBuf) -> PathBuf {
+    std::fs::canonicalize(&path).unwrap_or(path)
 }
 
 /// Returns a list of local git branches.
@@ -1148,6 +1163,33 @@ mod tests {
         let got_nested =
             resolve_root_git_project_for_trust(&nested).and_then(|p| std::fs::canonicalize(p).ok());
         assert_eq!(got_nested, expected);
+    }
+
+    #[test]
+    fn resolve_root_git_project_for_trust_detects_worktree_pointer_without_git_command() {
+        let tmp = TempDir::new().expect("tempdir");
+        let repo_root = tmp.path().join("repo");
+        let common_dir = repo_root.join(".git");
+        let worktree_git_dir = common_dir.join("worktrees").join("feature-x");
+        let worktree_root = tmp.path().join("wt");
+        std::fs::create_dir_all(&worktree_git_dir).unwrap();
+        std::fs::create_dir_all(&worktree_root).unwrap();
+        std::fs::create_dir_all(worktree_root.join("nested")).unwrap();
+        std::fs::write(
+            worktree_root.join(".git"),
+            format!("gitdir: {}\n", worktree_git_dir.display()),
+        )
+        .unwrap();
+
+        let expected = std::fs::canonicalize(&repo_root).unwrap();
+        assert_eq!(
+            resolve_root_git_project_for_trust(&worktree_root),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            resolve_root_git_project_for_trust(&worktree_root.join("nested")),
+            Some(expected)
+        );
     }
 
     #[test]

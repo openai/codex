@@ -429,7 +429,8 @@ pub struct SendUserTurnParams {
     pub service_tier: Option<Option<ServiceTier>>,
     pub effort: Option<ReasoningEffort>,
     pub summary: ReasoningSummary,
-    /// Optional JSON Schema used to constrain the final assistant message for this turn.
+    /// Optional JSON Schema used to constrain the final assistant message for
+    /// this turn.
     pub output_schema: Option<serde_json::Value>,
 }
 

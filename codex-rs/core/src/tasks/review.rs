@@ -13,6 +13,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::SubAgentSource;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -57,7 +58,7 @@ impl SessionTask for ReviewTask {
         let _ = session
             .session
             .services
-            .otel_manager
+            .session_telemetry
             .counter("codex.task.review", 1, &[]);
 
         // Start sub-codex conversation and get the receiver for events.
@@ -118,6 +119,8 @@ async fn start_review_conversation(
         session.clone_session(),
         ctx.clone(),
         cancellation_token,
+        SubAgentSource::Review,
+        None,
         None,
     )
     .await)
