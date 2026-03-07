@@ -3853,7 +3853,7 @@ async fn rejects_additional_permissions_when_policy_not_on_request() {
     };
 
     let expected = format!(
-        "approval policy is {policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest or Guardian",
+        "approval policy is {policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest",
         policy = turn_context.approval_policy.value(),
     );
 
@@ -4029,7 +4029,7 @@ async fn unified_exec_rejects_additional_permissions_when_policy_not_on_request(
     };
 
     let expected = format!(
-        "approval policy is {policy:?}; reject command — you cannot ask for additional sandbox permissions if the approval policy is not OnRequest or Guardian",
+        "approval policy is {policy:?}; reject command — you cannot ask for additional sandbox permissions if the approval policy is not OnRequest",
         policy = turn_context.approval_policy.value()
     );
 

@@ -1,4 +1,5 @@
-//! Guardian review decides whether a tool may leave the normal sandbox.
+//! Guardian review decides whether an `on-request` approval should be granted
+//! automatically instead of shown to the user.
 //!
 //! High-level approach:
 //! 1. Reconstruct a compact transcript that preserves user intent and the most
@@ -59,6 +60,8 @@ const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 20;
 
 pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = "Guardian rejected this action due to unacceptable risk. The agent must not attempt to achieve the same outcome via workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or stop and request user input.";
 
+/// Whether this turn should route `on-request` approval prompts through the
+/// guardian reviewer instead of surfacing them to the user.
 pub(crate) fn routes_approval_to_guardian(
     turn: &TurnContext,
     approval_policy: AskForApproval,
@@ -132,8 +135,12 @@ struct GuardianTranscriptTokenCount {
     tool: usize,
 }
 
-/// Top-level guardian review entry point for tool retries that need to leave
-/// the current sandbox.
+/// Top-level guardian review entry point for approval requests routed through
+/// guardian.
+///
+/// Despite the historical name, this now covers the full feature-routed
+/// `on-request` surface: explicit unsandboxed execution requests, sandboxed
+/// retries after denial, patch approvals, and managed-network allowlist misses.
 ///
 /// This function always fails closed: any timeout, subagent failure, or parse
 /// failure is treated as a high-risk denial.
@@ -147,7 +154,7 @@ pub(crate) async fn review_sandbox_escalation(
     session
         .notify_background_event(
             turn.as_ref(),
-            format!("Guardian assessing sandbox escalation for {tool_name}..."),
+            format!("Guardian assessing approval request for {tool_name}..."),
         )
         .await;
 
@@ -190,7 +197,7 @@ pub(crate) async fn review_sandbox_escalation(
     // Emit a concise warning so the parent turn has an auditable summary of the
     // guardian decision without needing the full subagent transcript.
     let warning = format!(
-        "Guardian {verdict} sandbox escalation ({}/100, {}): {}",
+        "Guardian {verdict} approval request ({}/100, {}): {}",
         assessment.risk_score,
         assessment.risk_level.as_str(),
         assessment.rationale
