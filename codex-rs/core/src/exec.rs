@@ -1233,6 +1233,28 @@ mod tests {
     }
 
     #[test]
+    fn windows_restricted_token_allows_legacy_workspace_write_policies() {
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        let file_system_policy = FileSystemSandboxPolicy::from(&policy);
+
+        assert_eq!(
+            unsupported_windows_restricted_token_sandbox_reason(
+                SandboxType::WindowsRestrictedToken,
+                &policy,
+                &file_system_policy,
+                NetworkSandboxPolicy::Restricted,
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() {
         let expected = crate::get_platform_sandbox(false).unwrap_or(SandboxType::None);
 
