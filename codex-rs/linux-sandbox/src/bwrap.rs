@@ -15,6 +15,7 @@ use std::path::PathBuf;
 
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
+use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
 
@@ -89,7 +90,17 @@ pub(crate) fn create_bwrap_command_args(
     cwd: &Path,
     options: BwrapOptions,
 ) -> Result<Vec<String>> {
-    if sandbox_policy.has_full_disk_write_access() {
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::from(sandbox_policy);
+    create_bwrap_command_args_for_policy(command, &file_system_sandbox_policy, cwd, options)
+}
+
+pub(crate) fn create_bwrap_command_args_for_policy(
+    command: Vec<String>,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
+    options: BwrapOptions,
+) -> Result<Vec<String>> {
+    if file_system_sandbox_policy.has_full_disk_write_access() {
         return if options.network_mode == BwrapNetworkMode::FullAccess {
             Ok(command)
         } else {
@@ -97,7 +108,7 @@ pub(crate) fn create_bwrap_command_args(
         };
     }
 
-    create_bwrap_flags(command, sandbox_policy, cwd, options)
+    create_bwrap_flags(command, file_system_sandbox_policy, cwd, options)
 }
 
 fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> Vec<String> {
@@ -127,14 +138,14 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
 /// Build the bubblewrap flags (everything after `argv[0]`).
 fn create_bwrap_flags(
     command: Vec<String>,
-    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
     options: BwrapOptions,
 ) -> Result<Vec<String>> {
     let mut args = Vec::new();
     args.push("--new-session".to_string());
     args.push("--die-with-parent".to_string());
-    args.extend(create_filesystem_args(sandbox_policy, cwd)?);
+    args.extend(create_filesystem_args(file_system_sandbox_policy, cwd)?);
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
     args.push("--unshare-user".to_string());
@@ -153,7 +164,7 @@ fn create_bwrap_flags(
     Ok(args)
 }
 
-/// Build the bubblewrap filesystem mounts for a given sandbox policy.
+/// Build the bubblewrap filesystem mounts for a given filesystem policy.
 ///
 /// The mount order is important:
 /// 1. Full-read policies use `--ro-bind / /`; restricted-read policies start
@@ -164,11 +175,14 @@ fn create_bwrap_flags(
 ///    writable subpaths under `/dev` (for example, `/dev/shm`).
 /// 4. `--ro-bind <subpath> <subpath>` re-applies read-only protections under
 ///    those writable roots so protected subpaths win.
-fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<Vec<String>> {
-    let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
+fn create_filesystem_args(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
+) -> Result<Vec<String>> {
+    let writable_roots = file_system_sandbox_policy.get_writable_roots_with_cwd(cwd);
     ensure_mount_targets_exist(&writable_roots)?;
 
-    let mut args = if sandbox_policy.has_full_disk_read_access() {
+    let mut args = if file_system_sandbox_policy.has_full_disk_read_access() {
         // Read-only root, then mount a minimal device tree.
         // In bubblewrap (`bubblewrap.c`, `SETUP_MOUNT_DEV`), `--dev /dev`
         // creates the standard minimal nodes: null, zero, full, random,
@@ -191,12 +205,12 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
             "/dev".to_string(),
         ];
 
-        let mut readable_roots: BTreeSet<PathBuf> = sandbox_policy
+        let mut readable_roots: BTreeSet<PathBuf> = file_system_sandbox_policy
             .get_readable_roots_with_cwd(cwd)
             .into_iter()
             .map(PathBuf::from)
             .collect();
-        if sandbox_policy.include_platform_defaults() {
+        if file_system_sandbox_policy.include_platform_defaults() {
             readable_roots.extend(
                 LINUX_PLATFORM_DEFAULT_READ_ROOTS
                     .iter()
@@ -386,6 +400,12 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::FileSystemAccessMode;
+    use codex_protocol::protocol::FileSystemPath;
+    use codex_protocol::protocol::FileSystemSandboxEntry;
+    use codex_protocol::protocol::FileSystemSandboxPolicy;
+    use codex_protocol::protocol::FileSystemSpecialPath;
+    use codex_protocol::protocol::FileSystemSpecialPathKind;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -527,5 +547,48 @@ mod tests {
                     .any(|window| window == ["--ro-bind", "/usr", "/usr"])
             );
         }
+    }
+
+    #[test]
+    fn split_policy_reapplies_unreadable_carveouts_after_writable_binds() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("workspace");
+        let blocked = writable_root.join("blocked");
+        std::fs::create_dir_all(&blocked).expect("create blocked dir");
+        let writable_root =
+            AbsolutePathBuf::from_absolute_path(&writable_root).expect("absolute writable root");
+        let blocked = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked dir");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: writable_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: blocked.clone(),
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let writable_root_str = path_to_string(writable_root.as_path());
+        let blocked_str = path_to_string(blocked.as_path());
+
+        assert!(args.windows(3).any(|window| {
+            window
+                == [
+                    "--bind",
+                    writable_root_str.as_str(),
+                    writable_root_str.as_str(),
+                ]
+        }));
+        assert!(
+            args.windows(3).any(|window| {
+                window == ["--ro-bind", blocked_str.as_str(), blocked_str.as_str()]
+            })
+        );
     }
 }

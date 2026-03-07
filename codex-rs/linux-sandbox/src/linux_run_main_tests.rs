@@ -35,9 +35,10 @@ fn ignores_non_proc_mount_errors() {
 
 #[test]
 fn inserts_bwrap_argv0_before_command_separator() {
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
-        &SandboxPolicy::new_read_only_policy(),
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
         Path::new("/"),
         BwrapOptions {
             mount_proc: true,
@@ -69,9 +70,10 @@ fn inserts_bwrap_argv0_before_command_separator() {
 
 #[test]
 fn inserts_unshare_net_when_network_isolation_requested() {
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
-        &SandboxPolicy::new_read_only_policy(),
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
         Path::new("/"),
         BwrapOptions {
             mount_proc: true,
@@ -83,9 +85,10 @@ fn inserts_unshare_net_when_network_isolation_requested() {
 
 #[test]
 fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
-        &SandboxPolicy::new_read_only_policy(),
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
         Path::new("/"),
         BwrapOptions {
             mount_proc: true,
@@ -104,7 +107,11 @@ fn proxy_only_mode_takes_precedence_over_full_network_policy() {
 #[test]
 fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
     let mode = bwrap_network_mode(NetworkSandboxPolicy::Enabled, true);
-    let argv = build_preflight_bwrap_argv(Path::new("/"), &SandboxPolicy::DangerFullAccess, mode);
+    let argv = build_preflight_bwrap_argv(
+        Path::new("/"),
+        &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
+        mode,
+    );
     assert!(argv.iter().any(|arg| arg == "--"));
 }
 
