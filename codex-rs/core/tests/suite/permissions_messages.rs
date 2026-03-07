@@ -490,6 +490,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let expected = DeveloperInstructions::from_policy(
         &sandbox_policy,
         AskForApproval::OnRequest,
+        false,
         &Policy::empty(),
         test.config.cwd.as_path(),
         false,

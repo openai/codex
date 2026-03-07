@@ -793,6 +793,77 @@ impl App {
         }
     }
 
+    async fn update_feature_flags(&mut self, updates: Vec<(Feature, bool)>) {
+        if updates.is_empty() {
+            return;
+        }
+
+        let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
+            matches!(
+                feature,
+                Feature::WindowsSandbox | Feature::WindowsSandboxElevated
+            )
+        });
+        let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_profile(self.active_profile.as_deref());
+
+        for (feature, enabled) in updates {
+            let feature_key = feature.key();
+            if let Err(err) = self.config.features.set_enabled(feature, enabled) {
+                tracing::error!(
+                    error = %err,
+                    feature = feature_key,
+                    "failed to update constrained feature flags"
+                );
+                self.chat_widget.add_error_message(format!(
+                    "Failed to update experimental feature `{feature_key}`: {err}"
+                ));
+                continue;
+            }
+            let effective_enabled = self.config.features.enabled(feature);
+            self.chat_widget
+                .set_feature_enabled(feature, effective_enabled);
+            if effective_enabled {
+                builder = builder.set_feature_enabled(feature_key, true);
+            } else if feature.default_enabled() {
+                builder = builder.set_feature_enabled(feature_key, false);
+            } else {
+                // If the feature already default to `false`, we drop the key
+                // in the config file so that the user does not miss the feature
+                // once it gets globally released.
+                builder = builder.with_edits(vec![ConfigEdit::ClearPath {
+                    segments: vec!["features".to_string(), feature_key.to_string()],
+                }]);
+            }
+        }
+
+        if windows_sandbox_changed {
+            #[cfg(target_os = "windows")]
+            {
+                let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        windows_sandbox_level: Some(windows_sandbox_level),
+                        model: None,
+                        effort: None,
+                        summary: None,
+                        service_tier: None,
+                        collaboration_mode: None,
+                        personality: None,
+                    }));
+            }
+        }
+
+        if let Err(err) = builder.apply().await {
+            tracing::error!(error = %err, "failed to persist feature flags");
+            self.chat_widget
+                .add_error_message(format!("Failed to update experimental features: {err}"));
+        }
+    }
+
     fn open_url_in_browser(&mut self, url: String) {
         if let Err(err) = webbrowser::open(&url) {
             self.chat_widget
@@ -2876,71 +2947,7 @@ impl App {
                 }
             }
             AppEvent::UpdateFeatureFlags { updates } => {
-                if updates.is_empty() {
-                    return Ok(AppRunControl::Continue);
-                }
-                let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
-                    matches!(
-                        feature,
-                        Feature::WindowsSandbox | Feature::WindowsSandboxElevated
-                    )
-                });
-                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(self.active_profile.as_deref());
-                for (feature, enabled) in &updates {
-                    let feature_key = feature.key();
-                    if let Err(err) = self.config.features.set_enabled(*feature, *enabled) {
-                        tracing::error!(
-                            error = %err,
-                            feature = feature_key,
-                            "failed to update constrained feature flags"
-                        );
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to update experimental feature `{feature_key}`: {err}"
-                        ));
-                        continue;
-                    }
-                    let effective_enabled = self.config.features.enabled(*feature);
-                    self.chat_widget
-                        .set_feature_enabled(*feature, effective_enabled);
-                    if effective_enabled {
-                        builder = builder.set_feature_enabled(feature_key, true);
-                    } else if feature.default_enabled() {
-                        builder = builder.set_feature_enabled(feature_key, false);
-                    } else {
-                        // If the feature already default to `false`, we drop the key
-                        // in the config file so that the user does not miss the feature
-                        // once it gets globally released.
-                        builder = builder.with_edits(vec![ConfigEdit::ClearPath {
-                            segments: vec!["features".to_string(), feature_key.to_string()],
-                        }]);
-                    }
-                }
-                if windows_sandbox_changed {
-                    #[cfg(target_os = "windows")]
-                    {
-                        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                        self.app_event_tx
-                            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                                cwd: None,
-                                approval_policy: None,
-                                sandbox_policy: None,
-                                windows_sandbox_level: Some(windows_sandbox_level),
-                                model: None,
-                                effort: None,
-                                summary: None,
-                                service_tier: None,
-                                collaboration_mode: None,
-                                personality: None,
-                            }));
-                    }
-                }
-                if let Err(err) = builder.apply().await {
-                    tracing::error!(error = %err, "failed to persist feature flags");
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to update experimental features: {err}"
-                    ));
-                }
+                self.update_feature_flags(updates).await;
             }
             AppEvent::SkipNextWorldWritableScan => {
                 self.windows_sandbox.skip_world_writable_scan_once = true;
@@ -4871,6 +4878,94 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(rendered.contains("Multi-agent will be enabled in the next session."));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_feature_flags_enabling_guardian_persists_only_the_feature_flag() -> Result<()> {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        let current_session_policy = app
+            .chat_widget
+            .config_ref()
+            .permissions
+            .approval_policy
+            .value();
+
+        app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
+            .await;
+
+        assert!(app.config.features.enabled(Feature::GuardianApproval));
+        assert!(
+            app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::GuardianApproval)
+        );
+        assert_eq!(
+            app.config.permissions.approval_policy.value(),
+            current_session_policy
+        );
+        assert_eq!(
+            app.chat_widget
+                .config_ref()
+                .permissions
+                .approval_policy
+                .value(),
+            current_session_policy
+        );
+        assert_eq!(app.runtime_approval_policy_override, None);
+        assert!(
+            op_rx.try_recv().is_err(),
+            "feature toggle should not patch the active session"
+        );
+
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert!(config.contains("guardian_approval = true"));
+        assert!(!config.contains("approval_policy"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_feature_flags_disabling_guardian_clears_only_the_feature_flag() -> Result<()> {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "[features]\nguardian_approval = true\n",
+        )?;
+        app.config
+            .features
+            .set_enabled(Feature::GuardianApproval, true)?;
+        app.chat_widget
+            .set_feature_enabled(Feature::GuardianApproval, true);
+        let current_session_policy = app.config.permissions.approval_policy.value();
+
+        app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+            .await;
+
+        assert!(!app.config.features.enabled(Feature::GuardianApproval));
+        assert!(
+            !app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::GuardianApproval)
+        );
+        assert_eq!(
+            app.config.permissions.approval_policy.value(),
+            current_session_policy
+        );
+        assert_eq!(app.runtime_approval_policy_override, None);
+        assert!(
+            op_rx.try_recv().is_err(),
+            "feature toggle should not patch the active session"
+        );
+
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert!(!config.contains("guardian_approval = true"));
+        assert!(!config.contains("approval_policy"));
         Ok(())
     }
 

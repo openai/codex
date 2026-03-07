@@ -16,6 +16,7 @@ use codex_protocol::protocol::Submission;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
+use serde_json::Value;
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -36,6 +37,7 @@ use codex_protocol::protocol::InitialHistory;
 /// The returned `events_rx` yields non-approval events emitted by the sub-agent.
 /// Approval requests are handled via `parent_session` and are not surfaced.
 /// The returned `ops_tx` allows the caller to submit additional `Op`s to the sub-agent.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_codex_thread_interactive(
     config: Config,
     auth_manager: Arc<AuthManager>,
@@ -43,6 +45,7 @@ pub(crate) async fn run_codex_thread_interactive(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
+    subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -57,7 +60,7 @@ pub(crate) async fn run_codex_thread_interactive(
         Arc::clone(&parent_session.services.mcp_manager),
         Arc::clone(&parent_session.services.file_watcher),
         initial_history.unwrap_or(InitialHistory::New),
-        SessionSource::SubAgent(SubAgentSource::Review),
+        SessionSource::SubAgent(subagent_source),
         parent_session.services.agent_control.clone(),
         Vec::new(),
         false,
@@ -113,6 +116,8 @@ pub(crate) async fn run_codex_thread_one_shot(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
+    subagent_source: SubAgentSource,
+    final_output_json_schema: Option<Value>,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
@@ -125,6 +130,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         parent_session,
         parent_ctx,
         child_cancel.clone(),
+        subagent_source,
         initial_history,
     )
     .await?;
@@ -132,7 +138,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     // Send the initial input to kick off the one-shot turn.
     io.submit(Op::UserInput {
         items: input,
-        final_output_json_schema: None,
+        final_output_json_schema,
     })
     .await?;
 

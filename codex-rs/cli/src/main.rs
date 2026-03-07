@@ -904,12 +904,9 @@ async fn run_debug_clear_memories_command(
     let state_path = state_db_path(config.sqlite_home.as_path());
     let mut cleared_state_db = false;
     if tokio::fs::try_exists(&state_path).await? {
-        let state_db = StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await?;
+        let state_db =
+            StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+                .await?;
         state_db.reset_memory_data_for_fresh_start().await?;
         cleared_state_db = true;
     }

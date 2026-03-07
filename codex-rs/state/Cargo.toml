@@ -8,7 +8,6 @@ license.workspace = true
 anyhow = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
-codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 dirs = { workspace = true }
 log = { workspace = true }

@@ -6943,6 +6943,19 @@ async fn experimental_popup_shows_js_repl_node_requirement() {
 }
 
 #[tokio::test]
+async fn experimental_popup_includes_guardian_approval() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_experimental_popup();
+
+    let popup = render_bottom_popup(&chat, 120);
+    #[cfg(target_os = "linux")]
+    assert_snapshot!("experimental_popup_includes_guardian_approval_linux", popup);
+    #[cfg(not(target_os = "linux"))]
+    assert_snapshot!("experimental_popup_includes_guardian_approval", popup);
+}
+
+#[tokio::test]
 async fn multi_agent_enable_prompt_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

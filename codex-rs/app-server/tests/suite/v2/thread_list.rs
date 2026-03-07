@@ -556,12 +556,9 @@ sqlite = true
     // `thread/list` only applies `search_term` on the sqlite path. In this test we
     // create rollouts manually, so we must also create the sqlite DB and mark backfill
     // complete; otherwise app-server will permanently use filesystem fallback.
-    let state_db = codex_state::StateRuntime::init(
-        codex_home.path().to_path_buf(),
-        "mock_provider".into(),
-        None,
-    )
-    .await?;
+    let state_db =
+        codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
+            .await?;
     state_db.mark_backfill_complete(None).await?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;

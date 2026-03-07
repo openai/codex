@@ -502,16 +502,18 @@ pub fn render_decision_for_unmatched_command(
         cfg!(windows) && matches!(sandbox_policy, SandboxPolicy::ReadOnly { .. });
 
     // If the command is flagged as dangerous or we have no sandbox protection,
-    // we should never allow it to run without user approval.
+    // we should never allow it to run without approval.
     //
     // We prefer to prompt the user rather than outright forbid the command,
     // but if the user has explicitly disabled prompts, we must
     // forbid the command.
     if command_might_be_dangerous(command) || runtime_sandbox_provides_safety {
-        return if matches!(approval_policy, AskForApproval::Never) {
-            Decision::Forbidden
-        } else {
-            Decision::Prompt
+        return match approval_policy {
+            AskForApproval::Never => Decision::Forbidden,
+            AskForApproval::OnFailure
+            | AskForApproval::OnRequest
+            | AskForApproval::UnlessTrusted
+            | AskForApproval::Reject(_) => Decision::Prompt,
         };
     }
 
@@ -1578,7 +1580,8 @@ prefix_rule(pattern=["git"], decision="prompt")
     }
 
     #[tokio::test]
-    async fn exec_approval_requirement_rejects_unmatched_prompt_when_sandbox_rejection_enabled() {
+    async fn exec_approval_requirement_rejects_unmatched_sandbox_escalation_when_sandbox_rejection_enabled()
+     {
         let command = vec!["madeup-cmd".to_string()];
 
         let requirement = ExecPolicyManager::default()
