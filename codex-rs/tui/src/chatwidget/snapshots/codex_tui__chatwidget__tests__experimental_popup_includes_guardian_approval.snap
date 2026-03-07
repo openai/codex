@@ -11,9 +11,9 @@ expression: popup
   [ ] Multi-agents                 Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.
   [ ] Apps                         Use a connected ChatGPT App using "$". Install Apps via /apps command. Restart
                                    Codex after enabling.
-  [ ] Guardian approvals           Let a guardian subagent review approval prompts for sandbox escapes and blocked
-                                   network access instead of asking you directly. Try `codex -a guardian -s workspace-
-                                   write`.
+  [ ] Guardian approvals           Let a guardian subagent review approval prompts that would otherwise be shown to
+                                   you, including sandbox escapes and blocked network access. Try `codex -a guardian
+                                   -s workspace-write`.
   [ ] Prevent sleep while running  Keep your computer awake while Codex is running a thread.
 
   Press space to select or enter to save for next conversation
