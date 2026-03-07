@@ -2,6 +2,9 @@ use crate::ClientNotification;
 use crate::ClientRequest;
 use crate::ServerNotification;
 use crate::ServerRequest;
+use crate::experimental_api::ExperimentalEnumVariant;
+use crate::experimental_api::ExperimentalEnumVariantEncoding;
+use crate::experimental_api::experimental_enum_variants;
 use crate::experimental_api::experimental_fields;
 use crate::export_client_notification_schemas;
 use crate::export_client_param_schemas;
@@ -220,6 +223,7 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
 
 fn filter_experimental_ts(out_dir: &Path) -> Result<()> {
     let registered_fields = experimental_fields();
+    let registered_enum_variants = experimental_enum_variants();
     let experimental_method_types = experimental_method_types();
     // Most generated TS files are filtered by schema processing, but
     // `ClientRequest.ts` and any type with `#[experimental(...)]` fields need
@@ -227,6 +231,7 @@ fn filter_experimental_ts(out_dir: &Path) -> Result<()> {
     // file-local unions/interfaces.
     filter_client_request_ts(out_dir, EXPERIMENTAL_CLIENT_METHODS)?;
     filter_experimental_type_fields_ts(out_dir, &registered_fields)?;
+    filter_experimental_enum_variants_ts(out_dir, &registered_enum_variants)?;
     remove_generated_type_files(out_dir, &experimental_method_types, "ts")?;
     Ok(())
 }
@@ -327,13 +332,161 @@ fn filter_experimental_fields_in_ts_file(
     Ok(())
 }
 
+fn filter_experimental_enum_variants_ts(
+    out_dir: &Path,
+    experimental_variants: &[&'static ExperimentalEnumVariant],
+) -> Result<()> {
+    let mut variants_by_type_name: HashMap<String, Vec<&'static ExperimentalEnumVariant>> =
+        HashMap::new();
+    for variant in experimental_variants {
+        variants_by_type_name
+            .entry(variant.type_name.to_string())
+            .or_default()
+            .push(*variant);
+    }
+
+    for path in ts_files_in_recursive(out_dir)? {
+        let Some(type_name) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let Some(type_variants) = variants_by_type_name.get(type_name) else {
+            continue;
+        };
+        filter_experimental_enum_variants_in_ts_file(&path, type_variants)?;
+    }
+    Ok(())
+}
+
+fn filter_experimental_enum_variants_in_ts_file(
+    path: &Path,
+    experimental_variants: &[&ExperimentalEnumVariant],
+) -> Result<()> {
+    let mut content =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    let Some((prefix, body, suffix)) = split_type_alias(&content) else {
+        return Ok(());
+    };
+
+    let filtered_arms: Vec<String> = split_top_level(&body, '|')
+        .into_iter()
+        .filter(|arm| {
+            !experimental_variants
+                .iter()
+                .any(|variant| ts_union_arm_matches_experimental_enum_variant(arm, variant))
+        })
+        .collect();
+    let new_body = filtered_arms.join(" | ");
+    content = format!("{prefix}{new_body}{suffix}");
+    let import_usage_scope = split_type_alias(&content)
+        .map(|(_, body, _)| body)
+        .unwrap_or_else(|| new_body.clone());
+    content = prune_unused_type_imports(content, &import_usage_scope);
+    fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(())
+}
+
 fn filter_experimental_schema(bundle: &mut Value) -> Result<()> {
     let registered_fields = experimental_fields();
+    let registered_enum_variants = experimental_enum_variants();
     filter_experimental_fields_in_root(bundle, &registered_fields);
     filter_experimental_fields_in_definitions(bundle, &registered_fields);
+    filter_experimental_enum_variants_in_root(bundle, &registered_enum_variants);
+    filter_experimental_enum_variants_in_definitions(bundle, &registered_enum_variants);
     prune_experimental_methods(bundle, EXPERIMENTAL_CLIENT_METHODS);
     remove_experimental_method_type_definitions(bundle);
     Ok(())
+}
+
+fn filter_experimental_enum_variants_in_root(
+    schema: &mut Value,
+    experimental_variants: &[&'static ExperimentalEnumVariant],
+) {
+    let Some(title) = schema.get("title").and_then(Value::as_str) else {
+        return;
+    };
+    let title = title.to_string();
+
+    let matching_variants: Vec<&ExperimentalEnumVariant> = experimental_variants
+        .iter()
+        .copied()
+        .filter(|variant| title == variant.type_name)
+        .collect();
+    if matching_variants.is_empty() {
+        return;
+    }
+    remove_experimental_enum_variants_from_schema(schema, &matching_variants);
+}
+
+fn filter_experimental_enum_variants_in_definitions(
+    bundle: &mut Value,
+    experimental_variants: &[&'static ExperimentalEnumVariant],
+) {
+    let Some(definitions) = bundle.get_mut("definitions").and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    filter_experimental_enum_variants_in_definitions_map(definitions, experimental_variants);
+}
+
+fn filter_experimental_enum_variants_in_definitions_map(
+    definitions: &mut Map<String, Value>,
+    experimental_variants: &[&'static ExperimentalEnumVariant],
+) {
+    for (def_name, def_schema) in definitions.iter_mut() {
+        if is_namespace_map(def_schema) {
+            if let Some(namespace_defs) = def_schema.as_object_mut() {
+                filter_experimental_enum_variants_in_definitions_map(
+                    namespace_defs,
+                    experimental_variants,
+                );
+            }
+            continue;
+        }
+
+        let matching_variants: Vec<&ExperimentalEnumVariant> = experimental_variants
+            .iter()
+            .copied()
+            .filter(|variant| definition_matches_type(def_name, variant.type_name))
+            .collect();
+        if matching_variants.is_empty() {
+            continue;
+        }
+        remove_experimental_enum_variants_from_schema(def_schema, &matching_variants);
+    }
+}
+
+fn remove_experimental_enum_variants_from_schema(
+    schema: &mut Value,
+    experimental_variants: &[&ExperimentalEnumVariant],
+) {
+    match schema {
+        Value::Array(items) => {
+            items.retain(|item| {
+                !experimental_variants
+                    .iter()
+                    .any(|variant| json_schema_matches_experimental_enum_variant(item, variant))
+            });
+            for item in items {
+                remove_experimental_enum_variants_from_schema(item, experimental_variants);
+            }
+        }
+        Value::Object(map) => {
+            if let Some(enum_values) = map.get_mut("enum").and_then(Value::as_array_mut) {
+                enum_values.retain(|value| {
+                    !experimental_variants.iter().any(|variant| {
+                        matches!(
+                            variant.encoding,
+                            ExperimentalEnumVariantEncoding::StringLiteral
+                        ) && value.as_str() == Some(variant.serialized_name)
+                    })
+                });
+            }
+            for child in map.values_mut() {
+                remove_experimental_enum_variants_from_schema(child, experimental_variants);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
 }
 
 fn filter_experimental_fields_in_root(
@@ -713,6 +866,105 @@ fn parse_property(input: &str) -> Option<(String, &str)> {
     let name = parse_property_name(input)?;
     let colon_index = input.find(':')?;
     Some((name, input[colon_index + 1..].trim_start()))
+}
+
+fn ts_union_arm_matches_experimental_enum_variant(
+    arm: &str,
+    variant: &ExperimentalEnumVariant,
+) -> bool {
+    let arm = strip_leading_block_comments(arm).trim();
+    match variant.encoding {
+        ExperimentalEnumVariantEncoding::StringLiteral => {
+            arm == format!("\"{}\"", variant.serialized_name)
+        }
+        ExperimentalEnumVariantEncoding::TaggedObject { tag_name } => {
+            ts_object_arm_has_string_property(arm, tag_name, variant.serialized_name)
+        }
+        ExperimentalEnumVariantEncoding::ExternallyTaggedObject => {
+            ts_object_arm_has_property(arm, variant.serialized_name)
+        }
+    }
+}
+
+fn ts_object_arm_has_string_property(arm: &str, property_name: &str, property_value: &str) -> bool {
+    let Some((open, close)) = find_top_level_brace_span(arm) else {
+        return false;
+    };
+    let inner = &arm[open + 1..close];
+    for field in split_top_level(inner, ',') {
+        let field = strip_leading_block_comments(field.as_str());
+        let Some((name, value)) = parse_property(field) else {
+            continue;
+        };
+        if name != property_name {
+            continue;
+        }
+        return parse_string_literal(strip_leading_block_comments(value).trim_start())
+            .is_some_and(|(value, _)| value == property_value);
+    }
+    false
+}
+
+fn ts_object_arm_has_property(arm: &str, property_name: &str) -> bool {
+    let Some((open, close)) = find_top_level_brace_span(arm) else {
+        return false;
+    };
+    let inner = &arm[open + 1..close];
+    split_top_level(inner, ',').into_iter().any(|field| {
+        let field = strip_leading_block_comments(field.as_str());
+        parse_property_name(field).is_some_and(|name| name == property_name)
+    })
+}
+
+fn json_schema_matches_experimental_enum_variant(
+    schema: &Value,
+    variant: &ExperimentalEnumVariant,
+) -> bool {
+    match variant.encoding {
+        ExperimentalEnumVariantEncoding::StringLiteral => {
+            json_schema_matches_string_literal(schema, variant.serialized_name)
+        }
+        ExperimentalEnumVariantEncoding::TaggedObject { tag_name } => {
+            json_schema_has_tagged_variant(schema, tag_name, variant.serialized_name)
+        }
+        ExperimentalEnumVariantEncoding::ExternallyTaggedObject => {
+            json_schema_has_property(schema, variant.serialized_name)
+        }
+    }
+}
+
+fn json_schema_matches_string_literal(schema: &Value, literal: &str) -> bool {
+    let Value::Object(map) = schema else {
+        return false;
+    };
+    if map.get("const").and_then(Value::as_str) == Some(literal) {
+        return true;
+    }
+    map.get("enum")
+        .and_then(Value::as_array)
+        .is_some_and(|values| values.len() == 1 && values[0].as_str() == Some(literal))
+}
+
+fn json_schema_has_tagged_variant(schema: &Value, tag_name: &str, tag_value: &str) -> bool {
+    let Value::Object(map) = schema else {
+        return false;
+    };
+    let Some(properties) = map.get("properties").and_then(Value::as_object) else {
+        return false;
+    };
+    properties
+        .get(tag_name)
+        .is_some_and(|tag_schema| json_schema_matches_string_literal(tag_schema, tag_value))
+}
+
+fn json_schema_has_property(schema: &Value, property_name: &str) -> bool {
+    let Value::Object(map) = schema else {
+        return false;
+    };
+    let Some(properties) = map.get("properties").and_then(Value::as_object) else {
+        return false;
+    };
+    properties.contains_key(property_name)
 }
 
 fn strip_leading_block_comments(input: &str) -> &str {
@@ -1942,6 +2194,12 @@ mod tests {
         let thread_start_ts =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.ts"))?;
         assert_eq!(thread_start_ts.contains("mockExperimentalField"), false);
+        let login_account_params_ts =
+            fs::read_to_string(output_dir.join("v2").join("LoginAccountParams.ts"))?;
+        assert_eq!(
+            login_account_params_ts.contains("\"chatgptAuthTokens\""),
+            false
+        );
         assert_eq!(
             output_dir
                 .join("v2")
@@ -2197,6 +2455,12 @@ mod tests {
         let thread_start_ts =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.ts"))?;
         assert_eq!(thread_start_ts.contains("mockExperimentalField"), true);
+        let login_account_params_ts =
+            fs::read_to_string(output_dir.join("v2").join("LoginAccountParams.ts"))?;
+        assert_eq!(
+            login_account_params_ts.contains("\"chatgptAuthTokens\""),
+            true
+        );
         let command_execution_request_approval_ts = fs::read_to_string(
             output_dir
                 .join("v2")
@@ -2662,6 +2926,12 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         let thread_start_json =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.json"))?;
         assert_eq!(thread_start_json.contains("mockExperimentalField"), false);
+        let login_account_params_json =
+            fs::read_to_string(output_dir.join("v2").join("LoginAccountParams.json"))?;
+        assert_eq!(
+            login_account_params_json.contains("chatgptAuthTokens"),
+            false
+        );
         let command_execution_request_approval_json =
             fs::read_to_string(output_dir.join("CommandExecutionRequestApprovalParams.json"))?;
         assert_eq!(
