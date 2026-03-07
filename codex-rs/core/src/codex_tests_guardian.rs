@@ -43,6 +43,10 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         .sandbox_policy
         .set(SandboxPolicy::DangerFullAccess)
         .expect("test setup should allow updating sandbox policy");
+    turn_context_raw.file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from(turn_context_raw.sandbox_policy.get());
+    turn_context_raw.network_sandbox_policy =
+        NetworkSandboxPolicy::from(turn_context_raw.sandbox_policy.get());
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
 
