@@ -136,13 +136,13 @@ struct GuardianTranscriptTokenCount {
 /// Top-level guardian review entry point for approval requests routed through
 /// guardian.
 ///
-/// Despite the historical name, this now covers the full feature-routed
-/// `on-request` surface: explicit unsandboxed execution requests, sandboxed
-/// retries after denial, patch approvals, and managed-network allowlist misses.
+/// This covers the full feature-routed `on-request` surface: explicit
+/// unsandboxed execution requests, sandboxed retries after denial, patch
+/// approvals, and managed-network allowlist misses.
 ///
 /// This function always fails closed: any timeout, subagent failure, or parse
 /// failure is treated as a high-risk denial.
-pub(crate) async fn review_sandbox_escalation(
+async fn assess_approval_request(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     tool_name: &str,
@@ -183,9 +183,8 @@ pub(crate) async fn review_sandbox_escalation(
         Err(GuardianReviewFailure::TimedOut) => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             risk_score: 100,
-            rationale:
-                "Guardian review timed out while evaluating the requested sandbox escalation."
-                    .to_string(),
+            rationale: "Guardian review timed out while evaluating the requested approval."
+                .to_string(),
             evidence: vec![],
         },
     };
@@ -231,21 +230,21 @@ where
 }
 
 /// Adapter used by callsites that already traffic in `ReviewDecision`.
-pub(crate) async fn review_escalation(
+pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     request: GuardianReviewRequest,
 ) -> ReviewDecision {
-    review_escalation_with_reason(session, turn, request, None).await
+    review_approval_request_with_reason(session, turn, request, None).await
 }
 
-pub(crate) async fn review_escalation_with_reason(
+pub(crate) async fn review_approval_request_with_reason(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     request: GuardianReviewRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
-    let review = review_sandbox_escalation(
+    let review = assess_approval_request(
         Arc::clone(session),
         Arc::clone(turn),
         request.tool_name,

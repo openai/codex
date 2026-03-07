@@ -12,7 +12,7 @@ use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
 use crate::guardian::GuardianReviewRequest;
-use crate::guardian::review_escalation;
+use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
@@ -164,7 +164,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         "justification": reason,
                     }),
                 };
-                return review_escalation(session, turn, request).await;
+                return review_approval_request(session, turn, request).await;
             }
             with_cached_approval(&session.services, "shell", keys, move || async move {
                 let available_decisions = None;

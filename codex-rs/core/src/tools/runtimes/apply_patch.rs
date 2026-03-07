@@ -6,7 +6,7 @@
 //! `SandboxAttempt` with a minimal environment.
 use crate::exec::ExecToolCallOutput;
 use crate::guardian::GuardianReviewRequest;
-use crate::guardian::review_escalation;
+use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
@@ -136,7 +136,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
                 let request = ApplyPatchRuntime::build_guardian_review_request(req);
-                return review_escalation(session, turn, request).await;
+                return review_approval_request(session, turn, request).await;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session

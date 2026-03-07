@@ -8,7 +8,7 @@ use crate::exec::is_likely_sandbox_denied;
 use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::features::Feature;
 use crate::guardian::GuardianReviewRequest;
-use crate::guardian::review_escalation;
+use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
@@ -394,7 +394,7 @@ impl CoreShellActionProvider {
                             "additional_permissions": additional_permissions,
                         }),
                     };
-                    return review_escalation(&session, &turn, request).await;
+                    return review_approval_request(&session, &turn, request).await;
                 }
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),
