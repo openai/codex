@@ -12,6 +12,9 @@ use crate::protocol::AskForApproval;
 use crate::protocol::FileSystemSandboxPolicy;
 use crate::protocol::SandboxPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSpecialPath;
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
@@ -143,7 +146,40 @@ fn is_write_patch_constrained_to_writable_paths(
         Some(out)
     }
 
-    let unreadable_roots = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
+    fn resolve_special_path(value: &FileSystemSpecialPath, cwd: &Path) -> Option<PathBuf> {
+        match value {
+            FileSystemSpecialPath::Root => normalize(cwd).and_then(|cwd| {
+                cwd.ancestors()
+                    .last()
+                    .map(Path::to_path_buf)
+                    .and_then(|path| normalize(&path))
+            }),
+            FileSystemSpecialPath::Minimal => None,
+            FileSystemSpecialPath::CurrentWorkingDirectory => normalize(cwd),
+            FileSystemSpecialPath::ProjectRoots { subpath } => {
+                let cwd = normalize(cwd)?;
+                match subpath.as_ref() {
+                    Some(subpath) => normalize(&cwd.join(subpath)),
+                    None => Some(cwd),
+                }
+            }
+            FileSystemSpecialPath::Tmpdir => std::env::var_os("TMPDIR")
+                .map(PathBuf::from)
+                .and_then(|path| normalize(&path)),
+            FileSystemSpecialPath::SlashTmp => {
+                let slash_tmp = Path::new("/tmp");
+                slash_tmp.is_dir().then(|| normalize(slash_tmp)).flatten()
+            }
+        }
+    }
+
+    fn resolve_entry_path(entry: &FileSystemPath, cwd: &Path) -> Option<PathBuf> {
+        match entry {
+            FileSystemPath::Path { path } => normalize(path.as_path()),
+            FileSystemPath::Special { value } => resolve_special_path(value, cwd),
+        }
+    }
+
     let writable_roots = file_system_sandbox_policy.get_writable_roots_with_cwd(cwd);
 
     // Determine whether `path` is inside **any** writable root. Both `path`
@@ -156,10 +192,33 @@ fn is_write_patch_constrained_to_writable_paths(
             None => return false,
         };
 
-        if unreadable_roots
-            .iter()
-            .any(|root| abs.starts_with(root.as_path()))
-        {
+        let mut most_specific_explicit_match: Option<(usize, bool)> = None;
+        for entry in &file_system_sandbox_policy.entries {
+            let Some(entry_path) = resolve_entry_path(&entry.path, cwd) else {
+                continue;
+            };
+            if !abs.starts_with(&entry_path) {
+                continue;
+            }
+
+            let specificity = entry_path.components().count();
+            let allows_write = entry.access == FileSystemAccessMode::Write;
+            match &mut most_specific_explicit_match {
+                Some((best_specificity, best_allows_write)) => {
+                    if specificity > *best_specificity {
+                        *best_specificity = specificity;
+                        *best_allows_write = allows_write;
+                    } else if specificity == *best_specificity {
+                        *best_allows_write &= allows_write;
+                    }
+                }
+                None => {
+                    most_specific_explicit_match = Some((specificity, allows_write));
+                }
+            }
+        }
+
+        if matches!(most_specific_explicit_match, Some((_, false))) {
             return false;
         }
 
@@ -384,6 +443,57 @@ mod tests {
                     path: blocked_absolute,
                 },
                 access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        assert!(!is_write_patch_constrained_to_writable_paths(
+            &action,
+            &file_system_sandbox_policy,
+            &cwd,
+        ));
+        assert_eq!(
+            assess_patch_safety(
+                &action,
+                AskForApproval::OnRequest,
+                &sandbox_policy,
+                &file_system_sandbox_policy,
+                &cwd,
+                WindowsSandboxLevel::Disabled,
+            ),
+            SafetyCheck::AskUser,
+        );
+    }
+
+    #[test]
+    fn explicit_read_only_subpaths_prevent_auto_approval_under_writable_roots() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_path_buf();
+        let docs_path = cwd.join("docs");
+        let docs_absolute = AbsolutePathBuf::from_absolute_path(docs_path.clone()).unwrap();
+        let action =
+            ApplyPatchAction::new_add_for_test(&docs_path.join("guide.md"), "".to_string());
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: codex_protocol::protocol::ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![docs_absolute.clone()],
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: docs_absolute,
+                },
+                access: FileSystemAccessMode::Read,
             },
         ]);
 
