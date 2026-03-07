@@ -144,10 +144,8 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let keys = self.approval_keys(req);
         let command = req.command.clone();
         let cwd = req.cwd.clone();
-        let reason = ctx
-            .retry_reason
-            .clone()
-            .or_else(|| req.justification.clone());
+        let retry_reason = ctx.retry_reason.clone();
+        let reason = retry_reason.clone().or_else(|| req.justification.clone());
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
@@ -159,17 +157,17 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     "cwd": cwd,
                     "sandbox_permissions": req.sandbox_permissions,
                     "additional_permissions": req.additional_permissions,
-                    "justification": reason,
+                    "justification": req.justification,
                 });
                 if let Some(action) = action.as_object_mut() {
                     if req.additional_permissions.is_none() {
                         action.remove("additional_permissions");
                     }
-                    if reason.is_none() {
+                    if req.justification.is_none() {
                         action.remove("justification");
                     }
                 }
-                return review_approval_request(session, turn, action, reason).await;
+                return review_approval_request(session, turn, action, retry_reason).await;
             }
             with_cached_approval(&session.services, "shell", keys, move || async move {
                 let available_decisions = None;

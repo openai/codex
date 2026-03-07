@@ -112,10 +112,8 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let call_id = ctx.call_id.to_string();
         let command = req.command.clone();
         let cwd = req.cwd.clone();
-        let reason = ctx
-            .retry_reason
-            .clone()
-            .or_else(|| req.justification.clone());
+        let retry_reason = ctx.retry_reason.clone();
+        let reason = retry_reason.clone().or_else(|| req.justification.clone());
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
                 let mut action = json!({
@@ -124,18 +122,18 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     "cwd": cwd,
                     "sandbox_permissions": req.sandbox_permissions,
                     "additional_permissions": req.additional_permissions,
-                    "justification": reason,
+                    "justification": req.justification,
                     "tty": req.tty,
                 });
                 if let Some(action) = action.as_object_mut() {
                     if req.additional_permissions.is_none() {
                         action.remove("additional_permissions");
                     }
-                    if reason.is_none() {
+                    if req.justification.is_none() {
                         action.remove("justification");
                     }
                 }
-                return review_approval_request(session, turn, action, reason).await;
+                return review_approval_request(session, turn, action, retry_reason).await;
             }
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 let available_decisions = None;
