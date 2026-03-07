@@ -5,9 +5,7 @@ expression: "format_labeled_requests_snapshot(\"Remote mid-turn continuation com
 Scenario: Remote mid-turn continuation compaction after realtime was closed before the turn: the initial second-turn request emits realtime-end instructions, but the continuation request does not restate them after compaction because the current turn already established the inactive baseline.
 
 ## Second Turn Initial Request
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
@@ -18,9 +16,7 @@ Scenario: Remote mid-turn continuation compaction after realtime was closed befo
 06:message/user:USER_TWO
 
 ## Remote Compaction Request
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
@@ -33,9 +29,7 @@ Scenario: Remote mid-turn continuation compaction after realtime was closed befo
 08:function_call_output:unsupported call: test_tool
 
 ## Remote Post-Compaction History Layout
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
