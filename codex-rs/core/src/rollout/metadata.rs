@@ -7,7 +7,7 @@ use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
 use chrono::Utc;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
@@ -96,7 +96,7 @@ pub(crate) fn builder_from_items(
 pub(crate) async fn extract_metadata_from_rollout(
     rollout_path: &Path,
     default_provider: &str,
-    otel: Option<&OtelManager>,
+    otel: Option<&SessionTelemetry>,
 ) -> anyhow::Result<ExtractionOutcome> {
     let (items, _thread_id, parse_errors) =
         RolloutRecorder::load_rollout_items(rollout_path).await?;
@@ -144,7 +144,7 @@ pub(crate) async fn extract_metadata_from_rollout(
 pub(crate) async fn backfill_sessions(
     runtime: &codex_state::StateRuntime,
     config: &Config,
-    otel: Option<&OtelManager>,
+    otel: Option<&SessionTelemetry>,
 ) {
     let timer = otel.and_then(|otel| otel.start_timer(DB_METRIC_BACKFILL_DURATION_MS, &[]).ok());
     let backfill_state = match runtime.get_backfill_state().await {

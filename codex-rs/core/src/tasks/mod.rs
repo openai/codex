@@ -144,7 +144,7 @@ impl Session {
         let done = Arc::new(Notify::new());
 
         let timer = turn_context
-            .otel_manager
+            .session_telemetry
             .start_timer("codex.turn.e2e_duration_ms", &[])
             .ok();
 
@@ -272,7 +272,7 @@ impl Session {
                     "false"
                 },
             );
-            self.services.otel_manager.histogram(
+            self.services.session_telemetry.histogram(
                 "codex.turn.tool.call",
                 i64::try_from(turn_tool_calls).unwrap_or(i64::MAX),
                 &[tmp_mem],
@@ -295,27 +295,27 @@ impl Session {
                     - token_usage_at_turn_start.total_tokens)
                     .max(0),
             };
-            self.services.otel_manager.histogram(
+            self.services.session_telemetry.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.total_tokens,
                 &[("token_type", "total"), tmp_mem],
             );
-            self.services.otel_manager.histogram(
+            self.services.session_telemetry.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.input_tokens,
                 &[("token_type", "input"), tmp_mem],
             );
-            self.services.otel_manager.histogram(
+            self.services.session_telemetry.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.cached_input(),
                 &[("token_type", "cached_input"), tmp_mem],
             );
-            self.services.otel_manager.histogram(
+            self.services.session_telemetry.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.output_tokens,
                 &[("token_type", "output"), tmp_mem],
             );
-            self.services.otel_manager.histogram(
+            self.services.session_telemetry.histogram(
                 "codex.turn.token_usage",
                 turn_token_usage.reasoning_output_tokens,
                 &[("token_type", "reasoning_output"), tmp_mem],

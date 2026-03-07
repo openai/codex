@@ -28,7 +28,7 @@ use crate::model::datetime_to_epoch_seconds;
 use crate::paths::file_modified_time_utc;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
@@ -84,7 +84,7 @@ impl StateRuntime {
     pub async fn init(
         codex_home: PathBuf,
         default_provider: String,
-        otel: Option<OtelManager>,
+        otel: Option<SessionTelemetry>,
     ) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&codex_home).await?;
         let current_state_name = state_db_filename();

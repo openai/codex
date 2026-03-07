@@ -24,7 +24,9 @@ pub struct NetworkProxyConstraints {
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
+    pub allowlist_expansion_enabled: Option<bool>,
     pub denied_domains: Option<Vec<String>>,
+    pub denylist_expansion_enabled: Option<bool>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
 }
@@ -207,31 +209,82 @@ pub fn validate_policy_against_constraints(
 
     if let Some(allowed_domains) = &constraints.allowed_domains {
         validate_domain_patterns("network.allowed_domains", allowed_domains)?;
-        let managed_patterns: Vec<DomainPattern> = allowed_domains
-            .iter()
-            .map(|entry| DomainPattern::parse_for_constraints(entry))
-            .collect();
-        validate(config.network.allowed_domains.clone(), move |candidate| {
-            let mut invalid = Vec::new();
-            for entry in candidate {
-                let candidate_pattern = DomainPattern::parse_for_constraints(entry);
-                if !managed_patterns
+        match constraints.allowlist_expansion_enabled {
+            Some(true) => {
+                let required_set: HashSet<String> = allowed_domains
                     .iter()
-                    .any(|managed| managed.allows(&candidate_pattern))
-                {
-                    invalid.push(entry.clone());
-                }
+                    .map(|entry| entry.to_ascii_lowercase())
+                    .collect();
+                validate(config.network.allowed_domains.clone(), move |candidate| {
+                    let candidate_set: HashSet<String> = candidate
+                        .iter()
+                        .map(|entry| entry.to_ascii_lowercase())
+                        .collect();
+                    let missing: Vec<String> = required_set
+                        .iter()
+                        .filter(|entry| !candidate_set.contains(*entry))
+                        .cloned()
+                        .collect();
+                    if missing.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(invalid_value(
+                            "network.allowed_domains",
+                            "missing managed allowed_domains entries",
+                            format!("{missing:?}"),
+                        ))
+                    }
+                })?;
             }
-            if invalid.is_empty() {
-                Ok(())
-            } else {
-                Err(invalid_value(
-                    "network.allowed_domains",
-                    format!("{invalid:?}"),
-                    "subset of managed allowed_domains",
-                ))
+            Some(false) => {
+                let required_set: HashSet<String> = allowed_domains
+                    .iter()
+                    .map(|entry| entry.to_ascii_lowercase())
+                    .collect();
+                validate(config.network.allowed_domains.clone(), move |candidate| {
+                    let candidate_set: HashSet<String> = candidate
+                        .iter()
+                        .map(|entry| entry.to_ascii_lowercase())
+                        .collect();
+                    if candidate_set == required_set {
+                        Ok(())
+                    } else {
+                        Err(invalid_value(
+                            "network.allowed_domains",
+                            format!("{candidate:?}"),
+                            "must match managed allowed_domains",
+                        ))
+                    }
+                })?;
             }
-        })?;
+            None => {
+                let managed_patterns: Vec<DomainPattern> = allowed_domains
+                    .iter()
+                    .map(|entry| DomainPattern::parse_for_constraints(entry))
+                    .collect();
+                validate(config.network.allowed_domains.clone(), move |candidate| {
+                    let mut invalid = Vec::new();
+                    for entry in candidate {
+                        let candidate_pattern = DomainPattern::parse_for_constraints(entry);
+                        if !managed_patterns
+                            .iter()
+                            .any(|managed| managed.allows(&candidate_pattern))
+                        {
+                            invalid.push(entry.clone());
+                        }
+                    }
+                    if invalid.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(invalid_value(
+                            "network.allowed_domains",
+                            format!("{invalid:?}"),
+                            "subset of managed allowed_domains",
+                        ))
+                    }
+                })?;
+            }
+        }
     }
 
     if let Some(denied_domains) = &constraints.denied_domains {
@@ -240,24 +293,45 @@ pub fn validate_policy_against_constraints(
             .iter()
             .map(|s| s.to_ascii_lowercase())
             .collect();
-        validate(config.network.denied_domains.clone(), move |candidate| {
-            let candidate_set: HashSet<String> =
-                candidate.iter().map(|s| s.to_ascii_lowercase()).collect();
-            let missing: Vec<String> = required_set
-                .iter()
-                .filter(|entry| !candidate_set.contains(*entry))
-                .cloned()
-                .collect();
-            if missing.is_empty() {
-                Ok(())
-            } else {
-                Err(invalid_value(
-                    "network.denied_domains",
-                    "missing managed denied_domains entries",
-                    format!("{missing:?}"),
-                ))
+        match constraints.denylist_expansion_enabled {
+            Some(false) => {
+                validate(config.network.denied_domains.clone(), move |candidate| {
+                    let candidate_set: HashSet<String> = candidate
+                        .iter()
+                        .map(|entry| entry.to_ascii_lowercase())
+                        .collect();
+                    if candidate_set == required_set {
+                        Ok(())
+                    } else {
+                        Err(invalid_value(
+                            "network.denied_domains",
+                            format!("{candidate:?}"),
+                            "must match managed denied_domains",
+                        ))
+                    }
+                })?;
             }
-        })?;
+            Some(true) | None => {
+                validate(config.network.denied_domains.clone(), move |candidate| {
+                    let candidate_set: HashSet<String> =
+                        candidate.iter().map(|s| s.to_ascii_lowercase()).collect();
+                    let missing: Vec<String> = required_set
+                        .iter()
+                        .filter(|entry| !candidate_set.contains(*entry))
+                        .cloned()
+                        .collect();
+                    if missing.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(invalid_value(
+                            "network.denied_domains",
+                            "missing managed denied_domains entries",
+                            format!("{missing:?}"),
+                        ))
+                    }
+                })?;
+            }
+        }
     }
 
     if let Some(allow_unix_sockets) = &constraints.allow_unix_sockets {

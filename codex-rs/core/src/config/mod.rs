@@ -68,7 +68,9 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::openai_models::ModelsResponse;
@@ -464,6 +466,10 @@ pub struct Config {
     /// websocket transport instructions (the `Op::RealtimeConversation`
     /// `/ws` session.update instructions) without changing normal prompts.
     pub experimental_realtime_ws_backend_prompt: Option<String>,
+    /// Experimental / do not use. Replaces the synthesized realtime startup
+    /// context appended to websocket session instructions. An empty string
+    /// disables startup context injection entirely.
+    pub experimental_realtime_ws_startup_context: Option<String>,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -477,6 +483,9 @@ pub struct Config {
 
     /// Explicit or feature-derived web search mode.
     pub web_search_mode: Constrained<WebSearchMode>,
+
+    /// Additional parameters for the web search tool when it is enabled.
+    pub web_search_config: Option<WebSearchConfig>,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -1228,6 +1237,10 @@ pub struct ConfigToml {
     /// websocket transport instructions (the `Op::RealtimeConversation`
     /// `/ws` session.update instructions) without changing normal prompts.
     pub experimental_realtime_ws_backend_prompt: Option<String>,
+    /// Experimental / do not use. Replaces the synthesized realtime startup
+    /// context appended to websocket session instructions. An empty string
+    /// disables startup context injection entirely.
+    pub experimental_realtime_ws_startup_context: Option<String>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -1371,8 +1384,8 @@ pub struct RealtimeAudioToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
-    #[serde(default, alias = "web_search_request")]
-    pub web_search: Option<bool>,
+    #[serde(default)]
+    pub web_search: Option<WebSearchToolConfig>,
 
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
@@ -1434,7 +1447,7 @@ pub struct AgentRoleToml {
 impl From<ToolsToml> for Tools {
     fn from(tools_toml: ToolsToml) -> Self {
         Self {
-            web_search: tools_toml.web_search,
+            web_search: tools_toml.web_search.is_some().then_some(true),
             view_image: tools_toml.view_image,
         }
     }
@@ -1726,6 +1739,27 @@ fn resolve_web_search_mode(
     None
 }
 
+fn resolve_web_search_config(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> Option<WebSearchConfig> {
+    let base = config_toml
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.web_search.as_ref());
+    let profile = config_profile
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.web_search.as_ref());
+
+    match (base, profile) {
+        (None, None) => None,
+        (Some(base), None) => Some(base.clone().into()),
+        (None, Some(profile)) => Some(profile.clone().into()),
+        (Some(base), Some(profile)) => Some(base.merge(profile).into()),
+    }
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     sandbox_policy: &SandboxPolicy,
@@ -2005,6 +2039,7 @@ impl Config {
         }
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
+        let web_search_config = resolve_web_search_config(&cfg, &config_profile);
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -2273,6 +2308,7 @@ impl Config {
         let network = NetworkProxySpec::from_config_and_constraints(
             configured_network_proxy_config,
             network_requirements,
+            constrained_sandbox_policy.get(),
         )
         .map_err(|err| {
             if let Some(source) = network_requirements_source.as_ref() {
@@ -2405,10 +2441,12 @@ impl Config {
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
+            experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
+            web_search_config,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,

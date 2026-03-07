@@ -7,7 +7,7 @@ use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
 use chrono::Utc;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
@@ -26,7 +26,10 @@ pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
 /// Initialize the state runtime for thread state persistence and backfill checks. To only be used
 /// inside `core`. The initialization should not be done anywhere else.
-pub(crate) async fn init(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
+pub(crate) async fn init(
+    config: &Config,
+    otel: Option<&SessionTelemetry>,
+) -> Option<StateDbHandle> {
     let runtime = match codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
@@ -69,7 +72,10 @@ pub(crate) async fn init(config: &Config, otel: Option<&OtelManager>) -> Option<
 }
 
 /// Get the DB if the feature is enabled and the DB exists.
-pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
+pub async fn get_state_db(
+    config: &Config,
+    otel: Option<&SessionTelemetry>,
+) -> Option<StateDbHandle> {
     let state_path = codex_state::state_db_path(config.sqlite_home.as_path());
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
         return None;
