@@ -359,19 +359,31 @@ fn guardian_snapshot_dir() -> PathBuf {
     let mut candidates = Vec::new();
 
     if let Some(test_srcdir) = std::env::var_os("TEST_SRCDIR") {
-        candidates.push(
-            PathBuf::from(test_srcdir)
-                .join(&test_workspace)
-                .join("codex-rs/core/src/snapshots"),
-        );
+        push_snapshot_dir_candidates(&mut candidates, PathBuf::from(test_srcdir), &test_workspace);
     }
 
     if let Some(runfiles_dir) = std::env::var_os("RUNFILES_DIR") {
-        candidates.push(
-            PathBuf::from(runfiles_dir)
-                .join(&test_workspace)
-                .join("codex-rs/core/src/snapshots"),
+        push_snapshot_dir_candidates(
+            &mut candidates,
+            PathBuf::from(runfiles_dir),
+            &test_workspace,
         );
+    }
+
+    if let Ok(github_workspace) = std::env::var("GITHUB_WORKSPACE") {
+        push_snapshot_dir_candidates(
+            &mut candidates,
+            PathBuf::from(github_workspace),
+            &test_workspace,
+        );
+    }
+
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(file_name) = current_exe.file_name()
+    {
+        let runfiles_dir =
+            current_exe.with_file_name(format!("{}.runfiles", file_name.to_string_lossy()));
+        push_snapshot_dir_candidates(&mut candidates, runfiles_dir, &test_workspace);
     }
 
     candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/snapshots"));
@@ -388,6 +400,18 @@ fn guardian_snapshot_dir() -> PathBuf {
     }
 
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/snapshots")
+}
+
+fn push_snapshot_dir_candidates(
+    candidates: &mut Vec<PathBuf>,
+    base: PathBuf,
+    test_workspace: &PathBuf,
+) {
+    candidates.push(base.join("codex-rs/core/src/snapshots"));
+    candidates.push(
+        base.join(test_workspace)
+            .join("codex-rs/core/src/snapshots"),
+    );
 }
 
 #[test]
