@@ -104,7 +104,7 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
 /// `prompt_is_rule` distinguishes policy-rule prompts from sandbox/escalation
 /// prompts so `Reject.rules` and `Reject.sandbox_approval` are honored
 /// independently. When both are present, policy-rule prompts take precedence.
-fn prompt_is_rejected_by_policy(
+pub(crate) fn prompt_is_rejected_by_policy(
     approval_policy: AskForApproval,
     prompt_is_rule: bool,
 ) -> Option<&'static str> {
@@ -538,7 +538,7 @@ pub fn render_decision_for_unmatched_command(
                     // In restricted sandboxes (ReadOnly/WorkspaceWrite), do not prompt for
                     // non‑escalated, non‑dangerous commands — let the sandbox enforce
                     // restrictions (e.g., block network/write) without a user prompt.
-                    if sandbox_permissions.requires_additional_permissions() {
+                    if sandbox_permissions.requests_sandbox_override() {
                         Decision::Prompt
                     } else {
                         Decision::Allow
@@ -553,7 +553,7 @@ pub fn render_decision_for_unmatched_command(
                 Decision::Allow
             }
             SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => {
-                if sandbox_permissions.requires_additional_permissions() {
+                if sandbox_permissions.requests_sandbox_override() {
                     Decision::Prompt
                 } else {
                     Decision::Allow

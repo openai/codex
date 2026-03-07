@@ -61,13 +61,22 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     };
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
 
-    let responses = vec![create_shell_command_sse_response(
+    let response = create_shell_command_sse_response(
         vec!["echo".to_string(), "hi".to_string()],
         None,
         Some(5000),
         "call-zsh-fork",
-    )?];
-    let server = create_mock_responses_server_sequence(responses).await;
+    )?;
+    let no_op_response = responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_completed("resp-2"),
+    ]);
+    // Interrupting after the shell item starts can race with the follow-up
+    // model request that reports the aborted tool call. This test only cares
+    // that zsh-fork launches the expected command, so allow one extra no-op
+    // `/responses` POST instead of asserting an exact request count.
+    let server =
+        create_mock_responses_server_sequence_unchecked(vec![response, no_op_response]).await;
     create_config_toml(
         &codex_home,
         &server.uri(),

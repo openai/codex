@@ -62,3 +62,30 @@ async fn windows_sandbox_setup_start_emits_completion_notification() -> Result<(
     assert_eq!(payload.mode, WindowsSandboxSetupMode::Unelevated);
     Ok(())
 }
+
+#[tokio::test]
+async fn windows_sandbox_setup_start_rejects_relative_cwd() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "windowsSandbox/setupStart",
+            Some(serde_json::json!({
+                "mode": "unelevated",
+                "cwd": "relative-root",
+            })),
+        )
+        .await?;
+
+    let err = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert!(err.error.message.contains("Invalid request"));
+    Ok(())
+}

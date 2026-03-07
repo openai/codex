@@ -17,6 +17,8 @@ use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::Future;
@@ -88,7 +90,7 @@ where
 
     let decision = fetch().await;
 
-    services.otel_manager.counter(
+    services.session_telemetry.counter(
         "codex.approval.requested",
         1,
         &[
@@ -318,6 +320,8 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 pub(crate) struct SandboxAttempt<'a> {
     pub sandbox: crate::exec::SandboxType,
     pub policy: &'a crate::protocol::SandboxPolicy,
+    pub file_system_policy: &'a FileSystemSandboxPolicy,
+    pub network_policy: NetworkSandboxPolicy,
     pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a Path,
@@ -336,6 +340,8 @@ impl<'a> SandboxAttempt<'a> {
             .transform(crate::sandboxing::SandboxTransformRequest {
                 spec,
                 policy: self.policy,
+                file_system_policy: self.file_system_policy,
+                network_policy: self.network_policy,
                 sandbox: self.sandbox,
                 enforce_managed_network: self.enforce_managed_network,
                 network,

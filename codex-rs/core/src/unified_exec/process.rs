@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::task::JoinHandle;
@@ -47,6 +48,7 @@ pub(crate) struct OutputHandles {
 #[derive(Debug)]
 pub(crate) struct UnifiedExecProcess {
     process_handle: ExecCommandSession,
+    output_rx: broadcast::Receiver<Vec<u8>>,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
     output_closed: Arc<AtomicBool>,
@@ -72,6 +74,7 @@ impl UnifiedExecProcess {
         let cancellation_token = CancellationToken::new();
         let output_drained = Arc::new(Notify::new());
         let mut receiver = initial_output_rx;
+        let output_rx = receiver.resubscribe();
         let buffer_clone = Arc::clone(&output_buffer);
         let notify_clone = Arc::clone(&output_notify);
         let output_closed_clone = Arc::clone(&output_closed);
@@ -97,6 +100,7 @@ impl UnifiedExecProcess {
 
         Self {
             process_handle,
+            output_rx,
             output_buffer,
             output_notify,
             output_closed,
@@ -124,7 +128,7 @@ impl UnifiedExecProcess {
     }
 
     pub(super) fn output_receiver(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
-        self.process_handle.output_receiver()
+        self.output_rx.resubscribe()
     }
 
     pub(super) fn cancellation_token(&self) -> CancellationToken {
@@ -214,9 +218,11 @@ impl UnifiedExecProcess {
     ) -> Result<Self, UnifiedExecError> {
         let SpawnedPty {
             session: process_handle,
-            output_rx,
+            stdout_rx,
+            stderr_rx,
             mut exit_rx,
         } = spawned;
+        let output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
         let managed = Self::new(process_handle, output_rx, sandbox_type, spawn_lifecycle);
 
         let exit_ready = matches!(exit_rx.try_recv(), Ok(_) | Err(TryRecvError::Closed));

@@ -205,6 +205,10 @@ mod tests {
         turn.sandbox_policy
             .set(SandboxPolicy::DangerFullAccess)
             .expect("test setup should allow updating sandbox policy");
+        turn.file_system_sandbox_policy =
+            codex_protocol::permissions::FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
+        turn.network_sandbox_policy =
+            codex_protocol::permissions::NetworkSandboxPolicy::from(turn.sandbox_policy.get());
         (Arc::new(session), Arc::new(turn))
     }
 

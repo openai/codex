@@ -39,7 +39,7 @@ pub(crate) async fn emit_metric_for_tool_read(invocation: &ToolInvocation, succe
 
     let success = if success { "true" } else { "false" };
     for kind in kinds {
-        invocation.turn.otel_manager.counter(
+        invocation.turn.session_telemetry.counter(
             MEMORIES_USAGE_METRIC,
             1,
             &[
