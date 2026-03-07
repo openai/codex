@@ -1,0 +1,6 @@
+---
+source: tui/src/multi_agents.rs
+expression: cell_to_text(&cell)
+---
+• Resumed Robie [explorer]
+  └ Interrupted

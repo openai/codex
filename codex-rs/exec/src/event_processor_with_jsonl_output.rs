@@ -815,6 +815,10 @@ impl From<CoreAgentStatus> for CollabAgentState {
                 status: CollabAgentStatus::Running,
                 message: None,
             },
+            CoreAgentStatus::Interrupted => Self {
+                status: CollabAgentStatus::Interrupted,
+                message: None,
+            },
             CoreAgentStatus::Completed(message) => Self {
                 status: CollabAgentStatus::Completed,
                 message,
