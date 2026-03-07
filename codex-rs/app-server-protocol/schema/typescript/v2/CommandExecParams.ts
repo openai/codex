@@ -12,11 +12,11 @@ import type { SandboxPolicy } from "./SandboxPolicy";
  * sent only after all `command/exec/outputDelta` notifications for that
  * connection have been emitted.
  */
-export type CommandExecParams = {
+export type CommandExecParams = { 
 /**
  * Command argv vector. Empty arrays are rejected.
  */
-command: Array<string>,
+command: Array<string>, 
 /**
  * Optional client-supplied, connection-scoped process id.
  *
@@ -25,56 +25,56 @@ command: Array<string>,
  * `command/exec/terminate` calls. When omitted, buffered execution gets an
  * internal id that is not exposed to the client.
  */
-processId?: string | null,
+processId?: string | null, 
 /**
  * Enable PTY mode.
  *
  * This implies `streamStdin` and `streamStdoutStderr`.
  */
-tty?: boolean,
+tty?: boolean, 
 /**
  * Allow follow-up `command/exec/write` requests to write stdin bytes.
  *
  * Requires a client-supplied `processId`.
  */
-streamStdin?: boolean,
+streamStdin?: boolean, 
 /**
  * Stream stdout/stderr via `command/exec/outputDelta` notifications.
  *
  * Streamed bytes are not duplicated into the final response and require a
  * client-supplied `processId`.
  */
-streamStdoutStderr?: boolean,
+streamStdoutStderr?: boolean, 
 /**
  * Optional per-stream stdout/stderr capture cap in bytes.
  *
  * When omitted, the server default applies. Cannot be combined with
  * `disableOutputCap`.
  */
-outputBytesCap?: number | null,
+outputBytesCap?: number | null, 
 /**
  * Disable stdout/stderr capture truncation for this request.
  *
  * Cannot be combined with `outputBytesCap`.
  */
-disableOutputCap?: boolean,
+disableOutputCap?: boolean, 
 /**
  * Disable the timeout entirely for this request.
  *
  * Cannot be combined with `timeoutMs`.
  */
-disableTimeout?: boolean,
+disableTimeout?: boolean, 
 /**
  * Optional timeout in milliseconds.
  *
  * When omitted, the server default applies. Cannot be combined with
  * `disableTimeout`.
  */
-timeoutMs?: number | null,
+timeoutMs?: number | null, 
 /**
  * Optional working directory. Defaults to the server cwd.
  */
-cwd?: string | null,
+cwd?: string | null, 
 /**
  * Optional environment overrides merged into the server-computed
  * environment.
@@ -82,12 +82,12 @@ cwd?: string | null,
  * Matching names override inherited values. Set a key to `null` to unset
  * an inherited variable.
  */
-env?: { [key in string]?: string | null } | null,
+env?: { [key in string]?: string | null } | null, 
 /**
  * Optional initial PTY size in character cells. Only valid when `tty` is
  * true.
  */
-size?: CommandExecTerminalSize | null,
+size?: CommandExecTerminalSize | null, 
 /**
  * Optional sandbox policy for this command.
  *
