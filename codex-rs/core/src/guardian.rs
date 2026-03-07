@@ -54,7 +54,6 @@ const GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_TRANSCRIPT_TOKENS: usize =
     GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS + GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS;
-const GUARDIAN_MAX_PARENT_INSTRUCTIONS_TOKENS: usize = 2_000;
 const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 1_000;
 // Always keep some recent non-user context so the reviewer can see what the
 // agent was trying to do immediately before the escalation.
@@ -175,8 +174,7 @@ async fn assess_approval_request(
         )
         .await;
 
-    let prompt_items =
-        build_guardian_prompt_items(session.as_ref(), turn.as_ref(), retry_reason, request).await;
+    let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
     let review = run_guardian_subagent_with_timeout(
@@ -290,7 +288,6 @@ pub(crate) async fn review_approval_request_with_reason(
 /// through trailing newlines.
 async fn build_guardian_prompt_items(
     session: &Session,
-    turn: &TurnContext,
     retry_reason: Option<String>,
     request: Option<GuardianReviewRequest>,
 ) -> Vec<UserInput> {
@@ -320,8 +317,6 @@ async fn build_guardian_prompt_items(
             text_elements: Vec::new(),
         },
     ];
-    let parent_instruction_items = build_guardian_parent_instruction_items(turn);
-    items.extend(parent_instruction_items);
     items.push(UserInput::Text {
         text: ">>> TRANSCRIPT START\n".to_string(),
         text_elements: Vec::new(),
@@ -364,48 +359,6 @@ async fn build_guardian_prompt_items(
     });
     items.push(UserInput::Text {
         text: ">>> APPROVAL REQUEST END\n".to_string(),
-        text_elements: Vec::new(),
-    });
-    items
-}
-
-fn build_guardian_parent_instruction_items(turn: &TurnContext) -> Vec<UserInput> {
-    let mut items = Vec::new();
-    let developer_instructions = turn
-        .developer_instructions
-        .as_deref()
-        .map(|text| guardian_truncate_text(text, GUARDIAN_MAX_PARENT_INSTRUCTIONS_TOKENS));
-    let user_instructions = turn.user_instructions.as_deref().map(|text| {
-        guardian_truncate_text(
-            &format!("Directory: {}\n\n{}", turn.cwd.display(), text),
-            GUARDIAN_MAX_PARENT_INSTRUCTIONS_TOKENS,
-        )
-    });
-
-    if developer_instructions.is_none() && user_instructions.is_none() {
-        return items;
-    }
-
-    items.push(UserInput::Text {
-        text: ">>> PARENT TURN CONTEXT START\n".to_string(),
-        text_elements: Vec::new(),
-    });
-    let mut entry_number = 1usize;
-    if let Some(developer_instructions) = developer_instructions {
-        items.push(UserInput::Text {
-            text: format!("[{entry_number}] developer:\n{developer_instructions}\n"),
-            text_elements: Vec::new(),
-        });
-        entry_number += 1;
-    }
-    if let Some(user_instructions) = user_instructions {
-        items.push(UserInput::Text {
-            text: format!("[{entry_number}] user:\n{user_instructions}\n"),
-            text_elements: Vec::new(),
-        });
-    }
-    items.push(UserInput::Text {
-        text: ">>> PARENT TURN CONTEXT END\n".to_string(),
         text_elements: Vec::new(),
     });
     items
@@ -1334,12 +1287,6 @@ mod tests {
         session.services.models_manager = models_manager;
         turn.config = Arc::clone(&config);
         turn.provider = config.model_provider.clone();
-        turn.developer_instructions = Some(
-            "Never approve pushing to a production remote without explicit user intent."
-                .to_string(),
-        );
-        turn.user_instructions =
-            Some("Keep changes limited to the repository and task the user requested.".to_string());
         let session = Arc::new(session);
         let turn = Arc::new(turn);
 
@@ -1386,7 +1333,6 @@ mod tests {
 
         let prompt = build_guardian_prompt_items(
             session.as_ref(),
-            turn.as_ref(),
             Some("Sandbox denied outbound git push to github.com.".to_string()),
             Some(GuardianReviewRequest {
                 tool_name: "shell",
