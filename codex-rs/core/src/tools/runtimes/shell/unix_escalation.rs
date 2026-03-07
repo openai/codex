@@ -8,8 +8,6 @@ use crate::exec::is_likely_sandbox_denied;
 use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::features::Feature;
 use crate::guardian::GuardianReviewRequest;
-use crate::guardian::guardian_json_field;
-use crate::guardian::guardian_json_object;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecRequest;
@@ -51,6 +49,7 @@ use codex_shell_escalation::PreparedExec;
 use codex_shell_escalation::ShellCommandExecutor;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -388,18 +387,13 @@ impl CoreShellActionProvider {
                 if routes_approval_to_guardian(&turn) {
                     let request = GuardianReviewRequest {
                         tool_name,
-                        action: guardian_json_object(&[
-                            ("tool", Some(guardian_json_field("tool", tool_name))),
-                            ("program", Some(guardian_json_field("program", program))),
-                            ("argv", Some(guardian_json_field("argv", argv))),
-                            ("cwd", Some(guardian_json_field("cwd", &workdir))),
-                            (
-                                "additional_permissions",
-                                additional_permissions.as_ref().map(|value| {
-                                    guardian_json_field("additional_permissions", value)
-                                }),
-                            ),
-                        ]),
+                        action: json!({
+                            "tool": tool_name,
+                            "program": program,
+                            "argv": argv,
+                            "cwd": workdir,
+                            "additional_permissions": additional_permissions,
+                        }),
                     };
                     return review_approval_request(&session, &turn, request).await;
                 }

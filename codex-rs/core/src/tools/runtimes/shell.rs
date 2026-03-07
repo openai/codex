@@ -12,8 +12,6 @@ use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
 use crate::guardian::GuardianReviewRequest;
-use crate::guardian::guardian_json_field;
-use crate::guardian::guardian_json_object;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
@@ -40,6 +38,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -155,32 +154,25 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
+                let mut action = json!({
+                    "tool": "shell",
+                    "command": command,
+                    "cwd": cwd,
+                    "sandbox_permissions": req.sandbox_permissions,
+                    "additional_permissions": req.additional_permissions,
+                    "justification": reason,
+                });
+                if let Some(action) = action.as_object_mut() {
+                    if req.additional_permissions.is_none() {
+                        action.remove("additional_permissions");
+                    }
+                    if reason.is_none() {
+                        action.remove("justification");
+                    }
+                }
                 let request = GuardianReviewRequest {
                     tool_name: "shell",
-                    action: guardian_json_object(&[
-                        ("tool", Some(guardian_json_field("tool", "shell"))),
-                        ("command", Some(guardian_json_field("command", &command))),
-                        ("cwd", Some(guardian_json_field("cwd", &cwd))),
-                        (
-                            "sandbox_permissions",
-                            Some(guardian_json_field(
-                                "sandbox_permissions",
-                                req.sandbox_permissions,
-                            )),
-                        ),
-                        (
-                            "additional_permissions",
-                            req.additional_permissions
-                                .as_ref()
-                                .map(|value| guardian_json_field("additional_permissions", value)),
-                        ),
-                        (
-                            "justification",
-                            reason
-                                .as_ref()
-                                .map(|value| guardian_json_field("justification", value)),
-                        ),
-                    ]),
+                    action,
                 };
                 return review_approval_request(session, turn, request).await;
             }

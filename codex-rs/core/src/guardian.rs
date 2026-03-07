@@ -850,35 +850,6 @@ fn format_guardian_json_value_at_indent(value: &Value, indent: usize) -> String 
     }
 }
 
-pub(crate) fn guardian_json_field<T: Serialize>(field_name: &'static str, value: T) -> Value {
-    match serde_json::to_value(value) {
-        Ok(value) => value,
-        Err(err) => {
-            tracing::warn!(
-                field_name,
-                ?err,
-                "guardian action field serialization failed"
-            );
-            Value::String(format!(
-                "<guardian_serialization_failed field=\"{field_name}\" />"
-            ))
-        }
-    }
-}
-
-pub(crate) fn guardian_json_object(fields: &[(&str, Option<Value>)]) -> Value {
-    Value::Object(
-        fields
-            .iter()
-            .filter_map(|(key, value)| {
-                value
-                    .as_ref()
-                    .map(|value| ((*key).to_string(), value.clone()))
-            })
-            .collect(),
-    )
-}
-
 fn guardian_truncate_text(content: &str, token_cap: usize) -> String {
     if content.is_empty() {
         return String::new();
@@ -1185,25 +1156,13 @@ mod tests {
 
     #[test]
     fn format_guardian_action_pretty_truncates_large_string_fields() {
-        let action = guardian_json_object(&[
-            ("tool", Some(guardian_json_field("tool", "apply_patch"))),
-            (
-                "cwd",
-                Some(guardian_json_field("cwd", PathBuf::from("/tmp"))),
-            ),
-            (
-                "files",
-                Some(guardian_json_field("files", Vec::<String>::new())),
-            ),
-            (
-                "change_count",
-                Some(guardian_json_field("change_count", 1usize)),
-            ),
-            (
-                "patch",
-                Some(guardian_json_field("patch", "line\n".repeat(2_000))),
-            ),
-        ]);
+        let action = serde_json::json!({
+            "tool": "apply_patch",
+            "cwd": PathBuf::from("/tmp"),
+            "files": Vec::<String>::new(),
+            "change_count": 1usize,
+            "patch": "line\n".repeat(2_000),
+        });
 
         let rendered = format_guardian_action_pretty(&action);
 
@@ -1368,42 +1327,18 @@ mod tests {
             Some("Sandbox denied outbound git push to github.com.".to_string()),
             Some(GuardianReviewRequest {
                 tool_name: "shell",
-                action: guardian_json_object(&[
-                    ("tool", Some(guardian_json_field("tool", "shell"))),
-                    (
-                        "command",
-                        Some(guardian_json_field(
-                            "command",
-                            vec![
-                                "git".to_string(),
-                                "push".to_string(),
-                                "origin".to_string(),
-                                "guardian-approval-mvp".to_string(),
-                            ],
-                        )),
-                    ),
-                    (
-                        "cwd",
-                        Some(guardian_json_field(
-                            "cwd",
-                            PathBuf::from("/repo/codex-rs/core"),
-                        )),
-                    ),
-                    (
-                        "sandbox_permissions",
-                        Some(guardian_json_field(
-                            "sandbox_permissions",
-                            crate::sandboxing::SandboxPermissions::UseDefault,
-                        )),
-                    ),
-                    (
-                        "justification",
-                        Some(guardian_json_field(
-                            "justification",
-                            "Need to push the reviewed docs fix to the repo remote.",
-                        )),
-                    ),
-                ]),
+                action: serde_json::json!({
+                    "tool": "shell",
+                    "command": [
+                        "git",
+                        "push",
+                        "origin",
+                        "guardian-approval-mvp"
+                    ],
+                    "cwd": "/repo/codex-rs/core",
+                    "sandbox_permissions": crate::sandboxing::SandboxPermissions::UseDefault,
+                    "justification": "Need to push the reviewed docs fix to the repo remote.",
+                }),
             }),
         )
         .await;

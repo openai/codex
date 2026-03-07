@@ -6,8 +6,6 @@
 //! `SandboxAttempt` with a minimal environment.
 use crate::exec::ExecToolCallOutput;
 use crate::guardian::GuardianReviewRequest;
-use crate::guardian::guardian_json_field;
-use crate::guardian::guardian_json_object;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::CommandSpec;
@@ -30,6 +28,7 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -54,19 +53,13 @@ impl ApplyPatchRuntime {
     fn build_guardian_review_request(req: &ApplyPatchRequest) -> GuardianReviewRequest {
         GuardianReviewRequest {
             tool_name: "apply_patch",
-            action: guardian_json_object(&[
-                ("tool", Some(guardian_json_field("tool", "apply_patch"))),
-                ("cwd", Some(guardian_json_field("cwd", &req.action.cwd))),
-                ("files", Some(guardian_json_field("files", &req.file_paths))),
-                (
-                    "change_count",
-                    Some(guardian_json_field("change_count", req.changes.len())),
-                ),
-                (
-                    "patch",
-                    Some(guardian_json_field("patch", &req.action.patch)),
-                ),
-            ]),
+            action: json!({
+                "tool": "apply_patch",
+                "cwd": req.action.cwd,
+                "files": req.file_paths,
+                "change_count": req.changes.len(),
+                "patch": req.action.patch,
+            }),
         }
     }
 
@@ -266,19 +259,13 @@ mod tests {
             guardian_request,
             GuardianReviewRequest {
                 tool_name: "apply_patch",
-                action: guardian_json_object(&[
-                    ("tool", Some(guardian_json_field("tool", "apply_patch"))),
-                    ("cwd", Some(guardian_json_field("cwd", &expected_cwd))),
-                    (
-                        "files",
-                        Some(guardian_json_field("files", &request.file_paths))
-                    ),
-                    (
-                        "change_count",
-                        Some(guardian_json_field("change_count", 1usize))
-                    ),
-                    ("patch", Some(guardian_json_field("patch", &expected_patch))),
-                ]),
+                action: json!({
+                    "tool": "apply_patch",
+                    "cwd": expected_cwd,
+                    "files": request.file_paths,
+                    "change_count": 1usize,
+                    "patch": expected_patch,
+                }),
             }
         );
     }

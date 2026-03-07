@@ -1,8 +1,6 @@
 use crate::codex::Session;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
 use crate::guardian::GuardianReviewRequest;
-use crate::guardian::guardian_json_field;
-use crate::guardian::guardian_json_object;
 use crate::guardian::review_approval_request_with_reason;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::denied_network_policy_message;
@@ -23,6 +21,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::WarningEvent;
 use indexmap::IndexMap;
+use serde_json::json;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -352,16 +351,13 @@ impl NetworkApprovalService {
                 &turn_context,
                 GuardianReviewRequest {
                     tool_name: "network_access",
-                    action: guardian_json_object(&[
-                        ("tool", Some(guardian_json_field("tool", "network_access"))),
-                        ("target", Some(guardian_json_field("target", &target))),
-                        ("host", Some(guardian_json_field("host", &request.host))),
-                        (
-                            "protocol",
-                            Some(guardian_json_field("protocol", key.protocol)),
-                        ),
-                        ("port", Some(guardian_json_field("port", key.port))),
-                    ]),
+                    action: json!({
+                        "tool": "network_access",
+                        "target": target,
+                        "host": request.host,
+                        "protocol": key.protocol,
+                        "port": key.port,
+                    }),
                 },
                 Some(policy_denial_message.clone()),
             )
