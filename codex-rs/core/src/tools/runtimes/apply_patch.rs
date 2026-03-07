@@ -58,7 +58,6 @@ impl ApplyPatchRuntime {
                 "files": req.file_paths.clone(),
                 "change_count": req.changes.len(),
                 "patch": req.action.patch.clone(),
-                "changes": req.changes.clone(),
             }),
         }
     }
@@ -229,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn guardian_review_request_includes_full_patch_and_changes() {
+    fn guardian_review_request_includes_full_patch_without_duplicate_changes() {
         let path = std::env::temp_dir().join("guardian-apply-patch-test.txt");
         let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
         let expected_cwd = action.cwd.clone();
@@ -264,7 +263,6 @@ mod tests {
                 "files": request.file_paths,
                 "change_count": 1,
                 "patch": expected_patch,
-                "changes": request.changes,
             })
         );
     }

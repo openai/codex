@@ -543,6 +543,11 @@ async fn run_guardian_subagent(
         Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
         None => None,
     };
+    let session_approved_hosts = session
+        .services
+        .network_approval
+        .session_approved_host_patterns()
+        .await;
     let available_models = session
         .services
         .models_manager
@@ -579,6 +584,7 @@ async fn run_guardian_subagent(
     let guardian_config = build_guardian_subagent_config(
         turn.config.as_ref(),
         live_network_config,
+        session_approved_hosts.as_slice(),
         guardian_model.as_str(),
         guardian_reasoning_effort,
     )?;
@@ -626,10 +632,12 @@ async fn run_guardian_subagent(
 /// cloning the parent config preserves any already-configured managed network
 /// proxy / allowlist. When the parent session has edited that proxy state
 /// in-memory, we refresh from the live runtime config so the guardian sees the
-/// same current allowlist as the parent turn.
+/// same current allowlist as the parent turn, including session-scoped host
+/// approvals.
 fn build_guardian_subagent_config(
     parent_config: &Config,
     live_network_config: Option<codex_network_proxy::NetworkProxyConfig>,
+    session_approved_hosts: &[String],
     active_model: &str,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> anyhow::Result<Config> {
@@ -648,6 +656,15 @@ fn build_guardian_subagent_config(
             .network
             .as_ref()
             .map(|network| network.value.clone());
+        let mut live_network_config = live_network_config;
+        for host in session_approved_hosts {
+            if !live_network_config.network.allowed_domains.contains(host) {
+                live_network_config
+                    .network
+                    .allowed_domains
+                    .push(host.clone());
+            }
+        }
         guardian_config.permissions.network = Some(NetworkProxySpec::from_config_and_constraints(
             live_network_config,
             network_constraints,
@@ -982,6 +999,7 @@ mod tests {
         let guardian_config = build_guardian_subagent_config(
             &parent_config,
             None,
+            &[],
             "parent-active-model",
             Some(codex_protocol::openai_models::ReasoningEffort::Low),
         )
@@ -1028,6 +1046,7 @@ mod tests {
         let guardian_config = build_guardian_subagent_config(
             &parent_config,
             Some(live_network.clone()),
+            &[],
             "active-model",
             None,
         )
@@ -1060,7 +1079,7 @@ mod tests {
         )
         .expect("managed features");
 
-        let err = build_guardian_subagent_config(&parent_config, None, "active-model", None)
+        let err = build_guardian_subagent_config(&parent_config, None, &[], "active-model", None)
             .expect_err("guardian config should fail when collab is pinned on");
 
         assert!(
@@ -1075,9 +1094,52 @@ mod tests {
         parent_config.model = Some("configured-model".to_string());
 
         let guardian_config =
-            build_guardian_subagent_config(&parent_config, None, "active-model", None)
+            build_guardian_subagent_config(&parent_config, None, &[], "active-model", None)
                 .expect("guardian config");
 
         assert_eq!(guardian_config.model, Some("active-model".to_string()));
+    }
+
+    #[test]
+    fn guardian_subagent_config_preserves_session_approved_hosts_in_live_network_proxy() {
+        let mut parent_config = test_config();
+        let mut live_network = NetworkProxyConfig::default();
+        live_network.network.enabled = true;
+        live_network.network.allowed_domains = vec!["github.com".to_string()];
+        parent_config.permissions.network = Some(
+            NetworkProxySpec::from_config_and_constraints(
+                live_network.clone(),
+                None,
+                parent_config.permissions.sandbox_policy.get(),
+            )
+            .expect("parent network proxy spec"),
+        );
+
+        let guardian_config = build_guardian_subagent_config(
+            &parent_config,
+            Some(live_network.clone()),
+            &["api.example.com".to_string(), "github.com".to_string()],
+            "active-model",
+            None,
+        )
+        .expect("guardian config");
+
+        let mut expected_live_network = live_network;
+        expected_live_network
+            .network
+            .allowed_domains
+            .push("api.example.com".to_string());
+
+        assert_eq!(
+            guardian_config.permissions.network,
+            Some(
+                NetworkProxySpec::from_config_and_constraints(
+                    expected_live_network,
+                    None,
+                    &SandboxPolicy::new_read_only_policy(),
+                )
+                .expect("expected network proxy spec")
+            )
+        );
     }
 }

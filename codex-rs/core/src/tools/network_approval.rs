@@ -184,6 +184,17 @@ impl Default for NetworkApprovalService {
 }
 
 impl NetworkApprovalService {
+    pub(crate) async fn session_approved_host_patterns(&self) -> Vec<String> {
+        let approved_hosts = self.session_approved_hosts.lock().await;
+        let mut hosts = approved_hosts
+            .iter()
+            .map(|key| key.host.clone())
+            .collect::<Vec<_>>();
+        hosts.sort();
+        hosts.dedup();
+        hosts
+    }
+
     async fn register_call(&self, registration_id: String) {
         let mut active_calls = self.active_calls.lock().await;
         let key = registration_id.clone();
