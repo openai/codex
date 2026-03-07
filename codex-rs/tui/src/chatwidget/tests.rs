@@ -4387,21 +4387,35 @@ async fn manual_interrupt_restores_pending_steers_to_composer() {
 }
 
 #[tokio::test]
-async fn esc_interrupt_sends_pending_steer_immediately_and_keeps_existing_draft() {
+async fn esc_interrupt_sends_all_pending_steers_immediately_and_keeps_existing_draft() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     chat.on_agent_message_delta("Final answer line\n".to_string());
 
     chat.bottom_pane
-        .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
+        .set_composer_text("first pending steer".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "first pending steer".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    chat.bottom_pane
+        .set_composer_text("second pending steer".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
-                text: "pending steer".to_string(),
+                text: "second pending steer".to_string(),
                 text_elements: Vec::new(),
             }]
         ),
@@ -4423,11 +4437,11 @@ async fn esc_interrupt_sends_pending_steer_immediately_and_keeps_existing_draft(
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
-                text: "pending steer".to_string(),
+                text: "first pending steer\nsecond pending steer".to_string(),
                 text_elements: Vec::new(),
             }]
         ),
-        other => panic!("expected queued pending steer to submit, got {other:?}"),
+        other => panic!("expected merged pending steers to submit, got {other:?}"),
     }
 
     assert!(chat.pending_steers.is_empty());
@@ -4442,7 +4456,12 @@ async fn esc_interrupt_sends_pending_steer_immediately_and_keeps_existing_draft(
     assert!(
         inserted
             .iter()
-            .any(|cell| lines_to_single_string(cell).contains("pending steer"))
+            .any(|cell| lines_to_single_string(cell).contains("first pending steer"))
+    );
+    assert!(
+        inserted
+            .iter()
+            .any(|cell| lines_to_single_string(cell).contains("second pending steer"))
     );
 }
 

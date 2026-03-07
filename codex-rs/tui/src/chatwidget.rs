@@ -630,8 +630,8 @@ pub(crate) struct ChatWidget {
     // The bottom pane shows these above queued drafts until core records the
     // corresponding user message item.
     pending_steers: VecDeque<PendingSteer>,
-    // When set, the next interrupt should turn pending steers into fresh
-    // queued inputs instead of restoring them into the composer.
+    // When set, the next interrupt should resubmit all pending steers as one
+    // fresh user turn instead of restoring them into the composer.
     submit_pending_steers_after_interrupt: bool,
     /// Terminal-appropriate keybinding for popping the most-recently queued
     /// message back into the composer.  Determined once at construction time via
@@ -923,6 +923,45 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         text_elements: rebuilt_elements,
         mention_bindings,
     }
+}
+
+fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
+    let mut combined = UserMessage {
+        text: String::new(),
+        text_elements: Vec::new(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        mention_bindings: Vec::new(),
+    };
+    let total_remote_images = messages
+        .iter()
+        .map(|message| message.remote_image_urls.len())
+        .sum::<usize>();
+    let mut next_image_label = total_remote_images + 1;
+
+    for (idx, message) in messages.into_iter().enumerate() {
+        if idx > 0 {
+            combined.text.push('\n');
+        }
+        let UserMessage {
+            text,
+            text_elements,
+            local_images,
+            remote_image_urls,
+            mention_bindings,
+        } = remap_placeholders_for_message(message, &mut next_image_label);
+        append_text_with_rebased_elements(
+            &mut combined.text,
+            &mut combined.text_elements,
+            &text,
+            text_elements,
+        );
+        combined.local_images.extend(local_images);
+        combined.remote_image_urls.extend(remote_image_urls);
+        combined.mention_bindings.extend(mention_bindings);
+    }
+
+    combined
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1994,34 +2033,23 @@ impl ChatWidget {
         // still tracked here must be restored locally instead of waiting for a later commit.
         let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
         self.submit_pending_steers_after_interrupt = false;
-        if send_pending_steers_immediately && self.move_pending_steers_to_queue_front() {
-            self.maybe_send_next_queued_input();
+        if send_pending_steers_immediately {
+            let pending_steers: Vec<UserMessage> = self
+                .pending_steers
+                .drain(..)
+                .map(|pending| pending.user_message)
+                .collect();
+            if !pending_steers.is_empty() {
+                self.submit_user_message(merge_user_messages(pending_steers));
+            } else if let Some(combined) = self.drain_pending_messages_for_restore() {
+                self.restore_user_message_to_composer(combined);
+            }
         } else if let Some(combined) = self.drain_pending_messages_for_restore() {
             self.restore_user_message_to_composer(combined);
         }
         self.refresh_pending_input_preview();
 
         self.request_redraw();
-    }
-
-    /// Move uncommitted pending steers ahead of older queued drafts.
-    ///
-    /// This lets Esc turn "submit after next tool call" steers into normal
-    /// queued follow-ups: the first one starts immediately after interrupt and
-    /// the rest preserve FIFO order.
-    fn move_pending_steers_to_queue_front(&mut self) -> bool {
-        if self.pending_steers.is_empty() {
-            return false;
-        }
-
-        let mut pending_inputs: VecDeque<UserMessage> = self
-            .pending_steers
-            .drain(..)
-            .map(|pending| pending.user_message)
-            .collect();
-        pending_inputs.append(&mut self.queued_user_messages);
-        self.queued_user_messages = pending_inputs;
-        true
     }
 
     /// Merge pending steers, queued drafts, and the current composer state into a single message.
@@ -2057,42 +2085,7 @@ impl ChatWidget {
             to_merge.push(existing_message);
         }
 
-        let mut combined = UserMessage {
-            text: String::new(),
-            text_elements: Vec::new(),
-            local_images: Vec::new(),
-            remote_image_urls: Vec::new(),
-            mention_bindings: Vec::new(),
-        };
-        let total_remote_images = to_merge
-            .iter()
-            .map(|message| message.remote_image_urls.len())
-            .sum::<usize>();
-        let mut next_image_label = total_remote_images + 1;
-
-        for (idx, message) in to_merge.into_iter().enumerate() {
-            if idx > 0 {
-                combined.text.push('\n');
-            }
-            let UserMessage {
-                text,
-                text_elements,
-                local_images,
-                remote_image_urls,
-                mention_bindings,
-            } = remap_placeholders_for_message(message, &mut next_image_label);
-            append_text_with_rebased_elements(
-                &mut combined.text,
-                &mut combined.text_elements,
-                &text,
-                text_elements,
-            );
-            combined.local_images.extend(local_images);
-            combined.remote_image_urls.extend(remote_image_urls);
-            combined.mention_bindings.extend(mention_bindings);
-        }
-
-        Some(combined)
+        Some(merge_user_messages(to_merge))
     }
 
     fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
