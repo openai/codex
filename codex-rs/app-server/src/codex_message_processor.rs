@@ -2364,18 +2364,16 @@ impl CodexMessageProcessor {
                     "ephemeral thread does not support metadata updates: {thread_uuid}"
                 )));
             };
-            if thread.rollout_path().is_some() {
-                reconcile_rollout(
-                    Some(state_db_ctx),
-                    rollout_path.as_path(),
-                    self.config.model_provider_id.as_str(),
-                    None,
-                    &[],
-                    None,
-                    None,
-                )
-                .await;
-            }
+            reconcile_rollout(
+                Some(state_db_ctx),
+                rollout_path.as_path(),
+                self.config.model_provider_id.as_str(),
+                None,
+                &[],
+                None,
+                None,
+            )
+            .await;
 
             match state_db_ctx.get_thread(thread_uuid).await {
                 Ok(Some(_)) => return Ok(()),
