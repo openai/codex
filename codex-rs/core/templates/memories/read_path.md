@@ -33,6 +33,7 @@ Memory layout (general -> specific):
 Quick memory pass (when applicable):
 
 1. Skim the MEMORY_SUMMARY below and extract task-relevant keywords.
+   Pay special attention to repo names, git branches, worktree names, and checkout-specific paths.
 2. Search {{ base_path }}/MEMORY.md using those keywords.
 3. Only if MEMORY.md directly points to rollout summaries/skills, open the 1-2
    most relevant files under {{ base_path }}/rollout_summaries/ or
@@ -47,6 +48,22 @@ Quick-pass budget:
 
 During execution: if you hit repeated errors, confusing behavior, or suspect
 relevant prior context, redo the quick memory pass.
+
+Branch / repo matching rules:
+
+- Treat repo and git branch applicability as part of memory relevance, not background metadata.
+- Before relying on a memory for task planning, compare the memory's repo / branch hints against
+  the current environment.
+- Strong match: same repo and same branch, or the memory explicitly says it is branch-agnostic.
+- Weak match: same repo but different branch. Use only if the guidance is clearly generic; otherwise
+  call out the mismatch and prefer current checkout evidence.
+- Mismatch: different repo, or branch-sensitive memory from a different branch. Do not let it override
+  the current checkout state.
+- If the current task is about diffs, local state, merge status, or "compare against the checkout",
+  prefer current checkout evidence over memories from other threads unless those memories explicitly
+  match the same repo / branch.
+- When branch / repo metadata is missing, treat the memory as lower-confidence and verify with the
+  current checkout before reusing it for environment-specific reasoning.
 
 How to decide whether to verify memory:
 

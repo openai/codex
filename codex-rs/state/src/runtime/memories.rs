@@ -1,4 +1,3 @@
-use super::threads::push_thread_filters;
 use super::threads::push_thread_order_and_limit;
 use super::*;
 use crate::model::Phase2InputSelection;
@@ -191,15 +190,20 @@ LEFT JOIN jobs
    AND jobs.job_key = threads.id
             "#,
         );
-        push_thread_filters(
-            &mut builder,
-            false,
-            allowed_sources,
-            None,
-            None,
-            SortKey::UpdatedAt,
-            None,
-        );
+        // Phase-1 startup should not depend on preview extraction quality.
+        // Older or partially parsed rollouts can legitimately miss
+        // `first_user_message`, and gating on that field prevents those
+        // threads from ever generating memories.
+        builder.push(" WHERE 1 = 1");
+        builder.push(" AND threads.archived = 0");
+        if !allowed_sources.is_empty() {
+            builder.push(" AND threads.source IN (");
+            let mut separated = builder.separated(", ");
+            for source in allowed_sources {
+                separated.push_bind(source);
+            }
+            separated.push_unseparated(")");
+        }
         builder.push(" AND threads.memory_mode = 'enabled'");
         builder
             .push(" AND id != ")
@@ -1779,6 +1783,65 @@ mod tests {
 
         assert_eq!(claims.len(), 1);
         assert_eq!(claims[0].thread.id, enabled_thread_id);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn claim_stage1_jobs_allows_threads_without_first_user_message_preview() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let now = Utc::now();
+        let eligible_at = now - Duration::hours(13);
+
+        let current_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
+        let previewless_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("previewless thread id");
+
+        let mut current =
+            test_thread_metadata(&codex_home, current_thread_id, codex_home.join("current"));
+        current.created_at = now;
+        current.updated_at = now;
+        runtime
+            .upsert_thread(&current)
+            .await
+            .expect("upsert current thread");
+
+        let mut previewless = test_thread_metadata(
+            &codex_home,
+            previewless_thread_id,
+            codex_home.join("previewless"),
+        );
+        previewless.created_at = eligible_at;
+        previewless.updated_at = eligible_at;
+        previewless.first_user_message = None;
+        runtime
+            .upsert_thread(&previewless)
+            .await
+            .expect("upsert previewless thread");
+
+        let allowed_sources = vec!["cli".to_string()];
+        let claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 10,
+                    max_claimed: 10,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3600,
+                },
+            )
+            .await
+            .expect("claim stage1 startup jobs");
+
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].thread.id, previewless_thread_id);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

@@ -364,7 +364,7 @@ task_outcome: success
         rollout_slug: Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345".to_string()),
         rollout_path: PathBuf::from("/tmp/rollout-200.jsonl"),
         cwd: PathBuf::from("/tmp/workspace"),
-        git_branch: None,
+        git_branch: Some("feature/memory-branch".to_string()),
         generated_at: Utc.timestamp_opt(201, 0).single().expect("timestamp"),
     }];
 
@@ -406,6 +406,7 @@ task_outcome: success
     assert!(raw_memories.contains(&format!(
         "rollout_summary_file: {canonical_rollout_summary_file}"
     )));
+    assert!(raw_memories.contains("git_branch: feature/memory-branch"));
     assert!(raw_memories.contains("description: Added a migration test"));
     assert!(raw_memories.contains("### Task 1: migration-test"));
     assert!(raw_memories.contains("task: add-migration-test"));
