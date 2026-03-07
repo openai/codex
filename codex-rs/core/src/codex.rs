@@ -3189,17 +3189,21 @@ impl Session {
         {
             developer_sections.push(model_switch_message.into_text());
         }
-        developer_sections.push(
-            DeveloperInstructions::from_policy(
-                turn_context.sandbox_policy.get(),
-                turn_context.approval_policy.value(),
-                turn_context.features.enabled(Feature::GuardianApproval),
-                self.services.exec_policy.current().as_ref(),
-                &turn_context.cwd,
-                turn_context.features.enabled(Feature::RequestPermissions),
-            )
-            .into_text(),
-        );
+        if is_guardian_subagent {
+            developer_sections.push(crate::guardian::guardian_execution_instructions().to_string());
+        } else {
+            developer_sections.push(
+                DeveloperInstructions::from_policy(
+                    turn_context.sandbox_policy.get(),
+                    turn_context.approval_policy.value(),
+                    turn_context.features.enabled(Feature::GuardianApproval),
+                    self.services.exec_policy.current().as_ref(),
+                    &turn_context.cwd,
+                    turn_context.features.enabled(Feature::RequestPermissions),
+                )
+                .into_text(),
+            );
+        }
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             developer_sections.push(developer_instructions.to_string());
         }

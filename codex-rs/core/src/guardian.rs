@@ -1127,6 +1127,10 @@ fn guardian_output_contract_prompt() -> &'static str {
 }"#
 }
 
+pub(crate) fn guardian_execution_instructions() -> &'static str {
+    "You are running in a read-only sandbox with `approval_policy = never`. You cannot request additional permissions or approvals from the user. Use available read-only checks to inspect local state and gather context when needed, including allowed network access that is already available in this session. Do not mutate files, change external state, or attempt side effects while investigating."
+}
+
 /// Guardian policy prompt.
 ///
 /// Keep the prompt in a dedicated markdown file so reviewers can audit prompt
