@@ -92,6 +92,13 @@ impl HostApprovalKey {
     }
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct SessionApprovedHost {
+    pub(crate) host: String,
+    pub(crate) protocol: &'static str,
+    pub(crate) port: u16,
+}
+
 fn protocol_key_label(protocol: NetworkApprovalProtocol) -> &'static str {
     match protocol {
         NetworkApprovalProtocol::Http => "http",
@@ -185,15 +192,27 @@ impl Default for NetworkApprovalService {
 }
 
 impl NetworkApprovalService {
-    pub(crate) async fn session_approved_host_patterns(&self) -> Vec<String> {
+    pub(crate) async fn session_approved_hosts(&self) -> Vec<SessionApprovedHost> {
         let approved_hosts = self.session_approved_hosts.lock().await;
         let mut hosts = approved_hosts
             .iter()
-            .map(|key| key.host.clone())
+            .map(|key| SessionApprovedHost {
+                host: key.host.clone(),
+                protocol: key.protocol,
+                port: key.port,
+            })
             .collect::<Vec<_>>();
         hosts.sort();
-        hosts.dedup();
         hosts
+    }
+
+    pub(crate) async fn seed_session_approved_hosts(&self, hosts: &[SessionApprovedHost]) {
+        let mut approved_hosts = self.session_approved_hosts.lock().await;
+        approved_hosts.extend(hosts.iter().map(|host| HostApprovalKey {
+            host: host.host.clone(),
+            protocol: host.protocol,
+            port: host.port,
+        }));
     }
 
     async fn register_call(&self, registration_id: String) {
@@ -642,6 +661,58 @@ mod tests {
         assert!(first_is_owner);
         assert!(second_is_owner);
         assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn session_approved_hosts_preserve_protocol_and_port_scope() {
+        let source = NetworkApprovalService::default();
+        source
+            .seed_session_approved_hosts(&[
+                SessionApprovedHost {
+                    host: "example.com".to_string(),
+                    protocol: "https",
+                    port: 443,
+                },
+                SessionApprovedHost {
+                    host: "example.com".to_string(),
+                    protocol: "https",
+                    port: 8443,
+                },
+                SessionApprovedHost {
+                    host: "example.com".to_string(),
+                    protocol: "http",
+                    port: 80,
+                },
+            ])
+            .await;
+
+        let exported = source.session_approved_hosts().await;
+
+        assert_eq!(
+            exported,
+            vec![
+                SessionApprovedHost {
+                    host: "example.com".to_string(),
+                    protocol: "http",
+                    port: 80,
+                },
+                SessionApprovedHost {
+                    host: "example.com".to_string(),
+                    protocol: "https",
+                    port: 443,
+                },
+                SessionApprovedHost {
+                    host: "example.com".to_string(),
+                    protocol: "https",
+                    port: 8443,
+                },
+            ]
+        );
+
+        let seeded = NetworkApprovalService::default();
+        seeded.seed_session_approved_hosts(&exported).await;
+
+        assert_eq!(seeded.session_approved_hosts().await, exported);
     }
 
     #[tokio::test]
