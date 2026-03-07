@@ -53,6 +53,11 @@
           "format": "uint",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "use_function_call_inbox": {
+          "default": false,
+          "description": "Deliver inbound agent messages to non-subagent threads as a synthetic function_call/function_call_output pair instead of plain user input.",
+          "type": "boolean"
         }
       },
       "type": "object"

@@ -371,6 +371,10 @@ pub struct Config {
     pub agent_max_threads: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
+    /// When true, inbound agent messages to non-subagent threads are delivered
+    /// as a synthetic function_call/function_call_output pair instead of plain
+    /// user input.
+    pub agent_use_function_call_inbox: bool,
 
     /// Maximum nesting depth allowed for spawned agent threads.
     pub agent_max_depth: i32,
@@ -1406,6 +1410,10 @@ pub struct AgentsToml {
     /// Default maximum runtime in seconds for agent job workers.
     #[schemars(range(min = 1))]
     pub job_max_runtime_seconds: Option<u64>,
+    /// Deliver inbound agent messages to non-subagent threads as a synthetic
+    /// function_call/function_call_output pair instead of plain user input.
+    #[serde(default)]
+    pub use_function_call_inbox: bool,
 
     /// User-defined role declarations keyed by role name.
     ///
@@ -2123,6 +2131,10 @@ impl Config {
             .as_ref()
             .and_then(|agents| agents.job_max_runtime_seconds)
             .or(DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS);
+        let agent_use_function_call_inbox = cfg
+            .agents
+            .as_ref()
+            .is_some_and(|agents| agents.use_function_call_inbox);
         if agent_job_max_runtime_seconds == Some(0) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -2398,6 +2410,7 @@ impl Config {
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
+            agent_use_function_call_inbox,
             codex_home,
             sqlite_home,
             log_dir,
