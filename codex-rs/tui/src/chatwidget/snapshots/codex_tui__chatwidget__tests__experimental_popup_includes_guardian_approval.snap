@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 6952
 expression: popup
 ---
   Experimental features
