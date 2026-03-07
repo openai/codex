@@ -129,6 +129,8 @@ impl CodexThread {
     }
 
     /// Return the rollout path for this thread, if any.
+    ///
+    /// Fresh persistent threads may reserve a rollout path before the file is materialized.
     pub fn rollout_path(&self) -> Option<PathBuf> {
         self.rollout_path.clone()
     }

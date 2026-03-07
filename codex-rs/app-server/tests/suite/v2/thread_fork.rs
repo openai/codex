@@ -3,6 +3,7 @@ use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -163,7 +164,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_fork_creates_empty_loaded_thread() -> Result<()> {
+async fn thread_fork_rejects_unmaterialized_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -184,24 +185,25 @@ async fn thread_fork_creates_empty_loaded_thread() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    let thread_id = thread.id.clone();
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
-            thread_id,
+            thread_id: thread.id,
             ..Default::default()
         })
         .await?;
-    let fork_resp: JSONRPCResponse = timeout(
+    let fork_err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
     )
     .await??;
-    let ThreadForkResponse { thread: forked, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
-
-    assert_ne!(forked.id, thread.id);
-    assert!(forked.preview.is_empty());
-    assert_eq!(forked.turns.len(), 0);
-    assert_eq!(forked.status, ThreadStatus::Idle);
+    assert!(
+        fork_err
+            .error
+            .message
+            .contains("no rollout found for thread id"),
+        "unexpected fork error: {}",
+        fork_err.error.message
+    );
 
     Ok(())
 }

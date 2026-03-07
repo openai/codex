@@ -3008,6 +3008,16 @@ impl CodexMessageProcessor {
                 Ok(items) => {
                     thread.turns = build_turns_from_rollout_items(&items);
                 }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!(
+                            "thread {thread_uuid} is not materialized yet; includeTurns is unavailable before first user message"
+                        ),
+                    )
+                    .await;
+                    return;
+                }
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
@@ -3285,7 +3295,34 @@ impl CodexMessageProcessor {
             }
 
             let rollout_path = if let Some(path) = existing_thread.rollout_path() {
-                path
+                if path.exists() {
+                    path
+                } else {
+                    match find_thread_path_by_id_str(
+                        &self.config.codex_home,
+                        &existing_thread_id.to_string(),
+                    )
+                    .await
+                    {
+                        Ok(Some(path)) => path,
+                        Ok(None) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!("no rollout found for thread id {existing_thread_id}"),
+                            )
+                            .await;
+                            return true;
+                        }
+                        Err(err) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!("failed to locate thread id {existing_thread_id}: {err}"),
+                            )
+                            .await;
+                            return true;
+                        }
+                    }
+                }
             } else {
                 match find_thread_path_by_id_str(
                     &self.config.codex_home,

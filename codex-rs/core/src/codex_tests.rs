@@ -1790,6 +1790,7 @@ async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
         let mut rollout = session.services.rollout.lock().await;
         *rollout = Some(recorder);
     }
+    session.ensure_rollout_materialized().await;
     session.flush_rollout().await;
     rollout_path
 }
@@ -3020,6 +3021,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         serde_json::to_value(Some(turn_context.to_turn_context_item()))
             .expect("serialize expected context item")
     );
+    session.ensure_rollout_materialized().await;
     session.flush_rollout().await;
 
     let InitialHistory::Resumed(resumed) = RolloutStore::get_rollout_history(&rollout_path)
@@ -3121,6 +3123,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
+    session.ensure_rollout_materialized().await;
     session.flush_rollout().await;
 
     let InitialHistory::Resumed(resumed) = RolloutStore::get_rollout_history(&rollout_path)

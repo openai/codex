@@ -60,7 +60,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 #[tokio::test]
-async fn thread_resume_returns_empty_loaded_thread() -> Result<()> {
+async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -82,25 +82,26 @@ async fn thread_resume_returns_empty_loaded_thread() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
+    // Resume should fail before the first user message materializes rollout storage.
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
             ..Default::default()
         })
         .await?;
-    let resume_resp: JSONRPCResponse = timeout(
+    let resume_err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse {
-        thread: resumed, ..
-    } = to_response::<ThreadResumeResponse>(resume_resp)?;
-
-    assert_eq!(resumed.id, thread.id);
-    assert!(resumed.preview.is_empty());
-    assert_eq!(resumed.turns.len(), 0);
-    assert_eq!(resumed.status, ThreadStatus::Idle);
+    assert!(
+        resume_err
+            .error
+            .message
+            .contains("no rollout found for thread id"),
+        "unexpected resume error: {}",
+        resume_err.error.message
+    );
 
     Ok(())
 }

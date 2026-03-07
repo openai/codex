@@ -519,15 +519,23 @@ impl RolloutStore {
 
     /// Attempt to create a new [`RolloutStore`].
     ///
-    /// For both new and resumed sessions, this opens the rollout file immediately so the path is
-    /// readable as soon as startup returns.
+    /// For resumed sessions, this immediately opens the existing rollout file. Fresh sessions keep
+    /// their rollout buffered in memory until an explicit `persist()` call materializes the file.
     pub async fn new(
         config: &Config,
         params: RolloutStoreParams,
         state_db_ctx: Option<StateDbHandle>,
         state_builder: Option<ThreadMetadataBuilder>,
     ) -> std::io::Result<Self> {
-        let (file, rollout_path, source, meta, event_persistence_mode) = match params {
+        let (
+            file,
+            deferred_log_file_info,
+            rollout_path,
+            source,
+            meta,
+            git_info_handle,
+            event_persistence_mode,
+        ) = match params {
             RolloutStoreParams::Create {
                 conversation_id,
                 forked_from_id,
@@ -573,14 +581,19 @@ impl RolloutStore {
                     meta: session_meta,
                     git: None,
                 };
+                let cwd = config.cwd.clone();
 
                 (
-                    tokio::fs::File::from_std(open_log_file(path.as_path())?),
+                    None,
+                    Some(log_file_info),
                     path,
                     InMemoryRolloutSource::new(vec![RolloutItem::SessionMeta(
                         session_meta_line.clone(),
                     )]),
                     Some(session_meta_line),
+                    Some(tokio::task::spawn(async move {
+                        collect_git_info(cwd.as_path()).await
+                    })),
                     event_persistence_mode,
                 )
             }
@@ -594,12 +607,16 @@ impl RolloutStore {
                     None => Self::load_source(path.as_path()).await?.source,
                 };
                 (
-                    tokio::fs::OpenOptions::new()
-                        .append(true)
-                        .open(&path)
-                        .await?,
+                    Some(
+                        tokio::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&path)
+                            .await?,
+                    ),
+                    None,
                     path,
                     source,
+                    None,
                     None,
                     event_persistence_mode,
                 )
@@ -612,30 +629,20 @@ impl RolloutStore {
         let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
 
         let source = Arc::new(Mutex::new(source));
-        let mut writer = JsonlWriter { file };
-        let mut state_builder = state_builder;
-        if let Some(session_meta_line) = meta {
-            write_session_meta(
-                &mut writer,
-                session_meta_line,
-                &rollout_path,
-                &source,
-                state_db_ctx.as_deref(),
-                &mut state_builder,
-                config.model_provider_id.as_str(),
-            )
-            .await?;
-        }
         // Spawn a Tokio task that owns the file handle and performs async
         // writes. Using `tokio::fs::File` keeps everything on the async I/O
         // driver instead of blocking the runtime.
         tokio::task::spawn(rollout_writer(
-            writer.file,
+            file,
+            deferred_log_file_info,
             rx,
+            meta,
             rollout_path.clone(),
+            Arc::clone(&source),
             state_db_ctx.clone(),
             state_builder,
             config.model_provider_id.clone(),
+            git_info_handle,
         ));
 
         Ok(Self {
@@ -886,16 +893,37 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
 
 #[allow(clippy::too_many_arguments)]
 async fn rollout_writer(
-    file: tokio::fs::File,
+    file: Option<tokio::fs::File>,
+    mut deferred_log_file_info: Option<LogFileInfo>,
     mut rx: mpsc::Receiver<RolloutCmd>,
+    mut meta: Option<SessionMetaLine>,
     rollout_path: PathBuf,
+    source: Arc<Mutex<InMemoryRolloutSource>>,
     state_db_ctx: Option<StateDbHandle>,
     mut state_builder: Option<ThreadMetadataBuilder>,
     default_provider: String,
+    mut git_info_handle: Option<tokio::task::JoinHandle<Option<codex_protocol::protocol::GitInfo>>>,
 ) -> std::io::Result<()> {
-    let mut writer = JsonlWriter { file };
+    let mut writer = file.map(|file| JsonlWriter { file });
+    let mut buffered_items = Vec::<RolloutItem>::new();
     if let Some(builder) = state_builder.as_mut() {
         builder.rollout_path = rollout_path.clone();
+    }
+
+    if let Some(writer) = writer.as_mut()
+        && let Some(session_meta_line) = meta.take()
+    {
+        write_session_meta(
+            writer,
+            session_meta_line,
+            &rollout_path,
+            &source,
+            state_db_ctx.as_deref(),
+            &mut state_builder,
+            default_provider.as_str(),
+            &mut git_info_handle,
+        )
+        .await?;
     }
 
     // Process rollout commands
@@ -906,8 +934,16 @@ async fn rollout_writer(
                     continue;
                 }
 
+                if writer.is_none() {
+                    buffered_items.extend(items);
+                    continue;
+                }
+
+                let Some(writer) = writer.as_mut() else {
+                    continue;
+                };
                 write_and_reconcile_items(
-                    &mut writer,
+                    writer,
                     items.as_slice(),
                     &rollout_path,
                     state_db_ctx.as_deref(),
@@ -917,14 +953,76 @@ async fn rollout_writer(
                 .await?;
             }
             RolloutCmd::Persist { ack } => {
-                if let Err(e) = writer.file.flush().await {
+                if writer.is_none() {
+                    let result = async {
+                        let Some(log_file_info) = deferred_log_file_info.take() else {
+                            return Err(IoError::other(
+                                "deferred rollout store missing log file metadata",
+                            ));
+                        };
+                        let file = open_log_file(log_file_info.path.as_path())?;
+                        writer = Some(JsonlWriter {
+                            file: tokio::fs::File::from_std(file),
+                        });
+
+                        if let Some(session_meta_line) = meta.take() {
+                            let Some(writer) = writer.as_mut() else {
+                                return Err(IoError::other(
+                                    "writer missing after rollout materialization",
+                                ));
+                            };
+                            write_session_meta(
+                                writer,
+                                session_meta_line,
+                                &rollout_path,
+                                &source,
+                                state_db_ctx.as_deref(),
+                                &mut state_builder,
+                                default_provider.as_str(),
+                                &mut git_info_handle,
+                            )
+                            .await?;
+                        }
+
+                        if !buffered_items.is_empty() {
+                            let Some(writer) = writer.as_mut() else {
+                                return Err(IoError::other(
+                                    "writer missing after rollout materialization",
+                                ));
+                            };
+                            write_and_reconcile_items(
+                                writer,
+                                buffered_items.as_slice(),
+                                &rollout_path,
+                                state_db_ctx.as_deref(),
+                                state_builder.as_ref(),
+                                default_provider.as_str(),
+                            )
+                            .await?;
+                            buffered_items.clear();
+                        }
+
+                        Ok(())
+                    }
+                    .await;
+
+                    if let Err(err) = result {
+                        let _ = ack.send(());
+                        return Err(err);
+                    }
+                }
+                if let Some(writer) = writer.as_mut()
+                    && let Err(e) = writer.file.flush().await
+                {
                     let _ = ack.send(());
                     return Err(e);
                 }
                 let _ = ack.send(());
             }
             RolloutCmd::Flush { ack } => {
-                if let Err(e) = writer.file.flush().await {
+                if let Some(writer) = writer.as_mut()
+                    && let Err(e) = writer.file.flush().await
+                {
                     let _ = ack.send(());
                     return Err(e);
                 }
@@ -948,9 +1046,21 @@ async fn write_session_meta(
     state_db_ctx: Option<&StateRuntime>,
     state_builder: &mut Option<ThreadMetadataBuilder>,
     default_provider: &str,
+    git_info_handle: &mut Option<
+        tokio::task::JoinHandle<Option<codex_protocol::protocol::GitInfo>>,
+    >,
 ) -> std::io::Result<()> {
     if session_meta_line.git.is_none() {
-        session_meta_line.git = collect_git_info(&session_meta_line.meta.cwd).await;
+        session_meta_line.git = match git_info_handle.take() {
+            Some(handle) => match handle.await {
+                Ok(git_info) => git_info,
+                Err(err) => {
+                    warn!("failed waiting for startup git info: {err}");
+                    collect_git_info(&session_meta_line.meta.cwd).await
+                }
+            },
+            None => collect_git_info(&session_meta_line.meta.cwd).await,
+        };
     }
     let memory_mode = session_meta_line.meta.memory_mode.clone();
     if state_db_ctx.is_some() {
@@ -1272,7 +1382,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_creates_rollout_immediately() -> std::io::Result<()> {
+    async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<()> {
         let home = TempDir::new().expect("temp dir");
         let config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
@@ -1296,9 +1406,44 @@ mod tests {
 
         let rollout_path = store.rollout_path().to_path_buf();
         assert!(
-            rollout_path.exists(),
-            "rollout file should exist at startup"
+            !rollout_path.exists(),
+            "rollout file should not exist before first user message"
         );
+
+        store
+            .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
+                AgentMessageEvent {
+                    message: "buffered-event".to_string(),
+                    phase: None,
+                },
+            ))])
+            .await?;
+        store.flush().await?;
+        assert!(
+            !rollout_path.exists(),
+            "rollout file should remain deferred before first user message"
+        );
+
+        store
+            .record_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+                UserMessageEvent {
+                    message: "first-user-message".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            ))])
+            .await?;
+        store.flush().await?;
+        assert!(
+            !rollout_path.exists(),
+            "user-message-like items should not materialize without explicit persist"
+        );
+
+        store.persist().await?;
+        // Second call verifies `persist()` is idempotent after materialization.
+        store.persist().await?;
+        assert!(rollout_path.exists(), "rollout file should be materialized");
 
         let source_session_meta = {
             let source = store.source.lock().await;
@@ -1333,33 +1478,6 @@ mod tests {
             serde_json::to_value(source_session_meta.git)?,
             serde_json::to_value(collect_git_info(&config.cwd).await)?,
         );
-
-        store
-            .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
-                AgentMessageEvent {
-                    message: "buffered-event".to_string(),
-                    phase: None,
-                },
-            ))])
-            .await?;
-        store.flush().await?;
-
-        store
-            .record_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
-                UserMessageEvent {
-                    message: "first-user-message".to_string(),
-                    images: None,
-                    local_images: Vec::new(),
-                    text_elements: Vec::new(),
-                },
-            ))])
-            .await?;
-        store.flush().await?;
-
-        store.persist().await?;
-        // Second call verifies `persist()` is idempotent after startup materialization.
-        store.persist().await?;
-        assert!(rollout_path.exists(), "rollout file should exist");
 
         let text = std::fs::read_to_string(&rollout_path)?;
         assert!(

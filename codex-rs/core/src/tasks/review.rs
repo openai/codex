@@ -265,7 +265,8 @@ pub(crate) async fn exit_review_mode(
         )
         .await;
 
-    // Review turns record rollout items asynchronously, so explicitly flush
-    // before any follow-up path snapshots the thread's JSONL.
-    session.flush_rollout().await;
+    // Review turns can run before any regular user turn, so explicitly
+    // materialize rollout persistence. Do this after emitting review output so
+    // file creation + git metadata collection cannot delay client-facing items.
+    session.ensure_rollout_materialized().await;
 }

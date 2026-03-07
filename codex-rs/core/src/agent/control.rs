@@ -144,7 +144,12 @@ impl AgentControl {
                     let parent_thread = state.get_thread(parent_thread_id).await.ok();
                     if let Some(parent_thread) = parent_thread.as_ref() {
                         // `record_conversation_items` only queues rollout writes asynchronously.
-                        // Flush the live parent before snapshotting JSONL for a fork.
+                        // Flush/materialize the live parent before snapshotting JSONL for a fork.
+                        parent_thread
+                            .codex
+                            .session
+                            .ensure_rollout_materialized()
+                            .await;
                         parent_thread.codex.session.flush_rollout().await;
                     }
                     let rollout_path = parent_thread
@@ -883,6 +888,11 @@ mod tests {
             .session
             .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
             .await;
+        parent_thread
+            .codex
+            .session
+            .ensure_rollout_materialized()
+            .await;
         parent_thread.codex.session.flush_rollout().await;
 
         let child_thread_id = harness
@@ -959,6 +969,11 @@ mod tests {
             .codex
             .session
             .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
+            .await;
+        parent_thread
+            .codex
+            .session
+            .ensure_rollout_materialized()
             .await;
         parent_thread.codex.session.flush_rollout().await;
 
