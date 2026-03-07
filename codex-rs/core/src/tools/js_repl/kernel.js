@@ -1153,29 +1153,40 @@ function formatLog(args) {
     .join(" ");
 }
 
-function withCapturedConsole(ctx, fn) {
-  const logs = [];
+function withCapturedConsole(ctx, onLog, captureLogs, fn) {
+  const logs = captureLogs ? [] : null;
   const original = ctx.console ?? console;
+  function record(line) {
+    if (logs) {
+      logs.push(line);
+    }
+    if (onLog) onLog(line);
+  }
   const captured = {
     ...original,
     log: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     info: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     warn: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     error: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     debug: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
   };
   ctx.console = captured;
-  return fn(logs).finally(() => {
+  return fn(logs ?? []).finally(() => {
     ctx.console = original;
   });
 }
@@ -1532,6 +1543,7 @@ async function handleExec(message) {
 
   try {
     const code = typeof message.code === "string" ? message.code : "";
+    const streamLogs = Boolean(message.stream_logs);
     const builtSource = await buildModuleSource(code);
     const source = builtSource.source;
     currentBindings = builtSource.currentBindings;
@@ -1542,61 +1554,63 @@ async function handleExec(message) {
     context.codex = { tmpDir, tool, emitImage };
     context.tmpDir = tmpDir;
 
-    await withCapturedConsole(context, async (logs) => {
-      const cellIdentifier = path.join(
-        process.cwd(),
-        `.codex_js_repl_cell_${cellCounter++}.mjs`,
-      );
-      module = new SourceTextModule(source, {
-        context,
-        identifier: cellIdentifier,
-        initializeImportMeta(meta, mod) {
-          setImportMeta(meta, mod, true);
-          meta.__codexInternalMarkCommittedBindings = markCommittedBindings;
-          meta.__codexInternalMarkPreludeCompleted = markPreludeCompleted;
-        },
-        importModuleDynamically(specifier, referrer) {
-          return importResolved(resolveSpecifier(specifier, referrer?.identifier));
-        },
-      });
+    await withCapturedConsole(
+      context,
+      streamLogs ? (line) => send({ type: "exec_log", id: message.id, text: line }) : null,
+      !streamLogs,
+      async (logs) => {
+        const cellIdentifier = path.join(
+          process.cwd(),
+          `.codex_js_repl_cell_${cellCounter++}.mjs`,
+        );
+        module = new SourceTextModule(source, {
+          context,
+          identifier: cellIdentifier,
+          initializeImportMeta(meta, mod) {
+            setImportMeta(meta, mod, true);
+            meta.__codexInternalMarkCommittedBindings = markCommittedBindings;
+            meta.__codexInternalMarkPreludeCompleted = markPreludeCompleted;
+          },
+          importModuleDynamically(specifier, referrer) {
+            return importResolved(resolveSpecifier(specifier, referrer?.identifier));
+          },
+        });
 
-      await module.link(async (specifier) => {
-        if (specifier === "@prev" && previousModule) {
-          const exportNames = previousBindings.map((b) => b.name);
-          // Build a synthetic module snapshot of the prior cell's exports.
-          // This is the bridge that carries values from cell N to cell N+1.
-          const synthetic = new SyntheticModule(
-            exportNames,
-            function initSynthetic() {
-              for (const binding of previousBindings) {
-                this.setExport(
-                  binding.name,
-                  previousModule.namespace[binding.name],
-                );
-              }
-            },
-            { context },
+        await module.link(async (specifier) => {
+          if (specifier === "@prev" && previousModule) {
+            const exportNames = previousBindings.map((b) => b.name);
+            // Build a synthetic module snapshot of the prior cell's exports.
+            // This is the bridge that carries values from cell N to cell N+1.
+            const synthetic = new SyntheticModule(
+              exportNames,
+              function initSynthetic() {
+                for (const binding of previousBindings) {
+                  this.setExport(binding.name, previousModule.namespace[binding.name]);
+                }
+              },
+              { context },
+            );
+            return synthetic;
+          }
+          throw new Error(
+            `Top-level static import "${specifier}" is not supported in js_repl. Use await import("${specifier}") instead.`,
           );
-          return synthetic;
-        }
-        throw new Error(
-          `Top-level static import "${specifier}" is not supported in js_repl. Use await import("${specifier}") instead.`,
-        );
-      });
-      moduleLinked = true;
+        });
+        moduleLinked = true;
 
-      await module.evaluate();
-      if (pendingBackgroundTasks.size > 0) {
-        const backgroundResults = await Promise.all([...pendingBackgroundTasks]);
-        const firstUnhandledBackgroundError = backgroundResults.find(
-          (result) => !result.ok && !result.observation.observed,
-        );
-        if (firstUnhandledBackgroundError) {
-          throw firstUnhandledBackgroundError.error;
+        await module.evaluate();
+        if (pendingBackgroundTasks.size > 0) {
+          const backgroundResults = await Promise.all([...pendingBackgroundTasks]);
+          const firstUnhandledBackgroundError = backgroundResults.find(
+            (result) => !result.ok && !result.observation.observed,
+          );
+          if (firstUnhandledBackgroundError) {
+            throw firstUnhandledBackgroundError.error;
+          }
         }
-      }
-      output = logs.join("\n");
-    });
+        output = logs.join("\n");
+      },
+    );
 
     previousModule = module;
     previousBindings = nextBindings;

@@ -131,11 +131,10 @@ trust_level = "trusted"
     let mut output = Vec::new();
     let codex_utils_pty::SpawnedProcess {
         session,
-        stdout_rx,
-        stderr_rx,
+        output_rx,
         exit_rx,
     } = spawned;
-    let mut output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
+    let mut output_rx = output_rx;
     let mut exit_rx = exit_rx;
     let writer_tx = session.writer_sender();
     let interrupt_writer = writer_tx.clone();

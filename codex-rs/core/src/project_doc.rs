@@ -65,6 +65,17 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
     section.push_str("- Top-level bindings persist across cells. If a cell throws, prior bindings remain available and bindings that finished initializing before the throw often remain usable in later cells. For code you plan to reuse across cells, prefer declaring or assigning it in direct top-level statements before operations that might throw. If you hit `SyntaxError: Identifier 'x' has already been declared`, first reuse the existing binding, reassign a previously declared `let`, or pick a new descriptive name. Use `{ ... }` only for a short temporary block when you specifically need local scratch names; do not wrap an entire cell in block scope if you want those names reusable later. Reset the kernel with `js_repl_reset` only when you need a clean state.\n");
     section.push_str("- Top-level static import declarations (for example `import x from \"./file.js\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")`, `await import(\"./file.js\")`, or `await import(\"/abs/path/file.mjs\")` instead. Imported local files must be ESM `.js`/`.mjs` files and run in the same REPL VM context. Bare package imports always resolve from REPL-global search roots (`CODEX_JS_REPL_NODE_MODULE_DIRS`, then cwd), not relative to the imported file location. Local files may statically import only other local relative/absolute/`file://` `.js`/`.mjs` files; package and builtin imports from local files must stay dynamic. `import.meta.resolve()` returns importable strings such as `file://...`, bare package names, and `node:...` specifiers. Local file modules reload between execs, while top-level bindings persist until `js_repl_reset`.\n");
 
+    if config.features.enabled(Feature::JsReplPolling) {
+        section.push_str("- Polling mode is session-based: call `js_repl` with first-line pragma `// codex-js-repl: poll=true` to get `exec_id` and `session_id`; provide `session_id=<id>` in later `js_repl` calls to reuse that session state. Omit `session_id` to create a new polling session, and note that unknown `session_id` values fail. Use space-separated pragma arguments. If a task says to use polling mode only, every `js_repl` submission for that task must include `// codex-js-repl: poll=true`; do not mix polling and non-polling submissions.\n");
+        section.push_str("- Reuse the same `session_id` across related polling cells so top-level state, imported modules, and handles persist. Omit `session_id` only when you intentionally want a fresh polling session.\n");
+        section.push_str("- Use `js_repl_poll` with `exec_id` until `status` is `completed` or `error`; if a poll returns `status: running`, keep polling the same `exec_id` even if the logs or `final_output` already look complete. Poll responses also include `session_id`, and completed polls can also include nested multimodal tool output after the JSON status item.\n");
+        section.push_str("- Keep polling submissions short and single-purpose. If a submission errors, prefer resending a smaller cell in the same session before reaching for `js_repl_reset`.\n");
+        section.push_str("- Use `js_repl_reset({\"session_id\":\"...\"})` to stop one polling session (including any running exec), or `js_repl_reset({})` to reset all js_repl kernels.\n");
+        section.push_str("- `js_repl_poll` must not be called before a successful `js_repl` polling submission returns an `exec_id`.\n");
+        section.push_str("- In polling mode, `timeout_ms` is not supported on `js_repl`; use `js_repl_poll` `yield_time_ms` to control poll wait duration. Omitted values, or values below `5000`, wait up to 5 seconds before returning if nothing new arrives.\n");
+        section.push_str("- If `js_repl` rejects your payload format, resend raw JS with the pragma; do not retry with JSON, quoted strings, or markdown fences.\n");
+    }
+
     if config.features.enabled(Feature::JsReplToolsOnly) {
         section.push_str("- Do not call tools directly; use `js_repl` + `codex.tool(...)` for all tool calls, including shell commands.\n");
         section
@@ -390,6 +401,47 @@ mod tests {
         }])
     }
 
+    fn expected_js_repl_instructions(polling: bool, tools_only: bool) -> String {
+        let mut expected = String::from("## JavaScript REPL (Node)\n");
+        expected.push_str(
+            "- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel.\n",
+        );
+        expected.push_str("- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input (optionally with first-line `// codex-js-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n");
+        expected.push_str(
+            "- Helpers: `codex.tmpDir`, `codex.tool(name, args?)`, and `codex.emitImage(imageLike)`.\n",
+        );
+        expected.push_str("- `codex.tool` executes a normal tool call and resolves to the raw tool output object. Use it for shell and non-shell tools alike. Nested tool outputs stay inside JavaScript unless you emit them explicitly.\n");
+        expected.push_str("- `codex.emitImage(...)` adds one image to the outer `js_repl` function output each time you call it, so you can call it multiple times to emit multiple images. It accepts a data URL, a single `input_image` item, an object like `{ bytes, mimeType }`, or a raw tool response object with exactly one image and no text. It rejects mixed text-and-image content.\n");
+        expected.push_str("- Example of sharing an in-memory Playwright screenshot: `await codex.emitImage({ bytes: await page.screenshot({ type: \"jpeg\", quality: 85 }), mimeType: \"image/jpeg\" })`.\n");
+        expected.push_str("- Example of sharing a local image tool result: `await codex.emitImage(codex.tool(\"view_image\", { path: \"/absolute/path\" }))`.\n");
+        expected.push_str("- When encoding an image to send with `codex.emitImage(...)` or `view_image`, prefer JPEG at about 85 quality when lossy compression is acceptable; use PNG when transparency or lossless detail matters. Smaller uploads are faster and less likely to hit size limits.\n");
+        expected.push_str("- Top-level bindings persist across cells. If a cell throws, prior bindings remain available and bindings that finished initializing before the throw often remain usable in later cells. For code you plan to reuse across cells, prefer declaring or assigning it in direct top-level statements before operations that might throw. If you hit `SyntaxError: Identifier 'x' has already been declared`, first reuse the existing binding, reassign a previously declared `let`, or pick a new descriptive name. Use `{ ... }` only for a short temporary block when you specifically need local scratch names; do not wrap an entire cell in block scope if you want those names reusable later. Reset the kernel with `js_repl_reset` only when you need a clean state.\n");
+        expected.push_str("- Top-level static import declarations (for example `import x from \"./file.js\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")`, `await import(\"./file.js\")`, or `await import(\"/abs/path/file.mjs\")` instead. Imported local files must be ESM `.js`/`.mjs` files and run in the same REPL VM context. Bare package imports always resolve from REPL-global search roots (`CODEX_JS_REPL_NODE_MODULE_DIRS`, then cwd), not relative to the imported file location. Local files may statically import only other local relative/absolute/`file://` `.js`/`.mjs` files; package and builtin imports from local files must stay dynamic. `import.meta.resolve()` returns importable strings such as `file://...`, bare package names, and `node:...` specifiers. Local file modules reload between execs, while top-level bindings persist until `js_repl_reset`.\n");
+
+        if polling {
+            expected.push_str("- Polling mode is session-based: call `js_repl` with first-line pragma `// codex-js-repl: poll=true` to get `exec_id` and `session_id`; provide `session_id=<id>` in later `js_repl` calls to reuse that session state. Omit `session_id` to create a new polling session, and note that unknown `session_id` values fail. Use space-separated pragma arguments. If a task says to use polling mode only, every `js_repl` submission for that task must include `// codex-js-repl: poll=true`; do not mix polling and non-polling submissions.\n");
+            expected.push_str("- Reuse the same `session_id` across related polling cells so top-level state, imported modules, and handles persist. Omit `session_id` only when you intentionally want a fresh polling session.\n");
+            expected.push_str("- Use `js_repl_poll` with `exec_id` until `status` is `completed` or `error`; if a poll returns `status: running`, keep polling the same `exec_id` even if the logs or `final_output` already look complete. Poll responses also include `session_id`, and completed polls can also include nested multimodal tool output after the JSON status item.\n");
+            expected.push_str("- Keep polling submissions short and single-purpose. If a submission errors, prefer resending a smaller cell in the same session before reaching for `js_repl_reset`.\n");
+            expected.push_str("- Use `js_repl_reset({\"session_id\":\"...\"})` to stop one polling session (including any running exec), or `js_repl_reset({})` to reset all js_repl kernels.\n");
+            expected.push_str("- `js_repl_poll` must not be called before a successful `js_repl` polling submission returns an `exec_id`.\n");
+            expected.push_str("- In polling mode, `timeout_ms` is not supported on `js_repl`; use `js_repl_poll` `yield_time_ms` to control poll wait duration. Omitted values, or values below `5000`, wait up to 5 seconds before returning if nothing new arrives.\n");
+            expected.push_str("- If `js_repl` rejects your payload format, resend raw JS with the pragma; do not retry with JSON, quoted strings, or markdown fences.\n");
+        }
+
+        if tools_only {
+            expected.push_str(
+                "- Do not call tools directly; use `js_repl` + `codex.tool(...)` for all tool calls, including shell commands.\n",
+            );
+            expected.push_str(
+                "- MCP tools (if any) can also be called by name via `codex.tool(...)`.\n",
+            );
+        }
+
+        expected.push_str("- Avoid direct access to `process.stdout` / `process.stderr` / `process.stdin`; it can corrupt the JSON line protocol. Use `console.log`, `codex.tool(...)`, and `codex.emitImage(...)`.");
+        expected
+    }
+
     /// AGENTS.md missing – should yield `None`.
     #[tokio::test]
     async fn no_doc_file_returns_none() {
@@ -400,7 +452,6 @@ mod tests {
             res.is_none(),
             "Expected None when AGENTS.md is absent and no system instructions provided"
         );
-        assert!(res.is_none(), "Expected None when AGENTS.md is absent");
     }
 
     /// Small file within the byte-limit is returned unmodified.
@@ -490,8 +541,7 @@ mod tests {
         let res = get_user_instructions(&cfg, None, None)
             .await
             .expect("js_repl instructions expected");
-        let expected = "## JavaScript REPL (Node)\n- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel.\n- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input (optionally with first-line `// codex-js-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n- Helpers: `codex.tmpDir`, `codex.tool(name, args?)`, and `codex.emitImage(imageLike)`.\n- `codex.tool` executes a normal tool call and resolves to the raw tool output object. Use it for shell and non-shell tools alike. Nested tool outputs stay inside JavaScript unless you emit them explicitly.\n- `codex.emitImage(...)` adds one image to the outer `js_repl` function output each time you call it, so you can call it multiple times to emit multiple images. It accepts a data URL, a single `input_image` item, an object like `{ bytes, mimeType }`, or a raw tool response object with exactly one image and no text. It rejects mixed text-and-image content.\n- Example of sharing an in-memory Playwright screenshot: `await codex.emitImage({ bytes: await page.screenshot({ type: \"jpeg\", quality: 85 }), mimeType: \"image/jpeg\" })`.\n- Example of sharing a local image tool result: `await codex.emitImage(codex.tool(\"view_image\", { path: \"/absolute/path\" }))`.\n- When encoding an image to send with `codex.emitImage(...)` or `view_image`, prefer JPEG at about 85 quality when lossy compression is acceptable; use PNG when transparency or lossless detail matters. Smaller uploads are faster and less likely to hit size limits.\n- Top-level bindings persist across cells. If a cell throws, prior bindings remain available and bindings that finished initializing before the throw often remain usable in later cells. For code you plan to reuse across cells, prefer declaring or assigning it in direct top-level statements before operations that might throw. If you hit `SyntaxError: Identifier 'x' has already been declared`, first reuse the existing binding, reassign a previously declared `let`, or pick a new descriptive name. Use `{ ... }` only for a short temporary block when you specifically need local scratch names; do not wrap an entire cell in block scope if you want those names reusable later. Reset the kernel with `js_repl_reset` only when you need a clean state.\n- Top-level static import declarations (for example `import x from \"./file.js\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")`, `await import(\"./file.js\")`, or `await import(\"/abs/path/file.mjs\")` instead. Imported local files must be ESM `.js`/`.mjs` files and run in the same REPL VM context. Bare package imports always resolve from REPL-global search roots (`CODEX_JS_REPL_NODE_MODULE_DIRS`, then cwd), not relative to the imported file location. Local files may statically import only other local relative/absolute/`file://` `.js`/`.mjs` files; package and builtin imports from local files must stay dynamic. `import.meta.resolve()` returns importable strings such as `file://...`, bare package names, and `node:...` specifiers. Local file modules reload between execs, while top-level bindings persist until `js_repl_reset`.\n- Avoid direct access to `process.stdout` / `process.stderr` / `process.stdin`; it can corrupt the JSON line protocol. Use `console.log`, `codex.tool(...)`, and `codex.emitImage(...)`.";
-        assert_eq!(res, expected);
+        assert_eq!(res, expected_js_repl_instructions(false, false));
     }
 
     #[tokio::test]
@@ -509,8 +559,7 @@ mod tests {
         let res = get_user_instructions(&cfg, None, None)
             .await
             .expect("js_repl instructions expected");
-        let expected = "## JavaScript REPL (Node)\n- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel.\n- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input (optionally with first-line `// codex-js-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n- Helpers: `codex.tmpDir`, `codex.tool(name, args?)`, and `codex.emitImage(imageLike)`.\n- `codex.tool` executes a normal tool call and resolves to the raw tool output object. Use it for shell and non-shell tools alike. Nested tool outputs stay inside JavaScript unless you emit them explicitly.\n- `codex.emitImage(...)` adds one image to the outer `js_repl` function output each time you call it, so you can call it multiple times to emit multiple images. It accepts a data URL, a single `input_image` item, an object like `{ bytes, mimeType }`, or a raw tool response object with exactly one image and no text. It rejects mixed text-and-image content.\n- Example of sharing an in-memory Playwright screenshot: `await codex.emitImage({ bytes: await page.screenshot({ type: \"jpeg\", quality: 85 }), mimeType: \"image/jpeg\" })`.\n- Example of sharing a local image tool result: `await codex.emitImage(codex.tool(\"view_image\", { path: \"/absolute/path\" }))`.\n- When encoding an image to send with `codex.emitImage(...)` or `view_image`, prefer JPEG at about 85 quality when lossy compression is acceptable; use PNG when transparency or lossless detail matters. Smaller uploads are faster and less likely to hit size limits.\n- Top-level bindings persist across cells. If a cell throws, prior bindings remain available and bindings that finished initializing before the throw often remain usable in later cells. For code you plan to reuse across cells, prefer declaring or assigning it in direct top-level statements before operations that might throw. If you hit `SyntaxError: Identifier 'x' has already been declared`, first reuse the existing binding, reassign a previously declared `let`, or pick a new descriptive name. Use `{ ... }` only for a short temporary block when you specifically need local scratch names; do not wrap an entire cell in block scope if you want those names reusable later. Reset the kernel with `js_repl_reset` only when you need a clean state.\n- Top-level static import declarations (for example `import x from \"./file.js\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")`, `await import(\"./file.js\")`, or `await import(\"/abs/path/file.mjs\")` instead. Imported local files must be ESM `.js`/`.mjs` files and run in the same REPL VM context. Bare package imports always resolve from REPL-global search roots (`CODEX_JS_REPL_NODE_MODULE_DIRS`, then cwd), not relative to the imported file location. Local files may statically import only other local relative/absolute/`file://` `.js`/`.mjs` files; package and builtin imports from local files must stay dynamic. `import.meta.resolve()` returns importable strings such as `file://...`, bare package names, and `node:...` specifiers. Local file modules reload between execs, while top-level bindings persist until `js_repl_reset`.\n- Do not call tools directly; use `js_repl` + `codex.tool(...)` for all tool calls, including shell commands.\n- MCP tools (if any) can also be called by name via `codex.tool(...)`.\n- Avoid direct access to `process.stdout` / `process.stderr` / `process.stdin`; it can corrupt the JSON line protocol. Use `console.log`, `codex.tool(...)`, and `codex.emitImage(...)`.";
-        assert_eq!(res, expected);
+        assert_eq!(res, expected_js_repl_instructions(false, true));
     }
 
     #[tokio::test]
@@ -528,8 +577,24 @@ mod tests {
         let res = get_user_instructions(&cfg, None, None)
             .await
             .expect("js_repl instructions expected");
-        let expected = "## JavaScript REPL (Node)\n- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel.\n- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input (optionally with first-line `// codex-js-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n- Helpers: `codex.tmpDir`, `codex.tool(name, args?)`, and `codex.emitImage(imageLike)`.\n- `codex.tool` executes a normal tool call and resolves to the raw tool output object. Use it for shell and non-shell tools alike. Nested tool outputs stay inside JavaScript unless you emit them explicitly.\n- `codex.emitImage(...)` adds one image to the outer `js_repl` function output each time you call it, so you can call it multiple times to emit multiple images. It accepts a data URL, a single `input_image` item, an object like `{ bytes, mimeType }`, or a raw tool response object with exactly one image and no text. It rejects mixed text-and-image content.\n- Example of sharing an in-memory Playwright screenshot: `await codex.emitImage({ bytes: await page.screenshot({ type: \"jpeg\", quality: 85 }), mimeType: \"image/jpeg\" })`.\n- Example of sharing a local image tool result: `await codex.emitImage(codex.tool(\"view_image\", { path: \"/absolute/path\" }))`.\n- When encoding an image to send with `codex.emitImage(...)` or `view_image`, prefer JPEG at about 85 quality when lossy compression is acceptable; use PNG when transparency or lossless detail matters. Smaller uploads are faster and less likely to hit size limits.\n- Top-level bindings persist across cells. If a cell throws, prior bindings remain available and bindings that finished initializing before the throw often remain usable in later cells. For code you plan to reuse across cells, prefer declaring or assigning it in direct top-level statements before operations that might throw. If you hit `SyntaxError: Identifier 'x' has already been declared`, first reuse the existing binding, reassign a previously declared `let`, or pick a new descriptive name. Use `{ ... }` only for a short temporary block when you specifically need local scratch names; do not wrap an entire cell in block scope if you want those names reusable later. Reset the kernel with `js_repl_reset` only when you need a clean state.\n- Top-level static import declarations (for example `import x from \"./file.js\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")`, `await import(\"./file.js\")`, or `await import(\"/abs/path/file.mjs\")` instead. Imported local files must be ESM `.js`/`.mjs` files and run in the same REPL VM context. Bare package imports always resolve from REPL-global search roots (`CODEX_JS_REPL_NODE_MODULE_DIRS`, then cwd), not relative to the imported file location. Local files may statically import only other local relative/absolute/`file://` `.js`/`.mjs` files; package and builtin imports from local files must stay dynamic. `import.meta.resolve()` returns importable strings such as `file://...`, bare package names, and `node:...` specifiers. Local file modules reload between execs, while top-level bindings persist until `js_repl_reset`.\n- Avoid direct access to `process.stdout` / `process.stderr` / `process.stdin`; it can corrupt the JSON line protocol. Use `console.log`, `codex.tool(...)`, and `codex.emitImage(...)`.";
-        assert_eq!(res, expected);
+        assert_eq!(res, expected_js_repl_instructions(false, false));
+    }
+
+    #[tokio::test]
+    async fn js_repl_polling_instructions_are_feature_gated() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.features
+            .enable(Feature::JsRepl)
+            .expect("feature flag should enable");
+        cfg.features
+            .enable(Feature::JsReplPolling)
+            .expect("feature flag should enable");
+
+        let res = get_user_instructions(&cfg, None, None)
+            .await
+            .expect("js_repl instructions expected");
+        assert_eq!(res, expected_js_repl_instructions(true, false));
     }
 
     /// When both system instructions *and* a project doc are present the two

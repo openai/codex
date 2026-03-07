@@ -55,6 +55,7 @@ impl fmt::Debug for PtyHandles {
 /// Handle for driving an interactive process (PTY or pipe).
 pub struct ProcessHandle {
     writer_tx: StdMutex<Option<mpsc::Sender<Vec<u8>>>>,
+    pid: Option<u32>,
     killer: StdMutex<Option<Box<dyn ChildTerminator>>>,
     reader_handle: StdMutex<Option<JoinHandle<()>>>,
     reader_abort_handles: StdMutex<Vec<AbortHandle>>,
@@ -77,6 +78,7 @@ impl ProcessHandle {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         writer_tx: mpsc::Sender<Vec<u8>>,
+        pid: Option<u32>,
         killer: Box<dyn ChildTerminator>,
         reader_handle: JoinHandle<()>,
         reader_abort_handles: Vec<AbortHandle>,
@@ -88,6 +90,7 @@ impl ProcessHandle {
     ) -> Self {
         Self {
             writer_tx: StdMutex::new(Some(writer_tx)),
+            pid,
             killer: StdMutex::new(Some(killer)),
             reader_handle: StdMutex::new(Some(reader_handle)),
             reader_abort_handles: StdMutex::new(reader_abort_handles),
@@ -110,6 +113,11 @@ impl ProcessHandle {
         let (writer_tx, writer_rx) = mpsc::channel(1);
         drop(writer_rx);
         writer_tx
+    }
+
+    /// Returns the child process ID when available.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
     }
 
     /// True if the child process has exited.
@@ -171,9 +179,7 @@ impl ProcessHandle {
             }
         }
         if let Ok(mut h) = self.wait_handle.lock() {
-            if let Some(handle) = h.take() {
-                handle.abort();
-            }
+            let _ = h.take();
         }
     }
 }
@@ -184,45 +190,19 @@ impl Drop for ProcessHandle {
     }
 }
 
-/// Combine split stdout/stderr receivers into a single broadcast receiver.
-pub fn combine_output_receivers(
-    mut stdout_rx: mpsc::Receiver<Vec<u8>>,
-    mut stderr_rx: mpsc::Receiver<Vec<u8>>,
-) -> broadcast::Receiver<Vec<u8>> {
-    let (combined_tx, combined_rx) = broadcast::channel(256);
-    tokio::spawn(async move {
-        let mut stdout_open = true;
-        let mut stderr_open = true;
-
-        loop {
-            tokio::select! {
-                stdout = stdout_rx.recv(), if stdout_open => match stdout {
-                    Some(chunk) => {
-                        let _ = combined_tx.send(chunk);
-                    }
-                    None => {
-                        stdout_open = false;
-                    }
-                },
-                stderr = stderr_rx.recv(), if stderr_open => match stderr {
-                    Some(chunk) => {
-                        let _ = combined_tx.send(chunk);
-                    }
-                    None => {
-                        stderr_open = false;
-                    }
-                },
-                else => break,
-            }
-        }
-    });
-    combined_rx
-}
-
 /// Return value from PTY or pipe spawn helpers.
 #[derive(Debug)]
 pub struct SpawnedProcess {
     pub session: ProcessHandle,
+    pub output_rx: broadcast::Receiver<Vec<u8>>,
+    pub exit_rx: oneshot::Receiver<i32>,
+}
+
+/// Return value from split-output spawn helpers.
+#[derive(Debug)]
+pub struct SpawnedProcessSplit {
+    pub session: ProcessHandle,
+    pub output_rx: broadcast::Receiver<Vec<u8>>,
     pub stdout_rx: mpsc::Receiver<Vec<u8>>,
     pub stderr_rx: mpsc::Receiver<Vec<u8>>,
     pub exit_rx: oneshot::Receiver<i32>,
