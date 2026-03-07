@@ -58,8 +58,10 @@ impl PendingInputPreview {
     }
 
     fn push_section_header(lines: &mut Vec<Line<'static>>, width: u16, header: Line<'static>) {
+        let mut spans = vec!["• ".dim()];
+        spans.extend(header.spans);
         lines.extend(adaptive_wrap_lines(
-            std::iter::once(header),
+            std::iter::once(Line::from(spans)),
             RtOptions::new(width as usize).subsequent_indent(Line::from("  ".dim())),
         ));
     }

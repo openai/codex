@@ -5,7 +5,7 @@ expression: "format!(\"{buf:?}\")"
 Buffer {
     area: Rect { x: 0, y: 0, width: 48, height: 6 },
     content: [
-        "Messages to be submitted after next tool call   ",
+        "• Messages to be submitted after next tool call ",
         "  (press esc to interrupt and send immediately):",
         "  ↳ First line                                  ",
         "    Second line                                 ",
@@ -13,7 +13,8 @@ Buffer {
         "    …                                           ",
     ],
     styles: [
-        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
         x: 14, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 4, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
