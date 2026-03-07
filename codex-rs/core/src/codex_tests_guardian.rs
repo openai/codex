@@ -41,10 +41,15 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         .features
         .enable(Feature::RequestPermissions)
         .expect("test setup should allow enabling request permissions");
-    turn_context_raw
-        .sandbox_policy
-        .set(SandboxPolicy::DangerFullAccess)
-        .expect("test setup should allow updating sandbox policy");
+    // This test is about request-permissions validation, not managed sandbox
+    // policy enforcement. Widen the derived sandbox policies directly so the
+    // command runs without depending on a platform sandbox binary.
+    turn_context_raw.file_system_sandbox_policy =
+        codex_protocol::permissions::FileSystemSandboxPolicy::from(
+            &SandboxPolicy::DangerFullAccess,
+        );
+    turn_context_raw.network_sandbox_policy =
+        codex_protocol::permissions::NetworkSandboxPolicy::from(&SandboxPolicy::DangerFullAccess);
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
 

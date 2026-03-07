@@ -664,12 +664,16 @@ fn truncate_guardian_action_value(value: Value) -> Value {
                 .map(truncate_guardian_action_value)
                 .collect::<Vec<_>>(),
         ),
-        Value::Object(values) => Value::Object(
-            values
-                .into_iter()
-                .map(|(key, value)| (key, truncate_guardian_action_value(value)))
-                .collect(),
-        ),
+        Value::Object(values) => {
+            let mut entries = values.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, truncate_guardian_action_value(value)))
+                    .collect(),
+            )
+        }
         other => other,
     }
 }
