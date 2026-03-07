@@ -3297,6 +3297,56 @@ mod tests {
     }
 
     #[test]
+    fn restricted_file_system_policy_treats_root_with_carveouts_as_scoped_access() {
+        let cwd = TempDir::new().expect("tempdir");
+        let cwd_absolute =
+            AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute tempdir");
+        let root = cwd_absolute
+            .as_path()
+            .ancestors()
+            .last()
+            .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+            .expect("filesystem root");
+        let blocked = AbsolutePathBuf::resolve_path_against_base("blocked", cwd.path())
+            .expect("resolve blocked");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: blocked.clone(),
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        assert!(!policy.has_full_disk_read_access());
+        assert!(!policy.has_full_disk_write_access());
+        assert_eq!(
+            policy.get_readable_roots_with_cwd(cwd.path()),
+            vec![root.clone()]
+        );
+        assert_eq!(
+            policy.get_unreadable_roots_with_cwd(cwd.path()),
+            vec![blocked.clone()]
+        );
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(writable_roots[0].root, root);
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .iter()
+                .any(|path| path.as_path() == blocked.as_path())
+        );
+    }
+
+    #[test]
     fn restricted_file_system_policy_derives_effective_paths() {
         let cwd = TempDir::new().expect("tempdir");
         std::fs::create_dir_all(cwd.path().join(".agents")).expect("create .agents");

@@ -672,6 +672,32 @@ mod tests {
     }
 
     #[test]
+    fn root_write_policy_with_carveouts_still_uses_platform_sandbox() {
+        let blocked = AbsolutePathBuf::resolve_path_against_base(
+            "blocked",
+            std::env::current_dir().expect("current dir"),
+        )
+        .expect("blocked path");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: blocked },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        assert_eq!(
+            should_require_platform_sandbox(&policy, NetworkSandboxPolicy::Enabled, false),
+            true
+        );
+    }
+
+    #[test]
     fn full_access_restricted_policy_still_uses_platform_sandbox_for_restricted_network() {
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
