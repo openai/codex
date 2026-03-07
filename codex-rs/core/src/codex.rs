@@ -3189,9 +3189,7 @@ impl Session {
         {
             developer_sections.push(model_switch_message.into_text());
         }
-        if is_guardian_subagent {
-            developer_sections.push(crate::guardian::guardian_execution_instructions().to_string());
-        } else {
+        if !is_guardian_subagent {
             developer_sections.push(
                 DeveloperInstructions::from_policy(
                     turn_context.sandbox_policy.get(),
@@ -3257,18 +3255,16 @@ impl Session {
         {
             developer_sections.push(commit_message_instruction);
         }
-        if !is_guardian_subagent
-            && let Some(user_instructions) = turn_context.user_instructions.as_deref()
-        {
-            contextual_user_sections.push(
-                UserInstructions {
-                    text: user_instructions.to_string(),
-                    directory: turn_context.cwd.to_string_lossy().into_owned(),
-                }
-                .serialize_to_text(),
-            );
-        }
         if !is_guardian_subagent {
+            if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
+                contextual_user_sections.push(
+                    UserInstructions {
+                        text: user_instructions.to_string(),
+                        directory: turn_context.cwd.to_string_lossy().into_owned(),
+                    }
+                    .serialize_to_text(),
+                );
+            }
             let subagents = self
                 .services
                 .agent_control
