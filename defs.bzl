@@ -80,10 +80,9 @@ def codex_rust_crate(
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
     test_env = {
-        # Bazel unit tests run with `codex-rs` as cwd, so `.` already points at
-        # the shared workspace root. Keep Insta there so it resolves the
-        # existing `tui/src/snapshots` and `core/src/snapshots` files instead
-        # of looking one directory too high and treating every snapshot as new.
+        # Keep Insta rooted at the current Bazel unit-test cwd so it resolves
+        # existing snapshots inside the runfiles tree instead of walking one
+        # directory too high and treating every snapshot as new.
         "INSTA_WORKSPACE_ROOT": ".",
         "INSTA_SNAPSHOT_PATH": "src",
     }
@@ -131,11 +130,13 @@ def codex_rust_crate(
             crate = name,
             env = test_env,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
-            # Bazel feeds source paths to `file!()` as `../codex-rs/<crate>/...`.
-            # Strip that full prefix so Insta records Cargo-like metadata such
-            # as `tui/src/...` instead of the broken `../...` source path that
-            # churns every snapshot header under unit tests.
-            rustc_flags = rustc_flags_extra + ["--remap-path-prefix=../codex-rs="],
+            # Bazel has emitted both `codex-rs/<crate>/...` and
+            # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
+            # prefix so Insta records Cargo-like metadata such as `tui/src/...`.
+            rustc_flags = rustc_flags_extra + [
+                "--remap-path-prefix=../codex-rs=",
+                "--remap-path-prefix=codex-rs=",
+            ],
             rustc_env = rustc_env,
             data = test_data_extra,
             tags = test_tags,
@@ -181,10 +182,13 @@ def codex_rust_crate(
             data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
-            # Bazel feeds source paths to `file!()` as `../codex-rs/<crate>/...`.
-            # Strip that full prefix so Insta records Cargo-like metadata such
-            # as `core/tests/...` instead of the broken `../...` source path.
-            rustc_flags = rustc_flags_extra + ["--remap-path-prefix=../codex-rs="],
+            # Bazel has emitted both `codex-rs/<crate>/...` and
+            # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
+            # prefix so Insta records Cargo-like metadata such as `core/tests/...`.
+            rustc_flags = rustc_flags_extra + [
+                "--remap-path-prefix=../codex-rs=",
+                "--remap-path-prefix=codex-rs=",
+            ],
             rustc_env = rustc_env,
             # Important: do not merge `test_env` here. Its unit-test-only
             # `INSTA_WORKSPACE_ROOT="."` can point integration tests at the
