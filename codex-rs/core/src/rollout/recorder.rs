@@ -43,6 +43,7 @@ use super::policy::EventPersistenceMode;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::originator;
+use crate::git_info::collect_git_info;
 use crate::path_utils;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
@@ -618,6 +619,7 @@ impl RolloutStore {
                 &mut writer,
                 session_meta_line,
                 &rollout_path,
+                &source,
                 state_db_ctx.as_deref(),
                 &mut state_builder,
                 config.model_provider_id.as_str(),
@@ -940,18 +942,30 @@ async fn rollout_writer(
 #[allow(clippy::too_many_arguments)]
 async fn write_session_meta(
     writer: &mut JsonlWriter,
-    session_meta_line: SessionMetaLine,
+    mut session_meta_line: SessionMetaLine,
     rollout_path: &Path,
+    source: &Arc<Mutex<InMemoryRolloutSource>>,
     state_db_ctx: Option<&StateRuntime>,
     state_builder: &mut Option<ThreadMetadataBuilder>,
     default_provider: &str,
 ) -> std::io::Result<()> {
+    if session_meta_line.git.is_none() {
+        session_meta_line.git = collect_git_info(&session_meta_line.meta.cwd).await;
+    }
     let memory_mode = session_meta_line.meta.memory_mode.clone();
     if state_db_ctx.is_some() {
         *state_builder = metadata::builder_from_session_meta(&session_meta_line, rollout_path);
     }
 
-    let rollout_item = RolloutItem::SessionMeta(session_meta_line);
+    let rollout_item = RolloutItem::SessionMeta(session_meta_line.clone());
+    {
+        let mut source = source.lock().await;
+        if let Some(RolloutItem::SessionMeta(existing_session_meta)) =
+            source.rollout_items.first_mut()
+        {
+            *existing_session_meta = session_meta_line;
+        }
+    }
     writer.write_rollout_item(&rollout_item).await?;
     state_db::reconcile_rollout(
         state_db_ctx,
@@ -1206,6 +1220,7 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::features::Feature;
+    use crate::git_info::collect_git_info;
     use chrono::TimeZone;
     use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
     use codex_protocol::protocol::AgentMessageEvent;
@@ -1283,6 +1298,40 @@ mod tests {
         assert!(
             rollout_path.exists(),
             "rollout file should exist at startup"
+        );
+
+        let source_session_meta = {
+            let source = store.source.lock().await;
+            source
+                .iter_forward_from(source.inclusive_start_of_rollout_index())
+                .find_map(|(_, item)| match item {
+                    RolloutItem::SessionMeta(session_meta_line) => Some(session_meta_line.clone()),
+                    RolloutItem::ResponseItem(_)
+                    | RolloutItem::Compacted(_)
+                    | RolloutItem::TurnContext(_)
+                    | RolloutItem::EventMsg(_) => None,
+                })
+                .expect("session meta in source")
+        };
+        let loaded_rollout = RolloutStore::load_source(&rollout_path).await?;
+        let persisted_session_meta = loaded_rollout
+            .source
+            .iter_forward_from(loaded_rollout.source.inclusive_start_of_rollout_index())
+            .find_map(|(_, item)| match item {
+                RolloutItem::SessionMeta(session_meta_line) => Some(session_meta_line.clone()),
+                RolloutItem::ResponseItem(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
+            })
+            .expect("session meta in persisted rollout");
+        assert_eq!(
+            serde_json::to_value(persisted_session_meta)?,
+            serde_json::to_value(source_session_meta.clone())?,
+        );
+        assert_eq!(
+            serde_json::to_value(source_session_meta.git)?,
+            serde_json::to_value(collect_git_info(&config.cwd).await)?,
         );
 
         store
