@@ -8,6 +8,7 @@ expression: popup
 › [ ] JavaScript REPL              Enable a persistent Node-backed JavaScript REPL for interactive website debugging
                                    and other inline JavaScript execution capabilities. Requires Node >= v22.22.0
                                    installed.
+  [ ] Bubblewrap sandbox           Try the new linux sandbox based on bubblewrap.
   [ ] Multi-agents                 Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.
   [ ] Apps                         Use a connected ChatGPT App using "$". Install Apps via /apps command. Restart
                                    Codex after enabling.
