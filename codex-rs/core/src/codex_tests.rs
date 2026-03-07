@@ -17,6 +17,8 @@ use crate::tools::format_exec_output_str;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::PermissionProfile;
 use tracing::Span;
 
 use crate::protocol::CompactedItem;
@@ -3968,6 +3970,10 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         .features
         .enable(Feature::RequestPermissions)
         .expect("test setup should allow enabling request permissions");
+    turn_context_raw
+        .sandbox_policy
+        .set(SandboxPolicy::DangerFullAccess)
+        .expect("test setup should allow updating sandbox policy");
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
 
@@ -4009,6 +4015,13 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
                     "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
                     "timeout_ms": params.expiration.timeout_ms(),
                     "sandbox_permissions": params.sandbox_permissions,
+                    "additional_permissions": PermissionProfile {
+                        network: Some(NetworkPermissions {
+                            enabled: Some(true),
+                        }),
+                        file_system: None,
+                        macos: None,
+                    },
                     "justification": params.justification.clone(),
                 })
                 .to_string(),
@@ -4016,14 +4029,30 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         })
         .await;
 
-    let Err(FunctionCallError::RespondToModel(output)) = resp else {
-        panic!("expected validation error result");
+    let output = match resp.expect("expected Ok result") {
+        ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            ..
+        } => content,
+        _ => panic!("unexpected tool output"),
     };
 
-    assert_eq!(
-        output,
-        "missing `additional_permissions`; provide at least one of `network`, `file_system`, or `macos` when using `with_additional_permissions`"
-    );
+    #[derive(Deserialize, PartialEq, Eq, Debug)]
+    struct ResponseExecMetadata {
+        exit_code: i32,
+    }
+
+    #[derive(Deserialize)]
+    struct ResponseExecOutput {
+        output: String,
+        metadata: ResponseExecMetadata,
+    }
+
+    let exec_output: ResponseExecOutput =
+        serde_json::from_str(&output).expect("valid exec output json");
+
+    pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
+    assert!(exec_output.output.contains("hi"));
 }
 
 #[tokio::test]

@@ -348,11 +348,12 @@ impl ShellHandler {
             && !matches!(
                 turn.approval_policy.value(),
                 codex_protocol::protocol::AskForApproval::OnRequest
+                    | codex_protocol::protocol::AskForApproval::Guardian
             )
         {
             let approval_policy = turn.approval_policy.value();
             return Err(FunctionCallError::RespondToModel(format!(
-                "approval policy is {approval_policy:?}; reject command — you should not ask for additional sandbox permissions if the approval policy is {approval_policy:?}"
+                "approval policy is {approval_policy:?}; reject command — you should not ask for additional sandbox permissions if the approval policy is not OnRequest or Guardian"
             )));
         }
 
