@@ -7,14 +7,20 @@ mod tests;
 #[cfg(windows)]
 mod win;
 
+pub const DEFAULT_OUTPUT_BYTES_CAP: usize = 1024 * 1024;
+
 /// Spawn a non-interactive process using regular pipes for stdin/stdout/stderr.
 pub use pipe::spawn_process as spawn_pipe_process;
 /// Spawn a non-interactive process using regular pipes, but close stdin immediately.
 pub use pipe::spawn_process_no_stdin as spawn_pipe_process_no_stdin;
+/// Combine stdout/stderr receivers into a single broadcast receiver.
+pub use process::combine_output_receivers;
 /// Handle for interacting with a spawned process (PTY or pipe).
 pub use process::ProcessHandle;
-/// Bundle of process handles plus output and exit receivers returned by spawn helpers.
+/// Bundle of process handles plus split output and exit receivers returned by spawn helpers.
 pub use process::SpawnedProcess;
+/// Terminal size in character cells used for PTY spawn and resize operations.
+pub use process::TerminalSize;
 /// Backwards-compatible alias for ProcessHandle.
 pub type ExecCommandSession = ProcessHandle;
 /// Backwards-compatible alias for SpawnedProcess.
