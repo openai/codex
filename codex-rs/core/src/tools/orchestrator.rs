@@ -242,17 +242,17 @@ impl ToolOrchestrator {
                 // Under policies that do not normally retry unsandboxed, only
                 // allow the retry approval flow to continue when a managed
                 // network denial needs an approval prompt.
-                if !tool.wants_no_sandbox_approval(approval_policy) {
-                    if !allows_network_retry_approval_after_sandbox_denial(
+                if !tool.wants_no_sandbox_approval(approval_policy)
+                    && !allows_network_retry_approval_after_sandbox_denial(
                         approval_policy,
                         network_approval_context.is_some(),
                         &turn_ctx.sandbox_policy,
-                    ) {
-                        return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                            output,
-                            network_policy_decision,
-                        })));
-                    }
+                    )
+                {
+                    return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                        output,
+                        network_policy_decision,
+                    })));
                 }
                 let retry_reason =
                     if let Some(network_approval_context) = network_approval_context.as_ref() {

@@ -11,6 +11,7 @@
 //! 4. Approve only low- and medium-risk actions (`risk_score < 80`).
 
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,11 +44,15 @@ use codex_protocol::protocol::ReviewDecision;
 
 const GUARDIAN_MODEL: &str = "gpt-5.4";
 const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
+pub(crate) const GUARDIAN_SUBAGENT_NAME: &str = "guardian";
 // This is intentionally much smaller than the model's context window. Guardian
 // only needs enough conversation state to establish intent and recent context;
 // keeping the transcript compact helps latency and leaves plenty of room for
 // the policy prompt and exact planned action JSON.
 const GUARDIAN_MAX_TRANSCRIPT_TOKENS: usize = 3_500;
+// Keep a smaller sub-budget for recent tool evidence so command output can
+// inform the review without crowding out the actual conversation.
+const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 1_200;
 // Always keep some recent non-user context so the reviewer can see what the
 // agent was trying to do immediately before the escalation.
 const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 20;
@@ -102,9 +107,22 @@ enum GuardianReviewFailure {
 #[derive(Debug)]
 struct GuardianTranscriptEntry {
     number: usize,
-    role: &'static str,
+    role: String,
     is_user: bool,
+    is_tool: bool,
     text: String,
+}
+
+#[derive(Clone, Copy)]
+struct GuardianTranscriptRenderBudget {
+    message_entry_token_cap: usize,
+    tool_entry_token_cap: usize,
+}
+
+#[derive(Default)]
+struct GuardianTranscriptTokenCount {
+    total: usize,
+    tool: usize,
 }
 
 /// Top-level guardian review entry point for tool retries that need to leave
@@ -277,11 +295,13 @@ async fn build_guardian_prompt(
     )
 }
 
-/// Keeps all user turns plus a bounded amount of recent assistant context.
+/// Keeps all user turns plus a bounded amount of recent assistant/tool context.
 ///
 /// The pruning strategy is intentionally simple and reviewable:
 /// - always retain user messages because they carry authorization and intent
 /// - seed the transcript with the most recent entries
+/// - reserve a smaller sub-budget for tool evidence so it cannot crowd out the
+///   human conversation
 /// - if the transcript is still too large, drop older non-user entries first
 /// - progressively shrink the per-entry truncation cap before giving up
 fn build_guardian_transcript(
@@ -298,7 +318,8 @@ fn build_guardian_transcript(
     }
 
     // Preserve all user turns and a slice of recent context so the reviewer can
-    // see both the authorization signal and the immediate lead-up to retry.
+    // see both the authorization signal and the immediate lead-up to retry,
+    // including recent tool evidence that may justify the escalation.
     let recent_numbers: BTreeSet<usize> = entries
         .iter()
         .rev()
@@ -313,25 +334,53 @@ fn build_guardian_transcript(
 
     // Start with more generous per-entry truncation, then tighten it if needed
     // before dropping the transcript entirely.
-    for cap in [220usize, 120, 60] {
-        while transcript_token_count(entries, &included_numbers, cap)
-            > GUARDIAN_MAX_TRANSCRIPT_TOKENS
-        {
-            // Drop the oldest non-user context first. User messages remain
-            // sticky because they are the strongest evidence of authorization.
-            let Some(number) = entries
-                .iter()
-                .find(|entry| included_numbers.contains(&entry.number) && !entry.is_user)
-                .map(|entry| entry.number)
-            else {
+    for budget in [
+        GuardianTranscriptRenderBudget {
+            message_entry_token_cap: 220,
+            tool_entry_token_cap: 320,
+        },
+        GuardianTranscriptRenderBudget {
+            message_entry_token_cap: 120,
+            tool_entry_token_cap: 160,
+        },
+        GuardianTranscriptRenderBudget {
+            message_entry_token_cap: 60,
+            tool_entry_token_cap: 80,
+        },
+    ] {
+        loop {
+            let counts = transcript_token_count(entries, &included_numbers, budget);
+            if counts.total <= GUARDIAN_MAX_TRANSCRIPT_TOKENS
+                && counts.tool <= GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS
+            {
+                break;
+            }
+
+            // Trim the oldest retained tool evidence first when it exceeds its
+            // reserved budget. Otherwise trim the oldest non-user context.
+            let number = if counts.tool > GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS {
+                entries
+                    .iter()
+                    .find(|entry| included_numbers.contains(&entry.number) && entry.is_tool)
+                    .map(|entry| entry.number)
+            } else {
+                entries
+                    .iter()
+                    .find(|entry| included_numbers.contains(&entry.number) && !entry.is_user)
+                    .map(|entry| entry.number)
+            };
+
+            let Some(number) = number else {
                 break;
             };
             included_numbers.remove(&number);
         }
 
-        if transcript_token_count(entries, &included_numbers, cap) <= GUARDIAN_MAX_TRANSCRIPT_TOKENS
+        let counts = transcript_token_count(entries, &included_numbers, budget);
+        if counts.total <= GUARDIAN_MAX_TRANSCRIPT_TOKENS
+            && counts.tool <= GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS
         {
-            let transcript = render_transcript(entries, &included_numbers, cap);
+            let transcript = render_transcript(entries, &included_numbers, budget);
             let omission = if included_numbers.len() < entries.len() {
                 Some(format!(
                     "Earlier conversation entries were omitted. Session ID: {session_id}. Rollout path: {}. Full conversation can be consulted for deeper judgment.",
@@ -356,13 +405,18 @@ fn build_guardian_transcript(
 fn render_transcript(
     entries: &[GuardianTranscriptEntry],
     included_numbers: &BTreeSet<usize>,
-    per_entry_token_cap: usize,
+    budget: GuardianTranscriptRenderBudget,
 ) -> String {
     entries
         .iter()
         .filter(|entry| included_numbers.contains(&entry.number))
         .map(|entry| {
-            let text = truncate_text(&entry.text, TruncationPolicy::Tokens(per_entry_token_cap));
+            let token_cap = if entry.is_tool {
+                budget.tool_entry_token_cap
+            } else {
+                budget.message_entry_token_cap
+            };
+            let text = truncate_text(&entry.text, TruncationPolicy::Tokens(token_cap));
             format!("[{}] {}: {}", entry.number, entry.role, text)
         })
         .collect::<Vec<_>>()
@@ -372,48 +426,100 @@ fn render_transcript(
 fn transcript_token_count(
     entries: &[GuardianTranscriptEntry],
     included_numbers: &BTreeSet<usize>,
-    per_entry_token_cap: usize,
-) -> usize {
-    approx_token_count(&render_transcript(
-        entries,
-        included_numbers,
-        per_entry_token_cap,
-    ))
+    budget: GuardianTranscriptRenderBudget,
+) -> GuardianTranscriptTokenCount {
+    let mut counts = GuardianTranscriptTokenCount::default();
+    for entry in entries
+        .iter()
+        .filter(|entry| included_numbers.contains(&entry.number))
+    {
+        let token_cap = if entry.is_tool {
+            budget.tool_entry_token_cap
+        } else {
+            budget.message_entry_token_cap
+        };
+        let text = truncate_text(&entry.text, TruncationPolicy::Tokens(token_cap));
+        let rendered = format!("[{}] {}: {}", entry.number, entry.role, text);
+        let token_count = approx_token_count(&rendered);
+        counts.total += token_count;
+        if entry.is_tool {
+            counts.tool += token_count;
+        }
+    }
+    counts
 }
 
-/// Retains only human-readable user/assistant message content for guardian
-/// review and skips synthetic contextual scaffolding that would just add noise.
+/// Retains the human-readable conversation plus recent tool evidence for
+/// guardian review and skips synthetic contextual scaffolding that would just
+/// add noise.
 fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTranscriptEntry> {
-    items
-        .iter()
-        .filter_map(|item| match item {
+    let mut entries = Vec::new();
+    let mut tool_names_by_call_id = HashMap::new();
+
+    for item in items {
+        let entry = match item {
             ResponseItem::Message { role, content, .. } if role == "user" => {
                 if is_contextual_user_message_content(content) {
                     None
                 } else {
-                    content_items_to_text(content).map(|text| ("user", true, text))
+                    content_items_to_text(content).map(|text| GuardianTranscriptEntry {
+                        number: entries.len() + 1,
+                        role: "user".to_string(),
+                        is_user: true,
+                        is_tool: false,
+                        text,
+                    })
                 }
             }
             ResponseItem::Message { role, content, .. } if role == "assistant" => {
-                content_items_to_text(content).map(|text| ("assistant", false, text))
+                content_items_to_text(content).map(|text| GuardianTranscriptEntry {
+                    number: entries.len() + 1,
+                    role: "assistant".to_string(),
+                    is_user: false,
+                    is_tool: false,
+                    text,
+                })
             }
+            ResponseItem::FunctionCall { call_id, name, .. } => {
+                tool_names_by_call_id.insert(call_id.clone(), name.clone());
+                None
+            }
+            ResponseItem::CustomToolCall { call_id, name, .. } => {
+                tool_names_by_call_id.insert(call_id.clone(), name.clone());
+                None
+            }
+            ResponseItem::FunctionCallOutput { call_id, output }
+            | ResponseItem::CustomToolCallOutput { call_id, output } => output
+                .body
+                .to_text()
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| GuardianTranscriptEntry {
+                    number: entries.len() + 1,
+                    role: tool_names_by_call_id
+                        .get(call_id)
+                        .map_or_else(|| "tool".to_string(), |name| format!("tool {name}")),
+                    is_user: false,
+                    is_tool: true,
+                    text,
+                }),
             _ => None,
-        })
-        .enumerate()
-        .map(|(idx, (role, is_user, text))| GuardianTranscriptEntry {
-            number: idx + 1,
-            role,
-            is_user,
-            text,
-        })
-        .collect()
+        };
+
+        if let Some(entry) = entry {
+            entries.push(entry);
+        }
+    }
+
+    entries
 }
 
 /// Runs the guardian as a locked-down one-shot subagent.
 ///
-/// The guardian itself should not mutate state, trigger further approvals, or
-/// roam the network, so it is pinned to a read-only sandbox with
-/// `approval_policy = never` and nonessential agent features disabled.
+/// The guardian itself should not mutate state or trigger further approvals, so
+/// it is pinned to a read-only sandbox with `approval_policy = never` and
+/// nonessential agent features disabled. It may still reuse the parent's
+/// managed-network allowlist for read-only checks, but it intentionally runs
+/// without inherited exec-policy rules.
 async fn run_guardian_subagent(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -431,6 +537,8 @@ async fn run_guardian_subagent(
     // `run_codex_thread_one_shot` is already the subagent runner used elsewhere
     // in core. Reusing it here keeps the MVP aligned with the existing review
     // subagent model instead of introducing a guardian-specific execution path.
+    // The guardian subagent source is also how session startup recognizes this
+    // reviewer and disables inherited exec-policy rules.
     let codex = run_codex_thread_one_shot(
         guardian_config,
         session.services.auth_manager.clone(),
@@ -442,7 +550,7 @@ async fn run_guardian_subagent(
         session,
         turn,
         cancel_token,
-        SubAgentSource::Other("guardian".to_string()),
+        SubAgentSource::Other(GUARDIAN_SUBAGENT_NAME.to_string()),
         Some(schema),
         None,
     )
@@ -493,6 +601,7 @@ fn build_guardian_subagent_config(
         guardian_config.permissions.network = Some(NetworkProxySpec::from_config_and_constraints(
             live_network_config,
             network_constraints,
+            &SandboxPolicy::new_read_only_policy(),
         )?);
     }
     let _ = guardian_config.features.disable(Feature::Collab);
@@ -588,20 +697,23 @@ mod tests {
         let entries = [
             GuardianTranscriptEntry {
                 number: 1,
-                role: "user",
+                role: "user".to_string(),
                 is_user: true,
+                is_tool: false,
                 text: "first".to_string(),
             },
             GuardianTranscriptEntry {
                 number: 2,
-                role: "assistant",
+                role: "assistant".to_string(),
                 is_user: false,
+                is_tool: false,
                 text: "second".to_string(),
             },
             GuardianTranscriptEntry {
                 number: 3,
-                role: "assistant",
+                role: "assistant".to_string(),
                 is_user: false,
+                is_tool: false,
                 text: "third".to_string(),
             },
         ];
@@ -643,6 +755,108 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].number, 1);
         assert_eq!(entries[0].role, "assistant");
+    }
+
+    #[test]
+    fn collect_guardian_transcript_entries_includes_recent_tool_output() {
+        let items = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "check the repo".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "read_file".to_string(),
+                arguments: "{\"path\":\"README.md\"}".to_string(),
+                call_id: "call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                    "repo is public".to_string(),
+                ),
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "I need to push a fix".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+
+        let entries = collect_guardian_transcript_entries(&items);
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[1].role, "tool read_file");
+        assert!(entries[1].is_tool);
+        assert_eq!(entries[1].text, "repo is public");
+    }
+
+    #[test]
+    fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
+        let repeated = "signal ".repeat(500);
+        let entries = vec![
+            GuardianTranscriptEntry {
+                number: 1,
+                role: "user".to_string(),
+                is_user: true,
+                is_tool: false,
+                text: "please figure out if the repo is public".to_string(),
+            },
+            GuardianTranscriptEntry {
+                number: 2,
+                role: "tool gh".to_string(),
+                is_user: false,
+                is_tool: true,
+                text: repeated.clone(),
+            },
+            GuardianTranscriptEntry {
+                number: 3,
+                role: "tool read_file".to_string(),
+                is_user: false,
+                is_tool: true,
+                text: repeated.clone(),
+            },
+            GuardianTranscriptEntry {
+                number: 4,
+                role: "tool web".to_string(),
+                is_user: false,
+                is_tool: true,
+                text: repeated.clone(),
+            },
+            GuardianTranscriptEntry {
+                number: 5,
+                role: "tool gh".to_string(),
+                is_user: false,
+                is_tool: true,
+                text: repeated,
+            },
+            GuardianTranscriptEntry {
+                number: 6,
+                role: "assistant".to_string(),
+                is_user: false,
+                is_tool: false,
+                text: "The public repo check is the main reason I want to escalate.".to_string(),
+            },
+        ];
+
+        let (transcript, omission) =
+            build_guardian_transcript(&entries, "session-1", Some("/tmp/rollout.jsonl"));
+
+        assert!(transcript.contains("[1] user: please figure out if the repo is public"));
+        assert!(transcript.contains(
+            "[6] assistant: The public repo check is the main reason I want to escalate."
+        ));
+        assert!(!transcript.contains("[2] tool gh:"));
+        assert!(omission.is_some());
     }
 
     #[test]
@@ -690,6 +904,7 @@ mod tests {
                 allowed_domains: Some(vec!["github.com".to_string()]),
                 ..Default::default()
             }),
+            parent_config.permissions.sandbox_policy.get(),
         )
         .expect("network proxy spec");
         parent_config.permissions.network = Some(network.clone());
@@ -715,8 +930,12 @@ mod tests {
         parent_network.network.enabled = true;
         parent_network.network.allowed_domains = vec!["parent.example".to_string()];
         parent_config.permissions.network = Some(
-            NetworkProxySpec::from_config_and_constraints(parent_network, None)
-                .expect("parent network proxy spec"),
+            NetworkProxySpec::from_config_and_constraints(
+                parent_network,
+                None,
+                parent_config.permissions.sandbox_policy.get(),
+            )
+            .expect("parent network proxy spec"),
         );
 
         let mut live_network = NetworkProxyConfig::default();
@@ -730,8 +949,12 @@ mod tests {
         assert_eq!(
             guardian_config.permissions.network,
             Some(
-                NetworkProxySpec::from_config_and_constraints(live_network, None)
-                    .expect("live network proxy spec")
+                NetworkProxySpec::from_config_and_constraints(
+                    live_network,
+                    None,
+                    &SandboxPolicy::new_read_only_policy(),
+                )
+                .expect("live network proxy spec")
             )
         );
     }
