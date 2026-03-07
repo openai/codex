@@ -68,7 +68,6 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
-use codex_protocol::config_types::WebSearchLocation;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -1660,39 +1659,7 @@ fn resolve_web_search_config(
         (None, None) => None,
         (Some(base), None) => Some(base.clone().into()),
         (None, Some(profile)) => Some(profile.clone().into()),
-        (Some(base), Some(profile)) => Some(
-            WebSearchToolConfig {
-                context_size: profile.context_size.or(base.context_size),
-                allowed_domains: profile
-                    .allowed_domains
-                    .clone()
-                    .or_else(|| base.allowed_domains.clone()),
-                location: match (base.location.as_ref(), profile.location.as_ref()) {
-                    (None, None) => None,
-                    (Some(base_location), None) => Some(base_location.clone()),
-                    (None, Some(profile_location)) => Some(profile_location.clone()),
-                    (Some(base_location), Some(profile_location)) => Some(WebSearchLocation {
-                        country: profile_location
-                            .country
-                            .clone()
-                            .or_else(|| base_location.country.clone()),
-                        region: profile_location
-                            .region
-                            .clone()
-                            .or_else(|| base_location.region.clone()),
-                        city: profile_location
-                            .city
-                            .clone()
-                            .or_else(|| base_location.city.clone()),
-                        timezone: profile_location
-                            .timezone
-                            .clone()
-                            .or_else(|| base_location.timezone.clone()),
-                    }),
-                },
-            }
-            .into(),
-        ),
+        (Some(base), Some(profile)) => Some(base.merge(profile).into()),
     }
 }
 
