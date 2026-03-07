@@ -132,7 +132,11 @@ def codex_rust_crate(
             crate = name,
             env = test_env,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
-            rustc_flags = rustc_flags_extra,
+            # Keep `file!()` paths Cargo-like (`tui/src/...`) instead of
+            # Bazel workspace-prefixed (`codex-rs/tui/src/...`) so Insta
+            # looks up committed snapshots under the shared `codex-rs`
+            # workspace root.
+            rustc_flags = rustc_flags_extra + ["--remap-path-prefix=codex-rs="],
             rustc_env = rustc_env,
             data = test_data_extra,
             tags = test_tags,
