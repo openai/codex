@@ -1711,6 +1711,27 @@ impl ChatWidget {
         }
     }
 
+    fn apply_turn_started_context_window(&mut self, model_context_window: Option<i64>) {
+        let info = match self.token_info.take() {
+            Some(mut info) => {
+                info.model_context_window = model_context_window;
+                info
+            }
+            None => {
+                let Some(model_context_window) = model_context_window else {
+                    return;
+                };
+                TokenUsageInfo {
+                    total_token_usage: TokenUsage::default(),
+                    last_token_usage: TokenUsage::default(),
+                    model_context_window: Some(model_context_window),
+                }
+            }
+        };
+
+        self.apply_token_info(info);
+    }
+
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
         let percent = self.context_remaining_percent(&info);
         let used_tokens = self.context_used_tokens(&info, percent.is_some());
@@ -4738,20 +4759,7 @@ impl ChatWidget {
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(event) => {
                 if !is_resume_initial_replay {
-                    match (self.token_info.take(), event.model_context_window) {
-                        (Some(mut info), model_context_window) => {
-                            info.model_context_window = model_context_window;
-                            self.apply_token_info(info);
-                        }
-                        (None, Some(model_context_window)) => {
-                            self.apply_token_info(TokenUsageInfo {
-                                total_token_usage: TokenUsage::default(),
-                                last_token_usage: TokenUsage::default(),
-                                model_context_window: Some(model_context_window),
-                            });
-                        }
-                        (None, None) => {}
-                    }
+                    self.apply_turn_started_context_window(event.model_context_window);
                     self.on_task_started();
                 }
             }
@@ -8452,6 +8460,11 @@ impl ChatWidget {
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
         &self.config
+    }
+
+    #[cfg(test)]
+    pub(crate) fn status_line_text(&self) -> Option<String> {
+        self.bottom_pane.status_line_text()
     }
 
     pub(crate) fn clear_token_usage(&mut self) {

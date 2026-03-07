@@ -3316,7 +3316,7 @@ impl App {
     fn handle_codex_event_now(&mut self, event: Event) {
         let needs_refresh = matches!(
             event.msg,
-            EventMsg::SessionConfigured(_) | EventMsg::TokenCount(_)
+            EventMsg::SessionConfigured(_) | EventMsg::TurnStarted(_) | EventMsg::TokenCount(_)
         );
         // This guard is only for intentional thread-switch shutdowns.
         // App-exit shutdowns are tracked by `pending_shutdown_exit_thread_id`
@@ -4802,6 +4802,29 @@ mod tests {
         assert!(
             new_op_rx.try_recv().is_err(),
             "replayed interrupted turns should restore queued input for editing, not submit it"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_turn_started_refreshes_status_line_with_runtime_context_window() {
+        let mut app = make_test_app().await;
+        app.chat_widget
+            .setup_status_line(vec![crate::bottom_pane::StatusLineItem::ContextWindowSize]);
+
+        assert_eq!(app.chat_widget.status_line_text(), None);
+
+        app.handle_codex_event_now(Event {
+            id: "turn-started".to_string(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: Some(950_000),
+                collaboration_mode_kind: Default::default(),
+            }),
+        });
+
+        assert_eq!(
+            app.chat_widget.status_line_text(),
+            Some("950K window".into())
         );
     }
 

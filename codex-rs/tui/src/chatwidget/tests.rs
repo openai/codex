@@ -1999,7 +1999,7 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
 }
 
 fn status_line_text(chat: &ChatWidget) -> Option<String> {
-    chat.bottom_pane.status_line_text()
+    chat.status_line_text()
 }
 
 fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
