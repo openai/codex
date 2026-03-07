@@ -1154,11 +1154,38 @@ fn insert_into_namespace(
         .or_insert_with(|| Value::Object(Map::new()));
     match entry {
         Value::Object(map) => {
-            map.insert(name, schema);
-            Ok(())
+            insert_definition(map, name, schema, &format!("namespace `{namespace}`"))
         }
         _ => Err(anyhow!("expected namespace {namespace} to be an object")),
     }
+}
+
+fn insert_definition(
+    definitions: &mut Map<String, Value>,
+    name: String,
+    schema: Value,
+    location: &str,
+) -> Result<()> {
+    if let Some(existing) = definitions.get(&name) {
+        if existing == &schema {
+            return Ok(());
+        }
+
+        let existing_title = existing
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("<untitled>");
+        let new_title = schema
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("<untitled>");
+        return Err(anyhow!(
+            "schema definition collision in {location}: {name} (existing title: {existing_title}, new title: {new_title}); use #[schemars(rename = \"...\")] to rename one of the conflicting schema definitions"
+        ));
+    }
+
+    definitions.insert(name, schema);
+    Ok(())
 }
 
 fn write_json_schema_with_return<T>(out_dir: &Path, name: &str) -> Result<GeneratedSchema>
@@ -2289,6 +2316,48 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn build_schema_bundle_rejects_conflicting_duplicate_definitions() {
+        let err = build_schema_bundle(vec![
+            GeneratedSchema {
+                namespace: Some("v2".to_string()),
+                logical_name: "First".to_string(),
+                in_v1_dir: false,
+                value: serde_json::json!({
+                    "title": "First",
+                    "type": "object",
+                    "definitions": {
+                        "Shared": {
+                            "title": "SharedString",
+                            "type": "string"
+                        }
+                    }
+                }),
+            },
+            GeneratedSchema {
+                namespace: Some("v2".to_string()),
+                logical_name: "Second".to_string(),
+                in_v1_dir: false,
+                value: serde_json::json!({
+                    "title": "Second",
+                    "type": "object",
+                    "definitions": {
+                        "Shared": {
+                            "title": "SharedInteger",
+                            "type": "integer"
+                        }
+                    }
+                }),
+            },
+        ])
+        .expect_err("conflicting schema definitions should be rejected");
+
+        assert_eq!(
+            err.to_string(),
+            "schema definition collision in namespace `v2`: Shared (existing title: SharedString, new title: SharedInteger); use #[schemars(rename = \"...\")] to rename one of the conflicting schema definitions"
+        );
     }
 
     #[test]
