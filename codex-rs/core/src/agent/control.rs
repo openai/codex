@@ -212,8 +212,9 @@ impl AgentControl {
         // TODO(jif) add helper for drain
         state.notify_thread_created(new_thread.thread_id);
 
+        self.maybe_start_completion_watcher(new_thread.thread_id, notification_source)
+            .await;
         self.send_input(new_thread.thread_id, items).await?;
-        self.maybe_start_completion_watcher(new_thread.thread_id, notification_source);
 
         Ok(new_thread.thread_id)
     }
@@ -288,7 +289,8 @@ impl AgentControl {
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
-        self.maybe_start_completion_watcher(resumed_thread.thread_id, Some(notification_source));
+        self.maybe_start_completion_watcher(resumed_thread.thread_id, Some(notification_source))
+            .await;
 
         Ok(resumed_thread.thread_id)
     }
@@ -418,7 +420,7 @@ impl AgentControl {
     ///
     /// This is only enabled for `SubAgentSource::ThreadSpawn`, where a parent thread exists and
     /// can receive completion notifications.
-    fn maybe_start_completion_watcher(
+    async fn maybe_start_completion_watcher(
         &self,
         child_thread_id: ThreadId,
         session_source: Option<SessionSource>,
@@ -429,10 +431,12 @@ impl AgentControl {
         else {
             return;
         };
+
+        let status_rx = self.subscribe_status(child_thread_id).await.ok();
         let control = self.clone();
         tokio::spawn(async move {
-            let status = match control.subscribe_status(child_thread_id).await {
-                Ok(mut status_rx) => {
+            let status = match status_rx {
+                Some(mut status_rx) => {
                     let mut status = status_rx.borrow().clone();
                     while !is_final(&status) {
                         if status_rx.changed().await.is_err() {
@@ -443,7 +447,7 @@ impl AgentControl {
                     }
                     status
                 }
-                Err(_) => control.get_status(child_thread_id).await,
+                None => control.get_status(child_thread_id).await,
             };
             if !is_final(&status) {
                 return;
@@ -1317,10 +1321,34 @@ mod tests {
             .get_thread(child_thread_id)
             .await
             .expect("child thread should exist");
+        let mut status_rx = harness
+            .control
+            .subscribe_status(child_thread_id)
+            .await
+            .expect("status subscription should succeed");
         let _ = child_thread
             .submit(Op::Shutdown {})
             .await
             .expect("child shutdown should submit");
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let status = status_rx.borrow().clone();
+                if is_final(&status) {
+                    break;
+                }
+                if status_rx.changed().await.is_err() {
+                    let latest = harness.control.get_status(child_thread_id).await;
+                    assert_eq!(
+                        is_final(&latest),
+                        true,
+                        "child status stream closed before a final status was observable"
+                    );
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("child should reach a final status");
 
         assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
     }
@@ -1331,15 +1359,18 @@ mod tests {
         let (parent_thread_id, parent_thread) = harness.start_thread().await;
         let child_thread_id = ThreadId::new();
 
-        harness.control.maybe_start_completion_watcher(
-            child_thread_id,
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_nickname: None,
-                agent_role: Some("explorer".to_string()),
-            })),
-        );
+        harness
+            .control
+            .maybe_start_completion_watcher(
+                child_thread_id,
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth: 1,
+                    agent_nickname: None,
+                    agent_role: Some("explorer".to_string()),
+                })),
+            )
+            .await;
 
         assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
 

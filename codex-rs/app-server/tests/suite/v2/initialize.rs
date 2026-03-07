@@ -14,6 +14,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::fs_wait;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -191,29 +192,22 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
-    let notify_script = codex_home.path().join("notify.py");
-    std::fs::write(
-        &notify_script,
-        r#"from pathlib import Path
-import sys
-
-payload_path = Path(__file__).with_name("notify.json")
-tmp_path = payload_path.with_suffix(".json.tmp")
-tmp_path.write_text(sys.argv[-1], encoding="utf-8")
-tmp_path.replace(payload_path)
-"#,
-    )?;
     let notify_file = codex_home.path().join("notify.json");
-    let notify_script = notify_script
+    let notify_capture = cargo_bin("codex-app-server-test-notify-capture")?;
+    let notify_capture = notify_capture
         .to_str()
-        .expect("notify script path should be valid UTF-8");
+        .expect("notify capture path should be valid UTF-8");
+    let notify_file_str = notify_file
+        .to_str()
+        .expect("notify file path should be valid UTF-8");
     create_config_toml_with_extra(
         codex_home.path(),
         &server.uri(),
         "never",
         &format!(
-            "notify = [\"python3\", {}]",
-            toml_basic_string(notify_script)
+            "notify = [{}, {}]",
+            toml_basic_string(notify_capture),
+            toml_basic_string(notify_file_str)
         ),
     )?;
 
@@ -296,6 +290,9 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 {extra}
+
+[features]
+shell_snapshot = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

@@ -2,6 +2,12 @@
 # Do not increase, fix your test instead
 slow-timeout = { period = "15s", terminate-after = 2 }
 
+[test-groups.app_server_protocol_codegen]
+max-threads = 1
+
+[test-groups.app_server_integration]
+max-threads = 1
+
 
 [[profile.default.overrides]]
 # Do not add new tests here
@@ -11,3 +17,13 @@ slow-timeout = { period = "1m", terminate-after = 4 }
 [[profile.default.overrides]]
 filter = 'test(approval_matrix_covers_all_modes)'
 slow-timeout = { period = "30s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = 'package(codex-app-server-protocol) & (test(typescript_schema_fixtures_match_generated) | test(json_schema_fixtures_match_generated) | test(generate_ts_with_experimental_api_retains_experimental_entries) | test(generated_ts_optional_nullable_fields_only_in_params) | test(generate_json_filters_experimental_fields_and_methods))'
+test-group = 'app_server_protocol_codegen'
+
+[[profile.default.overrides]]
+# These tests spawn a fresh app-server subprocess per case. Serializing them keeps
+# Windows startup deterministic without widening the read timeouts.
+filter = 'package(codex-app-server)'
+test-group = 'app_server_integration'
