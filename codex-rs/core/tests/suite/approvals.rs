@@ -2131,7 +2131,7 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
     )
     .await;
 
-    let parent_repeat_completion = mount_sse_once_match(
+    let _ = mount_sse_once_match(
         &server,
         |req: &Request| body_contains(req, PARENT_CALL_ID_2),
         sse(vec![
@@ -2207,6 +2207,11 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
         child_file.exists(),
         "expected subagent command to create file"
     );
+    fs::remove_file(&child_file)?;
+    assert!(
+        !child_file.exists(),
+        "expected child file to be removed before parent rerun"
+    );
 
     submit_turn(
         &test,
@@ -2216,13 +2221,10 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
     )
     .await?;
     wait_for_completion_without_approval(&test).await;
-
-    let second_output = parse_result(
-        &parent_repeat_completion
-            .single_request()
-            .function_call_output(PARENT_CALL_ID_2),
+    assert!(
+        child_file.exists(),
+        "expected parent rerun to recreate child file without prompting"
     );
-    assert_eq!(second_output.exit_code.unwrap_or(0), 0);
 
     Ok(())
 }
