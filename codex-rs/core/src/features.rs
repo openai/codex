@@ -703,7 +703,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "guardian_approval",
         stage: Stage::Experimental {
             name: "Automatic approval review",
-            menu_description: "Automatically review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access.",
+            menu_description: "Dispatch `on-request` approval prompts (for e.g. sandbox escapes and blocked network access) to a carefully prompted subagent rather than blocking the agent on your input.",
             announcement: "",
         },
         default_enabled: false,
@@ -916,7 +916,7 @@ mod tests {
         assert_eq!(
             stage.experimental_menu_description().map(str::to_owned),
             Some(
-                "Automatically review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access.".to_string()
+                "Dispatch `on-request` approval prompts (for e.g. sandbox escapes and blocked network access) to a carefully prompted subagent rather than blocking the agent on your input.".to_string()
             )
         );
         assert_eq!(stage.experimental_announcement(), None);
