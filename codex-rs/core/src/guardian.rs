@@ -66,7 +66,7 @@ const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 const GUARDIAN_TRUNCATION_TAG: &str = "guardian_truncated";
 
 pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
-    "Guardian rejected this action due to unacceptable risk. ",
+    "This action was rejected due to unacceptable risk. ",
     "The agent must not attempt to achieve the same outcome via workaround, ",
     "indirect execution, or policy circumvention. ",
     "Proceed only with a materially safer alternative, or stop and request user input.",
@@ -216,8 +216,7 @@ async fn run_guardian_review(
     // Emit a concise warning so the parent turn has an auditable summary of the
     // guardian decision without needing the full subagent transcript.
     let warning = format!(
-        "Guardian {verdict} approval request ({}/100, {}): {}",
-        assessment.risk_score,
+        "Sandbox escalation {verdict} (risk: {}): {}",
         assessment.risk_level.as_str(),
         assessment.rationale
     );

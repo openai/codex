@@ -449,7 +449,7 @@ impl DeveloperInstructions {
             AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.to_string(),
             AskForApproval::OnRequest => {
                 let mut instructions = on_request_instructions();
-                if guardian_approval_enabled {
+                if guardian_approval_enabled && !GUARDIAN_APPROVAL_FEATURE.trim().is_empty() {
                     instructions.push_str("\n\n");
                     instructions.push_str(GUARDIAN_APPROVAL_FEATURE);
                 }
@@ -1722,7 +1722,7 @@ mod tests {
     }
 
     #[test]
-    fn includes_guardian_feature_guidance_for_on_request_when_enabled() {
+    fn guardian_feature_does_not_change_on_request_instructions() {
         let instructions = DeveloperInstructions::from_permissions_with_network(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
@@ -1731,11 +1731,20 @@ mod tests {
             &Policy::empty(),
             None,
             false,
-        );
+        )
+        .into_text();
+        let baseline = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            AskForApproval::OnRequest,
+            false,
+            &Policy::empty(),
+            None,
+            false,
+        )
+        .into_text();
 
-        let text = instructions.into_text();
-        assert!(text.contains("guardian subagent"));
-        assert!(text.contains("approval prompts"));
+        assert_eq!(instructions, baseline);
     }
 
     #[test]
