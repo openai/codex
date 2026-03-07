@@ -4708,8 +4708,22 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TurnStarted(_) => {
+            EventMsg::TurnStarted(event) => {
                 if !is_resume_initial_replay {
+                    match (self.token_info.take(), event.model_context_window) {
+                        (Some(mut info), model_context_window) => {
+                            info.model_context_window = model_context_window;
+                            self.apply_token_info(info);
+                        }
+                        (None, Some(model_context_window)) => {
+                            self.apply_token_info(TokenUsageInfo {
+                                total_token_usage: TokenUsage::default(),
+                                last_token_usage: TokenUsage::default(),
+                                model_context_window: Some(model_context_window),
+                            });
+                        }
+                        (None, None) => {}
+                    }
                     self.on_task_started();
                 }
             }
