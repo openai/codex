@@ -1,6 +1,13 @@
+use std::path::Path;
+use std::time::Duration;
+
 use anyhow::Result;
+use anyhow::bail;
+use codex_core::RolloutRecorder;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -17,6 +24,40 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+
+const ROLLOUT_PERSIST_TIMEOUT: Duration = Duration::from_secs(5);
+const ROLLOUT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+async fn wait_for_completed_rollout(rollout_path: &Path) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + ROLLOUT_PERSIST_TIMEOUT;
+
+    loop {
+        match RolloutRecorder::get_rollout_history(rollout_path).await {
+            Ok(InitialHistory::Resumed(resumed))
+                if matches!(
+                    resumed.history.last(),
+                    Some(RolloutItem::EventMsg(EventMsg::TurnComplete(_)))
+                ) =>
+            {
+                return Ok(());
+            }
+            Ok(_) => {}
+            Err(err) if tokio::time::Instant::now() >= deadline => {
+                return Err(err.into());
+            }
+            Err(_) => {}
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for completed rollout history at {}",
+                rollout_path.display()
+            );
+        }
+
+        tokio::time::sleep(ROLLOUT_POLL_INTERVAL).await;
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
@@ -56,6 +97,7 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
         .await?;
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_completed_rollout(&rollout_path).await?;
 
     let resumed = builder.resume(&server, home, rollout_path).await?;
     let initial_messages = resumed
@@ -122,6 +164,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
         .await?;
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_completed_rollout(&rollout_path).await?;
 
     let resumed = builder.resume(&server, home, rollout_path).await?;
     let initial_messages = resumed
@@ -214,6 +257,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     )
     .await;
 
+    wait_for_completed_rollout(&rollout_path).await?;
     let mut resume_builder = test_codex().with_config(|config| {
         config.model = Some("gpt-5.2-codex".to_string());
     });
@@ -326,6 +370,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
     )
     .await;
 
+    wait_for_completed_rollout(&rollout_path).await?;
     let mut resume_builder = test_codex().with_config(|config| {
         config.model = Some("gpt-5.2-codex".to_string());
     });

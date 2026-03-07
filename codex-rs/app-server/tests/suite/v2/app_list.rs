@@ -501,15 +501,21 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
         })
         .await?;
 
-    let maybe_update = timeout(
-        Duration::from_millis(150),
-        read_app_list_updated_notification(&mut mcp),
-    )
-    .await;
-    assert!(
-        maybe_update.is_err(),
-        "unexpected directory-only app/list update before accessible apps loaded"
-    );
+    let expected_accessible = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta App".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
+        is_accessible: true,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }];
 
     let expected = vec![
         AppInfo {
@@ -544,8 +550,18 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
         },
     ];
 
-    let update = read_app_list_updated_notification(&mut mcp).await?;
-    assert_eq!(update.data, expected);
+    loop {
+        let update = read_app_list_updated_notification(&mut mcp).await?;
+        assert!(
+            update.data.iter().any(|connector| connector.is_accessible),
+            "unexpected directory-only app/list update before accessible apps loaded: {:#?}",
+            update.data
+        );
+        if update.data == expected {
+            break;
+        }
+        assert_eq!(update.data, expected_accessible);
+    }
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,

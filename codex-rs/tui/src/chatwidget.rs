@@ -2666,6 +2666,7 @@ impl ChatWidget {
             }
             self.stream_controller = Some(StreamController::new(
                 self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
+                self.config.cwd.clone(),
             ));
         }
         if let Some(controller) = self.stream_controller.as_mut()

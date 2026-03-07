@@ -4,6 +4,7 @@ use crate::render::line_utils::prefix_lines;
 use crate::style::proposed_plan_style;
 use ratatui::prelude::Stylize;
 use ratatui::text::Line;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -18,9 +19,9 @@ pub(crate) struct StreamController {
 }
 
 impl StreamController {
-    pub(crate) fn new(width: Option<usize>) -> Self {
+    pub(crate) fn new(width: Option<usize>, cwd: PathBuf) -> Self {
         Self {
-            state: StreamState::new(width),
+            state: StreamState::new(width, Some(cwd)),
             finishing_after_drain: false,
             header_emitted: false,
         }
@@ -117,7 +118,7 @@ pub(crate) struct PlanStreamController {
 impl PlanStreamController {
     pub(crate) fn new(width: Option<usize>) -> Self {
         Self {
-            state: StreamState::new(width),
+            state: StreamState::new(width, None),
             header_emitted: false,
             top_padding_emitted: false,
         }
@@ -248,7 +249,7 @@ mod tests {
 
     #[tokio::test]
     async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
-        let mut ctrl = StreamController::new(None);
+        let mut ctrl = StreamController::new(None, PathBuf::from("/workspace"));
         let mut lines = Vec::new();
 
         // Exact deltas from the session log (section: Loose vs. tight list items)
