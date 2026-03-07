@@ -43,8 +43,8 @@ fn normalize_absolute_path_buf(path: &AbsolutePathBuf) -> AbsolutePathBuf {
             .strip_prefix("/private")
             .map(|suffix| Path::new("/").join(suffix))
             .unwrap_or_else(|_| path.as_path().to_path_buf());
-        return AbsolutePathBuf::try_from(normalized.as_path())
-            .unwrap_or_else(|err| panic!("absolute path normalization: {err}"));
+        AbsolutePathBuf::try_from(normalized.as_path())
+            .unwrap_or_else(|err| panic!("absolute path normalization: {err}"))
     }
 
     #[cfg(not(target_os = "macos"))]
