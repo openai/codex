@@ -13,7 +13,6 @@ use crate::features::Feature;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
-use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxManager;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -240,20 +239,26 @@ impl ToolOrchestrator {
                         network_policy_decision,
                     })));
                 }
-                // Under policies that do not normally retry unsandboxed, only
-                // allow the retry approval flow to continue when a managed
-                // network denial needs an approval prompt.
-                if !tool.wants_no_sandbox_approval(approval_policy)
-                    && !allows_network_retry_approval_after_sandbox_denial(
-                        approval_policy,
-                        network_approval_context.is_some(),
-                        &turn_ctx.sandbox_policy,
-                    )
-                {
-                    return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                        output,
-                        network_policy_decision,
-                    })));
+                // Under `Never` or `OnRequest`, do not retry without sandbox;
+                // surface a concise sandbox denial that preserves the
+                // original output.
+                if !tool.wants_no_sandbox_approval(approval_policy) {
+                    let allow_on_request_network_prompt =
+                        matches!(approval_policy, AskForApproval::OnRequest)
+                            && network_approval_context.is_some()
+                            && matches!(
+                                default_exec_approval_requirement(
+                                    approval_policy,
+                                    &turn_ctx.sandbox_policy
+                                ),
+                                ExecApprovalRequirement::NeedsApproval { .. }
+                            );
+                    if !allow_on_request_network_prompt {
+                        return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                            output,
+                            network_policy_decision,
+                        })));
+                    }
                 }
                 let retry_reason =
                     if let Some(network_approval_context) = network_approval_context.as_ref() {
@@ -336,46 +341,8 @@ impl ToolOrchestrator {
     }
 }
 
-fn allows_network_retry_approval_after_sandbox_denial(
-    approval_policy: AskForApproval,
-    has_network_approval_context: bool,
-    sandbox_policy: &SandboxPolicy,
-) -> bool {
-    matches!(approval_policy, AskForApproval::OnRequest)
-        && has_network_approval_context
-        && matches!(
-            default_exec_approval_requirement(approval_policy, sandbox_policy),
-            ExecApprovalRequirement::NeedsApproval { .. }
-        )
-}
-
 fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
     // Keep approval reason terse and stable for UX/tests, but accept the
     // output so we can evolve heuristics later without touching call sites.
     "command failed; retry without sandbox?".to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::allows_network_retry_approval_after_sandbox_denial;
-    use crate::protocol::SandboxPolicy;
-    use codex_protocol::protocol::AskForApproval;
-
-    #[test]
-    fn on_request_allows_network_retry_approval_after_sandbox_denial() {
-        assert!(allows_network_retry_approval_after_sandbox_denial(
-            AskForApproval::OnRequest,
-            true,
-            &SandboxPolicy::new_read_only_policy(),
-        ));
-    }
-
-    #[test]
-    fn on_request_does_not_allow_network_retry_without_network_context() {
-        assert!(!allows_network_retry_approval_after_sandbox_denial(
-            AskForApproval::OnRequest,
-            false,
-            &SandboxPolicy::new_read_only_policy(),
-        ));
-    }
 }
