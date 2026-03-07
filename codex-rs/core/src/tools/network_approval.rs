@@ -92,13 +92,6 @@ impl HostApprovalKey {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct SessionApprovedHost {
-    pub(crate) host: String,
-    pub(crate) protocol: &'static str,
-    pub(crate) port: u16,
-}
-
 fn protocol_key_label(protocol: NetworkApprovalProtocol) -> &'static str {
     match protocol {
         NetworkApprovalProtocol::Http => "http",
@@ -192,27 +185,10 @@ impl Default for NetworkApprovalService {
 }
 
 impl NetworkApprovalService {
-    pub(crate) async fn session_approved_hosts(&self) -> Vec<SessionApprovedHost> {
+    pub(crate) async fn copy_session_approved_hosts_to(&self, other: &Self) {
         let approved_hosts = self.session_approved_hosts.lock().await;
-        let mut hosts = approved_hosts
-            .iter()
-            .map(|key| SessionApprovedHost {
-                host: key.host.clone(),
-                protocol: key.protocol,
-                port: key.port,
-            })
-            .collect::<Vec<_>>();
-        hosts.sort();
-        hosts
-    }
-
-    pub(crate) async fn seed_session_approved_hosts(&self, hosts: &[SessionApprovedHost]) {
-        let mut approved_hosts = self.session_approved_hosts.lock().await;
-        approved_hosts.extend(hosts.iter().map(|host| HostApprovalKey {
-            host: host.host.clone(),
-            protocol: host.protocol,
-            port: host.port,
-        }));
+        let mut other_approved_hosts = other.session_approved_hosts.lock().await;
+        other_approved_hosts.extend(approved_hosts.iter().cloned());
     }
 
     async fn register_call(&self, registration_id: String) {
@@ -666,53 +642,59 @@ mod tests {
     #[tokio::test]
     async fn session_approved_hosts_preserve_protocol_and_port_scope() {
         let source = NetworkApprovalService::default();
-        source
-            .seed_session_approved_hosts(&[
-                SessionApprovedHost {
+        {
+            let mut approved_hosts = source.session_approved_hosts.lock().await;
+            approved_hosts.extend([
+                HostApprovalKey {
                     host: "example.com".to_string(),
                     protocol: "https",
                     port: 443,
                 },
-                SessionApprovedHost {
+                HostApprovalKey {
                     host: "example.com".to_string(),
                     protocol: "https",
                     port: 8443,
                 },
-                SessionApprovedHost {
+                HostApprovalKey {
                     host: "example.com".to_string(),
                     protocol: "http",
                     port: 80,
                 },
-            ])
-            .await;
+            ]);
+        }
 
-        let exported = source.session_approved_hosts().await;
+        let seeded = NetworkApprovalService::default();
+        source.copy_session_approved_hosts_to(&seeded).await;
+
+        let mut copied = seeded
+            .session_approved_hosts
+            .lock()
+            .await
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        copied.sort_by(|a, b| (&a.host, a.protocol, a.port).cmp(&(&b.host, b.protocol, b.port)));
 
         assert_eq!(
-            exported,
+            copied,
             vec![
-                SessionApprovedHost {
+                HostApprovalKey {
                     host: "example.com".to_string(),
                     protocol: "http",
                     port: 80,
                 },
-                SessionApprovedHost {
+                HostApprovalKey {
                     host: "example.com".to_string(),
                     protocol: "https",
                     port: 443,
                 },
-                SessionApprovedHost {
+                HostApprovalKey {
                     host: "example.com".to_string(),
                     protocol: "https",
                     port: 8443,
                 },
             ]
         );
-
-        let seeded = NetworkApprovalService::default();
-        seeded.seed_session_approved_hosts(&exported).await;
-
-        assert_eq!(seeded.session_approved_hosts().await, exported);
     }
 
     #[tokio::test]

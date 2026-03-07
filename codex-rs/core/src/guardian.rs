@@ -709,11 +709,6 @@ async fn run_guardian_subagent(
         Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
         None => None,
     };
-    let session_approved_hosts = session
-        .services
-        .network_approval
-        .session_approved_hosts()
-        .await;
     let available_models = session
         .services
         .models_manager
@@ -774,11 +769,10 @@ async fn run_guardian_subagent(
     .await?;
     // Preserve exact session-scoped network approvals without broadening them
     // into host-level allowlist entries in the guardian's inherited proxy cfg.
-    codex
-        .session
+    session
         .services
         .network_approval
-        .seed_session_approved_hosts(session_approved_hosts.as_slice())
+        .copy_session_approved_hosts_to(&codex.session.services.network_approval)
         .await;
 
     let mut last_agent_message = None;
