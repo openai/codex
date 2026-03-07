@@ -2,8 +2,8 @@
 //! automatically instead of shown to the user.
 //!
 //! High-level approach:
-//! 1. Reconstruct a compact transcript that preserves user intent and the most
-//!    recent assistant context.
+//! 1. Reconstruct a compact transcript that preserves user intent plus the most
+//!    relevant recent assistant and tool context.
 //! 2. Ask a dedicated guardian subagent to assess the exact planned action and
 //!    return strict JSON.
 //!    The guardian clones the parent config, so it inherits any managed
@@ -38,25 +38,27 @@ use crate::config::NetworkProxySpec;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::features::Feature;
 use crate::protocol::SandboxPolicy;
-use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_bytes_for_tokens;
 use crate::truncate::approx_token_count;
-use crate::truncate::truncate_text;
+use crate::truncate::approx_tokens_from_byte_count;
 use codex_protocol::protocol::ReviewDecision;
 
 const GUARDIAN_PREFERRED_MODEL: &str = "gpt-5.4";
 const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const GUARDIAN_SUBAGENT_NAME: &str = "guardian";
-// This is intentionally much smaller than the model's context window. Guardian
-// only needs enough conversation state to establish intent and recent context;
-// keeping the transcript compact helps latency and leaves plenty of room for
-// the policy prompt and exact planned action JSON.
-const GUARDIAN_MAX_TRANSCRIPT_TOKENS: usize = 3_500;
-// Keep a smaller sub-budget for recent tool evidence so command output can
-// inform the review without crowding out the actual conversation.
-const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 1_200;
+// Guardian still needs a large enough transcript budget to preserve the real
+// authorization signal and recent evidence. Keep separate budgets for
+// human-authored conversation and tool evidence so neither crowds out the
+// other.
+const GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
+const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
+const GUARDIAN_MAX_TRANSCRIPT_TOKENS: usize =
+    GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS + GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS;
+const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 1_000;
 // Always keep some recent non-user context so the reviewer can see what the
 // agent was trying to do immediately before the escalation.
-const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 20;
+const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
+const GUARDIAN_TRUNCATION_TAG: &str = "guardian_truncated";
 
 pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = "Guardian rejected this action due to unacceptable risk. The agent must not attempt to achieve the same outcome via workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or stop and request user input.";
 
@@ -130,6 +132,7 @@ struct GuardianTranscriptRenderBudget {
 #[derive(Default)]
 struct GuardianTranscriptTokenCount {
     total: usize,
+    message: usize,
     tool: usize,
 }
 
@@ -264,6 +267,9 @@ pub(crate) async fn review_approval_request_with_reason(
 /// - the policy prompt
 /// - a compact transcript for authorization and local context
 /// - the exact action JSON being proposed for escalation
+///
+/// Keep the variable request block at the end so the large prompt prefix stays
+/// cache-friendly across repeated approval checks in the same conversation.
 async fn build_guardian_prompt(
     session: &Session,
     retry_reason: Option<String>,
@@ -280,6 +286,7 @@ async fn build_guardian_prompt(
         .as_ref()
         .map(|rollout| rollout.rollout_path().display().to_string());
     let planned_action_json = planned_action
+        .map(sanitize_guardian_action)
         .map(|action| serde_json::to_string_pretty(&action).unwrap_or_else(|_| "{}".to_string()))
         .unwrap_or_else(|| "{}".to_string());
 
@@ -288,20 +295,20 @@ async fn build_guardian_prompt(
         &session_id,
         rollout_path.as_deref(),
     );
-    let retry_reason_block = retry_reason
-        .map(|reason| format!("\nRetry reason: {reason}\n"))
-        .unwrap_or_default();
     let omission_block = omission_note
         .map(|note| format!("\n{note}\n"))
         .unwrap_or_default();
+    let retry_reason_block = retry_reason
+        .map(|reason| format!("Retry reason:\n{reason}\n\n"))
+        .unwrap_or_default();
 
     format!(
-        "{}\n{}\n{}>>> TRANSCRIPT START\n{}\n>>> TRANSCRIPT END\n{}\nPlanned action JSON:\n{}\n",
+        "{}\n{}>>> TRANSCRIPT START\n{}\n>>> TRANSCRIPT END\n{}\n>>> APPROVAL REQUEST START\n{}Planned action JSON:\n{}\n>>> APPROVAL REQUEST END\n",
         guardian_policy_prompt(),
-        retry_reason_block,
         "Assess the exact planned action below. Use read-only tool checks when local state matters.\n",
         transcript,
         omission_block,
+        retry_reason_block,
         planned_action_json
     )
 }
@@ -347,21 +354,22 @@ fn build_guardian_transcript(
     // before dropping the transcript entirely.
     for budget in [
         GuardianTranscriptRenderBudget {
-            message_entry_token_cap: 220,
-            tool_entry_token_cap: 320,
+            message_entry_token_cap: 2_000,
+            tool_entry_token_cap: 1_000,
         },
         GuardianTranscriptRenderBudget {
-            message_entry_token_cap: 120,
-            tool_entry_token_cap: 160,
+            message_entry_token_cap: 1_000,
+            tool_entry_token_cap: 500,
         },
         GuardianTranscriptRenderBudget {
-            message_entry_token_cap: 60,
-            tool_entry_token_cap: 80,
+            message_entry_token_cap: 500,
+            tool_entry_token_cap: 250,
         },
     ] {
         loop {
             let counts = transcript_token_count(entries, &included_numbers, budget);
             if counts.total <= GUARDIAN_MAX_TRANSCRIPT_TOKENS
+                && counts.message <= GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS
                 && counts.tool <= GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS
             {
                 break;
@@ -389,6 +397,7 @@ fn build_guardian_transcript(
 
         let counts = transcript_token_count(entries, &included_numbers, budget);
         if counts.total <= GUARDIAN_MAX_TRANSCRIPT_TOKENS
+            && counts.message <= GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS
             && counts.tool <= GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS
         {
             let transcript = render_transcript(entries, &included_numbers, budget);
@@ -427,7 +436,7 @@ fn render_transcript(
             } else {
                 budget.message_entry_token_cap
             };
-            let text = truncate_text(&entry.text, TruncationPolicy::Tokens(token_cap));
+            let text = guardian_truncate_text(&entry.text, token_cap);
             format!("[{}] {}: {}", entry.number, entry.role, text)
         })
         .collect::<Vec<_>>()
@@ -449,20 +458,22 @@ fn transcript_token_count(
         } else {
             budget.message_entry_token_cap
         };
-        let text = truncate_text(&entry.text, TruncationPolicy::Tokens(token_cap));
+        let text = guardian_truncate_text(&entry.text, token_cap);
         let rendered = format!("[{}] {}: {}", entry.number, entry.role, text);
         let token_count = approx_token_count(&rendered);
         counts.total += token_count;
         if entry.is_tool {
             counts.tool += token_count;
+        } else {
+            counts.message += token_count;
         }
     }
     counts
 }
 
-/// Retains the human-readable conversation plus recent tool evidence for
-/// guardian review and skips synthetic contextual scaffolding that would just
-/// add noise.
+/// Retains the human-readable conversation plus recent tool call / result
+/// evidence for guardian review and skips synthetic contextual scaffolding that
+/// would just add noise.
 fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();
@@ -491,14 +502,57 @@ fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTr
                     text,
                 })
             }
-            ResponseItem::FunctionCall { call_id, name, .. } => {
+            ResponseItem::LocalShellCall { action, .. } => serde_json::to_string(action)
+                .ok()
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| GuardianTranscriptEntry {
+                    number: entries.len() + 1,
+                    role: "tool shell call".to_string(),
+                    is_user: false,
+                    is_tool: true,
+                    text,
+                }),
+            ResponseItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } => {
                 tool_names_by_call_id.insert(call_id.clone(), name.clone());
-                None
+                (!arguments.trim().is_empty()).then(|| GuardianTranscriptEntry {
+                    number: entries.len() + 1,
+                    role: format!("tool {name} call"),
+                    is_user: false,
+                    is_tool: true,
+                    text: arguments.clone(),
+                })
             }
-            ResponseItem::CustomToolCall { call_id, name, .. } => {
+            ResponseItem::CustomToolCall {
+                call_id,
+                name,
+                input,
+                ..
+            } => {
                 tool_names_by_call_id.insert(call_id.clone(), name.clone());
-                None
+                (!input.trim().is_empty()).then(|| GuardianTranscriptEntry {
+                    number: entries.len() + 1,
+                    role: format!("tool {name} call"),
+                    is_user: false,
+                    is_tool: true,
+                    text: input.clone(),
+                })
             }
+            ResponseItem::WebSearchCall { action, .. } => action
+                .as_ref()
+                .and_then(|action| serde_json::to_string(action).ok())
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| GuardianTranscriptEntry {
+                    number: entries.len() + 1,
+                    role: "tool web_search call".to_string(),
+                    is_user: false,
+                    is_tool: true,
+                    text,
+                }),
             ResponseItem::FunctionCallOutput { call_id, output }
             | ResponseItem::CustomToolCallOutput { call_id, output } => output
                 .body
@@ -506,9 +560,10 @@ fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTr
                 .filter(|text| !text.trim().is_empty())
                 .map(|text| GuardianTranscriptEntry {
                     number: entries.len() + 1,
-                    role: tool_names_by_call_id
-                        .get(call_id)
-                        .map_or_else(|| "tool".to_string(), |name| format!("tool {name}")),
+                    role: tool_names_by_call_id.get(call_id).map_or_else(
+                        || "tool result".to_string(),
+                        |name| format!("tool {name} result"),
+                    ),
                     is_user: false,
                     is_tool: true,
                     text,
@@ -691,6 +746,91 @@ fn build_guardian_subagent_config(
     Ok(guardian_config)
 }
 
+fn sanitize_guardian_action(value: Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(guardian_truncate_text(
+            &text,
+            GUARDIAN_MAX_ACTION_STRING_TOKENS,
+        )),
+        Value::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(sanitize_guardian_action)
+                .collect::<Vec<_>>(),
+        ),
+        Value::Object(values) => Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, sanitize_guardian_action(value)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn guardian_truncate_text(content: &str, token_cap: usize) -> String {
+    if content.is_empty() {
+        return String::new();
+    }
+
+    let max_bytes = approx_bytes_for_tokens(token_cap);
+    if content.len() <= max_bytes {
+        return content.to_string();
+    }
+
+    let omitted_tokens = approx_tokens_from_byte_count(content.len().saturating_sub(max_bytes));
+    let marker =
+        format!("<{GUARDIAN_TRUNCATION_TAG} omitted_approx_tokens=\"{omitted_tokens}\" />");
+    if max_bytes <= marker.len() {
+        return marker;
+    }
+
+    let available_bytes = max_bytes.saturating_sub(marker.len());
+    let prefix_budget = available_bytes / 2;
+    let suffix_budget = available_bytes.saturating_sub(prefix_budget);
+    let (prefix, suffix) = split_guardian_truncation_bounds(content, prefix_budget, suffix_budget);
+
+    format!("{prefix}{marker}{suffix}")
+}
+
+fn split_guardian_truncation_bounds(
+    content: &str,
+    prefix_bytes: usize,
+    suffix_bytes: usize,
+) -> (&str, &str) {
+    if content.is_empty() {
+        return ("", "");
+    }
+
+    let len = content.len();
+    let suffix_start_target = len.saturating_sub(suffix_bytes);
+    let mut prefix_end = 0usize;
+    let mut suffix_start = len;
+    let mut suffix_started = false;
+
+    for (index, ch) in content.char_indices() {
+        let char_end = index + ch.len_utf8();
+        if char_end <= prefix_bytes {
+            prefix_end = char_end;
+            continue;
+        }
+
+        if index >= suffix_start_target {
+            if !suffix_started {
+                suffix_start = index;
+                suffix_started = true;
+            }
+            continue;
+        }
+    }
+
+    if suffix_start < prefix_end {
+        suffix_start = prefix_end;
+    }
+
+    (&content[..prefix_end], &content[suffix_start..])
+}
+
 /// The model is asked for strict JSON, but we still accept a surrounding prose
 /// wrapper so transient formatting drift fails less noisily during dogfooding.
 fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<GuardianAssessment> {
@@ -844,7 +984,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_guardian_transcript_entries_includes_recent_tool_output() {
+    fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
         let items = vec![
             ResponseItem::Message {
                 id: None,
@@ -880,15 +1020,47 @@ mod tests {
 
         let entries = collect_guardian_transcript_entries(&items);
 
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[1].role, "tool read_file");
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[1].role, "tool read_file call");
         assert!(entries[1].is_tool);
-        assert_eq!(entries[1].text, "repo is public");
+        assert_eq!(entries[1].text, "{\"path\":\"README.md\"}");
+        assert_eq!(entries[2].role, "tool read_file result");
+        assert_eq!(entries[2].text, "repo is public");
+    }
+
+    #[test]
+    fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
+        let content = "prefix ".repeat(200) + &" suffix".repeat(200);
+
+        let truncated = guardian_truncate_text(&content, 20);
+
+        assert!(truncated.starts_with("prefix"));
+        assert!(truncated.contains("<guardian_truncated omitted_approx_tokens=\""));
+        assert!(truncated.ends_with("suffix"));
+    }
+
+    #[test]
+    fn sanitize_guardian_action_truncates_large_string_fields() {
+        let action = serde_json::json!({
+            "tool": "apply_patch",
+            "patch": "line\n".repeat(2_000),
+            "nested": {
+                "reason": "keep this",
+            },
+        });
+
+        let sanitized = sanitize_guardian_action(action);
+
+        let patch = sanitized["patch"]
+            .as_str()
+            .expect("patch should remain a string");
+        assert!(patch.contains("<guardian_truncated omitted_approx_tokens=\""));
+        assert_eq!(sanitized["nested"]["reason"], "keep this");
     }
 
     #[test]
     fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
-        let repeated = "signal ".repeat(500);
+        let repeated = "signal ".repeat(8_000);
         let entries = vec![
             GuardianTranscriptEntry {
                 number: 1,
