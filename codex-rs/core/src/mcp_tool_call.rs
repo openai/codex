@@ -1379,7 +1379,7 @@ mod tests {
 
         assert_eq!(
             session_mcp_tool_approval_key(&invocation, None, AppToolApproval::Auto),
-            Some(expected.clone())
+            Some(expected)
         );
         assert_eq!(
             persistent_mcp_tool_approval_key(&invocation, None, AppToolApproval::Auto),
