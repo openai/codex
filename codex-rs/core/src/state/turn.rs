@@ -172,11 +172,3 @@ impl TurnState {
         !self.pending_input.is_empty()
     }
 }
-
-impl ActiveTurn {
-    /// Clear any pending approvals and input buffered for the current turn.
-    pub(crate) async fn clear_pending(&self) {
-        let mut ts = self.turn_state.lock().await;
-        ts.clear_pending();
-    }
-}
