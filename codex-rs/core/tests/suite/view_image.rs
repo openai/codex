@@ -41,6 +41,10 @@ use serde_json::Value;
 use tokio::time::Duration;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
+#[cfg(not(debug_assertions))]
+use wiremock::ResponseTemplate;
+#[cfg(not(debug_assertions))]
+use wiremock::matchers::body_string_contains;
 
 fn image_messages(body: &Value) -> Vec<&Value> {
     body.get("input")
