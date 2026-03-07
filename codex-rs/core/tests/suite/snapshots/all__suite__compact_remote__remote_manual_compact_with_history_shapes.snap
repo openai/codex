@@ -5,9 +5,7 @@ expression: "format_labeled_requests_snapshot(\"Remote manual /compact where rem
 Scenario: Remote manual /compact where remote compact output is compaction-only: follow-up layout uses the returned compaction item plus new user message.
 
 ## Remote Compaction Request
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
@@ -16,9 +14,7 @@ Scenario: Remote manual /compact where remote compact output is compaction-only:
 
 ## Remote Post-Compaction History Layout
 00:compaction:encrypted=true
-01:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
+01:message/developer:<PERMISSIONS_INSTRUCTIONS>
 02:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>

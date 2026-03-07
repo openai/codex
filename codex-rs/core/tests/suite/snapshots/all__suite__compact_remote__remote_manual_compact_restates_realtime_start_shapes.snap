@@ -5,9 +5,7 @@ expression: "format_labeled_requests_snapshot(\"Remote manual /compact while rea
 Scenario: Remote manual /compact while realtime remains active: the next regular turn restates realtime-start instructions after compaction clears the baseline.
 
 ## Remote Compaction Request
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
@@ -17,10 +15,9 @@ Scenario: Remote manual /compact while realtime remains active: the next regular
 
 ## Remote Post-Compaction History Layout
 00:compaction:encrypted=true
-01:message/developer[3]:
+01:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] # You are the Root Agent\n\nYou are the **root agent** in a mult...
-    [03] <realtime_conversation>\nRealtime conversation started.\n\nYou a...
+    [02] <realtime_conversation>\nRealtime conversation started.\n\nYou a...
 02:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
