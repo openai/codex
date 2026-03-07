@@ -147,7 +147,7 @@ pub enum Feature {
     Steer,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
-    /// Enable guardian subagent approvals.
+    /// Enable automatic review for approval prompts.
     GuardianApproval,
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
@@ -702,8 +702,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GuardianApproval,
         key: "guardian_approval",
         stage: Stage::Experimental {
-            name: "Guardian approvals",
-            menu_description: "Let a guardian subagent review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access.",
+            name: "Automatic approval review",
+            menu_description: "Automatically review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access.",
             announcement: "",
         },
         default_enabled: false,
@@ -909,11 +909,14 @@ mod tests {
         let stage = spec.stage;
 
         assert!(matches!(stage, Stage::Experimental { .. }));
-        assert_eq!(stage.experimental_menu_name(), Some("Guardian approvals"));
+        assert_eq!(
+            stage.experimental_menu_name(),
+            Some("Automatic approval review")
+        );
         assert_eq!(
             stage.experimental_menu_description().map(str::to_owned),
             Some(
-                "Let a guardian subagent review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access.".to_string()
+                "Automatically review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access.".to_string()
             )
         );
         assert_eq!(stage.experimental_announcement(), None);

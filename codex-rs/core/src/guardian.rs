@@ -168,10 +168,7 @@ async fn run_guardian_review(
     retry_reason: Option<String>,
 ) -> ReviewDecision {
     session
-        .notify_background_event(
-            turn.as_ref(),
-            "Guardian assessing approval request...".to_string(),
-        )
+        .notify_background_event(turn.as_ref(), "Reviewing sandbox escalation...".to_string())
         .await;
 
     let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
@@ -199,14 +196,15 @@ async fn run_guardian_review(
         Some(Err(err)) => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             risk_score: 100,
-            rationale: format!("Guardian review failed: {err}"),
+            rationale: format!("Automatic approval review failed: {err}"),
             evidence: vec![],
         },
         None => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             risk_score: 100,
-            rationale: "Guardian review timed out while evaluating the requested approval."
-                .to_string(),
+            rationale:
+                "Automatic approval review timed out while evaluating the requested approval."
+                    .to_string(),
             evidence: vec![],
         },
     };
