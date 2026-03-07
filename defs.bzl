@@ -125,9 +125,10 @@ def codex_rust_crate(
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
     test_env = {
-        # Bazel unit tests run from the repo root inside the runfiles tree, but
-        # Rust snapshots live under the shared `codex-rs` workspace.
-        "INSTA_WORKSPACE_ROOT": "codex-rs",
+        # The launcher runs Bazel unit tests from the `codex-rs` workspace
+        # root inside runfiles, so `.` keeps Insta aligned with Cargo-style
+        # snapshot locations like `tui/src/snapshots/...`.
+        "INSTA_WORKSPACE_ROOT": ".",
         "INSTA_SNAPSHOT_PATH": "src",
     }
 
@@ -176,7 +177,8 @@ def codex_rust_crate(
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
             # Bazel has emitted both `codex-rs/<crate>/...` and
             # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
-            # prefix so Insta records Cargo-like metadata such as `tui/src/...`.
+            # prefix so the workspace-root launcher sees Cargo-like metadata
+            # such as `tui/src/...`.
             rustc_flags = rustc_flags_extra + [
                 "--remap-path-prefix=../codex-rs=",
                 "--remap-path-prefix=codex-rs=",
