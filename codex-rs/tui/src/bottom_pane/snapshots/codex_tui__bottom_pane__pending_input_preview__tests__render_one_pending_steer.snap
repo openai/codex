@@ -7,7 +7,7 @@ Buffer {
     content: [
         "Messages to be submitted after next tool call   ",
         "  (press esc to interrupt and send immediately):",
-        "  ! Please continue.                            ",
+        "  ↳ Please continue.                            ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
