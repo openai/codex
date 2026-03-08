@@ -85,12 +85,13 @@ pub(crate) fn typed_request_span(
     connection_id: ConnectionId,
     session: &ConnectionSessionState,
 ) -> Span {
+    let method = request.method();
     let span = info_span!(
         "app_server.request",
         otel.kind = "server",
-        otel.name = "in_process",
+        otel.name = method,
         rpc.system = "jsonrpc",
-        rpc.method = "in_process",
+        rpc.method = method,
         rpc.transport = "in-process",
         rpc.request_id = ?request.id(),
         app_server.connection_id = ?connection_id,
