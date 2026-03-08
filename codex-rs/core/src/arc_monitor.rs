@@ -105,7 +105,10 @@ pub(crate) async fn monitor_action(
         .timeout(ARC_MONITOR_TIMEOUT)
         .json(&body)
         .bearer_auth(token);
-    if let Some(account_id) = auth.as_ref().and_then(|auth| auth.get_account_id()) {
+    if let Some(account_id) = auth
+        .as_ref()
+        .and_then(crate::auth::CodexAuth::get_account_id)
+    {
         request = request.header("chatgpt-account-id", account_id);
     }
 
