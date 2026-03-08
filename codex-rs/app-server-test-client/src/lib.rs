@@ -1393,8 +1393,6 @@ struct CodexClient {
     unexpected_items_before_helper_done: Vec<ThreadItem>,
     last_turn_status: Option<TurnStatus>,
     last_turn_error_message: Option<String>,
-    trace_id: String,
-    trace_root_span_id: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1473,8 +1471,6 @@ impl CodexClient {
             unexpected_items_before_helper_done: Vec::new(),
             last_turn_status: None,
             last_turn_error_message: None,
-            trace_id: generate_trace_id(),
-            trace_root_span_id: generate_parent_span_id(),
         })
     }
 
@@ -1514,8 +1510,6 @@ impl CodexClient {
             unexpected_items_before_helper_done: Vec::new(),
             last_turn_status: None,
             last_turn_error_message: None,
-            trace_id: generate_trace_id(),
-            trace_root_span_id: generate_parent_span_id(),
         })
     }
 
