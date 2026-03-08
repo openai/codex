@@ -5,6 +5,7 @@
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
 use crate::exec::ExecToolCallOutput;
+use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::CommandSpec;
@@ -27,7 +28,6 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
-use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -49,14 +49,13 @@ impl ApplyPatchRuntime {
         Self
     }
 
-    fn build_guardian_review_request(req: &ApplyPatchRequest) -> serde_json::Value {
-        json!({
-            "tool": "apply_patch",
-            "cwd": req.action.cwd,
-            "files": req.file_paths,
-            "change_count": req.changes.len(),
-            "patch": req.action.patch,
-        })
+    fn build_guardian_review_request(req: &ApplyPatchRequest) -> GuardianApprovalRequest {
+        GuardianApprovalRequest::ApplyPatch {
+            cwd: req.action.cwd.clone(),
+            files: req.file_paths.clone(),
+            change_count: req.changes.len(),
+            patch: req.action.patch.clone(),
+        }
     }
 
     fn build_command_spec(
@@ -253,13 +252,12 @@ mod tests {
 
         assert_eq!(
             guardian_request,
-            json!({
-                "tool": "apply_patch",
-                "cwd": expected_cwd,
-                "files": request.file_paths,
-                "change_count": 1usize,
-                "patch": expected_patch,
-            })
+            GuardianApprovalRequest::ApplyPatch {
+                cwd: expected_cwd,
+                files: request.file_paths,
+                change_count: 1usize,
+                patch: expected_patch,
+            }
         );
     }
 }

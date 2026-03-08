@@ -12,15 +12,19 @@
 //! 4. Approve only low- and medium-risk actions (`risk_score < 80`).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_protocol::approvals::NetworkApprovalProtocol;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -114,6 +118,65 @@ pub(crate) struct GuardianAssessment {
     evidence: Vec<GuardianEvidence>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum GuardianApprovalRequest {
+    Shell {
+        command: Vec<String>,
+        cwd: PathBuf,
+        sandbox_permissions: crate::sandboxing::SandboxPermissions,
+        additional_permissions: Option<PermissionProfile>,
+        justification: Option<String>,
+    },
+    ExecCommand {
+        command: Vec<String>,
+        cwd: PathBuf,
+        sandbox_permissions: crate::sandboxing::SandboxPermissions,
+        additional_permissions: Option<PermissionProfile>,
+        justification: Option<String>,
+        tty: bool,
+    },
+    Execve {
+        tool_name: String,
+        program: String,
+        argv: Vec<String>,
+        cwd: PathBuf,
+        additional_permissions: Option<PermissionProfile>,
+    },
+    ApplyPatch {
+        cwd: PathBuf,
+        files: Vec<AbsolutePathBuf>,
+        change_count: usize,
+        patch: String,
+    },
+    NetworkAccess {
+        target: String,
+        host: String,
+        protocol: NetworkApprovalProtocol,
+        port: u16,
+    },
+    McpToolCall {
+        server: String,
+        tool_name: String,
+        arguments: Option<Value>,
+        connector_id: Option<String>,
+        connector_name: Option<String>,
+        connector_description: Option<String>,
+        tool_title: Option<String>,
+        tool_description: Option<String>,
+        annotations: Option<GuardianMcpAnnotations>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct GuardianMcpAnnotations {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    destructive_hint: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    open_world_hint: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    read_only_hint: Option<bool>,
+}
+
 /// Transcript entry retained for guardian review after filtering.
 #[derive(Debug, PartialEq, Eq)]
 struct GuardianTranscriptEntry {
@@ -158,14 +221,14 @@ impl GuardianTranscriptEntryKind {
 async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
-    action: Value,
+    request: GuardianApprovalRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
     session
         .notify_background_event(turn.as_ref(), "Reviewing approval request...".to_string())
         .await;
 
-    let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, action).await;
+    let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
     let review = tokio::select! {
@@ -230,10 +293,10 @@ async fn run_guardian_review(
 pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
-    action: Value,
+    request: GuardianApprovalRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
-    run_guardian_review(Arc::clone(session), Arc::clone(turn), action, retry_reason).await
+    run_guardian_review(Arc::clone(session), Arc::clone(turn), request, retry_reason).await
 }
 
 /// Builds the guardian user content items from:
@@ -247,11 +310,11 @@ pub(crate) async fn review_approval_request(
 async fn build_guardian_prompt_items(
     session: &Session,
     retry_reason: Option<String>,
-    action: Value,
+    request: GuardianApprovalRequest,
 ) -> Vec<UserInput> {
     let history = session.clone_history().await;
     let transcript_entries = collect_guardian_transcript_entries(history.raw_items());
-    let planned_action_json = format_guardian_action_pretty(&action);
+    let planned_action_json = format_guardian_action_pretty(&request);
 
     let (transcript_entries, omission_note) =
         render_guardian_transcript_entries(transcript_entries.as_slice());
@@ -667,9 +730,148 @@ fn truncate_guardian_action_value(value: Value) -> Value {
     }
 }
 
-fn format_guardian_action_pretty(action: &Value) -> String {
-    serde_json::to_string_pretty(&truncate_guardian_action_value(action.clone()))
-        .unwrap_or_else(|_| "null".to_string())
+fn format_guardian_action_pretty(action: &GuardianApprovalRequest) -> String {
+    let mut value = match action {
+        GuardianApprovalRequest::Shell {
+            command,
+            cwd,
+            sandbox_permissions,
+            additional_permissions,
+            justification,
+        } => {
+            let mut action = serde_json::json!({
+                "tool": "shell",
+                "command": command,
+                "cwd": cwd,
+                "sandbox_permissions": sandbox_permissions,
+                "additional_permissions": additional_permissions,
+                "justification": justification,
+            });
+            if let Some(action) = action.as_object_mut() {
+                if additional_permissions.is_none() {
+                    action.remove("additional_permissions");
+                }
+                if justification.is_none() {
+                    action.remove("justification");
+                }
+            }
+            action
+        }
+        GuardianApprovalRequest::ExecCommand {
+            command,
+            cwd,
+            sandbox_permissions,
+            additional_permissions,
+            justification,
+            tty,
+        } => {
+            let mut action = serde_json::json!({
+                "tool": "exec_command",
+                "command": command,
+                "cwd": cwd,
+                "sandbox_permissions": sandbox_permissions,
+                "additional_permissions": additional_permissions,
+                "justification": justification,
+                "tty": tty,
+            });
+            if let Some(action) = action.as_object_mut() {
+                if additional_permissions.is_none() {
+                    action.remove("additional_permissions");
+                }
+                if justification.is_none() {
+                    action.remove("justification");
+                }
+            }
+            action
+        }
+        GuardianApprovalRequest::Execve {
+            tool_name,
+            program,
+            argv,
+            cwd,
+            additional_permissions,
+        } => {
+            let mut action = serde_json::json!({
+                "tool": tool_name,
+                "program": program,
+                "argv": argv,
+                "cwd": cwd,
+                "additional_permissions": additional_permissions,
+            });
+            if let Some(action) = action.as_object_mut()
+                && additional_permissions.is_none()
+            {
+                action.remove("additional_permissions");
+            }
+            action
+        }
+        GuardianApprovalRequest::ApplyPatch {
+            cwd,
+            files,
+            change_count,
+            patch,
+        } => serde_json::json!({
+            "tool": "apply_patch",
+            "cwd": cwd,
+            "files": files,
+            "change_count": change_count,
+            "patch": patch,
+        }),
+        GuardianApprovalRequest::NetworkAccess {
+            target,
+            host,
+            protocol,
+            port,
+        } => serde_json::json!({
+            "tool": "network_access",
+            "target": target,
+            "host": host,
+            "protocol": protocol,
+            "port": port,
+        }),
+        GuardianApprovalRequest::McpToolCall {
+            server,
+            tool_name,
+            arguments,
+            connector_id,
+            connector_name,
+            connector_description,
+            tool_title,
+            tool_description,
+            annotations,
+        } => {
+            let mut action = serde_json::json!({
+                "tool": "mcp_tool_call",
+                "server": server,
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "connector_id": connector_id,
+                "connector_name": connector_name,
+                "connector_description": connector_description,
+                "tool_title": tool_title,
+                "tool_description": tool_description,
+                "annotations": annotations,
+            });
+            if let Some(action) = action.as_object_mut() {
+                for key in [
+                    ("arguments", arguments.is_none()),
+                    ("connector_id", connector_id.is_none()),
+                    ("connector_name", connector_name.is_none()),
+                    ("connector_description", connector_description.is_none()),
+                    ("tool_title", tool_title.is_none()),
+                    ("tool_description", tool_description.is_none()),
+                    ("annotations", annotations.is_none()),
+                ] {
+                    if key.1 {
+                        action.remove(key.0);
+                    }
+                }
+            }
+            action
+        }
+    };
+    value = truncate_guardian_action_value(value);
+    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "null".to_string())
 }
 
 fn guardian_truncate_text(content: &str, token_cap: usize) -> String {

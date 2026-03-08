@@ -9,6 +9,7 @@ use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecExpiration;
 use crate::features::Feature;
+use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
@@ -40,7 +41,6 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
-use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -116,24 +116,20 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
-                let mut action = json!({
-                    "tool": "exec_command",
-                    "command": command,
-                    "cwd": cwd,
-                    "sandbox_permissions": req.sandbox_permissions,
-                    "additional_permissions": req.additional_permissions,
-                    "justification": req.justification,
-                    "tty": req.tty,
-                });
-                if let Some(action) = action.as_object_mut() {
-                    if req.additional_permissions.is_none() {
-                        action.remove("additional_permissions");
-                    }
-                    if req.justification.is_none() {
-                        action.remove("justification");
-                    }
-                }
-                return review_approval_request(session, turn, action, retry_reason).await;
+                return review_approval_request(
+                    session,
+                    turn,
+                    GuardianApprovalRequest::ExecCommand {
+                        command,
+                        cwd,
+                        sandbox_permissions: req.sandbox_permissions,
+                        additional_permissions: req.additional_permissions.clone(),
+                        justification: req.justification.clone(),
+                        tty: req.tty,
+                    },
+                    retry_reason,
+                )
+                .await;
             }
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 let available_decisions = None;
