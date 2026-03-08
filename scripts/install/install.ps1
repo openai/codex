@@ -111,16 +111,51 @@ function Ensure-Junction {
         [string]$TargetPath
     )
 
-    if (Test-Path $LinkPath) {
+    if (Test-Path -LiteralPath $LinkPath) {
         $item = Get-Item -LiteralPath $LinkPath -Force
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
             Remove-Item -LiteralPath $LinkPath -Force
+        } elseif ($item.PSIsContainer) {
+            if ((Get-ChildItem -LiteralPath $LinkPath -Force | Select-Object -First 1) -ne $null) {
+                throw "Refusing to replace non-empty directory at $LinkPath with a junction."
+            }
+
+            Remove-Item -LiteralPath $LinkPath -Force
         } else {
-            Remove-Item -LiteralPath $LinkPath -Recurse -Force
+            throw "Refusing to replace file at $LinkPath with a junction."
         }
     }
 
     New-Item -ItemType Junction -Path $LinkPath -Target $TargetPath | Out-Null
+}
+
+function Test-ReleaseIsComplete {
+    param(
+        [string]$ReleaseDir,
+        [string]$ExpectedVersion,
+        [string]$ExpectedTarget
+    )
+
+    if (-not (Test-Path -LiteralPath $ReleaseDir -PathType Container)) {
+        return $false
+    }
+
+    $expectedFiles = @(
+        "codex.exe",
+        "codex-command-runner.exe",
+        "codex-windows-sandbox-setup.exe",
+        "rg.exe",
+        "metadata.toml"
+    )
+    foreach ($name in $expectedFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $ReleaseDir $name) -PathType Leaf)) {
+            return $false
+        }
+    }
+
+    $version = Read-MetadataValue -MetadataPath (Join-Path $ReleaseDir "metadata.toml") -Key "version"
+    $target = Read-MetadataValue -MetadataPath (Join-Path $ReleaseDir "metadata.toml") -Key "target"
+    return $version -eq $ExpectedVersion -and $target -eq $ExpectedTarget
 }
 
 function Get-ExistingCodexCommand {
@@ -259,7 +294,12 @@ $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-install-" + [Syst
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
 try {
-    if (-not (Test-Path $releaseDir)) {
+    if (-not (Test-ReleaseIsComplete -ReleaseDir $releaseDir -ExpectedVersion $resolvedVersion -ExpectedTarget $target)) {
+        if (Test-Path -LiteralPath $releaseDir) {
+            Write-WarningStep "Found incomplete existing release at $releaseDir. Reinstalling."
+            Remove-Item -LiteralPath $releaseDir -Recurse -Force
+        }
+
         $archivePath = Join-Path $tempDir $packageAsset
         $extractDir = Join-Path $tempDir "extract"
         $stagingDir = Join-Path $tempDir "release"

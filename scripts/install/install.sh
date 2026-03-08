@@ -172,16 +172,73 @@ add_to_path() {
   path_line="export PATH=\"$BIN_DIR:\$PATH\""
 
   if [ -f "$profile" ] && grep -F "$begin_marker" "$profile" >/dev/null 2>&1; then
-    path_action="configured"
-    return
+    if grep -F "$path_line" "$profile" >/dev/null 2>&1; then
+      path_action="configured"
+      return
+    fi
+
+    if grep -F "$end_marker" "$profile" >/dev/null 2>&1; then
+      rewrite_path_block "$profile" "$begin_marker" "$end_marker" "$path_line"
+      path_action="updated"
+      return
+    fi
   fi
+
+  append_path_block "$profile" "$begin_marker" "$end_marker" "$path_line"
+  path_action="added"
+}
+
+append_path_block() {
+  profile="$1"
+  begin_marker="$2"
+  end_marker="$3"
+  path_line="$4"
 
   {
     printf '\n%s\n' "$begin_marker"
     printf '%s\n' "$path_line"
     printf '%s\n' "$end_marker"
   } >>"$profile"
-  path_action="added"
+}
+
+rewrite_path_block() {
+  profile="$1"
+  begin_marker="$2"
+  end_marker="$3"
+  path_line="$4"
+  tmp_profile="$tmp_dir/profile.$$.tmp"
+
+  awk -v begin="$begin_marker" -v end="$end_marker" -v line="$path_line" '
+    BEGIN {
+      in_block = 0
+      replaced = 0
+    }
+    $0 == begin {
+      if (!replaced) {
+        print begin
+        print line
+        print end
+        replaced = 1
+      }
+      in_block = 1
+      next
+    }
+    in_block {
+      if ($0 == end) {
+        in_block = 0
+      }
+      next
+    }
+    {
+      print
+    }
+    END {
+      if (in_block != 0) {
+        exit 1
+      }
+    }
+  ' "$profile" >"$tmp_profile"
+  mv "$tmp_profile" "$profile"
 }
 
 read_metadata_value() {
@@ -285,12 +342,12 @@ handle_conflicting_install() {
 install_release() {
   release_dir="$1"
   vendor_root="$2"
-
-  if [ -d "$release_dir" ]; then
-    return
-  fi
-
   stage_release="$tmp_dir/release"
+
+  rm -rf "$stage_release"
+  if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
+    rm -rf "$release_dir"
+  fi
   mkdir -p "$stage_release"
   cp "$vendor_root/codex/codex" "$stage_release/codex"
   cp "$vendor_root/path/rg" "$stage_release/rg"
@@ -304,6 +361,18 @@ EOF
 
   mkdir -p "$RELEASES_DIR"
   mv "$stage_release" "$release_dir"
+}
+
+release_dir_is_complete() {
+  release_dir="$1"
+  expected_version="$2"
+  expected_target="$3"
+
+  [ -d "$release_dir" ] &&
+    [ -x "$release_dir/codex" ] &&
+    [ -x "$release_dir/rg" ] &&
+    [ "$(read_metadata_value "$release_dir/metadata.toml" version || true)" = "$expected_version" ] &&
+    [ "$(read_metadata_value "$release_dir/metadata.toml" target || true)" = "$expected_target" ]
 }
 
 update_current_link() {
@@ -408,7 +477,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if [ ! -d "$release_dir" ]; then
+if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"; then
+  if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
+    warn "Found incomplete existing release at $release_dir; reinstalling."
+  fi
+
   archive_path="$tmp_dir/$asset"
   extract_dir="$tmp_dir/extract"
 
@@ -429,6 +502,11 @@ add_to_path
 case "$path_action" in
   added)
     step "PATH updated for future shells in $path_profile"
+    step "Run now: export PATH=\"$BIN_DIR:\$PATH\" && codex"
+    step "Or open a new terminal and run: codex"
+    ;;
+  updated)
+    step "PATH updated in $path_profile"
     step "Run now: export PATH=\"$BIN_DIR:\$PATH\" && codex"
     step "Or open a new terminal and run: codex"
     ;;
