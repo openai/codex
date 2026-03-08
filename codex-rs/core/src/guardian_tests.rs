@@ -1,5 +1,4 @@
 use super::*;
-use crate::test_support;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
@@ -7,6 +6,7 @@ use crate::config_loader::FeatureRequirementsToml;
 use crate::config_loader::NetworkConstraints;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::test_support;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::models::ContentItem;
 use core_test_support::context_snapshot;
@@ -23,6 +23,8 @@ use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 #[test]
 fn build_guardian_transcript_keeps_original_numbering() {
