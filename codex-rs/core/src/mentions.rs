@@ -5,11 +5,13 @@ use std::path::PathBuf;
 use codex_protocol::user_input::UserInput;
 
 use crate::connectors;
+use crate::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
+use crate::mention_syntax::TOOL_MENTION_SIGIL;
 use crate::plugins::PluginCapabilitySummary;
 use crate::skills::SkillMetadata;
 use crate::skills::injection::ToolMentionKind;
 use crate::skills::injection::app_id_from_path;
-use crate::skills::injection::extract_tool_mentions;
+use crate::skills::injection::extract_tool_mentions_with_sigil;
 use crate::skills::injection::plugin_config_name_from_path;
 use crate::skills::injection::tool_kind_for_path;
 
@@ -19,10 +21,17 @@ pub(crate) struct CollectedToolMentions {
 }
 
 pub(crate) fn collect_tool_mentions_from_messages(messages: &[String]) -> CollectedToolMentions {
+    collect_tool_mentions_from_messages_with_sigil(messages, TOOL_MENTION_SIGIL)
+}
+
+fn collect_tool_mentions_from_messages_with_sigil(
+    messages: &[String],
+    sigil: char,
+) -> CollectedToolMentions {
     let mut plain_names = HashSet::new();
     let mut paths = HashSet::new();
     for message in messages {
-        let mentions = extract_tool_mentions(message);
+        let mentions = extract_tool_mentions_with_sigil(message, sigil);
         plain_names.extend(mentions.plain_names().map(str::to_string));
         paths.extend(mentions.paths().map(str::to_string));
     }
@@ -50,7 +59,7 @@ pub(crate) fn collect_explicit_app_ids(input: &[UserInput]) -> HashSet<String> {
         .collect()
 }
 
-/// Collect explicit structured `plugin://...` mentions.
+/// Collect explicit structured or linked `plugin://...` mentions.
 pub(crate) fn collect_explicit_plugin_mentions(
     input: &[UserInput],
     plugins: &[PluginCapabilitySummary],
@@ -73,7 +82,11 @@ pub(crate) fn collect_explicit_plugin_mentions(
             UserInput::Mention { path, .. } => Some(path.clone()),
             _ => None,
         })
-        .chain(collect_tool_mentions_from_messages(&messages).paths)
+        .chain(
+            // Plugin plaintext links use `@`, not the default `$` tool sigil.
+            collect_tool_mentions_from_messages_with_sigil(&messages, PLUGIN_TEXT_MENTION_SIGIL)
+                .paths,
+        )
         .filter(|path| tool_kind_for_path(path.as_str()) == ToolMentionKind::Plugin)
         .filter_map(|path| plugin_config_name_from_path(path.as_str()).map(str::to_string))
         .collect();
@@ -222,7 +235,7 @@ mod tests {
         ];
 
         let mentioned = collect_explicit_plugin_mentions(
-            &[text_input("use [$sample](plugin://sample@test)")],
+            &[text_input("use [@sample](plugin://sample@test)")],
             &plugins,
         );
 
@@ -238,7 +251,7 @@ mod tests {
 
         let mentioned = collect_explicit_plugin_mentions(
             &[
-                text_input("use [$sample](plugin://sample@test)"),
+                text_input("use [@sample](plugin://sample@test)"),
                 UserInput::Mention {
                     name: "sample".to_string(),
                     path: "plugin://sample@test".to_string(),
@@ -258,6 +271,18 @@ mod tests {
             &[text_input(
                 "use [$app](app://calendar) and [$skill](skill://team/skill) and [$file](/tmp/file.txt)",
             )],
+            &plugins,
+        );
+
+        assert_eq!(mentioned, Vec::<PluginCapabilitySummary>::new());
+    }
+
+    #[test]
+    fn collect_explicit_plugin_mentions_ignores_dollar_linked_plugin_mentions() {
+        let plugins = vec![plugin("sample@test", "sample")];
+
+        let mentioned = collect_explicit_plugin_mentions(
+            &[text_input("use [$sample](plugin://sample@test)")],
             &plugins,
         );
 
