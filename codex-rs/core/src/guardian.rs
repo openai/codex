@@ -170,11 +170,11 @@ pub(crate) enum GuardianApprovalRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct GuardianMcpAnnotations {
     #[serde(skip_serializing_if = "Option::is_none")]
-    destructive_hint: Option<bool>,
+    pub(crate) destructive_hint: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    open_world_hint: Option<bool>,
+    pub(crate) open_world_hint: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    read_only_hint: Option<bool>,
+    pub(crate) read_only_hint: Option<bool>,
 }
 
 /// Transcript entry retained for guardian review after filtering.
