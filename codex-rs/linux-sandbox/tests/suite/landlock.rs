@@ -9,8 +9,13 @@ use codex_core::exec::process_exec_tool_call;
 use codex_core::exec_env::create_env;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -63,13 +68,47 @@ async fn run_cmd_output(
         .expect("sandboxed command should execute")
 }
 
-#[expect(clippy::expect_used)]
 async fn run_cmd_result_with_writable_roots(
     cmd: &[&str],
     writable_roots: &[PathBuf],
     timeout_ms: u64,
     use_bwrap_sandbox: bool,
     network_access: bool,
+) -> Result<codex_core::exec::ExecToolCallOutput> {
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: writable_roots
+            .iter()
+            .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
+            .collect(),
+        read_only_access: Default::default(),
+        network_access,
+        // Exclude tmp-related folders from writable roots because we need a
+        // folder that is writable by tests but that we intentionally disallow
+        // writing to in the sandbox.
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
+    run_cmd_result_with_policies(
+        cmd,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        timeout_ms,
+        use_bwrap_sandbox,
+    )
+    .await
+}
+
+#[expect(clippy::expect_used)]
+async fn run_cmd_result_with_policies(
+    cmd: &[&str],
+    sandbox_policy: SandboxPolicy,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    timeout_ms: u64,
+    use_bwrap_sandbox: bool,
 ) -> Result<codex_core::exec::ExecToolCallOutput> {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
@@ -84,28 +123,14 @@ async fn run_cmd_result_with_writable_roots(
         justification: None,
         arg0: None,
     };
-
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: writable_roots
-            .iter()
-            .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
-            .collect(),
-        read_only_access: Default::default(),
-        network_access,
-        // Exclude tmp-related folders from writable roots because we need a
-        // folder that is writable by tests but that we intentionally disallow
-        // writing to in the sandbox.
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
 
     process_exec_tool_call(
         params,
         &sandbox_policy,
-        &FileSystemSandboxPolicy::from(&sandbox_policy),
-        NetworkSandboxPolicy::from(&sandbox_policy),
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
         use_bwrap_sandbox,
@@ -477,6 +502,110 @@ async fn sandbox_blocks_codex_symlink_replacement_attack() {
         ".codex symlink replacement should be denied",
     );
     assert_ne!(codex_output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().expect("tempdir");
+    let blocked = tmpdir.path().join("blocked");
+    std::fs::create_dir_all(&blocked).expect("create blocked dir");
+    let blocked_target = blocked.join("secret.txt");
+
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir")],
+        read_only_access: Default::default(),
+        network_access: true,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir"),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
+            },
+            access: FileSystemAccessMode::None,
+        },
+    ]);
+    let output = expect_denied(
+        run_cmd_result_with_policies(
+            &[
+                "bash",
+                "-lc",
+                &format!("echo denied > {}", blocked_target.to_string_lossy()),
+            ],
+            sandbox_policy,
+            file_system_sandbox_policy,
+            NetworkSandboxPolicy::Enabled,
+            LONG_TIMEOUT_MS,
+            true,
+        )
+        .await,
+        "explicit split-policy carveout should be denied under bubblewrap",
+    );
+
+    assert_ne!(output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn sandbox_blocks_root_read_carveouts_under_bwrap() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().expect("tempdir");
+    let blocked = tmpdir.path().join("blocked");
+    std::fs::create_dir_all(&blocked).expect("create blocked dir");
+    let blocked_target = blocked.join("secret.txt");
+    std::fs::write(&blocked_target, "secret").expect("seed blocked file");
+
+    let sandbox_policy = SandboxPolicy::ReadOnly {
+        access: ReadOnlyAccess::FullAccess,
+        network_access: true,
+    };
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
+            },
+            access: FileSystemAccessMode::None,
+        },
+    ]);
+    let output = expect_denied(
+        run_cmd_result_with_policies(
+            &[
+                "bash",
+                "-lc",
+                &format!("cat {}", blocked_target.to_string_lossy()),
+            ],
+            sandbox_policy,
+            file_system_sandbox_policy,
+            NetworkSandboxPolicy::Enabled,
+            LONG_TIMEOUT_MS,
+            true,
+        )
+        .await,
+        "root-read carveout should be denied under bubblewrap",
+    );
+
+    assert_ne!(output.exit_code, 0);
 }
 
 #[tokio::test]

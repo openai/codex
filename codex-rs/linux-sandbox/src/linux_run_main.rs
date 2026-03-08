@@ -178,7 +178,7 @@ pub fn run_main() -> ! {
         });
         run_bwrap_with_proc_fallback(
             &sandbox_policy_cwd,
-            &sandbox_policy,
+            &file_system_sandbox_policy,
             network_sandbox_policy,
             inner,
             !no_proc,
@@ -261,7 +261,7 @@ fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_san
 
 fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
-    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     inner: Vec<String>,
     mount_proc: bool,
@@ -270,7 +270,12 @@ fn run_bwrap_with_proc_fallback(
     let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
     let mut mount_proc = mount_proc;
 
-    if mount_proc && !preflight_proc_mount_support(sandbox_policy_cwd, sandbox_policy, network_mode)
+    if mount_proc
+        && !preflight_proc_mount_support(
+            sandbox_policy_cwd,
+            file_system_sandbox_policy,
+            network_mode,
+        )
     {
         eprintln!("codex-linux-sandbox: bwrap could not mount /proc; retrying with --no-proc");
         mount_proc = false;
@@ -280,8 +285,13 @@ fn run_bwrap_with_proc_fallback(
         mount_proc,
         network_mode,
     };
-    let argv = build_bwrap_argv(inner, sandbox_policy, sandbox_policy_cwd, options);
-    exec_vendored_bwrap(argv);
+    let bwrap_args = build_bwrap_argv(
+        inner,
+        file_system_sandbox_policy,
+        sandbox_policy_cwd,
+        options,
+    );
+    exec_vendored_bwrap(bwrap_args.args, bwrap_args.preserved_files);
 }
 
 fn bwrap_network_mode(
@@ -299,47 +309,56 @@ fn bwrap_network_mode(
 
 fn build_bwrap_argv(
     inner: Vec<String>,
-    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     sandbox_policy_cwd: &Path,
     options: BwrapOptions,
-) -> Vec<String> {
-    let mut args = create_bwrap_command_args(inner, sandbox_policy, sandbox_policy_cwd, options)
-        .unwrap_or_else(|err| panic!("error building bubblewrap command: {err:?}"));
+) -> crate::bwrap::BwrapArgs {
+    let mut bwrap_args = create_bwrap_command_args(
+        inner,
+        file_system_sandbox_policy,
+        sandbox_policy_cwd,
+        options,
+    )
+    .unwrap_or_else(|err| panic!("error building bubblewrap command: {err:?}"));
 
-    let command_separator_index = args
+    let command_separator_index = bwrap_args
+        .args
         .iter()
         .position(|arg| arg == "--")
         .unwrap_or_else(|| panic!("bubblewrap argv is missing command separator '--'"));
-    args.splice(
+    bwrap_args.args.splice(
         command_separator_index..command_separator_index,
         ["--argv0".to_string(), "codex-linux-sandbox".to_string()],
     );
 
     let mut argv = vec!["bwrap".to_string()];
-    argv.extend(args);
-    argv
+    argv.extend(bwrap_args.args);
+    crate::bwrap::BwrapArgs {
+        args: argv,
+        preserved_files: bwrap_args.preserved_files,
+    }
 }
 
 fn preflight_proc_mount_support(
     sandbox_policy_cwd: &Path,
-    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
 ) -> bool {
     let preflight_argv =
-        build_preflight_bwrap_argv(sandbox_policy_cwd, sandbox_policy, network_mode);
+        build_preflight_bwrap_argv(sandbox_policy_cwd, file_system_sandbox_policy, network_mode);
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
     !is_proc_mount_failure(stderr.as_str())
 }
 
 fn build_preflight_bwrap_argv(
     sandbox_policy_cwd: &Path,
-    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
-) -> Vec<String> {
+) -> crate::bwrap::BwrapArgs {
     let preflight_command = vec![resolve_true_command()];
     build_bwrap_argv(
         preflight_command,
-        sandbox_policy,
+        file_system_sandbox_policy,
         sandbox_policy_cwd,
         BwrapOptions {
             mount_proc: true,
@@ -368,7 +387,7 @@ fn resolve_true_command() -> String {
 /// - We capture stderr from that preflight to match known mount-failure text.
 ///   We do not stream it because this is a one-shot probe with a trivial
 ///   command, and reads are bounded to a fixed max size.
-fn run_bwrap_in_child_capture_stderr(argv: Vec<String>) -> String {
+fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> String {
     const MAX_PREFLIGHT_STDERR_BYTES: u64 = 64 * 1024;
 
     let mut pipe_fds = [0; 2];
@@ -397,7 +416,7 @@ fn run_bwrap_in_child_capture_stderr(argv: Vec<String>) -> String {
             close_fd_or_panic(write_fd, "close write end in bubblewrap child");
         }
 
-        let exit_code = run_vendored_bwrap_main(&argv);
+        let exit_code = run_vendored_bwrap_main(&bwrap_args.args, &bwrap_args.preserved_files);
         std::process::exit(exit_code);
     }
 
