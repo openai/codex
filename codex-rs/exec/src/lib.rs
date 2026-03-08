@@ -798,6 +798,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 if matches!(event.msg, EventMsg::SessionConfigured(_)) {
                     continue;
                 }
+                if matches!(event.msg, EventMsg::Error(_)) {
+                    // The legacy bridge still carries fatal turn failures for
+                    // exec. Preserve the non-zero exit behavior until this
+                    // path is fully replaced by typed server notifications.
+                    error_seen = true;
+                }
                 match &event.msg {
                     EventMsg::TurnComplete(payload) => {
                         if payload.turn_id != task_id {

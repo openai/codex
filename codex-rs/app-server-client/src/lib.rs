@@ -57,6 +57,25 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// `MessageProcessor` continues to produce that shape internally.
 pub type RequestResult = std::result::Result<JsonRpcResult, JSONRPCErrorError>;
 
+fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
+    // These terminal events drive surface shutdown/completion state. Dropping
+    // them under backpressure can leave exec/TUI waiting forever even though
+    // the underlying turn has already ended.
+    match event {
+        InProcessServerEvent::ServerNotification(
+            codex_app_server_protocol::ServerNotification::TurnCompleted(_),
+        ) => true,
+        InProcessServerEvent::LegacyNotification(notification) => matches!(
+            notification
+                .method
+                .strip_prefix("codex/event/")
+                .unwrap_or(&notification.method),
+            "task_complete" | "turn_aborted" | "shutdown_complete"
+        ),
+        _ => false,
+    }
+}
+
 /// Layered error for [`InProcessAppServerClient::request_typed`].
 ///
 /// This keeps transport failures, server-side JSON-RPC failures, and response
@@ -244,6 +263,9 @@ impl InProcessAppServerClient {
                         match command {
                             Some(ClientCommand::Request { request, response_tx }) => {
                                 let request_sender = request_sender.clone();
+                                // Request waits happen on a detached task so
+                                // this loop can keep draining runtime events
+                                // while the request is blocked on client input.
                                 tokio::spawn(async move {
                                     let result = request_sender.request(*request).await;
                                     let _ = response_tx.send(result);
@@ -290,34 +312,63 @@ impl InProcessAppServerClient {
                         };
 
                         if skipped_events > 0 {
-                            match event_tx.try_send(InProcessServerEvent::Lagged {
-                                skipped: skipped_events,
-                            }) {
-                                Ok(()) => {
-                                    skipped_events = 0;
-                                }
-                                Err(mpsc::error::TrySendError::Full(_)) => {
-                                    skipped_events = skipped_events.saturating_add(1);
-                                    warn!(
-                                        "dropping in-process app-server event because consumer queue is full"
-                                    );
-                                    if let InProcessServerEvent::ServerRequest(request) = event {
-                                        let _ = request_sender.fail_server_request(
-                                            request.id().clone(),
-                                            JSONRPCErrorError {
-                                                code: -32001,
-                                                message: "in-process app-server event queue is full".to_string(),
-                                                data: None,
-                                            },
-                                        );
-                                    }
-                                    continue;
-                                }
-                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                            if event_requires_delivery(&event) {
+                                // Surface lag before the terminal event, but
+                                // do not let the lag marker itself cause us to
+                                // drop the completion/abort notification that
+                                // the caller is blocked on.
+                                if event_tx
+                                    .send(InProcessServerEvent::Lagged {
+                                        skipped: skipped_events,
+                                    })
+                                    .await
+                                    .is_err()
+                                {
                                     event_stream_enabled = false;
                                     continue;
                                 }
+                                skipped_events = 0;
+                            } else {
+                                match event_tx.try_send(InProcessServerEvent::Lagged {
+                                    skipped: skipped_events,
+                                }) {
+                                    Ok(()) => {
+                                        skipped_events = 0;
+                                    }
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                        skipped_events = skipped_events.saturating_add(1);
+                                        warn!(
+                                            "dropping in-process app-server event because consumer queue is full"
+                                        );
+                                        if let InProcessServerEvent::ServerRequest(request) = event {
+                                            let _ = request_sender.fail_server_request(
+                                                request.id().clone(),
+                                                JSONRPCErrorError {
+                                                    code: -32001,
+                                                    message: "in-process app-server event queue is full".to_string(),
+                                                    data: None,
+                                                },
+                                            );
+                                        }
+                                        continue;
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                        event_stream_enabled = false;
+                                        continue;
+                                    }
+                                }
                             }
+                        }
+
+                        if event_requires_delivery(&event) {
+                            // Block until the consumer catches up for
+                            // terminal notifications; this preserves the
+                            // completion signal even when the queue is
+                            // otherwise saturated.
+                            if event_tx.send(event).await.is_err() {
+                                event_stream_enabled = false;
+                            }
+                            continue;
                         }
 
                         match event_tx.try_send(event) {
@@ -707,5 +758,35 @@ mod tests {
         ));
 
         client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[test]
+    fn event_requires_delivery_marks_terminal_events() {
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::TurnCompleted(
+                    codex_app_server_protocol::TurnCompletedNotification {
+                        thread_id: "thread".to_string(),
+                        turn: codex_app_server_protocol::Turn {
+                            id: "turn".to_string(),
+                            items: Vec::new(),
+                            status: codex_app_server_protocol::TurnStatus::Completed,
+                            error: None,
+                        },
+                    }
+                )
+            )
+        ));
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::LegacyNotification(
+                codex_app_server_protocol::JSONRPCNotification {
+                    method: "codex/event/turn_aborted".to_string(),
+                    params: None,
+                }
+            )
+        ));
+        assert!(!event_requires_delivery(&InProcessServerEvent::Lagged {
+            skipped: 1
+        }));
     }
 }
