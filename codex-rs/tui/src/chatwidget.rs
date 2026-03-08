@@ -1990,6 +1990,9 @@ impl ChatWidget {
         self.finalize_turn();
         if reason == TurnAbortReason::Interrupted {
             self.clear_unified_exec_processes();
+            // The in-process agent clears pending turn-scoped approvals as part of turn abort
+            // handling. Dismiss any modal that could still submit one of those stale requests.
+            self.bottom_pane.dismiss_all_views();
         }
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(

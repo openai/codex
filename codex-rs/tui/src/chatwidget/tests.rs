@@ -3269,6 +3269,67 @@ async fn exec_approval_uses_approval_id_when_present() {
 }
 
 #[tokio::test]
+async fn interrupted_turn_dismisses_pending_exec_approval_modal() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "sub-approve".into(),
+        msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+            call_id: "call-approve-exec".into(),
+            approval_id: Some("call-approve-exec".into()),
+            turn_id: "turn-1".into(),
+            command: vec![
+                "git".into(),
+                "fetch".into(),
+                "upstream".into(),
+                "main".into(),
+            ],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            reason: Some("need latest upstream".into()),
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: None,
+            available_decisions: None,
+            parsed_cmd: vec![],
+        }),
+    });
+
+    assert!(
+        chat.has_active_view(),
+        "expected approval modal to be visible"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert!(
+        !chat.has_active_view(),
+        "expected interrupted turn to dismiss the stale approval modal"
+    );
+    assert!(
+        op_rx.try_recv().is_err(),
+        "interrupting should dismiss the approval modal without submitting a stale approval op"
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
 async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
