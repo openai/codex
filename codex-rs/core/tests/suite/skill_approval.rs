@@ -7,6 +7,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RejectConfig;
 use codex_protocol::protocol::ReviewDecision;
@@ -240,6 +241,14 @@ permissions:
                 )]),
             }),
             ..Default::default()
+        })
+    );
+    assert_eq!(
+        approval.skill_metadata,
+        Some(ExecApprovalRequestSkillMetadata {
+            path_to_skills_md: test
+                .codex_home_path()
+                .join("skills/mbolin-test-skill/agents/openai.yaml"),
         })
     );
 

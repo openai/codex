@@ -53,6 +53,7 @@ export type { ElicitationRequestEvent } from "./ElicitationRequestEvent";
 export type { ErrorEvent } from "./ErrorEvent";
 export type { EventMsg } from "./EventMsg";
 export type { ExecApprovalRequestEvent } from "./ExecApprovalRequestEvent";
+export type { ExecApprovalRequestSkillMetadata } from "./ExecApprovalRequestSkillMetadata";
 export type { ExecCommandApprovalParams } from "./ExecCommandApprovalParams";
 export type { ExecCommandApprovalResponse } from "./ExecCommandApprovalResponse";
 export type { ExecCommandBeginEvent } from "./ExecCommandBeginEvent";

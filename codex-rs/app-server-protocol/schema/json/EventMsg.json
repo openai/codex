@@ -1866,6 +1866,17 @@
                 "null"
               ]
             },
+            "skill_metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ExecApprovalRequestSkillMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional skill metadata when the approval was triggered by a skill script."
+            },
             "turn_id": {
               "default": "",
               "description": "Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
@@ -3441,6 +3452,17 @@
           "type": "object"
         }
       ]
+    },
+    "ExecApprovalRequestSkillMetadata": {
+      "properties": {
+        "path_to_skills_md": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path_to_skills_md"
+      ],
+      "type": "object"
     },
     "ExecCommandSource": {
       "enum": [
@@ -7677,6 +7699,17 @@
             "string",
             "null"
           ]
+        },
+        "skill_metadata": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecApprovalRequestSkillMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional skill metadata when the approval was triggered by a skill script."
         },
         "turn_id": {
           "default": "",

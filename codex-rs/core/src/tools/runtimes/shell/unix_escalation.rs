@@ -31,6 +31,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -410,6 +411,14 @@ impl CoreShellActionProvider {
                 .into_iter()
                 .flatten()
                 .collect();
+                let skill_metadata = match decision_source {
+                    DecisionSource::SkillScript { skill } => {
+                        Some(ExecApprovalRequestSkillMetadata {
+                            path_to_skills_md: skill.path_to_skills_md.clone(),
+                        })
+                    }
+                    DecisionSource::PrefixRule | DecisionSource::UnmatchedCommandFallback => None,
+                };
                 session
                     .request_command_approval(
                         &turn,
@@ -421,6 +430,7 @@ impl CoreShellActionProvider {
                         None,
                         None,
                         additional_permissions,
+                        skill_metadata,
                         Some(available_decisions),
                     )
                     .await

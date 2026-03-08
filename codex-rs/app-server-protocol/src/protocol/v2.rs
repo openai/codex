@@ -7,6 +7,7 @@ use crate::protocol::common::AuthMode;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
+use codex_protocol::approvals::ExecApprovalRequestSkillMetadata as CoreExecApprovalRequestSkillMetadata;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
@@ -2824,6 +2825,14 @@ impl From<CoreSkillMetadata> for SkillMetadata {
     }
 }
 
+impl From<CoreExecApprovalRequestSkillMetadata> for CommandExecutionRequestApprovalSkillMetadata {
+    fn from(value: CoreExecApprovalRequestSkillMetadata) -> Self {
+        Self {
+            path_to_skills_md: value.path_to_skills_md,
+        }
+    }
+}
+
 impl From<CoreSkillInterface> for SkillInterface {
     fn from(value: CoreSkillInterface) -> Self {
         Self {
@@ -4297,6 +4306,11 @@ pub struct CommandExecutionRequestApprovalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub additional_permissions: Option<AdditionalPermissionProfile>,
+    /// Optional skill metadata when the approval was triggered by a skill script.
+    #[experimental("item/commandExecution/requestApproval.skillMetadata")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub skill_metadata: Option<CommandExecutionRequestApprovalSkillMetadata>,
     /// Optional proposed execpolicy amendment to allow similar commands without prompting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
@@ -4318,7 +4332,15 @@ impl CommandExecutionRequestApprovalParams {
         // We need a generic outbound compatibility design for stripping or
         // otherwise handling experimental server->client payloads.
         self.additional_permissions = None;
+        self.skill_metadata = None;
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecutionRequestApprovalSkillMetadata {
+    pub path_to_skills_md: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -5095,6 +5117,7 @@ mod tests {
                 },
                 "macos": null
             },
+            "skillMetadata": null,
             "proposedExecpolicyAmendment": null,
             "proposedNetworkPolicyAmendments": null,
             "availableDecisions": null
@@ -5130,6 +5153,7 @@ mod tests {
                     "calendar": false
                 }
             },
+            "skillMetadata": null,
             "proposedExecpolicyAmendment": null,
             "proposedNetworkPolicyAmendments": null,
             "availableDecisions": null
@@ -5144,6 +5168,35 @@ mod tests {
             Some(CoreMacOsAutomationPermission::BundleIds(vec![
                 "com.apple.Notes".to_string(),
             ]))
+        );
+    }
+
+    #[test]
+    fn command_execution_request_approval_accepts_skill_metadata() {
+        let params = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
+            "threadId": "thr_123",
+            "turnId": "turn_123",
+            "itemId": "call_123",
+            "command": "cat file",
+            "cwd": "/tmp",
+            "commandActions": null,
+            "reason": null,
+            "networkApprovalContext": null,
+            "additionalPermissions": null,
+            "skillMetadata": {
+                "pathToSkillsMd": "/tmp/SKILLS.md"
+            },
+            "proposedExecpolicyAmendment": null,
+            "proposedNetworkPolicyAmendments": null,
+            "availableDecisions": null
+        }))
+        .expect("skill metadata should deserialize");
+
+        assert_eq!(
+            params.skill_metadata,
+            Some(CommandExecutionRequestApprovalSkillMetadata {
+                path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
+            })
         );
     }
 

@@ -26,6 +26,7 @@ use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::CommandExecutionRequestApprovalSkillMetadata;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
@@ -437,6 +438,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 proposed_execpolicy_amendment,
                 proposed_network_policy_amendments,
                 additional_permissions,
+                skill_metadata,
                 parsed_cmd,
                 ..
             } = ev;
@@ -508,6 +510,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                         });
                     let additional_permissions =
                         additional_permissions.map(V2AdditionalPermissionProfile::from);
+                    let skill_metadata =
+                        skill_metadata.map(CommandExecutionRequestApprovalSkillMetadata::from);
 
                     let params = CommandExecutionRequestApprovalParams {
                         thread_id: conversation_id.to_string(),
@@ -520,6 +524,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         cwd,
                         command_actions,
                         additional_permissions,
+                        skill_metadata,
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                         proposed_network_policy_amendments: proposed_network_policy_amendments_v2,
                         available_decisions: Some(available_decisions),

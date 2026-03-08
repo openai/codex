@@ -1762,6 +1762,17 @@
       "title": "CommandExecutionRequestApprovalResponse",
       "type": "object"
     },
+    "CommandExecutionRequestApprovalSkillMetadata": {
+      "properties": {
+        "pathToSkillsMd": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pathToSkillsMd"
+      ],
+      "type": "object"
+    },
     "CustomPrompt": {
       "properties": {
         "argument_hint": {
@@ -3181,6 +3192,17 @@
                 "string",
                 "null"
               ]
+            },
+            "skill_metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ExecApprovalRequestSkillMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional skill metadata when the approval was triggered by a skill script."
             },
             "turn_id": {
               "default": "",
@@ -4758,6 +4780,17 @@
         }
       ],
       "title": "EventMsg"
+    },
+    "ExecApprovalRequestSkillMetadata": {
+      "properties": {
+        "path_to_skills_md": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path_to_skills_md"
+      ],
+      "type": "object"
     },
     "ExecCommandApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
