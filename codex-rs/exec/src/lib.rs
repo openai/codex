@@ -978,6 +978,10 @@ fn session_configured_from_thread_resume_response(
 /// Some session fields are not available synchronously from the start/resume
 /// response, so callers must treat the result as a best-effort fallback until
 /// a later `SessionConfigured` event proves otherwise.
+/// TODO(architecture): stop synthesizing a partial `SessionConfiguredEvent`
+/// here. Either return the authoritative session-configured payload from
+/// `thread/start`/`thread/resume`, or introduce a smaller bootstrap type for
+/// exec so this path cannot accidentally depend on placeholder fields.
 fn session_configured_from_thread_response(
     thread_id: &str,
     thread_name: Option<String>,
