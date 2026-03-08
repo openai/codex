@@ -730,14 +730,16 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
+    let mut interrupt_channel_open = true;
     let primary_thread_id_for_requests = primary_thread_id.to_string();
     loop {
         let server_event = if let Some(event) = buffered_events.pop_front() {
             Some(event)
         } else {
             tokio::select! {
-                maybe_interrupt = interrupt_rx.recv() => {
+                maybe_interrupt = interrupt_rx.recv(), if interrupt_channel_open => {
                     if maybe_interrupt.is_none() {
+                        interrupt_channel_open = false;
                         continue;
                     }
                     if let Err(err) = send_request_with_response::<TurnInterruptResponse>(
