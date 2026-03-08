@@ -788,13 +788,20 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 }
             }
             InProcessServerEvent::LegacyNotification(notification) => {
-                let event = match legacy_notification_to_event(notification) {
+                let decoded = match decode_legacy_notification(notification) {
                     Ok(event) => event,
                     Err(err) => {
                         warn!("{err}");
                         continue;
                     }
                 };
+                if decoded.conversation_id.as_deref()
+                    != Some(primary_thread_id_for_requests.as_str())
+                    && decoded.conversation_id.is_some()
+                {
+                    continue;
+                }
+                let event = decoded.event;
                 if matches!(event.msg, EventMsg::SessionConfigured(_)) {
                     continue;
                 }
@@ -1041,21 +1048,33 @@ fn lagged_event_warning_message(skipped: usize) -> String {
     format!("in-process app-server event stream lagged; dropped {skipped} events")
 }
 
-fn legacy_notification_to_event(notification: JSONRPCNotification) -> Result<Event, String> {
+struct DecodedLegacyNotification {
+    conversation_id: Option<String>,
+    event: Event,
+}
+
+fn decode_legacy_notification(
+    notification: JSONRPCNotification,
+) -> Result<DecodedLegacyNotification, String> {
     let value = notification
         .params
         .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
     let method = notification.method;
     let normalized_method = normalize_legacy_notification_method(&method).to_string();
-    let serde_json::Value::Object(object) = value else {
+    let serde_json::Value::Object(mut object) = value else {
         return Err(format!(
             "legacy notification `{method}` params were not an object"
         ));
     };
+    let conversation_id = object
+        .get("conversationId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
     let mut event_payload = if let Some(serde_json::Value::Object(msg_payload)) = object.get("msg")
     {
         serde_json::Value::Object(msg_payload.clone())
     } else {
+        object.remove("conversationId");
         serde_json::Value::Object(object)
     };
     let serde_json::Value::Object(ref mut object) = event_payload else {
@@ -1070,10 +1089,22 @@ fn legacy_notification_to_event(notification: JSONRPCNotification) -> Result<Eve
 
     let msg: EventMsg = serde_json::from_value(event_payload)
         .map_err(|err| format!("failed to decode event: {err}"))?;
-    Ok(Event {
-        id: String::new(),
-        msg,
+    Ok(DecodedLegacyNotification {
+        conversation_id,
+        event: Event {
+            id: String::new(),
+            msg,
+        },
     })
+}
+
+fn canceled_mcp_server_elicitation_response() -> Result<Value, String> {
+    serde_json::to_value(McpServerElicitationRequestResponse {
+        action: McpServerElicitationAction::Cancel,
+        content: None,
+        meta: None,
+    })
+    .map_err(|err| format!("failed to encode mcp elicitation response: {err}"))
 }
 
 async fn request_shutdown(
@@ -1139,41 +1170,26 @@ async fn handle_server_request(
     client: &InProcessAppServerClient,
     request: ServerRequest,
     config: &Config,
-    thread_id: &str,
+    _thread_id: &str,
     error_seen: &mut bool,
 ) {
     let method = server_request_method_name(&request);
     let handle_result = match request {
-        ServerRequest::McpServerElicitationRequest { request_id, params } => {
-            if params.thread_id != thread_id {
-                reject_server_request(
-                    client,
-                    request_id,
-                    &method,
-                    format!(
-                        "request targets thread `{}`, but active thread is `{thread_id}`",
-                        params.thread_id
-                    ),
-                )
-                .await
-            } else {
-                let response = McpServerElicitationRequestResponse {
-                    action: McpServerElicitationAction::Cancel,
-                    content: None,
-                    meta: None,
-                };
-                match serde_json::to_value(response) {
-                    Ok(value) => {
-                        resolve_server_request(
-                            client,
-                            request_id,
-                            value,
-                            "mcpServer/elicitation/request",
-                        )
-                        .await
-                    }
-                    Err(err) => Err(format!("failed to encode mcp elicitation response: {err}")),
+        ServerRequest::McpServerElicitationRequest { request_id, .. } => {
+            // Exec auto-cancels elicitation instead of surfacing it
+            // interactively. Preserve that behavior for attached subagent
+            // threads too so we do not turn a cancel into a decline/error.
+            match canceled_mcp_server_elicitation_response() {
+                Ok(value) => {
+                    resolve_server_request(
+                        client,
+                        request_id,
+                        value,
+                        "mcpServer/elicitation/request",
+                    )
+                    .await
                 }
+                Err(err) => Err(err),
             }
         }
         ServerRequest::ChatgptAuthTokensRefresh { request_id, params } => {
@@ -1737,6 +1753,46 @@ mod tests {
         assert_eq!(
             lagged_event_warning_message(7),
             "in-process app-server event stream lagged; dropped 7 events".to_string()
+        );
+    }
+
+    #[test]
+    fn decode_legacy_notification_preserves_conversation_id() {
+        let decoded = decode_legacy_notification(JSONRPCNotification {
+            method: "codex/event/error".to_string(),
+            params: Some(serde_json::json!({
+                "conversationId": "thread-123",
+                "msg": {
+                    "message": "boom"
+                }
+            })),
+        })
+        .expect("legacy notification should decode");
+
+        assert_eq!(decoded.conversation_id.as_deref(), Some("thread-123"));
+        assert!(matches!(
+            decoded.event.msg,
+            EventMsg::Error(codex_protocol::protocol::ErrorEvent {
+                message,
+                codex_error_info: None,
+            }) if message == "boom"
+        ));
+    }
+
+    #[test]
+    fn canceled_mcp_server_elicitation_response_uses_cancel_action() {
+        let value = canceled_mcp_server_elicitation_response()
+            .expect("mcp elicitation cancel response should serialize");
+        let response: McpServerElicitationRequestResponse =
+            serde_json::from_value(value).expect("cancel response should deserialize");
+
+        assert_eq!(
+            response,
+            McpServerElicitationRequestResponse {
+                action: McpServerElicitationAction::Cancel,
+                content: None,
+                meta: None,
+            }
         );
     }
 }
