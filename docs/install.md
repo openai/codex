@@ -1,24 +1,10 @@
 ## Installing & building
 
-### Native installer
-
-Use the native installer when you want a standalone Codex binary plus bundled native helpers without depending on Node:
-
-```bash
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
-```
-
-On Windows PowerShell:
-
-```powershell
-irm https://chatgpt.com/codex/install.ps1 | iex
-```
-
 ### System requirements
 
 | Requirement                 | Details                                                         |
 | --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11              |
+| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
 | Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
 | RAM                         | 4-GB minimum (8-GB recommended)                                 |
 

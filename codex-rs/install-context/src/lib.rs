@@ -13,17 +13,40 @@ pub enum InstallManager {
     Npm,
     Bun,
     Brew,
-    Unknown,
+    /// Any other execution environment.
+    ///
+    /// This commonly covers `cargo run`, app-bundled Codex binaries, custom
+    /// internal launchers, and tests that execute Codex from an arbitrary path.
+    Other,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct InstallContext {
-    pub manager: InstallManager,
-    pub current_exe: Option<PathBuf>,
-    pub release_dir: Option<PathBuf>,
-    pub version: Option<String>,
-    pub target: Option<String>,
-    pub rg_command: String,
+pub enum InstallContext {
+    Native {
+        /// The native release directory that contains `codex`, `rg`, and
+        /// `metadata.toml`, for example
+        /// `~/.codex/packages/native/releases/0.111.0-x86_64-unknown-linux-musl`.
+        release_dir: PathBuf,
+        /// The installed native Codex version, for example `0.111.0`.
+        version: String,
+        /// The target triple recorded in native metadata, for example
+        /// `x86_64-unknown-linux-musl` or `aarch64-apple-darwin`.
+        target: String,
+        /// The bundled ripgrep binary for this native release, for example
+        /// `~/.codex/packages/native/releases/.../rg`.
+        rg_command: PathBuf,
+    },
+    /// A Codex binary launched through the npm-managed `codex.js` shim.
+    Npm,
+    /// A Codex binary launched through the bun-managed `codex.js` shim.
+    Bun,
+    /// A Codex binary that appears to come from a Homebrew install prefix.
+    Brew,
+    /// Any other execution environment.
+    ///
+    /// This commonly covers `cargo run`, app-bundled Codex binaries, custom
+    /// internal launchers, and tests that execute Codex from an arbitrary path.
+    Other,
 }
 
 impl InstallContext {
@@ -34,11 +57,11 @@ impl InstallContext {
         managed_by_bun: bool,
     ) -> Self {
         if managed_by_npm {
-            return Self::unknown_with_manager(InstallManager::Npm, current_exe);
+            return Self::Npm;
         }
 
         if managed_by_bun {
-            return Self::unknown_with_manager(InstallManager::Bun, current_exe);
+            return Self::Bun;
         }
 
         if let Some(exe_path) = current_exe
@@ -51,10 +74,10 @@ impl InstallContext {
             && let Some(exe_path) = current_exe
             && (exe_path.starts_with("/opt/homebrew") || exe_path.starts_with("/usr/local"))
         {
-            return Self::unknown_with_manager(InstallManager::Brew, Some(exe_path));
+            return Self::Brew;
         }
 
-        Self::unknown_with_manager(InstallManager::Unknown, current_exe)
+        Self::Other
     }
 
     pub fn current() -> &'static Self {
@@ -71,14 +94,20 @@ impl InstallContext {
         })
     }
 
-    fn unknown_with_manager(manager: InstallManager, current_exe: Option<&Path>) -> Self {
-        Self {
-            manager,
-            current_exe: current_exe.map(Path::to_path_buf),
-            release_dir: None,
-            version: None,
-            target: None,
-            rg_command: default_rg_command(),
+    pub fn manager(&self) -> InstallManager {
+        match self {
+            Self::Native { .. } => InstallManager::Native,
+            Self::Npm => InstallManager::Npm,
+            Self::Bun => InstallManager::Bun,
+            Self::Brew => InstallManager::Brew,
+            Self::Other => InstallManager::Other,
+        }
+    }
+
+    pub fn rg_command(&self) -> PathBuf {
+        match self {
+            Self::Native { rg_command, .. } => rg_command.clone(),
+            Self::Npm | Self::Bun | Self::Brew | Self::Other => default_rg_command(),
         }
     }
 }
@@ -96,14 +125,12 @@ fn native_install_context(exe_path: &Path) -> Option<InstallContext> {
     let metadata = parse_native_install_metadata(&release_dir.join(METADATA_FILENAME))?;
 
     let rg_name = if cfg!(windows) { "rg.exe" } else { "rg" };
-    let rg_command = release_dir.join(rg_name).display().to_string();
+    let rg_command = release_dir.join(rg_name);
 
-    Some(InstallContext {
-        manager: InstallManager::Native,
-        current_exe: Some(canonical_exe),
-        release_dir: Some(release_dir),
-        version: Some(metadata.version),
-        target: Some(metadata.target),
+    Some(InstallContext::Native {
+        release_dir,
+        version: metadata.version,
+        target: metadata.target,
         rg_command,
     })
 }
@@ -117,11 +144,11 @@ fn parse_native_install_metadata(path: &Path) -> Option<NativeInstallMetadata> {
     Some(metadata)
 }
 
-fn default_rg_command() -> String {
+fn default_rg_command() -> PathBuf {
     if cfg!(windows) {
-        "rg.exe".to_string()
+        PathBuf::from("rg.exe")
     } else {
-        "rg".to_string()
+        PathBuf::from("rg")
     }
 }
 
@@ -147,11 +174,15 @@ mod tests {
         fs::write(release_dir.join(rg_name), "")?;
 
         let context = InstallContext::from_exe(false, Some(&exe_path), false, false);
-        assert_eq!(context.manager, InstallManager::Native);
-        assert_eq!(context.release_dir, Some(release_dir.canonicalize()?));
-        assert_eq!(context.version.as_deref(), Some("1.2.3"));
-        assert_eq!(context.target.as_deref(), Some("x86_64-unknown-linux-musl"));
-        assert!(context.rg_command.ends_with(rg_name));
+        assert_eq!(
+            context,
+            InstallContext::Native {
+                release_dir: release_dir.canonicalize()?,
+                version: "1.2.3".to_string(),
+                target: "x86_64-unknown-linux-musl".to_string(),
+                rg_command: release_dir.join(rg_name),
+            }
+        );
         Ok(())
     }
 
@@ -168,8 +199,7 @@ mod tests {
         fs::write(&exe_path, "")?;
 
         let context = InstallContext::from_exe(false, Some(&exe_path), false, false);
-        assert_eq!(context.manager, InstallManager::Unknown);
-        assert_eq!(context.version, None);
+        assert_eq!(context, InstallContext::Other);
         Ok(())
     }
 
@@ -177,11 +207,11 @@ mod tests {
     fn npm_and_bun_take_precedence() {
         let npm_context =
             InstallContext::from_exe(false, Some(Path::new("/tmp/codex")), true, false);
-        assert_eq!(npm_context.manager, InstallManager::Npm);
+        assert_eq!(npm_context, InstallContext::Npm);
 
         let bun_context =
             InstallContext::from_exe(false, Some(Path::new("/tmp/codex")), false, true);
-        assert_eq!(bun_context.manager, InstallManager::Bun);
+        assert_eq!(bun_context, InstallContext::Bun);
     }
 
     #[test]
@@ -192,6 +222,6 @@ mod tests {
             false,
             false,
         );
-        assert_eq!(context.manager, InstallManager::Brew);
+        assert_eq!(context, InstallContext::Brew);
     }
 }
