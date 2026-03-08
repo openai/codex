@@ -1995,7 +1995,7 @@ mod tests {
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/codex/safety/arc"))
+            .and(path("/codex/safety/arc"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "outcome": "interrupt-for-model",
                 "reason": "high-risk action",

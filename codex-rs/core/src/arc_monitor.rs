@@ -657,7 +657,7 @@ mod tests {
             .await;
 
         Mock::given(method("POST"))
-            .and(path("/api/codex/safety/arc"))
+            .and(path("/codex/safety/arc"))
             .and(header("authorization", "Bearer Access Token"))
             .and(header("chatgpt-account-id", "account_id"))
             .and(body_json(serde_json::json!({
@@ -764,7 +764,7 @@ mod tests {
     async fn monitor_action_accepts_legacy_reason_response_fields() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/codex/safety/arc"))
+            .and(path("/codex/safety/arc"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "outcome": "interrupt-for-model",
                 "reason": "legacy high-risk action",
