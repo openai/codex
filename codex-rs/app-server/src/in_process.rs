@@ -682,6 +682,9 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 data: None,
             }))
             .await;
+        // Drop the runtime's last sender before awaiting the router task so
+        // `outgoing_rx.recv()` can observe channel closure and exit cleanly.
+        drop(outgoing_message_sender);
         for (_, response_tx) in pending_request_responses {
             let _ = response_tx.send(Err(JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
