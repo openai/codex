@@ -215,6 +215,9 @@ pub(crate) fn client_request_id(request: &ClientRequest) -> &RequestId {
         | ClientRequest::GetAccountRateLimits { request_id, .. }
         | ClientRequest::FeedbackUpload { request_id, .. }
         | ClientRequest::OneOffCommandExec { request_id, .. }
+        | ClientRequest::CommandExecWrite { request_id, .. }
+        | ClientRequest::CommandExecTerminate { request_id, .. }
+        | ClientRequest::CommandExecResize { request_id, .. }
         | ClientRequest::ConfigRead { request_id, .. }
         | ClientRequest::ExternalAgentConfigDetect { request_id, .. }
         | ClientRequest::ExternalAgentConfigImport { request_id, .. }
