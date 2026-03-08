@@ -47,6 +47,7 @@ use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::default_input_modalities;
@@ -98,6 +99,7 @@ use codex_protocol::protocol::UndoCompletedEvent;
 use codex_protocol::protocol::UndoStartedEvent;
 use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WarningEvent;
+use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
@@ -2744,6 +2746,20 @@ async fn handle_request_user_input_sets_pending_notification() {
             summary: Some(ref summary),
         }) if summary == "Reasoning scope"
     );
+}
+
+#[tokio::test]
+async fn handle_request_permissions_opens_approval_modal() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+
+    chat.handle_request_permissions_now(RequestPermissionsEvent {
+        call_id: "call-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        reason: Some("need workspace access".to_string()),
+        permissions: PermissionProfile::default(),
+    });
+
+    assert!(chat.bottom_pane.has_active_view());
 }
 
 #[tokio::test]
