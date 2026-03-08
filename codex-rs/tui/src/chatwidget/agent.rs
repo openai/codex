@@ -132,30 +132,71 @@ const HISTORY_FILENAME: &str = "history.jsonl";
 const HISTORY_SOFT_CAP_RATIO: f64 = 0.8;
 const HISTORY_LOCK_MAX_RETRIES: usize = 10;
 const HISTORY_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(100);
-const IN_PROCESS_TYPED_EVENT_LEGACY_OPTOUTS: &[&str] = &[
-    "codex/event/exec_approval_request",
-    "codex/event/apply_patch_approval_request",
-    "codex/event/request_user_input",
-    "codex/event/elicitation_request",
-    "codex/event/dynamic_tool_call_request",
-];
+
+// Keep this mapping as the single source of truth for typed in-process requests
+// that replace legacy `codex/event/...` notifications. New interactive request
+// variants should be added here unless dual delivery is intentional.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InProcessTypedInteractiveRequest {
+    ExecApproval,
+    ApplyPatchApproval,
+    RequestUserInput,
+    McpServerElicitation,
+    DynamicToolCall,
+}
+
+impl InProcessTypedInteractiveRequest {
+    const ALL: [Self; 5] = [
+        Self::ExecApproval,
+        Self::ApplyPatchApproval,
+        Self::RequestUserInput,
+        Self::McpServerElicitation,
+        Self::DynamicToolCall,
+    ];
+
+    fn legacy_notification_method(self) -> &'static str {
+        match self {
+            Self::ExecApproval => "codex/event/exec_approval_request",
+            Self::ApplyPatchApproval => "codex/event/apply_patch_approval_request",
+            Self::RequestUserInput => "codex/event/request_user_input",
+            Self::McpServerElicitation => "codex/event/elicitation_request",
+            Self::DynamicToolCall => "codex/event/dynamic_tool_call_request",
+        }
+    }
+}
 
 #[cfg(test)]
-fn legacy_opt_out_for_typed_server_request(request: &ServerRequest) -> Option<&'static str> {
+fn in_process_typed_interactive_request(
+    request: &ServerRequest,
+) -> Option<InProcessTypedInteractiveRequest> {
     match request {
         ServerRequest::CommandExecutionRequestApproval { .. }
-        | ServerRequest::ExecCommandApproval { .. } => Some("codex/event/exec_approval_request"),
+        | ServerRequest::ExecCommandApproval { .. } => {
+            Some(InProcessTypedInteractiveRequest::ExecApproval)
+        }
         ServerRequest::FileChangeRequestApproval { .. }
         | ServerRequest::ApplyPatchApproval { .. } => {
-            Some("codex/event/apply_patch_approval_request")
+            Some(InProcessTypedInteractiveRequest::ApplyPatchApproval)
         }
-        ServerRequest::ToolRequestUserInput { .. } => Some("codex/event/request_user_input"),
+        ServerRequest::ToolRequestUserInput { .. } => {
+            Some(InProcessTypedInteractiveRequest::RequestUserInput)
+        }
         ServerRequest::McpServerElicitationRequest { .. } => {
-            Some("codex/event/elicitation_request")
+            Some(InProcessTypedInteractiveRequest::McpServerElicitation)
         }
-        ServerRequest::DynamicToolCall { .. } => Some("codex/event/dynamic_tool_call_request"),
+        ServerRequest::DynamicToolCall { .. } => {
+            Some(InProcessTypedInteractiveRequest::DynamicToolCall)
+        }
         _ => None,
     }
+}
+
+fn in_process_typed_event_legacy_opt_outs() -> Vec<String> {
+    InProcessTypedInteractiveRequest::ALL
+        .into_iter()
+        .map(InProcessTypedInteractiveRequest::legacy_notification_method)
+        .map(str::to_string)
+        .collect()
 }
 
 async fn initialize_app_server_client_name(thread: &CodexThread) {
@@ -196,10 +237,7 @@ fn in_process_start_args(
         client_name: Some(TUI_NOTIFY_CLIENT.to_string()),
         client_version: CODEX_CLI_VERSION.to_string(),
         experimental_api: true,
-        opt_out_notification_methods: IN_PROCESS_TYPED_EVENT_LEGACY_OPTOUTS
-            .iter()
-            .map(|method| (*method).to_string())
-            .collect(),
+        opt_out_notification_methods: in_process_typed_event_legacy_opt_outs(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     }
 }
@@ -2934,10 +2972,7 @@ mod tests {
 
         assert_eq!(
             args.opt_out_notification_methods,
-            IN_PROCESS_TYPED_EVENT_LEGACY_OPTOUTS
-                .iter()
-                .map(|method| (*method).to_string())
-                .collect::<Vec<_>>()
+            in_process_typed_event_legacy_opt_outs()
         );
     }
 
@@ -3045,12 +3080,16 @@ mod tests {
 
         let mut mapped_methods = requests
             .iter()
-            .filter_map(legacy_opt_out_for_typed_server_request)
+            .filter_map(in_process_typed_interactive_request)
+            .map(InProcessTypedInteractiveRequest::legacy_notification_method)
             .collect::<Vec<_>>();
         mapped_methods.sort_unstable();
         mapped_methods.dedup();
 
-        let mut expected_methods = IN_PROCESS_TYPED_EVENT_LEGACY_OPTOUTS.to_vec();
+        let mut expected_methods = InProcessTypedInteractiveRequest::ALL
+            .into_iter()
+            .map(InProcessTypedInteractiveRequest::legacy_notification_method)
+            .collect::<Vec<_>>();
         expected_methods.sort_unstable();
 
         assert_eq!(mapped_methods, expected_methods);
