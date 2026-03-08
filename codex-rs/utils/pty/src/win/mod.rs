@@ -21,8 +21,10 @@
 // Local modifications:
 // - Fix Codex bug #13945 in the Windows PTY kill path. The vendored code treated
 //   `TerminateProcess`'s nonzero success return as failure and `0` as success,
-//   which inverted kill outcomes for both `WinChild::do_kill` and
+//   which inverts kill outcomes for both `WinChild::do_kill` and
 //   `WinChildKiller::kill`.
+// - This bug still exists in the original WezTerm source as of 2026-03-08, so
+//   this is an intentional divergence from upstream.
 
 use anyhow::Context as _;
 use filedescriptor::OwnedHandle;
