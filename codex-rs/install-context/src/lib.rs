@@ -8,16 +8,9 @@ const METADATA_FILENAME: &str = "metadata.toml";
 static INSTALL_CONTEXT: OnceLock<InstallContext> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InstallManager {
-    Native,
-    Npm,
-    Bun,
-    Brew,
-    /// Any other execution environment.
-    ///
-    /// This commonly covers `cargo run`, app-bundled Codex binaries, custom
-    /// internal launchers, and tests that execute Codex from an arbitrary path.
-    Other,
+pub enum NativePlatform {
+    Unix,
+    Windows,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,6 +28,8 @@ pub enum InstallContext {
         /// The bundled ripgrep binary for this native release, for example
         /// `~/.codex/packages/native/releases/.../rg`.
         rg_command: PathBuf,
+        /// The platform of the native release, either `Unix` or `Windows`.
+        platform: NativePlatform,
     },
     /// A Codex binary launched through the npm-managed `codex.js` shim.
     Npm,
@@ -94,16 +89,6 @@ impl InstallContext {
         })
     }
 
-    pub fn manager(&self) -> InstallManager {
-        match self {
-            Self::Native { .. } => InstallManager::Native,
-            Self::Npm => InstallManager::Npm,
-            Self::Bun => InstallManager::Bun,
-            Self::Brew => InstallManager::Brew,
-            Self::Other => InstallManager::Other,
-        }
-    }
-
     pub fn rg_command(&self) -> PathBuf {
         match self {
             Self::Native { rg_command, .. } => rg_command.clone(),
@@ -123,11 +108,15 @@ fn native_install_context(exe_path: &Path) -> Option<InstallContext> {
     let canonical_exe = std::fs::canonicalize(exe_path).ok()?;
     let release_dir = canonical_exe.parent()?.to_path_buf();
     let metadata = parse_native_install_metadata(&release_dir.join(METADATA_FILENAME))?;
-
-    let rg_name = if cfg!(windows) { "rg.exe" } else { "rg" };
+    let platform = native_platform_from_target(&metadata.target);
+    let rg_name = match platform {
+        NativePlatform::Unix => "rg",
+        NativePlatform::Windows => "rg.exe",
+    };
     let rg_command = release_dir.join(rg_name);
 
     Some(InstallContext::Native {
+        platform,
         release_dir,
         version: metadata.version,
         target: metadata.target,
@@ -142,6 +131,14 @@ fn parse_native_install_metadata(path: &Path) -> Option<NativeInstallMetadata> {
         return None;
     }
     Some(metadata)
+}
+
+fn native_platform_from_target(target: &str) -> NativePlatform {
+    if target.contains("-windows-") {
+        NativePlatform::Windows
+    } else {
+        NativePlatform::Unix
+    }
 }
 
 fn default_rg_command() -> PathBuf {
@@ -177,10 +174,38 @@ mod tests {
         assert_eq!(
             context,
             InstallContext::Native {
+                platform: NativePlatform::Unix,
                 release_dir: release_dir.canonicalize()?,
                 version: "1.2.3".to_string(),
                 target: "x86_64-unknown-linux-musl".to_string(),
                 rg_command: release_dir.join(rg_name),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn detects_windows_native_platform_from_target() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let release_dir = root.path().join("1.2.3-x86_64-pc-windows-msvc");
+        fs::create_dir(&release_dir)?;
+        fs::write(
+            release_dir.join("metadata.toml"),
+            "install_method = \"native\"\nversion = \"1.2.3\"\ntarget = \"x86_64-pc-windows-msvc\"\n",
+        )?;
+        let exe_path = release_dir.join("codex");
+        fs::write(&exe_path, "")?;
+        fs::write(release_dir.join("rg.exe"), "")?;
+
+        let context = InstallContext::from_exe(false, Some(&exe_path), false, false);
+        assert_eq!(
+            context,
+            InstallContext::Native {
+                platform: NativePlatform::Windows,
+                release_dir: release_dir.canonicalize()?,
+                version: "1.2.3".to_string(),
+                target: "x86_64-pc-windows-msvc".to_string(),
+                rg_command: release_dir.join("rg.exe"),
             }
         );
         Ok(())

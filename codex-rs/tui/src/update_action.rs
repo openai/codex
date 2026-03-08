@@ -1,151 +1,121 @@
 #[cfg(any(not(debug_assertions), test))]
 use codex_install_context::InstallContext;
-use codex_install_context::InstallManager;
+#[cfg(any(not(debug_assertions), test))]
+use codex_install_context::NativePlatform;
 
-pub type UpdateAction = InstallManager;
-
-/// Returns the list of command-line arguments for invoking the update.
-pub fn command_args(action: UpdateAction) -> (String, Vec<String>) {
-    match action {
-        InstallManager::Npm => (
-            "npm".to_string(),
-            vec!["install".into(), "-g".into(), "@openai/codex".into()],
-        ),
-        InstallManager::Bun => (
-            "bun".to_string(),
-            vec!["install".into(), "-g".into(), "@openai/codex".into()],
-        ),
-        InstallManager::Native => {
-            #[cfg(windows)]
-            {
-                (
-                    "powershell".to_string(),
-                    vec![
-                        "-NoProfile".into(),
-                        "-ExecutionPolicy".into(),
-                        "Bypass".into(),
-                        "-Command".into(),
-                        "$tmp = New-TemporaryFile; Invoke-WebRequest -Uri 'https://chatgpt.com/codex/install.ps1' -OutFile $tmp; & $tmp; Remove-Item $tmp".into(),
-                    ],
-                )
-            }
-            #[cfg(not(windows))]
-            {
-                (
-                    "sh".to_string(),
-                    vec![
-                        "-c".into(),
-                        "tmp=\"$(mktemp)\" && if command -v curl >/dev/null 2>&1; then curl -fsSL 'https://chatgpt.com/codex/install.sh' -o \"$tmp\"; elif command -v wget >/dev/null 2>&1; then wget -q -O \"$tmp\" 'https://chatgpt.com/codex/install.sh'; else echo 'curl or wget is required to update Codex.' >&2; rm -f \"$tmp\"; exit 1; fi && sh \"$tmp\"; status=$?; rm -f \"$tmp\"; exit $status".into(),
-                    ],
-                )
-            }
-        }
-        InstallManager::Brew => (
-            "brew".to_string(),
-            vec!["upgrade".into(), "--cask".into(), "codex".into()],
-        ),
-        InstallManager::Other => {
-            unreachable!("non-updatable installs should not reach command_args")
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateAction {
+    Npm,
+    Bun,
+    Brew,
+    NativeUnix,
+    NativeWindows,
 }
 
-/// Returns string representation of the command-line arguments for invoking the update.
-pub fn command_str(action: UpdateAction) -> String {
-    let (command, args) = command_args(action);
-    shlex::try_join(std::iter::once(command.as_str()).chain(args.iter().map(String::as_str)))
-        .unwrap_or_else(|_| format!("{command} {}", args.join(" ")))
+impl UpdateAction {
+    pub(crate) fn from_install_context(context: &InstallContext) -> Option<Self> {
+        match context {
+            InstallContext::Native { platform, .. } => Some(match platform {
+                NativePlatform::Unix => UpdateAction::NativeUnix,
+                NativePlatform::Windows => UpdateAction::NativeWindows,
+            }),
+            InstallContext::Npm => Some(UpdateAction::Npm),
+            InstallContext::Bun => Some(UpdateAction::Bun),
+            InstallContext::Brew => Some(UpdateAction::Brew),
+            InstallContext::Other => None,
+        }
+    }
+
+    /// Returns the list of command-line arguments for invoking the update.
+    pub fn command_args(self) -> (String, Vec<String>) {
+        match self {
+            UpdateAction::Npm => (
+                "npm".to_string(),
+                vec!["install".into(), "-g".into(), "@openai/codex".into()],
+            ),
+            UpdateAction::Bun => (
+                "bun".to_string(),
+                vec!["install".into(), "-g".into(), "@openai/codex".into()],
+            ),
+            UpdateAction::NativeUnix => (
+                "sh".to_string(),
+                vec![
+                    "-c".into(),
+                    "curl -fsSL https://chatgpt.com/codex/install.sh | sh".into(),
+                ],
+            ),
+            UpdateAction::NativeWindows => (
+                "powershell".to_string(),
+                vec![
+                    "-c".into(),
+                    "irm https://chatgpt.com/codex/install.ps1|iex".into(),
+                ],
+            ),
+            UpdateAction::Brew => (
+                "brew".to_string(),
+                vec!["upgrade".into(), "--cask".into(), "codex".into()],
+            ),
+        }
+    }
+
+    /// Returns string representation of the command-line arguments for invoking the update.
+    pub fn command_str(self) -> String {
+        let (command, args) = self.command_args();
+        shlex::try_join(std::iter::once(command.as_str()).chain(args.iter().map(String::as_str)))
+            .unwrap_or_else(|_| format!("{command} {}", args.join(" ")))
+    }
 }
 
 #[cfg(not(debug_assertions))]
 pub(crate) fn get_update_action() -> Option<UpdateAction> {
-    update_action_for_context(InstallContext::current())
-}
-
-#[cfg(any(not(debug_assertions), test))]
-fn detect_update_action(
-    is_macos: bool,
-    current_exe: &std::path::Path,
-    managed_by_npm: bool,
-    managed_by_bun: bool,
-) -> Option<UpdateAction> {
-    let context =
-        InstallContext::from_exe(is_macos, Some(current_exe), managed_by_npm, managed_by_bun);
-    update_action_for_context(&context)
-}
-
-#[cfg(any(not(debug_assertions), test))]
-fn update_action_for_context(context: &InstallContext) -> Option<UpdateAction> {
-    match context.manager() {
-        InstallManager::Npm => Some(InstallManager::Npm),
-        InstallManager::Bun => Some(InstallManager::Bun),
-        InstallManager::Native => Some(InstallManager::Native),
-        InstallManager::Brew => Some(InstallManager::Brew),
-        InstallManager::Other => None,
-    }
+    UpdateAction::from_install_context(InstallContext::current())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::fs;
+    use std::path::PathBuf;
 
     #[test]
-    fn detects_update_action_without_env_mutation() {
+    fn maps_install_context_to_update_action() {
+        let native_release_dir = PathBuf::from("/tmp/native-release");
+
         assert_eq!(
-            detect_update_action(
-                /*is_macos*/ false,
-                std::path::Path::new("/any/path"),
-                /*managed_by_npm*/ false,
-                /*managed_by_bun*/ false
-            ),
+            UpdateAction::from_install_context(&InstallContext::Other),
             None
         );
         assert_eq!(
-            detect_update_action(false, std::path::Path::new("/any/path"), true, false),
-            Some(InstallManager::Npm)
+            UpdateAction::from_install_context(&InstallContext::Npm),
+            Some(UpdateAction::Npm)
         );
         assert_eq!(
-            detect_update_action(false, std::path::Path::new("/any/path"), false, true),
-            Some(InstallManager::Bun)
+            UpdateAction::from_install_context(&InstallContext::Bun),
+            Some(UpdateAction::Bun)
         );
         assert_eq!(
-            detect_update_action(
-                /*is_macos*/ true,
-                std::path::Path::new("/opt/homebrew/bin/codex"),
-                /*managed_by_npm*/ false,
-                /*managed_by_bun*/ false
-            ),
-            Some(InstallManager::Brew)
+            UpdateAction::from_install_context(&InstallContext::Brew),
+            Some(UpdateAction::Brew)
         );
         assert_eq!(
-            detect_update_action(
-                /*is_macos*/ true,
-                std::path::Path::new("/usr/local/bin/codex"),
-                /*managed_by_npm*/ false,
-                /*managed_by_bun*/ false
-            ),
-            Some(InstallManager::Brew)
+            UpdateAction::from_install_context(&InstallContext::Native {
+                platform: NativePlatform::Unix,
+                release_dir: native_release_dir.clone(),
+                version: "1.2.3".to_string(),
+                target: "x86_64-unknown-linux-musl".to_string(),
+                rg_command: native_release_dir.join("rg"),
+            }),
+            Some(UpdateAction::NativeUnix)
         );
-    }
-
-    #[test]
-    fn detects_native_update_action_from_metadata() -> std::io::Result<()> {
-        let root = tempfile::tempdir()?;
-        let release_dir = root.path().join("1.2.3-x86_64-unknown-linux-musl");
-        fs::create_dir(&release_dir)?;
-        fs::write(
-            release_dir.join("metadata.toml"),
-            "install_method = \"native\"\nversion = \"1.2.3\"\ntarget = \"x86_64-unknown-linux-musl\"\n",
-        )?;
-        let exe_path = release_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
-        fs::write(&exe_path, "")?;
-
         assert_eq!(
-            detect_update_action(false, &exe_path, false, false),
-            Some(InstallManager::Native)
+            UpdateAction::from_install_context(&InstallContext::Native {
+                platform: NativePlatform::Windows,
+                release_dir: native_release_dir.clone(),
+                version: "1.2.3".to_string(),
+                target: "x86_64-pc-windows-msvc".to_string(),
+                rg_command: native_release_dir.join("rg.exe"),
+            }),
+            Some(UpdateAction::NativeWindows)
         );
-        Ok(())
     }
 }

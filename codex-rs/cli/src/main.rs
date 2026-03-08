@@ -484,7 +484,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 /// Run the update action and print the result.
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
-    let cmd_str = command_str(action);
+    let cmd_str = action.command_str();
     println!("Updating Codex via `{cmd_str}`...");
 
     let status = {
@@ -497,7 +497,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
         }
         #[cfg(not(windows))]
         {
-            let (cmd, args) = command_args(action);
+            let (cmd, args) = action.command_args();
             let command_path = crate::wsl_paths::normalize_for_wsl(cmd);
             let normalized_args: Vec<String> = args
                 .iter()

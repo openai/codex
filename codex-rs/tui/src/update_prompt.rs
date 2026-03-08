@@ -11,7 +11,6 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
-use crate::update_action::command_str;
 use crate::updates;
 use codex_core::config::Config;
 use color_eyre::Result;
@@ -187,7 +186,7 @@ impl WidgetRef for &UpdatePromptScreen {
         Clear.render(area, buf);
         let mut column = ColumnRenderable::new();
 
-        let update_command = command_str(self.update_action);
+        let update_command = self.update_action.command_str();
 
         column.push("");
         column.push(Line::from(vec![
