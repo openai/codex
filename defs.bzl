@@ -28,134 +28,20 @@ def multiplatform_binaries(name, platforms = PLATFORMS):
         tags = ["manual"],
     )
 
-def _workspace_root_test_bash_launcher_content(workspace_root_marker, test_bin):
-    return """#!/usr/bin/env bash
-set -euo pipefail
-
-resolve_runfile() {{
-  local logical_path="$1"
-  local workspace_logical_path="${{logical_path}}"
-  if [[ -n "${{TEST_WORKSPACE:-}}" ]]; then
-    workspace_logical_path="${{TEST_WORKSPACE}}/${{logical_path}}"
-  fi
-
-  for runfiles_root in "${{RUNFILES_DIR:-}}" "${{TEST_SRCDIR:-}}"; do
-    if [[ -n "${{runfiles_root}}" && -e "${{runfiles_root}}/${{logical_path}}" ]]; then
-      printf '%s\n' "${{runfiles_root}}/${{logical_path}}"
-      return 0
-    fi
-    if [[ -n "${{runfiles_root}}" && -e "${{runfiles_root}}/${{workspace_logical_path}}" ]]; then
-      printf '%s\n' "${{runfiles_root}}/${{workspace_logical_path}}"
-      return 0
-    fi
-  done
-
-  local manifest="${{RUNFILES_MANIFEST_FILE:-}}"
-  if [[ -z "${{manifest}}" ]]; then
-    if [[ -f "$0.runfiles_manifest" ]]; then
-      manifest="$0.runfiles_manifest"
-    elif [[ -f "$0.exe.runfiles_manifest" ]]; then
-      manifest="$0.exe.runfiles_manifest"
-    fi
-  fi
-
-  if [[ -n "${{manifest}}" && -f "${{manifest}}" ]]; then
-    local resolved=""
-    resolved="$(awk -v key="${{logical_path}}" '$1 == key {{ $1 = ""; sub(/^ /, ""); print; exit }}' "${{manifest}}")"
-    if [[ -z "${{resolved}}" ]]; then
-      resolved="$(awk -v key="${{workspace_logical_path}}" '$1 == key {{ $1 = ""; sub(/^ /, ""); print; exit }}' "${{manifest}}")"
-    fi
-    if [[ -n "${{resolved}}" ]]; then
-      printf '%s\n' "${{resolved}}"
-      return 0
-    fi
-  fi
-
-  echo "failed to resolve runfile: $logical_path" >&2
-  return 1
-}}
-
-workspace_root_marker="$(resolve_runfile "{workspace_root_marker}")"
-workspace_root="$(dirname "$(dirname "$(dirname "${{workspace_root_marker}}")")")"
-test_bin="$(resolve_runfile "{test_bin}")"
-
-export INSTA_WORKSPACE_ROOT="${{workspace_root}}"
-cd "${{workspace_root}}"
-exec "${{test_bin}}" "$@"
-""".format(
-        workspace_root_marker = workspace_root_marker.short_path,
-        test_bin = test_bin.short_path,
-    )
-
-def _workspace_root_test_batch_launcher_content(workspace_root_marker, test_bin):
-    return """@echo off
-setlocal EnableExtensions EnableDelayedExpansion
-
-call :resolve_runfile workspace_root_marker "{workspace_root_marker}"
-if errorlevel 1 exit /b 1
-
-for %%I in ("%workspace_root_marker%") do set "workspace_root_marker_dir=%%~dpI"
-for %%I in ("%workspace_root_marker_dir%..\\..\\..") do set "workspace_root=%%~fI"
-
-call :resolve_runfile test_bin "{test_bin}"
-if errorlevel 1 exit /b 1
-
-set "INSTA_WORKSPACE_ROOT=%workspace_root%"
-cd /d "%workspace_root%" || exit /b 1
-"%test_bin%" %*
-exit /b %ERRORLEVEL%
-
-:resolve_runfile
-setlocal EnableExtensions EnableDelayedExpansion
-set "logical_path=%~2"
-set "workspace_logical_path=%logical_path%"
-if defined TEST_WORKSPACE set "workspace_logical_path=%TEST_WORKSPACE%/%logical_path%"
-set "native_logical_path=%logical_path:/=\\%"
-set "native_workspace_logical_path=%workspace_logical_path:/=\\%"
-
-for %%R in ("%RUNFILES_DIR%" "%TEST_SRCDIR%") do (
-  set "runfiles_root=%%~R"
-  if defined runfiles_root (
-    if exist "!runfiles_root!\\!native_logical_path!" (
-      endlocal & set "%~1=!runfiles_root!\\!native_logical_path!" & exit /b 0
-    )
-    if exist "!runfiles_root!\\!native_workspace_logical_path!" (
-      endlocal & set "%~1=!runfiles_root!\\!native_workspace_logical_path!" & exit /b 0
-    )
-  )
-)
-
-set "manifest=%RUNFILES_MANIFEST_FILE%"
-if not defined manifest if exist "%~f0.runfiles_manifest" set "manifest=%~f0.runfiles_manifest"
-if not defined manifest if exist "%~dpn0.runfiles_manifest" set "manifest=%~dpn0.runfiles_manifest"
-if not defined manifest if exist "%~f0.exe.runfiles_manifest" set "manifest=%~f0.exe.runfiles_manifest"
-
-if defined manifest if exist "%manifest%" (
-  for /f "usebackq tokens=1,* delims= " %%A in (`findstr /b /c:"%logical_path% " "%manifest%"`) do (
-    endlocal & set "%~1=%%B" & exit /b 0
-  )
-  for /f "usebackq tokens=1,* delims= " %%A in (`findstr /b /c:"%workspace_logical_path% " "%manifest%"`) do (
-    endlocal & set "%~1=%%B" & exit /b 0
-  )
-)
-
->&2 echo failed to resolve runfile: %logical_path%
-endlocal & exit /b 1
-""".format(
-        workspace_root_marker = workspace_root_marker.short_path,
-        test_bin = test_bin.short_path,
-    )
-
 def _workspace_root_test_impl(ctx):
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     launcher = ctx.actions.declare_file(ctx.label.name + ".bat" if is_windows else ctx.label.name)
     test_bin = ctx.executable.test_bin
     workspace_root_marker = ctx.file.workspace_root_marker
-    launcher_content = _workspace_root_test_batch_launcher_content(workspace_root_marker, test_bin) if is_windows else _workspace_root_test_bash_launcher_content(workspace_root_marker, test_bin)
-    ctx.actions.write(
+    launcher_template = ctx.file._windows_launcher_template if is_windows else ctx.file._bash_launcher_template
+    ctx.actions.expand_template(
+        template = launcher_template,
         output = launcher,
         is_executable = True,
-        content = launcher_content,
+        substitutions = {
+            "__TEST_BIN__": test_bin.short_path,
+            "__WORKSPACE_ROOT_MARKER__": workspace_root_marker.short_path,
+        },
     )
 
     runfiles = ctx.runfiles(files = [test_bin, workspace_root_marker]).merge(ctx.attr.test_bin[DefaultInfo].default_runfiles)
@@ -188,6 +74,14 @@ workspace_root_test = rule(
         "_windows_constraint": attr.label(
             default = "@platforms//os:windows",
             providers = [platform_common.ConstraintValueInfo],
+        ),
+        "_bash_launcher_template": attr.label(
+            allow_single_file = True,
+            default = "//:workspace_root_test_launcher.sh.tpl",
+        ),
+        "_windows_launcher_template": attr.label(
+            allow_single_file = True,
+            default = "//:workspace_root_test_launcher.bat.tpl",
         ),
     },
 )
