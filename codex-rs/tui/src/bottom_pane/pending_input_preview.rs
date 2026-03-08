@@ -81,7 +81,7 @@ impl PendingInputPreview {
                     "Messages to be submitted after next tool call".into(),
                     " (press ".dim(),
                     key_hint::plain(KeyCode::Esc).into(),
-                    " to interrupt and send immediately):".dim(),
+                    " to interrupt and send immediately)".dim(),
                 ]),
             );
 
@@ -100,7 +100,7 @@ impl PendingInputPreview {
             if !lines.is_empty() {
                 lines.push(Line::from(""));
             }
-            Self::push_section_header(&mut lines, width, "Queued follow-up messages:".into());
+            Self::push_section_header(&mut lines, width, "Queued follow-up messages".into());
 
             for message in &self.queued_messages {
                 let wrapped = adaptive_wrap_lines(
