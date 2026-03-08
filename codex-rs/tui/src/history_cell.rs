@@ -873,7 +873,7 @@ pub fn new_approval_decision_cell(
                     snippet,
                 ],
                 ApprovalDecisionActor::Guardian => vec![
-                    "Sandbox escalation ".into(),
+                    "Request ".into(),
                     "denied".bold(),
                     " for codex to run ".into(),
                     snippet,
@@ -922,7 +922,7 @@ pub fn new_guardian_denied_patch_request(
     change_count: usize,
 ) -> Box<dyn HistoryCell> {
     let mut summary = vec![
-        "Sandbox escalation ".into(),
+        "Request ".into(),
         "denied".bold(),
         " for codex to apply ".into(),
     ];
@@ -944,7 +944,7 @@ pub fn new_guardian_denied_patch_request(
 
 pub fn new_guardian_denied_action_request(summary: String) -> Box<dyn HistoryCell> {
     let line = Line::from(vec![
-        "Sandbox escalation ".into(),
+        "Request ".into(),
         "denied".bold(),
         " for ".into(),
         Span::from(summary).dim(),

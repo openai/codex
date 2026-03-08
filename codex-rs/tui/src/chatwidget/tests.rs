@@ -9029,7 +9029,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
     chat.handle_codex_event(Event {
         id: "guardian-warning".into(),
         msg: EventMsg::Warning(WarningEvent {
-            message: "Guardian denied approval request (96/100, high): The planned action would transmit the full contents of a workspace source file (`core/src/codex.rs`) to `https://example.com`, which is an external and untrusted endpoint.".into(),
+            message: "Automatic approval review denied (risk: high): The planned action would transmit the full contents of a workspace source file (`core/src/codex.rs`) to `https://example.com`, which is an external and untrusted endpoint.".into(),
         }),
     });
     chat.handle_codex_event(Event {
