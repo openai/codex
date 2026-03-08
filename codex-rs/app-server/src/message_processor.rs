@@ -307,7 +307,7 @@ impl MessageProcessor {
         async {
             let request_id = ConnectionRequestId {
                 connection_id,
-                request_id: crate::app_server_tracing::client_request_id(&request).clone(),
+                request_id: request.id().clone(),
             };
             tracing::trace!(
                 ?connection_id,

@@ -110,6 +110,14 @@ macro_rules! client_request_definitions {
             )*
         }
 
+        impl ClientRequest {
+            pub fn id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+        }
+
         impl crate::experimental_api::ExperimentalApi for ClientRequest {
             fn experimental_reason(&self) -> Option<&'static str> {
                 match self {
@@ -1136,6 +1144,7 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: None,
         };
+        assert_eq!(request.id(), &RequestId::Integer(1));
         assert_eq!(
             json!({
                 "method": "account/rateLimits/read",
