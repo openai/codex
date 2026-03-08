@@ -14,10 +14,6 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 
 const ARC_MONITOR_TIMEOUT: Duration = Duration::from_secs(30);
-const CODEX_MCP_TOOL_SAFETY_MONITOR_URL_OVERRIDE: &str =
-    "CODEX_MCP_TOOL_SAFETY_MONITOR_URL_OVERRIDE";
-const CODEX_MCP_TOOL_SAFETY_MONITOR_BEARER_TOKEN_OVERRIDE: &str =
-    "CODEX_MCP_TOOL_SAFETY_MONITOR_BEARER_TOKEN_OVERRIDE";
 const CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE: &str = "CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE";
 const CODEX_ARC_MONITOR_TOKEN: &str = "CODEX_ARC_MONITOR_TOKEN";
 
@@ -78,10 +74,7 @@ pub(crate) async fn monitor_action(
         },
         None => None,
     };
-    let token = if let Some(token) =
-        read_non_empty_env_var(CODEX_MCP_TOOL_SAFETY_MONITOR_BEARER_TOKEN_OVERRIDE)
-            .or_else(|| read_non_empty_env_var(CODEX_ARC_MONITOR_TOKEN))
-    {
+    let token = if let Some(token) = read_non_empty_env_var(CODEX_ARC_MONITOR_TOKEN) {
         token
     } else {
         let Some(auth) = auth.as_ref() else {
@@ -99,14 +92,12 @@ pub(crate) async fn monitor_action(
         }
     };
 
-    let url = read_non_empty_env_var(CODEX_MCP_TOOL_SAFETY_MONITOR_URL_OVERRIDE)
-        .or_else(|| read_non_empty_env_var(CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE))
-        .unwrap_or_else(|| {
-            format!(
-                "{}/api/codex/safety/arc",
-                turn_context.config.chatgpt_base_url.trim_end_matches('/')
-            )
-        });
+    let url = read_non_empty_env_var(CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE).unwrap_or_else(|| {
+        format!(
+            "{}/api/codex/safety/arc",
+            turn_context.config.chatgpt_base_url.trim_end_matches('/')
+        )
+    });
     let body = build_arc_monitor_request(sess, turn_context, action).await;
     let client = build_reqwest_client();
     let mut request = client
@@ -716,13 +707,10 @@ mod tests {
     async fn monitor_action_uses_env_url_and_token_overrides() {
         let server = MockServer::start().await;
         let _url_guard = EnvVarGuard::set(
-            CODEX_MCP_TOOL_SAFETY_MONITOR_URL_OVERRIDE,
+            CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE,
             OsStr::new(&format!("{}/override/arc", server.uri())),
         );
-        let _token_guard = EnvVarGuard::set(
-            CODEX_MCP_TOOL_SAFETY_MONITOR_BEARER_TOKEN_OVERRIDE,
-            OsStr::new("override-token"),
-        );
+        let _token_guard = EnvVarGuard::set(CODEX_ARC_MONITOR_TOKEN, OsStr::new("override-token"));
 
         let (session, turn_context) = make_session_and_context().await;
         session
