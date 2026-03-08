@@ -22,6 +22,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
@@ -107,7 +108,7 @@ impl AgentControl {
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
             .await;
         let inherited_exec_policy = self
-            .inherited_exec_policy_for_source(&state, session_source.as_ref())
+            .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
             .await;
         let session_source = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -276,7 +277,7 @@ impl AgentControl {
             .inherited_shell_snapshot_for_source(&state, Some(&session_source))
             .await;
         let inherited_exec_policy = self
-            .inherited_exec_policy_for_source(&state, Some(&session_source))
+            .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
             .await;
         let rollout_path =
             find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
@@ -499,6 +500,7 @@ impl AgentControl {
         &self,
         state: &Arc<ThreadManagerState>,
         session_source: Option<&SessionSource>,
+        child_config: &crate::config::Config,
     ) -> Option<Arc<crate::exec_policy::ExecPolicyManager>> {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
@@ -508,11 +510,38 @@ impl AgentControl {
         };
 
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
+        let parent_config = parent_thread.codex.session.get_config().await;
+        if !child_uses_parent_exec_policy(&parent_config, child_config) {
+            return None;
+        }
+
         Some(Arc::clone(
             &parent_thread.codex.session.services.exec_policy,
         ))
     }
 }
+
+fn child_uses_parent_exec_policy(
+    parent_config: &crate::config::Config,
+    child_config: &crate::config::Config,
+) -> bool {
+    exec_policy_config_folders(parent_config) == exec_policy_config_folders(child_config)
+        && parent_config.config_layer_stack.requirements().exec_policy
+            == child_config.config_layer_stack.requirements().exec_policy
+}
+
+fn exec_policy_config_folders(config: &crate::config::Config) -> Vec<AbsolutePathBuf> {
+    config
+        .config_layer_stack
+        .get_layers(
+            crate::config_loader::ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            false,
+        )
+        .into_iter()
+        .filter_map(|layer| layer.config_folder())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,10 +552,20 @@ mod tests {
     use crate::config::AgentRoleConfig;
     use crate::config::Config;
     use crate::config::ConfigBuilder;
+    use crate::config_loader::ConfigLayerEntry;
+    use crate::config_loader::ConfigLayerStack;
+    use crate::config_loader::ConfigLayerStackOrdering;
+    use crate::config_loader::ConfigRequirements;
     use crate::config_loader::LoaderOverrides;
+    use crate::config_loader::RequirementSource;
+    use crate::config_loader::Sourced;
     use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
     use crate::features::Feature;
     use assert_matches::assert_matches;
+    use codex_app_server_protocol::ConfigLayerSource;
+    use codex_config::RequirementsExecPolicy;
+    use codex_execpolicy::Decision;
+    use codex_execpolicy::Policy;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -677,6 +716,76 @@ mod tests {
             err.to_string(),
             "unsupported operation: thread manager dropped"
         );
+    }
+
+    #[tokio::test]
+    async fn child_uses_parent_exec_policy_when_layer_stack_matches() {
+        let (_home, parent_config) = test_config().await;
+        let child_config = parent_config.clone();
+
+        assert!(child_uses_parent_exec_policy(&parent_config, &child_config));
+    }
+
+    #[tokio::test]
+    async fn child_uses_parent_exec_policy_when_non_exec_policy_layers_differ() {
+        let (_home, parent_config) = test_config().await;
+        let mut child_config = parent_config.clone();
+        let mut layers: Vec<_> = child_config
+            .config_layer_stack
+            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .into_iter()
+            .cloned()
+            .collect();
+        layers.push(ConfigLayerEntry::new(
+            ConfigLayerSource::SessionFlags,
+            TomlValue::Table(Default::default()),
+        ));
+        child_config.config_layer_stack = ConfigLayerStack::new(
+            layers,
+            child_config.config_layer_stack.requirements().clone(),
+            child_config.config_layer_stack.requirements_toml().clone(),
+        )
+        .expect("config layer stack");
+
+        assert!(child_uses_parent_exec_policy(&parent_config, &child_config));
+    }
+
+    #[tokio::test]
+    async fn child_does_not_use_parent_exec_policy_when_requirements_exec_policy_differs() {
+        let (_home, parent_config) = test_config().await;
+        let mut child_config = parent_config.clone();
+        let mut requirements = ConfigRequirements {
+            exec_policy: child_config
+                .config_layer_stack
+                .requirements()
+                .exec_policy
+                .clone(),
+            ..ConfigRequirements::default()
+        };
+        let mut policy = Policy::empty();
+        policy
+            .add_prefix_rule(&["rm".to_string()], Decision::Forbidden)
+            .expect("add prefix rule");
+        requirements.exec_policy = Some(Sourced::new(
+            RequirementsExecPolicy::new(policy),
+            RequirementSource::Unknown,
+        ));
+        child_config.config_layer_stack = ConfigLayerStack::new(
+            child_config
+                .config_layer_stack
+                .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+                .into_iter()
+                .cloned()
+                .collect(),
+            requirements,
+            child_config.config_layer_stack.requirements_toml().clone(),
+        )
+        .expect("config layer stack");
+
+        assert!(!child_uses_parent_exec_policy(
+            &parent_config,
+            &child_config
+        ));
     }
 
     #[tokio::test]
