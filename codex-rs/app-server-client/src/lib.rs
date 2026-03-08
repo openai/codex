@@ -231,6 +231,7 @@ impl InProcessAppServerClient {
         let channel_capacity = args.channel_capacity.max(1);
         let mut handle =
             codex_app_server::in_process::start(args.into_runtime_start_args()).await?;
+        let request_sender = handle.sender();
         let (command_tx, mut command_rx) = mpsc::channel::<ClientCommand>(channel_capacity);
         let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
 
@@ -242,14 +243,17 @@ impl InProcessAppServerClient {
                     command = command_rx.recv() => {
                         match command {
                             Some(ClientCommand::Request { request, response_tx }) => {
-                                let result = handle.request(*request).await;
-                                let _ = response_tx.send(result);
+                                let request_sender = request_sender.clone();
+                                tokio::spawn(async move {
+                                    let result = request_sender.request(*request).await;
+                                    let _ = response_tx.send(result);
+                                });
                             }
                             Some(ClientCommand::Notify {
                                 notification,
                                 response_tx,
                             }) => {
-                                let result = handle.notify(notification);
+                                let result = request_sender.notify(notification);
                                 let _ = response_tx.send(result);
                             }
                             Some(ClientCommand::ResolveServerRequest {
@@ -257,7 +261,8 @@ impl InProcessAppServerClient {
                                 result,
                                 response_tx,
                             }) => {
-                                let send_result = handle.respond_to_server_request(request_id, result);
+                                let send_result =
+                                    request_sender.respond_to_server_request(request_id, result);
                                 let _ = response_tx.send(send_result);
                             }
                             Some(ClientCommand::RejectServerRequest {
@@ -265,7 +270,7 @@ impl InProcessAppServerClient {
                                 error,
                                 response_tx,
                             }) => {
-                                let send_result = handle.fail_server_request(request_id, error);
+                                let send_result = request_sender.fail_server_request(request_id, error);
                                 let _ = response_tx.send(send_result);
                             }
                             Some(ClientCommand::Shutdown { response_tx }) => {
@@ -297,7 +302,7 @@ impl InProcessAppServerClient {
                                         "dropping in-process app-server event because consumer queue is full"
                                     );
                                     if let InProcessServerEvent::ServerRequest(request) = event {
-                                        let _ = handle.fail_server_request(
+                                        let _ = request_sender.fail_server_request(
                                             request.id().clone(),
                                             JSONRPCErrorError {
                                                 code: -32001,
@@ -321,7 +326,7 @@ impl InProcessAppServerClient {
                                 skipped_events = skipped_events.saturating_add(1);
                                 warn!("dropping in-process app-server event because consumer queue is full");
                                 if let InProcessServerEvent::ServerRequest(request) = event {
-                                    let _ = handle.fail_server_request(
+                                    let _ = request_sender.fail_server_request(
                                         request.id().clone(),
                                         JSONRPCErrorError {
                                             code: -32001,

@@ -67,10 +67,8 @@ use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeParams;
-use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
@@ -185,25 +183,17 @@ enum InProcessClientMessage {
     },
 }
 
-/// Handle used by an in-process client to call app-server and consume events.
-///
-/// This is the low-level runtime handle. Higher-level callers should usually go
-/// through `codex-app-server-client`, which adds worker-task buffering,
-/// request/response helpers, and surface-specific startup policy.
-pub struct InProcessClientHandle {
-    client_tx: mpsc::Sender<InProcessClientMessage>,
-    event_rx: mpsc::Receiver<InProcessServerEvent>,
-    runtime_handle: tokio::task::JoinHandle<()>,
+enum ProcessorCommand {
+    Request(Box<ClientRequest>),
+    Notification(ClientNotification),
 }
 
-impl InProcessClientHandle {
-    /// Sends a typed client request into the in-process runtime.
-    ///
-    /// The returned value is a transport-level `IoResult` containing either a
-    /// JSON-RPC success payload or JSON-RPC error payload. Callers must keep
-    /// request IDs unique among concurrent requests; reusing an in-flight ID
-    /// produces an `INVALID_REQUEST` response and can make request routing
-    /// ambiguous in the caller.
+#[derive(Clone)]
+pub struct InProcessClientSender {
+    client_tx: mpsc::Sender<InProcessClientMessage>,
+}
+
+impl InProcessClientSender {
     pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
         let (response_tx, response_rx) = oneshot::channel();
         self.try_send_client_message(InProcessClientMessage::Request {
@@ -218,12 +208,72 @@ impl InProcessClientHandle {
         })
     }
 
+    pub fn notify(&self, notification: ClientNotification) -> IoResult<()> {
+        self.try_send_client_message(InProcessClientMessage::Notification { notification })
+    }
+
+    pub fn respond_to_server_request(&self, request_id: RequestId, result: Result) -> IoResult<()> {
+        self.try_send_client_message(InProcessClientMessage::ServerRequestResponse {
+            request_id,
+            result,
+        })
+    }
+
+    pub fn fail_server_request(
+        &self,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+    ) -> IoResult<()> {
+        self.try_send_client_message(InProcessClientMessage::ServerRequestError {
+            request_id,
+            error,
+        })
+    }
+
+    fn try_send_client_message(&self, message: InProcessClientMessage) -> IoResult<()> {
+        match self.client_tx.try_send(message) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(IoError::new(
+                ErrorKind::WouldBlock,
+                "in-process app-server client queue is full",
+            )),
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(IoError::new(
+                ErrorKind::BrokenPipe,
+                "in-process app-server runtime is closed",
+            )),
+        }
+    }
+}
+
+/// Handle used by an in-process client to call app-server and consume events.
+///
+/// This is the low-level runtime handle. Higher-level callers should usually go
+/// through `codex-app-server-client`, which adds worker-task buffering,
+/// request/response helpers, and surface-specific startup policy.
+pub struct InProcessClientHandle {
+    client: InProcessClientSender,
+    event_rx: mpsc::Receiver<InProcessServerEvent>,
+    runtime_handle: tokio::task::JoinHandle<()>,
+}
+
+impl InProcessClientHandle {
+    /// Sends a typed client request into the in-process runtime.
+    ///
+    /// The returned value is a transport-level `IoResult` containing either a
+    /// JSON-RPC success payload or JSON-RPC error payload. Callers must keep
+    /// request IDs unique among concurrent requests; reusing an in-flight ID
+    /// produces an `INVALID_REQUEST` response and can make request routing
+    /// ambiguous in the caller.
+    pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
+        self.client.request(request).await
+    }
+
     /// Sends a typed client notification into the in-process runtime.
     ///
     /// Notifications do not have an application-level response. Transport
     /// errors indicate queue saturation or closed runtime.
     pub fn notify(&self, notification: ClientNotification) -> IoResult<()> {
-        self.try_send_client_message(InProcessClientMessage::Notification { notification })
+        self.client.notify(notification)
     }
 
     /// Resolves a pending [`ServerRequest`](InProcessServerEvent::ServerRequest).
@@ -232,10 +282,7 @@ impl InProcessClientHandle {
     /// runtime event stream; sending arbitrary IDs has no effect on app-server
     /// state and can mask a stuck approval flow in the caller.
     pub fn respond_to_server_request(&self, request_id: RequestId, result: Result) -> IoResult<()> {
-        self.try_send_client_message(InProcessClientMessage::ServerRequestResponse {
-            request_id,
-            result,
-        })
+        self.client.respond_to_server_request(request_id, result)
     }
 
     /// Rejects a pending [`ServerRequest`](InProcessServerEvent::ServerRequest).
@@ -247,10 +294,7 @@ impl InProcessClientHandle {
         request_id: RequestId,
         error: JSONRPCErrorError,
     ) -> IoResult<()> {
-        self.try_send_client_message(InProcessClientMessage::ServerRequestError {
-            request_id,
-            error,
-        })
+        self.client.fail_server_request(request_id, error)
     }
 
     /// Receives the next server event from the in-process runtime.
@@ -270,6 +314,7 @@ impl InProcessClientHandle {
         let (done_tx, done_rx) = oneshot::channel();
 
         if self
+            .client
             .client_tx
             .send(InProcessClientMessage::Shutdown { done_tx })
             .await
@@ -285,18 +330,8 @@ impl InProcessClientHandle {
         Ok(())
     }
 
-    fn try_send_client_message(&self, message: InProcessClientMessage) -> IoResult<()> {
-        match self.client_tx.try_send(message) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => Err(IoError::new(
-                ErrorKind::WouldBlock,
-                "in-process app-server client queue is full",
-            )),
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(IoError::new(
-                ErrorKind::BrokenPipe,
-                "in-process app-server runtime is closed",
-            )),
-        }
+    pub fn sender(&self) -> InProcessClientSender {
+        self.client.clone()
     }
 }
 
@@ -358,25 +393,92 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             }
         });
 
-        let mut processor = MessageProcessor::new(MessageProcessorArgs {
-            outgoing: outgoing_message_sender,
-            arg0_paths: args.arg0_paths,
-            config: args.config,
-            cli_overrides: args.cli_overrides,
-            loader_overrides: args.loader_overrides,
-            cloud_requirements: args.cloud_requirements,
-            feedback: args.feedback,
-            log_db: None,
-            config_warnings: args.config_warnings,
-            session_source: args.session_source,
-            enable_codex_api_key_env: args.enable_codex_api_key_env,
+        let processor_outgoing = Arc::clone(&outgoing_message_sender);
+        let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
+        let mut processor_handle = tokio::spawn(async move {
+            let mut processor = MessageProcessor::new(MessageProcessorArgs {
+                outgoing: Arc::clone(&processor_outgoing),
+                arg0_paths: args.arg0_paths,
+                config: args.config,
+                cli_overrides: args.cli_overrides,
+                loader_overrides: args.loader_overrides,
+                cloud_requirements: args.cloud_requirements,
+                feedback: args.feedback,
+                log_db: None,
+                config_warnings: args.config_warnings,
+                session_source: args.session_source,
+                enable_codex_api_key_env: args.enable_codex_api_key_env,
+            });
+            let mut thread_created_rx = processor.thread_created_receiver();
+            let mut session = ConnectionSessionState::default();
+            let mut listen_for_threads = true;
+
+            loop {
+                tokio::select! {
+                    command = processor_rx.recv() => {
+                        match command {
+                            Some(ProcessorCommand::Request(request)) => {
+                                let was_initialized = session.initialized;
+                                processor
+                                    .process_client_request(
+                                        IN_PROCESS_CONNECTION_ID,
+                                        *request,
+                                        &mut session,
+                                        &outbound_initialized,
+                                    )
+                                    .await;
+                                if let Ok(mut opted_out_notification_methods) =
+                                    outbound_opted_out_notification_methods.write()
+                                {
+                                    *opted_out_notification_methods =
+                                        session.opted_out_notification_methods.clone();
+                                } else {
+                                    warn!("failed to update outbound opted-out notifications");
+                                }
+                                outbound_experimental_api_enabled.store(
+                                    session.experimental_api_enabled,
+                                    Ordering::Release,
+                                );
+                                if !was_initialized && session.initialized {
+                                    processor.send_initialize_notifications().await;
+                                }
+                            }
+                            Some(ProcessorCommand::Notification(notification)) => {
+                                processor.process_client_notification(notification).await;
+                            }
+                            None => {
+                                break;
+                            }
+                        }
+                    }
+                    created = thread_created_rx.recv(), if listen_for_threads => {
+                        match created {
+                            Ok(thread_id) => {
+                                let connection_ids = if session.initialized {
+                                    vec![IN_PROCESS_CONNECTION_ID]
+                                } else {
+                                    Vec::<ConnectionId>::new()
+                                };
+                                processor
+                                    .try_attach_thread_listener(thread_id, connection_ids)
+                                    .await;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                warn!("thread_created receiver lagged; skipping resync");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                listen_for_threads = false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            processor.connection_closed(IN_PROCESS_CONNECTION_ID).await;
         });
-        let mut thread_created_rx = processor.thread_created_receiver();
-        let mut session = ConnectionSessionState::default();
         let mut pending_request_responses =
             HashMap::<RequestId, oneshot::Sender<PendingClientRequestResponse>>::new();
         let mut shutdown_ack = None;
-        let mut listen_for_threads = true;
 
         loop {
             tokio::select! {
@@ -399,48 +501,55 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                 }
                             }
 
-                            let was_initialized = session.initialized;
-                            processor
-                                .process_client_request(
-                                    IN_PROCESS_CONNECTION_ID,
-                                    request,
-                                    &mut session,
-                                    &outbound_initialized,
-                                )
-                                .await;
-                            if let Ok(mut opted_out_notification_methods) =
-                                outbound_opted_out_notification_methods.write()
-                            {
-                                *opted_out_notification_methods =
-                                    session.opted_out_notification_methods.clone();
-                            } else {
-                                warn!("failed to update outbound opted-out notifications");
-                            }
-                            outbound_experimental_api_enabled.store(
-                                session.experimental_api_enabled,
-                                Ordering::Release,
-                            );
-                            if !was_initialized && session.initialized {
-                                processor.send_initialize_notifications().await;
+                            match processor_tx.try_send(ProcessorCommand::Request(Box::new(request))) {
+                                Ok(()) => {}
+                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                    if let Some(response_tx) =
+                                        pending_request_responses.remove(&request_id)
+                                    {
+                                        let _ = response_tx.send(Err(JSONRPCErrorError {
+                                            code: OVERLOADED_ERROR_CODE,
+                                            message: "in-process app-server request queue is full"
+                                                .to_string(),
+                                            data: None,
+                                        }));
+                                    }
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    if let Some(response_tx) =
+                                        pending_request_responses.remove(&request_id)
+                                    {
+                                        let _ = response_tx.send(Err(JSONRPCErrorError {
+                                            code: INTERNAL_ERROR_CODE,
+                                            message:
+                                                "in-process app-server request processor is closed"
+                                                    .to_string(),
+                                            data: None,
+                                        }));
+                                    }
+                                    break;
+                                }
                             }
                         }
                         Some(InProcessClientMessage::Notification { notification }) => {
-                            processor.process_client_notification(notification).await;
+                            match processor_tx.try_send(ProcessorCommand::Notification(notification)) {
+                                Ok(()) => {}
+                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                    warn!("dropping in-process client notification (queue full)");
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    break;
+                                }
+                            }
                         }
                         Some(InProcessClientMessage::ServerRequestResponse { request_id, result }) => {
-                            processor
-                                .process_response(JSONRPCResponse {
-                                    id: request_id,
-                                    result,
-                                })
+                            outgoing_message_sender
+                                .notify_client_response(request_id, result)
                                 .await;
                         }
                         Some(InProcessClientMessage::ServerRequestError { request_id, error }) => {
-                            processor
-                                .process_error(JSONRPCError {
-                                    error,
-                                    id: request_id,
-                                })
+                            outgoing_message_sender
+                                .notify_client_error(request_id, error)
                                 .await;
                         }
                         Some(InProcessClientMessage::Shutdown { done_tx }) => {
@@ -499,15 +608,15 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                     InProcessServerEvent::ServerRequest(req) => req.id().clone(),
                                     _ => unreachable!("we just sent a ServerRequest variant"),
                                 };
-                                processor
-                                    .process_error(JSONRPCError {
-                                        id: request_id,
-                                        error: JSONRPCErrorError {
+                                outgoing_message_sender
+                                    .notify_client_error(
+                                        request_id,
+                                        JSONRPCErrorError {
                                             code,
                                             message: message.to_string(),
                                             data: None,
                                         },
-                                    })
+                                    )
                                     .await;
                             }
                         }
@@ -561,30 +670,18 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                         }
                     }
                 }
-                created = thread_created_rx.recv(), if listen_for_threads => {
-                    match created {
-                        Ok(thread_id) => {
-                            let connection_ids = if session.initialized {
-                                vec![IN_PROCESS_CONNECTION_ID]
-                            } else {
-                                Vec::<ConnectionId>::new()
-                            };
-                            processor
-                                .try_attach_thread_listener(thread_id, connection_ids)
-                                .await;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            warn!("thread_created receiver lagged; skipping resync");
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            listen_for_threads = false;
-                        }
-                    }
-                }
             }
         }
 
-        processor.connection_closed(IN_PROCESS_CONNECTION_ID).await;
+        drop(writer_rx);
+        drop(processor_tx);
+        outgoing_message_sender
+            .cancel_all_requests(Some(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: "in-process app-server runtime is shutting down".to_string(),
+                data: None,
+            }))
+            .await;
         for (_, response_tx) in pending_request_responses {
             let _ = response_tx.send(Err(JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -593,7 +690,10 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             }));
         }
 
-        drop(processor);
+        if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut processor_handle).await {
+            processor_handle.abort();
+            let _ = processor_handle.await;
+        }
         if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut outbound_handle).await {
             outbound_handle.abort();
             let _ = outbound_handle.await;
@@ -605,7 +705,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
     });
 
     InProcessClientHandle {
-        client_tx,
+        client: InProcessClientSender { client_tx },
         event_rx,
         runtime_handle,
     }
