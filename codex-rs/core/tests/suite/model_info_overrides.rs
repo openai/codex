@@ -18,6 +18,7 @@ async fn offline_model_info_without_tool_output_override() {
         auth_manager,
         None,
         CollaborationModesConfig::default(),
+        None,
     );
 
     let model_info = manager.get_model_info("gpt-5.1", &config).await;
@@ -41,6 +42,7 @@ async fn offline_model_info_with_tool_output_override() {
         auth_manager,
         None,
         CollaborationModesConfig::default(),
+        None,
     );
 
     let model_info = manager.get_model_info("gpt-5.1-codex", &config).await;

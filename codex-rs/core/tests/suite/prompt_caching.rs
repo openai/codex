@@ -847,6 +847,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
 
     let expected_permissions_msg = body1["input"][0].clone();
     let expected_ui_msg = body1["input"][1].clone();
+    let expected_collaboration_mode_msg = body1["input"][2].clone();
 
     let shell = default_user_shell();
     let default_cwd_lossy = default_cwd.to_string_lossy();
@@ -868,6 +869,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let expected_input_1 = serde_json::Value::Array(vec![
         expected_permissions_msg.clone(),
         expected_contextual_user_msg_1.clone(),
+        expected_collaboration_mode_msg.clone(),
         expected_user_message_1.clone(),
     ]);
     assert_eq!(body1["input"], expected_input_1);
@@ -876,6 +878,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_permissions_msg,
         expected_contextual_user_msg_1,
+        expected_collaboration_mode_msg,
         expected_user_message_1,
         expected_user_message_2,
     ]);
@@ -971,6 +974,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
 
     let expected_permissions_msg = body1["input"][0].clone();
     let expected_ui_msg = body1["input"][1].clone();
+    let expected_collaboration_mode_msg = body1["input"][2].clone();
 
     let shell = default_user_shell();
     let expected_env_text_1 = expected_ui_msg["content"][1]["text"]
@@ -989,6 +993,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let expected_input_1 = serde_json::Value::Array(vec![
         expected_permissions_msg.clone(),
         expected_contextual_user_msg_1.clone(),
+        expected_collaboration_mode_msg.clone(),
         expected_user_message_1.clone(),
     ]);
     assert_eq!(body1["input"], expected_input_1);
@@ -1013,6 +1018,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_permissions_msg,
         expected_contextual_user_msg_1,
+        expected_collaboration_mode_msg,
         expected_user_message_1,
         expected_settings_update_msg,
         expected_user_message_2,

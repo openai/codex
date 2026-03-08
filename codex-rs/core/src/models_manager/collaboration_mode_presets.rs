@@ -23,17 +23,25 @@ pub struct CollaborationModesConfig {
 
 pub(crate) fn builtin_collaboration_mode_presets(
     collaboration_modes_config: CollaborationModesConfig,
+    plan_mode_developer_instructions: Option<&str>,
 ) -> Vec<CollaborationModeMask> {
-    vec![plan_preset(), default_preset(collaboration_modes_config)]
+    vec![
+        plan_preset(plan_mode_developer_instructions),
+        default_preset(collaboration_modes_config),
+    ]
 }
 
-fn plan_preset() -> CollaborationModeMask {
+fn plan_preset(plan_mode_developer_instructions: Option<&str>) -> CollaborationModeMask {
     CollaborationModeMask {
         name: ModeKind::Plan.display_name().to_string(),
         mode: Some(ModeKind::Plan),
         model: None,
         reasoning_effort: Some(Some(ReasoningEffort::Medium)),
-        developer_instructions: Some(Some(COLLABORATION_MODE_PLAN.to_string())),
+        developer_instructions: Some(Some(
+            plan_mode_developer_instructions
+                .unwrap_or(COLLABORATION_MODE_PLAN)
+                .to_string(),
+        )),
     }
 }
 
@@ -109,14 +117,24 @@ mod tests {
 
     #[test]
     fn preset_names_use_mode_display_names() {
-        assert_eq!(plan_preset().name, ModeKind::Plan.display_name());
+        assert_eq!(plan_preset(None).name, ModeKind::Plan.display_name());
         assert_eq!(
             default_preset(CollaborationModesConfig::default()).name,
             ModeKind::Default.display_name()
         );
         assert_eq!(
-            plan_preset().reasoning_effort,
+            plan_preset(None).reasoning_effort,
             Some(Some(ReasoningEffort::Medium))
+        );
+    }
+
+    #[test]
+    fn plan_preset_uses_configured_developer_instructions_override() {
+        let override_instructions = "Use plan override.";
+        let plan = plan_preset(Some(override_instructions));
+        assert_eq!(
+            plan.developer_instructions,
+            Some(Some(override_instructions.to_string()))
         );
     }
 

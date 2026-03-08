@@ -524,6 +524,9 @@
         "personality": {
           "$ref": "#/definitions/Personality"
         },
+        "plan_mode_developer_instructions": {
+          "type": "string"
+        },
         "plan_mode_reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
         },
@@ -2163,6 +2166,9 @@
         }
       ],
       "description": "Optionally specify a personality for the model"
+    },
+    "plan_mode_developer_instructions": {
+      "type": "string"
     },
     "plan_mode_reasoning_effort": {
       "$ref": "#/definitions/ReasoningEffort"

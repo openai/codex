@@ -18,5 +18,6 @@ Scenario: First post-resume turn where pre-turn override sets model to rollout m
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:seed resume history
 03:message/assistant:recorded before resume
-04:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-05:message/user:first resumed turn after model override
+04:message/developer:<collaboration_mode># Collaboration Mode: Default\n\nYou are now in Default mode. Any previous i...
+05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+06:message/user:first resumed turn after model override

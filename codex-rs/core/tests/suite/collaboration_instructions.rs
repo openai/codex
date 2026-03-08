@@ -192,6 +192,70 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_mode_uses_configured_developer_instructions_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let override_text = "configured plan instructions";
+    let test = test_codex()
+        .with_config(move |config| {
+            config.plan_mode_developer_instructions = Some(override_text.to_string());
+        })
+        .build(&server)
+        .await?;
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: test.session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            cwd: test.config.cwd.clone(),
+            approval_policy: test.config.permissions.approval_policy.value(),
+            sandbox_policy: test.config.permissions.sandbox_policy.get().clone(),
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: Some(
+                test.config
+                    .model_reasoning_summary
+                    .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
+            ),
+            service_tier: None,
+            collaboration_mode: Some(collaboration_mode),
+            final_output_json_schema: None,
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let input = req.single_request().input();
+    let dev_texts = developer_texts(&input);
+    let expected_text = collab_xml(override_text);
+    let collab_blocks = dev_texts
+        .iter()
+        .filter(|text| text.starts_with(COLLABORATION_MODE_OPEN_TAG))
+        .count();
+    assert_eq!(collab_blocks, 1);
+    assert_eq!(count_exact(&dev_texts, &expected_text), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
