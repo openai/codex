@@ -72,7 +72,7 @@ async fn run_cmd_result_with_writable_roots(
     cmd: &[&str],
     writable_roots: &[PathBuf],
     timeout_ms: u64,
-    use_bwrap_sandbox: bool,
+    use_legacy_landlock: bool,
     network_access: bool,
 ) -> Result<codex_core::exec::ExecToolCallOutput> {
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
@@ -96,7 +96,7 @@ async fn run_cmd_result_with_writable_roots(
         file_system_sandbox_policy,
         network_sandbox_policy,
         timeout_ms,
-        use_bwrap_sandbox,
+        use_legacy_landlock,
     )
     .await
 }
@@ -108,7 +108,7 @@ async fn run_cmd_result_with_policies(
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     timeout_ms: u64,
-    use_bwrap_sandbox: bool,
+    use_legacy_landlock: bool,
 ) -> Result<codex_core::exec::ExecToolCallOutput> {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
@@ -133,7 +133,7 @@ async fn run_cmd_result_with_policies(
         network_sandbox_policy,
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
-        use_bwrap_sandbox,
+        use_legacy_landlock,
         None,
     )
     .await

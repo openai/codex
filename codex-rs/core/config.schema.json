@@ -477,7 +477,7 @@
             "unified_exec": {
               "type": "boolean"
             },
-            "use_linux_sandbox_bwrap": {
+            "use_legacy_landlock": {
               "type": "boolean"
             },
             "voice_transcription": {
@@ -1978,7 +1978,7 @@
         "unified_exec": {
           "type": "boolean"
         },
-        "use_linux_sandbox_bwrap": {
+        "use_legacy_landlock": {
           "type": "boolean"
         },
         "voice_transcription": {

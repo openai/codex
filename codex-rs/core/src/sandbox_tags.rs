@@ -6,7 +6,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 pub(crate) fn sandbox_tag(
     policy: &SandboxPolicy,
     windows_sandbox_level: WindowsSandboxLevel,
-    use_linux_sandbox_bwrap: bool,
+    use_legacy_landlock: bool,
 ) -> &'static str {
     if matches!(policy, SandboxPolicy::DangerFullAccess) {
         return "none";
@@ -18,7 +18,7 @@ pub(crate) fn sandbox_tag(
     {
         return "windows_elevated";
     }
-    if cfg!(target_os = "linux") && use_linux_sandbox_bwrap {
+    if cfg!(target_os = "linux") && !use_legacy_landlock {
         return "linux_bubblewrap";
     }
 
