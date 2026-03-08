@@ -25,8 +25,10 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
+use crate::sandboxing::merge_permission_profiles;
 use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
 pub use artifacts::ArtifactsHandler;
@@ -98,6 +100,7 @@ pub(super) fn normalize_and_validate_additional_permissions(
     approval_policy: AskForApproval,
     sandbox_permissions: SandboxPermissions,
     additional_permissions: Option<PermissionProfile>,
+    permissions_preapproved: bool,
     _cwd: &Path,
 ) -> Result<Option<PermissionProfile>, String> {
     let uses_additional_permissions = matches!(
@@ -115,7 +118,7 @@ pub(super) fn normalize_and_validate_additional_permissions(
     }
 
     if uses_additional_permissions {
-        if !matches!(approval_policy, AskForApproval::OnRequest) {
+        if !permissions_preapproved && !matches!(approval_policy, AskForApproval::OnRequest) {
             return Err(format!(
                 "approval policy is {approval_policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest"
             ));
@@ -147,5 +150,53 @@ pub(super) fn normalize_and_validate_additional_permissions(
         )
     } else {
         Ok(None)
+    }
+}
+
+pub(super) struct EffectiveAdditionalPermissions {
+    pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
+    pub permissions_preapproved: bool,
+}
+
+pub(super) async fn apply_granted_turn_permissions(
+    session: &Session,
+    sandbox_permissions: SandboxPermissions,
+    additional_permissions: Option<PermissionProfile>,
+) -> EffectiveAdditionalPermissions {
+    if matches!(sandbox_permissions, SandboxPermissions::RequireEscalated) {
+        return EffectiveAdditionalPermissions {
+            sandbox_permissions,
+            additional_permissions,
+            permissions_preapproved: false,
+        };
+    }
+
+    let granted_permissions = session.granted_turn_permissions().await;
+    let effective_permissions = merge_permission_profiles(
+        additional_permissions.as_ref(),
+        granted_permissions.as_ref(),
+    );
+    let permissions_preapproved = match (effective_permissions.as_ref(), granted_permissions) {
+        (Some(effective_permissions), Some(granted_permissions)) => {
+            crate::sandboxing::intersect_permission_profiles(
+                effective_permissions.clone(),
+                granted_permissions,
+            ) == *effective_permissions
+        }
+        _ => false,
+    };
+
+    let sandbox_permissions =
+        if effective_permissions.is_some() && !sandbox_permissions.uses_additional_permissions() {
+            SandboxPermissions::WithAdditionalPermissions
+        } else {
+            sandbox_permissions
+        };
+
+    EffectiveAdditionalPermissions {
+        sandbox_permissions,
+        additional_permissions: effective_permissions,
+        permissions_preapproved,
     }
 }

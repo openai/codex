@@ -19,7 +19,9 @@ use tokio::sync::oneshot;
 use crate::codex::TurnContext;
 use crate::protocol::ReviewDecision;
 use crate::protocol::TokenUsage;
+use crate::sandboxing::merge_permission_profiles;
 use crate::tasks::SessionTask;
+use codex_protocol::models::PermissionProfile;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
@@ -79,6 +81,7 @@ pub(crate) struct TurnState {
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
+    granted_permissions: Option<PermissionProfile>,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
 }
@@ -188,6 +191,15 @@ impl TurnState {
 
     pub(crate) fn has_pending_input(&self) -> bool {
         !self.pending_input.is_empty()
+    }
+
+    pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {
+        self.granted_permissions =
+            merge_permission_profiles(self.granted_permissions.as_ref(), Some(&permissions));
+    }
+
+    pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
+        self.granted_permissions.clone()
     }
 }
 

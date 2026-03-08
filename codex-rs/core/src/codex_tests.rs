@@ -2142,6 +2142,28 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 }
 
 #[tokio::test]
+async fn notify_request_permissions_response_ignores_unmatched_call_id() {
+    let (session, _turn_context) = make_session_and_context().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+
+    session
+        .notify_request_permissions_response(
+            "missing",
+            codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: codex_protocol::models::PermissionProfile {
+                    network: Some(codex_protocol::models::NetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    ..Default::default()
+                },
+            },
+        )
+        .await;
+
+    assert_eq!(session.granted_turn_permissions().await, None);
+}
+
+#[tokio::test]
 async fn submit_with_id_captures_current_span_trace_context() {
     let (session, _turn_context) = make_session_and_context().await;
     let (tx_sub, rx_sub) = async_channel::bounded(1);

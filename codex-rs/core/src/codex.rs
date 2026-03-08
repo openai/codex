@@ -3000,7 +3000,11 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_request_permissions(call_id)
+                    let entry = ts.remove_pending_request_permissions(call_id);
+                    if entry.is_some() && !response.permissions.is_empty() {
+                        ts.record_granted_permissions(response.permissions.clone());
+                    }
+                    entry
                 }
                 None => None,
             }
@@ -3013,6 +3017,13 @@ impl Session {
                 warn!("No pending request_permissions found for call_id: {call_id}");
             }
         }
+    }
+
+    pub(crate) async fn granted_turn_permissions(&self) -> Option<PermissionProfile> {
+        let active = self.active_turn.lock().await;
+        let active = active.as_ref()?;
+        let ts = active.turn_state.lock().await;
+        ts.granted_permissions()
     }
 
     pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {

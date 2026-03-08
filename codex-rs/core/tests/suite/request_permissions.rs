@@ -12,6 +12,7 @@ use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ev_assistant_message;
@@ -19,6 +20,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -95,6 +97,65 @@ fn shell_event_with_request_permissions(
     });
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "shell_command", &args_str))
+}
+
+fn request_permissions_tool_event(
+    call_id: &str,
+    reason: &str,
+    permissions: &PermissionProfile,
+) -> Result<Value> {
+    let args = json!({
+        "reason": reason,
+        "permissions": permissions,
+    });
+    let args_str = serde_json::to_string(&args)?;
+    Ok(ev_function_call(call_id, "request_permissions", &args_str))
+}
+
+fn shell_command_event(call_id: &str, command: &str) -> Result<Value> {
+    let args = json!({
+        "command": command,
+        "timeout_ms": 1_000_u64,
+    });
+    let args_str = serde_json::to_string(&args)?;
+    Ok(ev_function_call(call_id, "shell_command", &args_str))
+}
+
+fn exec_command_event(call_id: &str, command: &str) -> Result<Value> {
+    let args = json!({
+        "cmd": command,
+        "yield_time_ms": 1_000_u64,
+    });
+    let args_str = serde_json::to_string(&args)?;
+    Ok(ev_function_call(call_id, "exec_command", &args_str))
+}
+
+fn exec_command_event_with_request_permissions(
+    call_id: &str,
+    command: &str,
+    additional_permissions: &PermissionProfile,
+) -> Result<Value> {
+    let args = json!({
+        "cmd": command,
+        "yield_time_ms": 1_000_u64,
+        "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
+        "additional_permissions": additional_permissions,
+    });
+    let args_str = serde_json::to_string(&args)?;
+    Ok(ev_function_call(call_id, "exec_command", &args_str))
+}
+
+fn exec_command_event_with_missing_additional_permissions(
+    call_id: &str,
+    command: &str,
+) -> Result<Value> {
+    let args = json!({
+        "cmd": command,
+        "yield_time_ms": 1_000_u64,
+        "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
+    });
+    let args_str = serde_json::to_string(&args)?;
+    Ok(ev_function_call(call_id, "exec_command", &args_str))
 }
 
 #[cfg(target_os = "macos")]
@@ -177,6 +238,28 @@ async fn expect_exec_approval(
     }
 }
 
+async fn expect_request_permissions_event(
+    test: &TestCodex,
+    expected_call_id: &str,
+) -> PermissionProfile {
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::RequestPermissions(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+
+    match event {
+        EventMsg::RequestPermissions(request) => {
+            assert_eq!(request.call_id, expected_call_id);
+            request.permissions
+        }
+        EventMsg::TurnComplete(_) => panic!("expected request_permissions before completion"),
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
 fn workspace_write_excluding_tmp() -> SandboxPolicy {
     SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
@@ -185,6 +268,26 @@ fn workspace_write_excluding_tmp() -> SandboxPolicy {
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     }
+}
+
+fn requested_directory_write_permissions(path: &Path) -> PermissionProfile {
+    PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![absolute_path(path)]),
+        }),
+        ..Default::default()
+    }
+}
+
+fn normalized_directory_write_permissions(path: &Path) -> Result<PermissionProfile> {
+    Ok(PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![AbsolutePathBuf::try_from(path.canonicalize()?)?]),
+        }),
+        ..Default::default()
+    })
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -761,5 +864,460 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
     );
 
     let _ = fs::remove_file(outside_write);
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(target_os = "macos")]
+async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = workspace_write_excluding_tmp();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let outside_dir = tempfile::tempdir()?;
+    let outside_write = outside_dir.path().join("sticky-write.txt");
+    let command = format!(
+        "printf {:?} > {:?} && cat {:?}",
+        "sticky-grant-ok", outside_write, outside_write
+    );
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![absolute_path(outside_dir.path())]),
+        }),
+        ..Default::default()
+    };
+    let normalized_requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![AbsolutePathBuf::try_from(
+                outside_dir.path().canonicalize()?,
+            )?]),
+        }),
+        ..Default::default()
+    };
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-sticky-1"),
+                request_permissions_tool_event(
+                    "permissions-call",
+                    "Allow writing outside the workspace",
+                    &requested_permissions,
+                )?,
+                ev_completed("resp-sticky-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-sticky-2"),
+                exec_command_event("exec-call", &command)?,
+                ev_completed("resp-sticky-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-sticky-3"),
+                ev_assistant_message("msg-sticky-1", "done"),
+                ev_completed("resp-sticky-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "write outside the workspace",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
+    assert_eq!(
+        granted_permissions,
+        normalized_requested_permissions.clone()
+    );
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: RequestPermissionsResponse {
+                permissions: normalized_requested_permissions.clone(),
+            },
+        })
+        .await?;
+
+    let completion_event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    if let EventMsg::ExecApprovalRequest(approval) = completion_event {
+        panic!("unexpected exec approval request after sticky permission grant: {approval:?}");
+    }
+
+    let exec_output = responses
+        .function_call_output_text("exec-call")
+        .map(|output| json!({ "output": output }))
+        .unwrap_or_else(|| panic!("expected exec-call output"));
+    let result = parse_result(&exec_output);
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.stdout.trim(), "sticky-grant-ok");
+    assert_eq!(fs::read_to_string(&outside_write)?, "sticky-grant-ok");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(target_os = "macos")]
+async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = workspace_write_excluding_tmp();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let outside_dir = tempfile::tempdir()?;
+    let outside_write = outside_dir.path().join("sticky-shell-write.txt");
+    let command = format!(
+        "printf {:?} > {:?} && cat {:?}",
+        "sticky-shell-grant-ok", outside_write, outside_write
+    );
+    let requested_permissions = requested_directory_write_permissions(outside_dir.path());
+    let normalized_requested_permissions =
+        normalized_directory_write_permissions(outside_dir.path())?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-sticky-shell-1"),
+                request_permissions_tool_event(
+                    "permissions-call",
+                    "Allow writing outside the workspace",
+                    &requested_permissions,
+                )?,
+                ev_completed("resp-sticky-shell-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-sticky-shell-2"),
+                shell_command_event("shell-call", &command)?,
+                ev_completed("resp-sticky-shell-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-sticky-shell-3"),
+                ev_assistant_message("msg-sticky-shell-1", "done"),
+                ev_completed("resp-sticky-shell-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "write outside the workspace",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
+    assert_eq!(
+        granted_permissions,
+        normalized_requested_permissions.clone()
+    );
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: RequestPermissionsResponse {
+                permissions: normalized_requested_permissions.clone(),
+            },
+        })
+        .await?;
+
+    let approval = expect_exec_approval(&test, &command).await;
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let shell_output = responses
+        .function_call_output_text("shell-call")
+        .map(|output| json!({ "output": output }))
+        .unwrap_or_else(|| panic!("expected shell-call output"));
+    let result = parse_result(&shell_output);
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.stdout.trim(), "sticky-shell-grant-ok");
+    assert_eq!(fs::read_to_string(&outside_write)?, "sticky-shell-grant-ok");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(target_os = "macos")]
+async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = workspace_write_excluding_tmp();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let first_dir = tempfile::tempdir()?;
+    let second_dir = tempfile::tempdir()?;
+    let second_write = second_dir.path().join("partial-grant-write.txt");
+    let command = format!(
+        "printf {:?} > {:?} && cat {:?}",
+        "partial-grant-ok", second_write, second_write
+    );
+
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![
+                absolute_path(first_dir.path()),
+                absolute_path(second_dir.path()),
+            ]),
+        }),
+        ..Default::default()
+    };
+    let normalized_requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![
+                AbsolutePathBuf::try_from(first_dir.path().canonicalize()?)?,
+                AbsolutePathBuf::try_from(second_dir.path().canonicalize()?)?,
+            ]),
+        }),
+        ..Default::default()
+    };
+    let granted_permissions = normalized_directory_write_permissions(first_dir.path())?;
+    let second_dir_permissions = requested_directory_write_permissions(second_dir.path());
+    let merged_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![
+                AbsolutePathBuf::try_from(first_dir.path().canonicalize()?)?,
+                AbsolutePathBuf::try_from(second_dir.path().canonicalize()?)?,
+            ]),
+        }),
+        ..Default::default()
+    };
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-partial-1"),
+                request_permissions_tool_event(
+                    "permissions-call",
+                    "Allow writing outside the workspace",
+                    &requested_permissions,
+                )?,
+                ev_completed("resp-partial-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-partial-2"),
+                exec_command_event_with_request_permissions(
+                    "exec-call",
+                    &command,
+                    &second_dir_permissions,
+                )?,
+                ev_completed("resp-partial-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-partial-3"),
+                ev_assistant_message("msg-partial-1", "done"),
+                ev_completed("resp-partial-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "write outside the workspace",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    let initial_request = expect_request_permissions_event(&test, "permissions-call").await;
+    assert_eq!(initial_request, normalized_requested_permissions);
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: RequestPermissionsResponse {
+                permissions: granted_permissions.clone(),
+            },
+        })
+        .await?;
+
+    let approval = expect_exec_approval(&test, &command).await;
+    assert_eq!(approval.additional_permissions, Some(merged_permissions));
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let exec_output = responses
+        .function_call_output_text("exec-call")
+        .map(|output| json!({ "output": output }))
+        .unwrap_or_else(|| panic!("expected exec-call output"));
+    let result = parse_result(&exec_output);
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.stdout.trim(), "partial-grant-ok");
+    assert_eq!(fs::read_to_string(&second_write)?, "partial-grant-ok");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(target_os = "macos")]
+async fn request_permissions_grants_do_not_carry_across_turns() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = workspace_write_excluding_tmp();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let outside_dir = tempfile::tempdir()?;
+    let requested_permissions = requested_directory_write_permissions(outside_dir.path());
+    let normalized_requested_permissions =
+        normalized_directory_write_permissions(outside_dir.path())?;
+
+    let _first_turn = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-turn-1"),
+                request_permissions_tool_event(
+                    "permissions-call",
+                    "Allow writing outside the workspace",
+                    &requested_permissions,
+                )?,
+                ev_completed("resp-turn-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-turn-2"),
+                ev_assistant_message("msg-turn-1", "done"),
+                ev_completed("resp-turn-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "request permissions for later use",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
+    assert_eq!(
+        granted_permissions,
+        normalized_requested_permissions.clone()
+    );
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: RequestPermissionsResponse {
+                permissions: normalized_requested_permissions,
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let second_turn = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-turn-3"),
+                exec_command_event_with_missing_additional_permissions(
+                    "exec-call",
+                    "printf 'should not run'",
+                )?,
+                ev_completed("resp-turn-3"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-turn-4"),
+                ev_assistant_message("msg-turn-2", "done"),
+                ev_completed("resp-turn-4"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "try to reuse permissions in a later turn",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+    wait_for_completion(&test).await;
+
+    let output = second_turn
+        .function_call_output_text("exec-call")
+        .unwrap_or_else(|| panic!("expected exec-call output"));
+    assert!(output.contains("missing `additional_permissions`"));
+
     Ok(())
 }

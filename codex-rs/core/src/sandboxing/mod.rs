@@ -172,6 +172,59 @@ pub(crate) fn normalize_additional_permissions(
     })
 }
 
+pub(crate) fn merge_permission_profiles(
+    base: Option<&PermissionProfile>,
+    permissions: Option<&PermissionProfile>,
+) -> Option<PermissionProfile> {
+    let Some(permissions) = permissions else {
+        return base.cloned();
+    };
+
+    match base {
+        Some(base) => {
+            let network = match (base.network.as_ref(), permissions.network.as_ref()) {
+                (
+                    Some(NetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    _,
+                )
+                | (
+                    _,
+                    Some(NetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                ) => Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                _ => None,
+            };
+            let file_system = match (base.file_system.as_ref(), permissions.file_system.as_ref()) {
+                (Some(base), Some(permissions)) => Some(FileSystemPermissions {
+                    read: merge_permission_paths(base.read.as_ref(), permissions.read.as_ref()),
+                    write: merge_permission_paths(base.write.as_ref(), permissions.write.as_ref()),
+                })
+                .filter(|file_system| !file_system.is_empty()),
+                (Some(base), None) => Some(base.clone()),
+                (None, Some(permissions)) => Some(permissions.clone()),
+                (None, None) => None,
+            };
+            let macos = merge_macos_seatbelt_profile_extensions(
+                base.macos.as_ref(),
+                permissions.macos.as_ref(),
+            );
+
+            Some(PermissionProfile {
+                network,
+                file_system,
+                macos,
+            })
+            .filter(|permissions| !permissions.is_empty())
+        }
+        None => Some(permissions.clone()).filter(|permissions| !permissions.is_empty()),
+    }
+}
+
 pub fn intersect_permission_profiles(
     requested: PermissionProfile,
     granted: PermissionProfile,
@@ -244,6 +297,29 @@ fn normalize_permission_paths(
     }
 
     out
+}
+
+fn merge_permission_paths(
+    base: Option<&Vec<AbsolutePathBuf>>,
+    permissions: Option<&Vec<AbsolutePathBuf>>,
+) -> Option<Vec<AbsolutePathBuf>> {
+    match (base, permissions) {
+        (Some(base), Some(permissions)) => {
+            let mut merged = Vec::with_capacity(base.len() + permissions.len());
+            let mut seen = HashSet::with_capacity(base.len() + permissions.len());
+
+            for path in base.iter().chain(permissions.iter()) {
+                if seen.insert(path.clone()) {
+                    merged.push(path.clone());
+                }
+            }
+
+            Some(merged).filter(|paths| !paths.is_empty())
+        }
+        (Some(base), None) => Some(base.clone()),
+        (None, Some(permissions)) => Some(permissions.clone()),
+        (None, None) => None,
+    }
 }
 
 fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {

@@ -919,6 +919,8 @@ The client responds with `result.permissions`, which should be the granted subse
 
 Only the granted subset matters on the wire. Any permissions omitted from `result.permissions` are treated as denied, including omitted nested keys inside `result.permissions.macos`, so a sparse response like `{ "permissions": { "macos": { "accessibility": true } } }` grants only accessibility. Any permissions not present in the original request are ignored by the server.
 
+Within the same turn, granted permissions are sticky: later shell-like tool calls can automatically reuse the granted subset without reissuing a separate permission request.
+
 ### Dynamic tool calls (experimental)
 
 `dynamicTools` on `thread/start` and the corresponding `item/tool/call` request/response flow are experimental APIs. To enable them, set `initialize.params.capabilities.experimentalApi = true`.

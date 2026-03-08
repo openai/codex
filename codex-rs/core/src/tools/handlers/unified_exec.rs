@@ -10,6 +10,7 @@ use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
@@ -188,12 +189,19 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or(cwd);
+                let effective_additional_permissions = apply_granted_turn_permissions(
+                    context.session.as_ref(),
+                    sandbox_permissions,
+                    additional_permissions,
+                )
+                .await;
                 let normalized_additional_permissions =
                     match normalize_and_validate_additional_permissions(
                         request_permission_enabled,
                         context.turn.approval_policy.value(),
-                        sandbox_permissions,
-                        additional_permissions,
+                        effective_additional_permissions.sandbox_permissions,
+                        effective_additional_permissions.additional_permissions,
+                        effective_additional_permissions.permissions_preapproved,
                         &cwd,
                     ) {
                         Ok(normalized) => normalized,
@@ -229,8 +237,11 @@ impl ToolHandler for UnifiedExecHandler {
                             workdir,
                             network: context.turn.network.clone(),
                             tty,
-                            sandbox_permissions,
+                            sandbox_permissions: effective_additional_permissions
+                                .sandbox_permissions,
                             additional_permissions: normalized_additional_permissions,
+                            additional_permissions_preapproved: effective_additional_permissions
+                                .permissions_preapproved,
                             justification,
                             prefix_rule,
                         },

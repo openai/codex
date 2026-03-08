@@ -95,6 +95,7 @@ pub(crate) struct ExecCommandRequest {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
+    pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub prefix_rule: Option<Vec<String>>,
 }
@@ -240,6 +241,7 @@ mod tests {
                     tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     additional_permissions: None,
+                    additional_permissions_preapproved: false,
                     justification: None,
                     prefix_rule: None,
                 },
