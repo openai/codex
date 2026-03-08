@@ -3,57 +3,48 @@ use codex_install_context::InstallContext;
 #[cfg(any(not(debug_assertions), test))]
 use codex_install_context::NativePlatform;
 
+/// Update action the CLI should perform after the TUI exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
-    Npm,
-    Bun,
-    Brew,
+    /// Update via `npm install -g @openai/codex@latest`.
+    NpmGlobalLatest,
+    /// Update via `bun install -g @openai/codex@latest`.
+    BunGlobalLatest,
+    /// Update via `brew upgrade codex`.
+    BrewUpgrade,
+    /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | sh`.
     NativeUnix,
+    /// Update via `irm https://chatgpt.com/codex/install.ps1|iex`.
     NativeWindows,
 }
 
 impl UpdateAction {
     pub(crate) fn from_install_context(context: &InstallContext) -> Option<Self> {
         match context {
+            InstallContext::Npm => Some(UpdateAction::NpmGlobalLatest),
+            InstallContext::Bun => Some(UpdateAction::BunGlobalLatest),
+            InstallContext::Brew => Some(UpdateAction::BrewUpgrade),
             InstallContext::Native { platform, .. } => Some(match platform {
                 NativePlatform::Unix => UpdateAction::NativeUnix,
                 NativePlatform::Windows => UpdateAction::NativeWindows,
             }),
-            InstallContext::Npm => Some(UpdateAction::Npm),
-            InstallContext::Bun => Some(UpdateAction::Bun),
-            InstallContext::Brew => Some(UpdateAction::Brew),
             InstallContext::Other => None,
         }
     }
 
     /// Returns the list of command-line arguments for invoking the update.
-    pub fn command_args(self) -> (String, Vec<String>) {
+    pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
-            UpdateAction::Npm => (
-                "npm".to_string(),
-                vec!["install".into(), "-g".into(), "@openai/codex".into()],
-            ),
-            UpdateAction::Bun => (
-                "bun".to_string(),
-                vec!["install".into(), "-g".into(), "@openai/codex".into()],
-            ),
+            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
+            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
+            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
             UpdateAction::NativeUnix => (
-                "sh".to_string(),
-                vec![
-                    "-c".into(),
-                    "curl -fsSL https://chatgpt.com/codex/install.sh | sh".into(),
-                ],
+                "sh",
+                &["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
             ),
             UpdateAction::NativeWindows => (
-                "powershell".to_string(),
-                vec![
-                    "-c".into(),
-                    "irm https://chatgpt.com/codex/install.ps1|iex".into(),
-                ],
-            ),
-            UpdateAction::Brew => (
-                "brew".to_string(),
-                vec!["upgrade".into(), "--cask".into(), "codex".into()],
+                "powershell",
+                &["-c", "irm https://chatgpt.com/codex/install.ps1|iex"],
             ),
         }
     }
@@ -61,7 +52,7 @@ impl UpdateAction {
     /// Returns string representation of the command-line arguments for invoking the update.
     pub fn command_str(self) -> String {
         let (command, args) = self.command_args();
-        shlex::try_join(std::iter::once(command.as_str()).chain(args.iter().map(String::as_str)))
+        shlex::try_join(std::iter::once(command).chain(args.iter().copied()))
             .unwrap_or_else(|_| format!("{command} {}", args.join(" ")))
     }
 }
@@ -87,15 +78,15 @@ mod tests {
         );
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext::Npm),
-            Some(UpdateAction::Npm)
+            Some(UpdateAction::NpmGlobalLatest)
         );
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext::Bun),
-            Some(UpdateAction::Bun)
+            Some(UpdateAction::BunGlobalLatest)
         );
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext::Brew),
-            Some(UpdateAction::Brew)
+            Some(UpdateAction::BrewUpgrade)
         );
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext::Native {
