@@ -462,37 +462,37 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                             }
                         }
                         OutgoingMessage::Request(request) => {
+                            // Send directly to avoid cloning; on failure the
+                            // original value is returned inside the error.
                             if let Err(send_error) = event_tx
-                                .try_send(InProcessServerEvent::ServerRequest(request.clone()))
+                                .try_send(InProcessServerEvent::ServerRequest(request))
                             {
-                                match send_error {
-                                    mpsc::error::TrySendError::Full(_) => {
-                                        processor
-                                            .process_error(JSONRPCError {
-                                                id: request.id().clone(),
-                                                error: JSONRPCErrorError {
-                                                    code: OVERLOADED_ERROR_CODE,
-                                                    message: "in-process server request queue is full"
-                                                        .to_string(),
-                                                    data: None,
-                                                },
-                                            })
-                                            .await;
-                                    }
-                                    mpsc::error::TrySendError::Closed(_) => {
-                                        processor
-                                            .process_error(JSONRPCError {
-                                                id: request.id().clone(),
-                                                error: JSONRPCErrorError {
-                                                    code: INTERNAL_ERROR_CODE,
-                                                    message: "in-process server request consumer is closed"
-                                                        .to_string(),
-                                                    data: None,
-                                                },
-                                            })
-                                            .await;
-                                    }
-                                }
+                                let (code, message, inner) = match send_error {
+                                    mpsc::error::TrySendError::Full(inner) => (
+                                        OVERLOADED_ERROR_CODE,
+                                        "in-process server request queue is full",
+                                        inner,
+                                    ),
+                                    mpsc::error::TrySendError::Closed(inner) => (
+                                        INTERNAL_ERROR_CODE,
+                                        "in-process server request consumer is closed",
+                                        inner,
+                                    ),
+                                };
+                                let request_id = match inner {
+                                    InProcessServerEvent::ServerRequest(req) => req.id().clone(),
+                                    _ => unreachable!("we just sent a ServerRequest variant"),
+                                };
+                                processor
+                                    .process_error(JSONRPCError {
+                                        id: request_id,
+                                        error: JSONRPCErrorError {
+                                            code,
+                                            message: message.to_string(),
+                                            data: None,
+                                        },
+                                    })
+                                    .await;
                             }
                         }
                         OutgoingMessage::AppServerNotification(notification) => {
