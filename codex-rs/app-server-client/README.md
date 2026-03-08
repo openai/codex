@@ -12,16 +12,12 @@ This crate centralizes startup and lifecycle management for an in-process
 
 - app-server bootstrap and initialize handshake
 - in-memory request/event transport wiring
-- session source selection per client surface
 - graceful shutdown behavior
 
-## Client surfaces and session source
+## Session source
 
-`ClientSurface` controls which `SessionSource` is used when starting
-app-server:
-
-- `ClientSurface::Exec` -> `SessionSource::Exec`
-- `ClientSurface::Tui` -> `SessionSource::Cli`
+Callers pass the `SessionSource` they want stamped into app-server thread
+metadata when starting the runtime.
 
 This ensures thread metadata (for example in `thread/list` and `thread/read`)
 matches the originating runtime.

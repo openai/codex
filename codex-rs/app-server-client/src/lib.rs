@@ -4,7 +4,7 @@
 //! used by surfaces like TUI and exec. It centralizes:
 //!
 //! - Runtime startup and initialize-capabilities handshake.
-//! - Surface-to-session-source policy ([`ClientSurface`] → [`SessionSource`]).
+//! - Startup policy for initialize metadata and session source.
 //! - Typed and raw request/notification dispatch.
 //! - Server request resolution and rejection.
 //! - Event consumption with backpressure signaling ([`InProcessServerEvent::Lagged`]).
@@ -104,34 +104,6 @@ impl Error for TypedRequestError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ClientSurface {
-    /// Non-interactive execution surface.
-    Exec,
-    /// Interactive terminal UI surface.
-    Tui,
-}
-
-/// Maps facade surface identity to app-server `SessionSource`.
-///
-/// `ClientSurface::Tui` intentionally maps to `SessionSource::Cli` because the
-/// TUI is the interactive CLI surface from the server's perspective.
-pub fn session_source_for_surface(surface: ClientSurface) -> SessionSource {
-    match surface {
-        ClientSurface::Exec => SessionSource::Exec,
-        ClientSurface::Tui => SessionSource::Cli,
-    }
-}
-
-impl ClientSurface {
-    fn default_client_name(self) -> &'static str {
-        match self {
-            ClientSurface::Exec => "codex-exec",
-            ClientSurface::Tui => "codex-tui",
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct InProcessClientStartArgs {
     /// Resolved argv0 dispatch paths used by command execution internals.
@@ -148,10 +120,10 @@ pub struct InProcessClientStartArgs {
     pub feedback: CodexFeedback,
     /// Startup warnings emitted after initialize succeeds.
     pub config_warnings: Vec<ConfigWarningNotification>,
-    /// Surface identity that drives session source and default client name.
-    pub surface: ClientSurface,
-    /// Optional explicit client name; falls back to surface default.
-    pub client_name: Option<String>,
+    /// Session source stamped into thread/session metadata.
+    pub session_source: SessionSource,
+    /// Client name reported during initialize.
+    pub client_name: String,
     /// Client version reported during initialize.
     pub client_version: String,
     /// Whether experimental APIs are requested at initialize time.
@@ -163,16 +135,8 @@ pub struct InProcessClientStartArgs {
 }
 
 impl InProcessClientStartArgs {
-    /// Builds initialize params from surface and caller-provided metadata.
-    ///
-    /// This keeps the initialize handshake policy in one place so TUI and exec
-    /// do not drift on client naming, experimental opt-in, or notification
-    /// suppression.
+    /// Builds initialize params from caller-provided metadata.
     pub fn initialize_params(&self) -> InitializeParams {
-        let client_name = self
-            .client_name
-            .clone()
-            .unwrap_or_else(|| self.surface.default_client_name().to_string());
         let capabilities = InitializeCapabilities {
             experimental_api: self.experimental_api,
             opt_out_notification_methods: if self.opt_out_notification_methods.is_empty() {
@@ -184,7 +148,7 @@ impl InProcessClientStartArgs {
 
         InitializeParams {
             client_info: ClientInfo {
-                name: client_name,
+                name: self.client_name.clone(),
                 title: None,
                 version: self.client_version.clone(),
             },
@@ -202,7 +166,7 @@ impl InProcessClientStartArgs {
             cloud_requirements: self.cloud_requirements,
             feedback: self.feedback,
             config_warnings: self.config_warnings,
-            session_source: session_source_for_surface(self.surface),
+            session_source: self.session_source,
             initialize,
             channel_capacity: self.channel_capacity,
         }
@@ -587,7 +551,7 @@ mod tests {
     }
 
     async fn start_test_client_with_capacity(
-        surface: ClientSurface,
+        session_source: SessionSource,
         channel_capacity: usize,
     ) -> InProcessAppServerClient {
         InProcessAppServerClient::start(InProcessClientStartArgs {
@@ -598,8 +562,8 @@ mod tests {
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             config_warnings: Vec::new(),
-            surface,
-            client_name: Some("codex-app-server-client-test".to_string()),
+            session_source,
+            client_name: "codex-app-server-client-test".to_string(),
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
@@ -609,13 +573,13 @@ mod tests {
         .expect("in-process app-server client should start")
     }
 
-    async fn start_test_client(surface: ClientSurface) -> InProcessAppServerClient {
-        start_test_client_with_capacity(surface, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
+    async fn start_test_client(session_source: SessionSource) -> InProcessAppServerClient {
+        start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
     }
 
     #[tokio::test]
     async fn typed_request_roundtrip_works() {
-        let client = start_test_client(ClientSurface::Exec).await;
+        let client = start_test_client(SessionSource::Exec).await;
         let _response: ConfigRequirementsReadResponse = client
             .request_typed(ClientRequest::ConfigRequirementsRead {
                 request_id: RequestId::Integer(1),
@@ -628,7 +592,7 @@ mod tests {
 
     #[tokio::test]
     async fn typed_request_reports_json_rpc_errors() {
-        let client = start_test_client(ClientSurface::Exec).await;
+        let client = start_test_client(SessionSource::Exec).await;
         let err = client
             .request_typed::<ConfigRequirementsReadResponse>(ClientRequest::ThreadRead {
                 request_id: RequestId::Integer(99),
@@ -647,12 +611,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn surface_to_session_source_mapping_is_applied() {
-        for (surface, expected_source) in [
-            (ClientSurface::Exec, ApiSessionSource::Exec),
-            (ClientSurface::Tui, ApiSessionSource::Cli),
+    async fn start_args_session_source_is_applied() {
+        for (session_source, expected_source) in [
+            (SessionSource::Exec, ApiSessionSource::Exec),
+            (SessionSource::Cli, ApiSessionSource::Cli),
         ] {
-            let client = start_test_client(surface).await;
+            let client = start_test_client(session_source).await;
             let parsed: ThreadStartResponse = client
                 .request_typed(ClientRequest::ThreadStart {
                     request_id: RequestId::Integer(2),
@@ -670,7 +634,7 @@ mod tests {
 
     #[tokio::test]
     async fn tiny_channel_capacity_still_supports_request_roundtrip() {
-        let client = start_test_client_with_capacity(ClientSurface::Exec, 1).await;
+        let client = start_test_client_with_capacity(SessionSource::Exec, 1).await;
         let _response: ConfigRequirementsReadResponse = client
             .request_typed(ClientRequest::ConfigRequirementsRead {
                 request_id: RequestId::Integer(1),
