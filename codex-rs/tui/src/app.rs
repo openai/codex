@@ -776,6 +776,39 @@ impl App {
         Ok(())
     }
 
+    async fn refresh_in_memory_config_from_disk_best_effort(&mut self, action: &str) {
+        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+            tracing::warn!(
+                error = %err,
+                action,
+                "failed to refresh config before thread transition; continuing with current in-memory config"
+            );
+        }
+    }
+
+    async fn rebuild_config_for_resume_or_fallback(
+        &mut self,
+        current_cwd: &Path,
+        resume_cwd: PathBuf,
+    ) -> Result<Config> {
+        match self.rebuild_config_for_cwd(resume_cwd.clone()).await {
+            Ok(config) => Ok(config),
+            Err(err) => {
+                if crate::cwds_differ(current_cwd, &resume_cwd) {
+                    Err(err)
+                } else {
+                    let resume_cwd_display = resume_cwd.display().to_string();
+                    tracing::warn!(
+                        error = %err,
+                        cwd = %resume_cwd_display,
+                        "failed to rebuild config for same-cwd resume; using current in-memory config"
+                    );
+                    Ok(self.config.clone())
+                }
+            }
+        }
+    }
+
     fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
         if let Some(policy) = self.runtime_approval_policy_override.as_ref()
             && let Err(err) = config.permissions.approval_policy.set(*policy)
@@ -1484,13 +1517,8 @@ impl App {
     async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
-        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-            tracing::warn!(error = %err, "failed to refresh config before starting fresh session");
-            self.chat_widget.add_error_message(format!(
-                "Failed to refresh configuration before starting a new thread: {err}"
-            ));
-            return;
-        }
+        self.refresh_in_memory_config_from_disk_best_effort("starting a new thread")
+            .await;
         let model = self.chat_widget.current_model().to_string();
         let config = self.fresh_session_config();
         let summary = session_summary(
@@ -2087,7 +2115,9 @@ impl App {
                                 return Ok(AppRunControl::Exit(ExitReason::UserRequested));
                             }
                         };
-                        let mut resume_config = match self.rebuild_config_for_cwd(resume_cwd).await
+                        let mut resume_config = match self
+                            .rebuild_config_for_resume_or_fallback(&current_cwd, resume_cwd)
+                            .await
                         {
                             Ok(cfg) => cfg,
                             Err(err) => {
@@ -2170,13 +2200,8 @@ impl App {
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(path) = self.chat_widget.rollout_path() {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(error = %err, "failed to refresh config before forking thread");
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to refresh configuration before forking the thread: {err}"
-                        ));
-                        return Ok(AppRunControl::Continue);
-                    }
+                    self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
+                        .await;
                     // Fresh threads expose a precomputed path, but the file is
                     // materialized lazily on first user message.
                     if path.exists() {
@@ -5920,6 +5945,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_best_effort_keeps_current_config_on_error()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        std::fs::write(codex_home.path().join("config.toml"), "[broken")?;
+        let original_config = app.config.clone();
+
+        app.refresh_in_memory_config_from_disk_best_effort("starting a new thread")
+            .await;
+
+        assert_eq!(app.config, original_config);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn refresh_in_memory_config_from_disk_uses_active_chat_widget_cwd() -> Result<()> {
         let mut app = make_test_app().await;
         let original_cwd = app.config.cwd.clone();
@@ -5953,6 +5994,42 @@ mod tests {
         app.refresh_in_memory_config_from_disk().await?;
 
         assert_eq!(app.config.cwd, app.chat_widget.config_ref().cwd);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rebuild_config_for_resume_or_fallback_uses_current_config_on_same_cwd_error()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        std::fs::write(codex_home.path().join("config.toml"), "[broken")?;
+        let current_config = app.config.clone();
+        let current_cwd = current_config.cwd.clone();
+
+        let resume_config = app
+            .rebuild_config_for_resume_or_fallback(&current_cwd, current_cwd.clone())
+            .await?;
+
+        assert_eq!(resume_config, current_config);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rebuild_config_for_resume_or_fallback_errors_when_cwd_changes() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        std::fs::write(codex_home.path().join("config.toml"), "[broken")?;
+        let current_cwd = app.config.cwd.clone();
+        let next_cwd_tmp = tempdir()?;
+        let next_cwd = next_cwd_tmp.path().to_path_buf();
+
+        let result = app
+            .rebuild_config_for_resume_or_fallback(&current_cwd, next_cwd)
+            .await;
+
+        assert!(result.is_err());
         Ok(())
     }
 
