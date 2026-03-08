@@ -845,7 +845,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         }
                         break;
                     }
-                    CodexStatus::Shutdown => break,
+                    CodexStatus::Shutdown => {
+                        // `ShutdownComplete` does not identify which attached
+                        // thread emitted it, so subagent shutdowns must not end
+                        // the primary exec loop early.
+                    }
                 }
             }
             InProcessServerEvent::Lagged { skipped } => {

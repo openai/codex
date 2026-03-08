@@ -94,6 +94,20 @@ pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 
 type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
 
+fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
+    matches!(notification, ServerNotification::TurnCompleted(_))
+}
+
+fn legacy_notification_requires_delivery(notification: &JSONRPCNotification) -> bool {
+    matches!(
+        notification
+            .method
+            .strip_prefix("codex/event/")
+            .unwrap_or(&notification.method),
+        "task_complete" | "turn_aborted" | "shutdown_complete"
+    )
+}
+
 /// Input needed to start an in-process app-server runtime.
 ///
 /// These fields mirror the pieces of ambient process state that stdio and
@@ -496,8 +510,16 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                             }
                         }
                         OutgoingMessage::AppServerNotification(notification) => {
-                            if let Err(send_error) = event_tx
-                                .try_send(InProcessServerEvent::ServerNotification(notification))
+                            if server_notification_requires_delivery(&notification) {
+                                if event_tx
+                                    .send(InProcessServerEvent::ServerNotification(notification))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            } else if let Err(send_error) =
+                                event_tx.try_send(InProcessServerEvent::ServerNotification(notification))
                             {
                                 match send_error {
                                     mpsc::error::TrySendError::Full(_) => {
@@ -510,12 +532,21 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                             }
                         }
                         OutgoingMessage::Notification(notification) => {
-                            if let Err(send_error) = event_tx.try_send(
-                                InProcessServerEvent::LegacyNotification(JSONRPCNotification {
-                                    method: notification.method,
-                                    params: notification.params,
-                                }),
-                            ) {
+                            let notification = JSONRPCNotification {
+                                method: notification.method,
+                                params: notification.params,
+                            };
+                            if legacy_notification_requires_delivery(&notification) {
+                                if event_tx
+                                    .send(InProcessServerEvent::LegacyNotification(notification))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            } else if let Err(send_error) =
+                                event_tx.try_send(InProcessServerEvent::LegacyNotification(notification))
+                            {
                                 match send_error {
                                     mpsc::error::TrySendError::Full(_) => {
                                         warn!("dropping in-process legacy notification (queue full)");
@@ -586,6 +617,9 @@ mod tests {
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
+    use codex_app_server_protocol::Turn;
+    use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
 
@@ -700,5 +734,45 @@ mod tests {
             .shutdown()
             .await
             .expect("in-process runtime should shutdown cleanly");
+    }
+
+    #[test]
+    fn guaranteed_delivery_helpers_cover_terminal_notifications() {
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::TurnCompleted(TurnCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn: Turn {
+                    id: "turn-1".to_string(),
+                    items: Vec::new(),
+                    status: TurnStatus::Completed,
+                    error: None,
+                },
+            })
+        ));
+
+        assert!(legacy_notification_requires_delivery(
+            &JSONRPCNotification {
+                method: "codex/event/task_complete".to_string(),
+                params: None,
+            }
+        ));
+        assert!(legacy_notification_requires_delivery(
+            &JSONRPCNotification {
+                method: "codex/event/turn_aborted".to_string(),
+                params: None,
+            }
+        ));
+        assert!(legacy_notification_requires_delivery(
+            &JSONRPCNotification {
+                method: "codex/event/shutdown_complete".to_string(),
+                params: None,
+            }
+        ));
+        assert!(!legacy_notification_requires_delivery(
+            &JSONRPCNotification {
+                method: "codex/event/item_started".to_string(),
+                params: None,
+            }
+        ));
     }
 }
