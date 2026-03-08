@@ -841,10 +841,12 @@ fn read_history_entry_blocking(
     requested_log_id: u64,
     offset: usize,
 ) -> Result<Option<codex_protocol::message_history::HistoryEntry>, String> {
-    let file = OpenOptions::new()
-        .read(true)
-        .open(path)
-        .map_err(|err| format!("failed to open history file: {err}"))?;
+    // Open directly and treat NotFound as empty history (no TOCTOU pre-check).
+    let file = match OpenOptions::new().read(true).open(path) {
+        Ok(f) => f,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(format!("failed to open history file: {err}")),
+    };
     let metadata = file
         .metadata()
         .map_err(|err| format!("failed to stat history file: {err}"))?;
@@ -914,12 +916,6 @@ async fn read_history_entry_local(
     offset: usize,
 ) -> Result<Option<codex_protocol::message_history::HistoryEntry>, String> {
     let path = history_file_path(config);
-    if !tokio::fs::try_exists(&path)
-        .await
-        .map_err(|err| format!("failed to check history file existence: {err}"))?
-    {
-        return Ok(None);
-    }
     tokio::task::spawn_blocking(move || read_history_entry_blocking(path, requested_log_id, offset))
         .await
         .map_err(|err| format!("failed to join history read task: {err}"))?
