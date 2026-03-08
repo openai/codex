@@ -67,9 +67,8 @@ impl WinChild {
     fn do_kill(&mut self) -> IoResult<()> {
         let proc = self.proc.lock().unwrap().try_clone().unwrap();
         let res = unsafe { TerminateProcess(proc.as_raw_handle() as _, 1) };
-        let err = IoError::last_os_error();
-        if res != 0 {
-            Err(err)
+        if res == 0 {
+            Err(IoError::last_os_error())
         } else {
             Ok(())
         }
@@ -96,9 +95,8 @@ pub struct WinChildKiller {
 impl ChildKiller for WinChildKiller {
     fn kill(&mut self) -> IoResult<()> {
         let res = unsafe { TerminateProcess(self.proc.as_raw_handle() as _, 1) };
-        let err = IoError::last_os_error();
-        if res != 0 {
-            Err(err)
+        if res == 0 {
+            Err(IoError::last_os_error())
         } else {
             Ok(())
         }
