@@ -159,6 +159,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
+    pub(crate) enable_codex_api_key_env: bool,
 }
 
 impl MessageProcessor {
@@ -176,8 +177,8 @@ impl MessageProcessor {
             log_db,
             config_warnings,
             session_source,
+            enable_codex_api_key_env,
         } = args;
-        let enable_codex_api_key_env = matches!(session_source, SessionSource::Exec);
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
             enable_codex_api_key_env,
