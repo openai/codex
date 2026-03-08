@@ -3225,7 +3225,7 @@ impl ChatWidget {
 
         widget
             .bottom_pane
-            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+            .set_connectors_enabled(widget.connectors_enabled());
 
         widget
     }
@@ -3397,7 +3397,7 @@ impl ChatWidget {
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
         widget
             .bottom_pane
-            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+            .set_connectors_enabled(widget.connectors_enabled());
 
         widget
     }
@@ -3580,7 +3580,7 @@ impl ChatWidget {
         widget.update_collaboration_mode_indicator();
         widget
             .bottom_pane
-            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+            .set_connectors_enabled(widget.connectors_enabled());
 
         widget
     }
@@ -7624,7 +7624,8 @@ impl ChatWidget {
     }
 
     fn connectors_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::Apps)
+        let auth = self.auth_manager.auth_cached();
+        self.config.features.apps_enabled(auth.as_ref())
     }
 
     fn connectors_for_mentions(&self) -> Option<&[connectors::AppInfo]> {

@@ -1265,8 +1265,13 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
     app_names.dedup();
     let app_names = app_names.join(", ");
 
-    let description =
-        SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE.replace("{{app_names}}", app_names.as_str());
+    let description = if app_names.is_empty() {
+        SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE
+            .replace("({{app_names}})", "(None currently enabled)")
+            .replace("{{app_names}}", "available apps")
+    } else {
+        SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE.replace("{{app_names}}", app_names.as_str())
+    };
 
     ToolSpec::Function(ResponsesApiTool {
         name: SEARCH_TOOL_BM25_TOOL_NAME.to_string(),
@@ -1912,9 +1917,8 @@ pub(crate) fn build_specs(
         builder.register_handler("request_user_input", request_user_input_handler);
     }
 
-    if config.search_tool
-        && let Some(app_tools) = app_tools
-    {
+    if config.search_tool {
+        let app_tools = app_tools.unwrap_or_default();
         builder.push_spec_with_parallel_support(create_search_tool_bm25_tool(&app_tools), true);
         builder.register_handler(SEARCH_TOOL_BM25_TOOL_NAME, search_tool_handler);
     }
@@ -3249,6 +3253,74 @@ mod tests {
         };
         assert!(description.contains("Calendar"));
         assert!(!description.contains("mcp__rmcp__echo"));
+    }
+
+    #[test]
+    fn search_tool_requires_apps_feature_flag_only() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let app_tools = Some(HashMap::from([(
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            ToolInfo {
+                server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                tool_name: "calendar_create_event".to_string(),
+                tool: mcp_tool(
+                    "calendar_create_event",
+                    "Create calendar event",
+                    serde_json::json!({"type": "object"}),
+                ),
+                connector_id: Some("calendar".to_string()),
+                connector_name: Some("Calendar".to_string()),
+                plugin_display_names: Vec::new(),
+            },
+        )]));
+
+        let features = Features::with_defaults();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, app_tools.clone(), &[]).build();
+        assert_lacks_tool_name(&tools, SEARCH_TOOL_BM25_TOOL_NAME);
+
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Apps);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, app_tools, &[]).build();
+        assert_contains_tool_names(&tools, &[SEARCH_TOOL_BM25_TOOL_NAME]);
+    }
+
+    #[test]
+    fn search_tool_description_handles_no_enabled_apps() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Apps);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let (tools, _) = build_specs(&tools_config, None, Some(HashMap::new()), &[]).build();
+        let search_tool = find_tool(&tools, SEARCH_TOOL_BM25_TOOL_NAME);
+        let ToolSpec::Function(ResponsesApiTool { description, .. }) = &search_tool.spec else {
+            panic!("expected function tool");
+        };
+
+        assert!(description.contains("(None currently enabled)"));
+        assert!(description.contains("available apps."));
+        assert!(!description.contains("{{app_names}}"));
     }
 
     #[test]

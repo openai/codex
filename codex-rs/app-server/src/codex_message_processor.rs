@@ -4848,7 +4848,8 @@ impl CodexMessageProcessor {
                 .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
         }
 
-        if !config.features.enabled(Feature::Apps) {
+        let auth = self.auth_manager.auth().await;
+        if !config.features.apps_enabled(auth.as_ref()) {
             self.outgoing
                 .send_response(
                     request_id,
@@ -5410,8 +5411,9 @@ impl CodexMessageProcessor {
                     }
                 };
                 let plugin_apps = load_plugin_apps(result.installed_path.as_path());
+                let auth = self.auth_manager.auth().await;
                 let apps_needing_auth = if plugin_apps.is_empty()
-                    || !config.features.enabled(Feature::Apps)
+                    || !config.features.apps_enabled(auth.as_ref())
                 {
                     Vec::new()
                 } else {
