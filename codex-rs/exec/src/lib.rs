@@ -866,7 +866,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 }
             }
             InProcessServerEvent::Lagged { skipped } => {
-                warn!("in-process app-server event stream lagged; dropped {skipped} events");
+                let message = lagged_event_warning_message(skipped);
+                warn!("{message}");
+                let _ = event_processor.process_event(Event {
+                    id: String::new(),
+                    msg: EventMsg::Warning(codex_protocol::protocol::WarningEvent { message }),
+                });
             }
         }
     }
@@ -1129,6 +1134,10 @@ fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
 
 fn normalize_legacy_notification_method(method: &str) -> &str {
     method.strip_prefix("codex/event/").unwrap_or(method)
+}
+
+fn lagged_event_warning_message(skipped: usize) -> String {
+    format!("in-process app-server event stream lagged; dropped {skipped} events")
 }
 
 fn legacy_notification_to_event(notification: JSONRPCNotification) -> Result<Event, String> {
@@ -1888,5 +1897,13 @@ mod tests {
             }
         }
         assert!(buffered_events.is_empty());
+    }
+
+    #[test]
+    fn lagged_event_warning_message_is_explicit() {
+        assert_eq!(
+            lagged_event_warning_message(7),
+            "in-process app-server event stream lagged; dropped 7 events".to_string()
+        );
     }
 }
