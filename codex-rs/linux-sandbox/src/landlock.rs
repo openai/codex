@@ -268,13 +268,13 @@ mod tests {
     use super::NetworkSeccompMode;
     use super::network_seccomp_mode;
     use super::should_install_network_seccomp;
-    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::NetworkSandboxPolicy;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn managed_network_enforces_seccomp_even_for_full_network_policy() {
         assert_eq!(
-            should_install_network_seccomp(&SandboxPolicy::DangerFullAccess, true),
+            should_install_network_seccomp(NetworkSandboxPolicy::Enabled, true),
             true
         );
     }
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn full_network_policy_without_managed_network_skips_seccomp() {
         assert_eq!(
-            should_install_network_seccomp(&SandboxPolicy::DangerFullAccess, false),
+            should_install_network_seccomp(NetworkSandboxPolicy::Enabled, false),
             false
         );
     }
@@ -290,11 +290,11 @@ mod tests {
     #[test]
     fn restricted_network_policy_always_installs_seccomp() {
         assert!(should_install_network_seccomp(
-            &SandboxPolicy::new_read_only_policy(),
+            NetworkSandboxPolicy::Restricted,
             false
         ));
         assert!(should_install_network_seccomp(
-            &SandboxPolicy::new_read_only_policy(),
+            NetworkSandboxPolicy::Restricted,
             true
         ));
     }
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn managed_proxy_routes_use_proxy_routed_seccomp_mode() {
         assert_eq!(
-            network_seccomp_mode(&SandboxPolicy::DangerFullAccess, true, true),
+            network_seccomp_mode(NetworkSandboxPolicy::Enabled, true, true),
             Some(NetworkSeccompMode::ProxyRouted)
         );
     }
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn restricted_network_without_proxy_routing_uses_restricted_mode() {
         assert_eq!(
-            network_seccomp_mode(&SandboxPolicy::new_read_only_policy(), false, false),
+            network_seccomp_mode(NetworkSandboxPolicy::Restricted, false, false),
             Some(NetworkSeccompMode::Restricted)
         );
     }
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn full_network_without_managed_proxy_skips_network_seccomp_mode() {
         assert_eq!(
-            network_seccomp_mode(&SandboxPolicy::DangerFullAccess, false, false),
+            network_seccomp_mode(NetworkSandboxPolicy::Enabled, false, false),
             None
         );
     }
