@@ -165,20 +165,21 @@ mod tests {
             "install_method = \"native\"\nversion = \"1.2.3\"\ntarget = \"x86_64-unknown-linux-musl\"\n",
         )?;
         let exe_name = if cfg!(windows) { "codex.exe" } else { "codex" };
-        let rg_name = if cfg!(windows) { "rg.exe" } else { "rg" };
+        let rg_name = "rg";
         let exe_path = release_dir.join(exe_name);
         fs::write(&exe_path, "")?;
         fs::write(release_dir.join(rg_name), "")?;
+        let canonical_release_dir = release_dir.canonicalize()?;
 
         let context = InstallContext::from_exe(false, Some(&exe_path), false, false);
         assert_eq!(
             context,
             InstallContext::Native {
                 platform: NativePlatform::Unix,
-                release_dir: release_dir.canonicalize()?,
+                release_dir: canonical_release_dir.clone(),
                 version: "1.2.3".to_string(),
                 target: "x86_64-unknown-linux-musl".to_string(),
-                rg_command: release_dir.join(rg_name),
+                rg_command: canonical_release_dir.join(rg_name),
             }
         );
         Ok(())
@@ -196,16 +197,17 @@ mod tests {
         let exe_path = release_dir.join("codex");
         fs::write(&exe_path, "")?;
         fs::write(release_dir.join("rg.exe"), "")?;
+        let canonical_release_dir = release_dir.canonicalize()?;
 
         let context = InstallContext::from_exe(false, Some(&exe_path), false, false);
         assert_eq!(
             context,
             InstallContext::Native {
                 platform: NativePlatform::Windows,
-                release_dir: release_dir.canonicalize()?,
+                release_dir: canonical_release_dir.clone(),
                 version: "1.2.3".to_string(),
                 target: "x86_64-pc-windows-msvc".to_string(),
-                rg_command: release_dir.join("rg.exe"),
+                rg_command: canonical_release_dir.join("rg.exe"),
             }
         );
         Ok(())
