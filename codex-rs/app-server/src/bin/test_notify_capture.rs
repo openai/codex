@@ -11,7 +11,9 @@ fn main() -> Result<()> {
     );
     let payload = args
         .next()
-        .ok_or_else(|| anyhow!("missing payload argument"))?;
+        .ok_or_else(|| anyhow!("missing payload argument"))?
+        .into_string()
+        .map_err(|_| anyhow!("payload must be valid UTF-8"))?;
 
     let temp_path = output_path.with_extension("json.tmp");
     std::fs::write(&temp_path, payload)?;
