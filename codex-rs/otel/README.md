@@ -4,7 +4,7 @@
 
 - Provider wiring for log/trace/metric exporters (`codex_otel::OtelProvider`,
   `codex_otel::provider`, and the compatibility shim `codex_otel::otel_provider`).
-- Session-scoped business event emission via `codex_otel::OtelManager`.
+- Session-scoped business event emission via `codex_otel::SessionTelemetry`.
 - Low-level metrics APIs via `codex_otel::metrics`.
 - Trace-context helpers via `codex_otel::trace_context` and crate-root re-exports.
 
@@ -49,16 +49,16 @@ if let Some(provider) = OtelProvider::from(&settings)? {
 }
 ```
 
-## OtelManager (events)
+## SessionTelemetry (events)
 
-`OtelManager` adds consistent metadata to tracing events and helps record
+`SessionTelemetry` adds consistent metadata to tracing events and helps record
 Codex-specific session events. Rich session/business events should go through
-`OtelManager`; subsystem-owned audit events can stay with the owning subsystem.
+`SessionTelemetry`; subsystem-owned audit events can stay with the owning subsystem.
 
 ```rust
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 
-let manager = OtelManager::new(
+let manager = SessionTelemetry::new(
     conversation_id,
     model,
     slug,
@@ -134,7 +134,7 @@ use codex_otel::set_parent_from_w3c_trace_context;
 ## Shutdown
 
 - `OtelProvider::shutdown()` stops the OTEL exporter.
-- `OtelManager::shutdown_metrics()` flushes and shuts down the metrics provider.
+- `SessionTelemetry::shutdown_metrics()` flushes and shuts down the metrics provider.
 
 Both are optional because drop performs best-effort shutdown, but calling them
 explicitly gives deterministic flushing (or a shutdown error if flushing does

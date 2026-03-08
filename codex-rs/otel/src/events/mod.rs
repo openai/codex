@@ -1,2 +1,2 @@
-pub(crate) mod otel_manager;
+pub(crate) mod session_telemetry;
 pub(crate) mod shared;

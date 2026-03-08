@@ -43,6 +43,7 @@ fn build_permissions_update_item(
     Some(DeveloperInstructions::from_policy(
         next.sandbox_policy.get(),
         next.approval_policy.value(),
+        next.features.enabled(Feature::GuardianApproval),
         exec_policy,
         &next.cwd,
         next.features.enabled(Feature::RequestPermissions),
