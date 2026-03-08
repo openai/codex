@@ -86,6 +86,54 @@ impl ApprovalRequest {
             | ApprovalRequest::McpElicitation { thread_label, .. } => thread_label.as_deref(),
         }
     }
+
+    fn same_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                ApprovalRequest::Exec {
+                    thread_id: left_thread_id,
+                    id: left_id,
+                    ..
+                },
+                ApprovalRequest::Exec {
+                    thread_id: right_thread_id,
+                    id: right_id,
+                    ..
+                },
+            ) => left_thread_id == right_thread_id && left_id == right_id,
+            (
+                ApprovalRequest::ApplyPatch {
+                    thread_id: left_thread_id,
+                    id: left_id,
+                    ..
+                },
+                ApprovalRequest::ApplyPatch {
+                    thread_id: right_thread_id,
+                    id: right_id,
+                    ..
+                },
+            ) => left_thread_id == right_thread_id && left_id == right_id,
+            (
+                ApprovalRequest::McpElicitation {
+                    thread_id: left_thread_id,
+                    server_name: left_server_name,
+                    request_id: left_request_id,
+                    ..
+                },
+                ApprovalRequest::McpElicitation {
+                    thread_id: right_thread_id,
+                    server_name: right_server_name,
+                    request_id: right_request_id,
+                    ..
+                },
+            ) => {
+                left_thread_id == right_thread_id
+                    && left_server_name == right_server_name
+                    && left_request_id == right_request_id
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Modal overlay asking the user to approve or deny one or more requests.
@@ -117,6 +165,14 @@ impl ApprovalOverlay {
     }
 
     pub fn enqueue_request(&mut self, req: ApprovalRequest) {
+        if self
+            .current_request
+            .as_ref()
+            .is_some_and(|current| current.same_identity(&req))
+            || self.queue.iter().any(|queued| queued.same_identity(&req))
+        {
+            return;
+        }
         self.queue.push(req);
     }
 
@@ -843,6 +899,34 @@ mod tests {
             }
         }
         assert!(saw_op, "expected approval decision to emit an op");
+    }
+
+    #[test]
+    fn duplicate_request_is_not_queued_twice() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let request = make_exec_request();
+        let mut view = ApprovalOverlay::new(request.clone(), tx, Features::with_defaults());
+
+        view.enqueue_request(request);
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        assert!(
+            view.is_complete(),
+            "expected duplicate approval request to be ignored instead of remaining queued"
+        );
+
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        let submit_count = events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::SubmitThreadOp { .. }))
+            .count();
+        let history_count = events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::InsertHistoryCell(_)))
+            .count();
+        assert_eq!(submit_count, 1);
+        assert_eq!(history_count, 1);
     }
 
     #[test]

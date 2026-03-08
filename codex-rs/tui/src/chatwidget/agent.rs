@@ -111,6 +111,13 @@ const HISTORY_FILENAME: &str = "history.jsonl";
 const HISTORY_SOFT_CAP_RATIO: f64 = 0.8;
 const HISTORY_LOCK_MAX_RETRIES: usize = 10;
 const HISTORY_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(100);
+const IN_PROCESS_TYPED_EVENT_LEGACY_OPTOUTS: &[&str] = &[
+    "codex/event/exec_approval_request",
+    "codex/event/apply_patch_approval_request",
+    "codex/event/request_user_input",
+    "codex/event/elicitation_request",
+    "codex/event/dynamic_tool_call_request",
+];
 
 async fn initialize_app_server_client_name(thread: &CodexThread) {
     if let Err(err) = thread
@@ -150,7 +157,10 @@ fn in_process_start_args(
         client_name: Some(TUI_NOTIFY_CLIENT.to_string()),
         client_version: CODEX_CLI_VERSION.to_string(),
         experimental_api: true,
-        opt_out_notification_methods: Vec::new(),
+        opt_out_notification_methods: IN_PROCESS_TYPED_EVENT_LEGACY_OPTOUTS
+            .iter()
+            .map(|method| (*method).to_string())
+            .collect(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     }
 }
@@ -2871,6 +2881,25 @@ mod tests {
         assert_eq!(payload.ready, vec!["server-a".to_string()]);
         assert!(payload.failed.is_empty());
         assert!(payload.cancelled.is_empty());
+    }
+
+    #[tokio::test]
+    async fn in_process_start_args_opt_outs_cover_typed_interactive_requests() {
+        let config = test_config().await;
+        let args = in_process_start_args(
+            &config,
+            codex_arg0::Arg0DispatchPaths::default(),
+            Vec::new(),
+            CloudRequirementsLoader::default(),
+        );
+
+        assert_eq!(
+            args.opt_out_notification_methods,
+            IN_PROCESS_TYPED_EVENT_LEGACY_OPTOUTS
+                .iter()
+                .map(|method| (*method).to_string())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]
