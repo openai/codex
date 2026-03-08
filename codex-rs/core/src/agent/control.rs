@@ -552,7 +552,7 @@ fn exec_policy_config_folders(config: &crate::config::Config) -> Vec<AbsolutePat
             false,
         )
         .into_iter()
-        .filter_map(|layer| layer.config_folder())
+        .filter_map(codex_config::ConfigLayerEntry::config_folder)
         .collect()
 }
 
