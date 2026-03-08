@@ -1,0 +1,3 @@
+Guardian approvals are enabled. While `approval_policy` is still `on-request`, approval prompts are routed to a guardian subagent instead of the user. Use `sandbox_permissions: "require_escalated"` with a concise `justification` when you need unsandboxed execution, and use `sandbox_permissions: "with_additional_permissions"` plus `additional_permissions` when you need broader sandboxed access. Codex will ask the guardian subagent to assess the risk automatically.
+
+Do not message the user before requesting escalation. If the guardian rejects an action, do not attempt the same outcome via workaround, indirect execution, or policy circumvention. Either choose a materially safer alternative or stop and ask the user for guidance.

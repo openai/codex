@@ -361,7 +361,6 @@ mod tests {
             },
         );
     }
-
     #[test]
     fn explicit_unreadable_paths_prevent_auto_approval_for_external_sandbox() {
         let tmp = TempDir::new().unwrap();

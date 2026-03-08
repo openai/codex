@@ -256,7 +256,7 @@ impl RolloutRecorder {
             .await?
         };
 
-        let state_db_ctx = state_db::get_state_db(config, None).await;
+        let state_db_ctx = state_db::get_state_db(config).await;
         if state_db_ctx.is_none() {
             // Keep legacy behavior when SQLite is unavailable: return filesystem results
             // at the requested page size.
@@ -308,7 +308,7 @@ impl RolloutRecorder {
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
         let codex_home = config.codex_home.as_path();
-        let state_db_ctx = state_db::get_state_db(config, None).await;
+        let state_db_ctx = state_db::get_state_db(config).await;
         if state_db_ctx.is_some() {
             let mut db_cursor = cursor.cloned();
             loop {
@@ -1061,7 +1061,7 @@ async fn resume_candidate_matches_cwd(
         return cwd_matches(latest_turn_context_cwd, cwd);
     }
 
-    metadata::extract_metadata_from_rollout(rollout_path, default_provider, None)
+    metadata::extract_metadata_from_rollout(rollout_path, default_provider)
         .await
         .is_ok_and(|outcome| cwd_matches(outcome.metadata.cwd.as_path(), cwd))
 }
@@ -1254,13 +1254,10 @@ mod tests {
             .enable(Feature::Sqlite)
             .expect("test config should allow sqlite");
 
-        let state_db = codex_state::StateRuntime::init(
-            home.path().to_path_buf(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await
-        .expect("state db should initialize");
+        let state_db =
+            StateRuntime::init(home.path().to_path_buf(), config.model_provider_id.clone())
+                .await
+                .expect("state db should initialize");
         state_db
             .mark_backfill_complete(None)
             .await
@@ -1345,13 +1342,10 @@ mod tests {
             .enable(Feature::Sqlite)
             .expect("test config should allow sqlite");
 
-        let state_db = codex_state::StateRuntime::init(
-            home.path().to_path_buf(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await
-        .expect("state db should initialize");
+        let state_db =
+            StateRuntime::init(home.path().to_path_buf(), config.model_provider_id.clone())
+                .await
+                .expect("state db should initialize");
         let thread_id = ThreadId::new();
         let rollout_path = home.path().join("rollout.jsonl");
         let builder = ThreadMetadataBuilder::new(
@@ -1457,7 +1451,6 @@ mod tests {
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
             config.model_provider_id.clone(),
-            None,
         )
         .await
         .expect("state db should initialize");
@@ -1527,7 +1520,6 @@ mod tests {
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
             config.model_provider_id.clone(),
-            None,
         )
         .await
         .expect("state db should initialize");

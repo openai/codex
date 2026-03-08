@@ -331,28 +331,10 @@ pub(crate) fn create_seatbelt_command_args(
     enforce_managed_network: bool,
     network: Option<&NetworkProxy>,
 ) -> Vec<String> {
-    create_seatbelt_command_args_for_policies(
+    create_seatbelt_command_args_for_policies_with_extensions(
         command,
         &FileSystemSandboxPolicy::from(sandbox_policy),
         NetworkSandboxPolicy::from(sandbox_policy),
-        sandbox_policy_cwd,
-        enforce_managed_network,
-        network,
-    )
-}
-
-pub(crate) fn create_seatbelt_command_args_for_policies(
-    command: Vec<String>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
-    sandbox_policy_cwd: &Path,
-    enforce_managed_network: bool,
-    network: Option<&NetworkProxy>,
-) -> Vec<String> {
-    create_seatbelt_command_args_for_policies_with_extensions(
-        command,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
         sandbox_policy_cwd,
         enforce_managed_network,
         network,
@@ -438,26 +420,6 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
 }
 
 pub(crate) fn create_seatbelt_command_args_for_policies_with_extensions(
-    command: Vec<String>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
-    sandbox_policy_cwd: &Path,
-    enforce_managed_network: bool,
-    network: Option<&NetworkProxy>,
-    extensions: Option<&MacOsSeatbeltProfileExtensions>,
-) -> Vec<String> {
-    create_seatbelt_command_args_from_policies_inner(
-        command,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
-        sandbox_policy_cwd,
-        enforce_managed_network,
-        network,
-        extensions,
-    )
-}
-
-fn create_seatbelt_command_args_from_policies_inner(
     command: Vec<String>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
@@ -627,7 +589,7 @@ mod tests {
     use super::ProxyPolicyInputs;
     use super::UnixDomainSocketPolicy;
     use super::create_seatbelt_command_args;
-    use super::create_seatbelt_command_args_for_policies;
+    use super::create_seatbelt_command_args_for_policies_with_extensions;
     use super::create_seatbelt_command_args_with_extensions;
     use super::dynamic_network_policy;
     use super::macos_dir_params;
@@ -738,12 +700,13 @@ mod tests {
             },
         ]);
 
-        let args = create_seatbelt_command_args_for_policies(
+        let args = create_seatbelt_command_args_for_policies_with_extensions(
             vec!["/bin/true".to_string()],
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
             Path::new("/"),
             false,
+            None,
             None,
         );
 
@@ -783,12 +746,13 @@ mod tests {
             },
         ]);
 
-        let args = create_seatbelt_command_args_for_policies(
+        let args = create_seatbelt_command_args_for_policies_with_extensions(
             vec!["/bin/true".to_string()],
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
             Path::new("/"),
             false,
+            None,
             None,
         );
 

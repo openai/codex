@@ -895,6 +895,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_allowed_domain_succeeds_when_managed_baseline_allows_expansion() {
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                allowed_domains: vec!["managed.example.com".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+        let constraints = NetworkProxyConstraints {
+            allowed_domains: Some(vec!["managed.example.com".to_string()]),
+            allowlist_expansion_enabled: Some(true),
+            ..NetworkProxyConstraints::default()
+        };
+        let state = NetworkProxyState::with_reloader(
+            build_config_state(config, constraints).unwrap(),
+            Arc::new(NoopReloader),
+        );
+
+        state.add_allowed_domain("user.example.com").await.unwrap();
+
+        let (allowed, denied) = state.current_patterns().await.unwrap();
+        assert_eq!(
+            allowed,
+            vec![
+                "managed.example.com".to_string(),
+                "user.example.com".to_string()
+            ]
+        );
+        assert!(denied.is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_allowed_domain_rejects_expansion_when_managed_baseline_is_fixed() {
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                allowed_domains: vec!["managed.example.com".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+        let constraints = NetworkProxyConstraints {
+            allowed_domains: Some(vec!["managed.example.com".to_string()]),
+            allowlist_expansion_enabled: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+        let state = NetworkProxyState::with_reloader(
+            build_config_state(config, constraints).unwrap(),
+            Arc::new(NoopReloader),
+        );
+
+        let err = state
+            .add_allowed_domain("user.example.com")
+            .await
+            .expect_err("managed baseline should reject allowlist expansion");
+
+        assert!(
+            format!("{err:#}").contains("network.allowed_domains constrained by managed config"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_denied_domain_rejects_expansion_when_managed_baseline_is_fixed() {
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                denied_domains: vec!["managed.example.com".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+        let constraints = NetworkProxyConstraints {
+            denied_domains: Some(vec!["managed.example.com".to_string()]),
+            denylist_expansion_enabled: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+        let state = NetworkProxyState::with_reloader(
+            build_config_state(config, constraints).unwrap(),
+            Arc::new(NoopReloader),
+        );
+
+        let err = state
+            .add_denied_domain("user.example.com")
+            .await
+            .expect_err("managed baseline should reject denylist expansion");
+
+        assert!(
+            format!("{err:#}").contains("network.denied_domains constrained by managed config"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
     async fn blocked_snapshot_does_not_consume_entries() {
         let state = network_proxy_state_for_policy(NetworkProxySettings::default());
 
@@ -1118,6 +1210,25 @@ mod tests {
     }
 
     #[test]
+    fn validate_policy_against_constraints_allows_expanding_allowed_domains_when_enabled() {
+        let constraints = NetworkProxyConstraints {
+            allowed_domains: Some(vec!["example.com".to_string()]),
+            allowlist_expansion_enabled: Some(true),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                allowed_domains: vec!["example.com".to_string(), "api.openai.com".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
+    }
+
+    #[test]
     fn validate_policy_against_constraints_disallows_widening_mode() {
         let constraints = NetworkProxyConstraints {
             mode: Some(NetworkMode::Limited),
@@ -1238,6 +1349,25 @@ mod tests {
             network: NetworkProxySettings {
                 enabled: true,
                 denied_domains: vec![],
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_disallows_expanding_denied_domains_when_fixed() {
+        let constraints = NetworkProxyConstraints {
+            denied_domains: Some(vec!["evil.com".to_string()]),
+            denylist_expansion_enabled: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                denied_domains: vec!["evil.com".to_string(), "more-evil.com".to_string()],
                 ..NetworkProxySettings::default()
             },
         };

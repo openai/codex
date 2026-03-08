@@ -74,8 +74,8 @@ use codex_core::terminal::TerminalName;
 use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
-use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
+use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -478,7 +478,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) startup_tooltip_override: Option<String>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
-    pub(crate) otel_manager: OtelManager,
+    pub(crate) session_telemetry: SessionTelemetry,
 }
 
 #[derive(Default)]
@@ -560,7 +560,7 @@ pub(crate) struct ChatWidget {
     active_collaboration_mask: Option<CollaborationModeMask>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
-    otel_manager: OtelManager,
+    session_telemetry: SessionTelemetry,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
@@ -1145,7 +1145,7 @@ impl ChatWidget {
     }
 
     fn collect_runtime_metrics_delta(&mut self) {
-        if let Some(delta) = self.otel_manager.runtime_metrics_summary() {
+        if let Some(delta) = self.session_telemetry.runtime_metrics_summary() {
             self.apply_runtime_metrics_delta(delta);
         }
     }
@@ -1506,7 +1506,7 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
-        self.otel_manager.reset_runtime_metrics();
+        self.session_telemetry.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
@@ -1709,6 +1709,27 @@ impl ChatWidget {
                 self.token_info = None;
             }
         }
+    }
+
+    fn apply_turn_started_context_window(&mut self, model_context_window: Option<i64>) {
+        let info = match self.token_info.take() {
+            Some(mut info) => {
+                info.model_context_window = model_context_window;
+                info
+            }
+            None => {
+                let Some(model_context_window) = model_context_window else {
+                    return;
+                };
+                TokenUsageInfo {
+                    total_token_usage: TokenUsage::default(),
+                    last_token_usage: TokenUsage::default(),
+                    model_context_window: Some(model_context_window),
+                }
+            }
+        };
+
+        self.apply_token_info(info);
     }
 
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
@@ -3044,7 +3065,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override,
             status_line_invalid_items_warned,
-            otel_manager,
+            session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3103,7 +3124,7 @@ impl ChatWidget {
             active_collaboration_mask,
             auth_manager,
             models_manager,
-            otel_manager,
+            session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
@@ -3227,7 +3248,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override,
             status_line_invalid_items_warned,
-            otel_manager,
+            session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3285,7 +3306,7 @@ impl ChatWidget {
             active_collaboration_mask,
             auth_manager,
             models_manager,
-            otel_manager,
+            session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
@@ -3401,7 +3422,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override: _,
             status_line_invalid_items_warned,
-            otel_manager,
+            session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
@@ -3459,7 +3480,7 @@ impl ChatWidget {
             active_collaboration_mask,
             auth_manager,
             models_manager,
-            otel_manager,
+            session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
@@ -3840,7 +3861,8 @@ impl ChatWidget {
                 self.open_review_popup();
             }
             SlashCommand::Rename => {
-                self.otel_manager.counter("codex.thread.rename", 1, &[]);
+                self.session_telemetry
+                    .counter("codex.thread.rename", 1, &[]);
                 self.show_rename_prompt();
             }
             SlashCommand::Model => {
@@ -3942,7 +3964,7 @@ impl ChatWidget {
                         return;
                     }
 
-                    self.otel_manager.counter(
+                    self.session_telemetry.counter(
                         "codex.windows_sandbox.setup_elevated_sandbox_command",
                         1,
                         &[],
@@ -3952,7 +3974,7 @@ impl ChatWidget {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = &self.otel_manager;
+                    let _ = &self.session_telemetry;
                     // Not supported; on non-Windows this command should never be reachable.
                 };
             }
@@ -4156,7 +4178,8 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
-                self.otel_manager.counter("codex.thread.rename", 1, &[]);
+                self.session_telemetry
+                    .counter("codex.thread.rename", 1, &[]);
                 let Some((prepared_args, _prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(false)
                 else {
@@ -4734,8 +4757,9 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TurnStarted(_) => {
+            EventMsg::TurnStarted(event) => {
                 if !is_resume_initial_replay {
+                    self.apply_turn_started_context_window(event.model_context_window);
                     self.on_task_started();
                 }
             }
@@ -5346,6 +5370,13 @@ impl ChatWidget {
                 format_tokens_compact(self.status_line_total_usage().output_tokens)
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
+            StatusLineItem::FastMode => Some(
+                if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                    "Fast on".to_string()
+                } else {
+                    "Fast off".to_string()
+                },
+            ),
         }
     }
 
@@ -6929,7 +6960,7 @@ impl ChatWidget {
             return;
         }
 
-        self.otel_manager
+        self.session_telemetry
             .counter("codex.windows_sandbox.elevated_prompt_shown", 1, &[]);
 
         let mut header = ColumnRenderable::new();
@@ -6940,10 +6971,10 @@ impl ChatWidget {
             .wrap(Wrap { trim: false }),
         ));
 
-        let accept_otel = self.otel_manager.clone();
-        let legacy_otel = self.otel_manager.clone();
+        let accept_otel = self.session_telemetry.clone();
+        let legacy_otel = self.session_telemetry.clone();
         let legacy_preset = preset.clone();
-        let quit_otel = self.otel_manager.clone();
+        let quit_otel = self.session_telemetry.clone();
         let items = vec![
             SelectionItem {
                 name: "Set up default sandbox (requires Administrator permissions)".to_string(),
@@ -7014,13 +7045,13 @@ impl ChatWidget {
 
         let elevated_preset = preset.clone();
         let legacy_preset = preset;
-        let quit_otel = self.otel_manager.clone();
+        let quit_otel = self.session_telemetry.clone();
         let items = vec![
             SelectionItem {
                 name: "Try setting up admin sandbox again".to_string(),
                 description: None,
                 actions: vec![Box::new({
-                    let otel = self.otel_manager.clone();
+                    let otel = self.session_telemetry.clone();
                     let preset = elevated_preset;
                     move |tx| {
                         otel.counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
@@ -7036,7 +7067,7 @@ impl ChatWidget {
                 name: "Use Codex with non-admin sandbox".to_string(),
                 description: None,
                 actions: vec![Box::new({
-                    let otel = self.otel_manager.clone();
+                    let otel = self.session_telemetry.clone();
                     let preset = legacy_preset;
                     move |tx| {
                         otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
@@ -8429,6 +8460,11 @@ impl ChatWidget {
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
         &self.config
+    }
+
+    #[cfg(test)]
+    pub(crate) fn status_line_text(&self) -> Option<String> {
+        self.bottom_pane.status_line_text()
     }
 
     pub(crate) fn clear_token_usage(&mut self) {
