@@ -213,24 +213,31 @@ fn resolve_sandbox_policies(
     file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
     network_sandbox_policy: Option<NetworkSandboxPolicy>,
 ) -> EffectiveSandboxPolicies {
-    match (
-        sandbox_policy,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
-    ) {
-        (Some(sandbox_policy), Some(file_system_sandbox_policy), Some(network_sandbox_policy)) => {
+    // Accept either a fully legacy policy, a fully split policy pair, or all
+    // three views together. Reject partial split-policy input so the helper
+    // never runs with mismatched filesystem/network state.
+    let split_policies = match (file_system_sandbox_policy, network_sandbox_policy) {
+        (Some(file_system_sandbox_policy), Some(network_sandbox_policy)) => {
+            Some((file_system_sandbox_policy, network_sandbox_policy))
+        }
+        (None, None) => None,
+        _ => panic!("file-system and network sandbox policies must be provided together"),
+    };
+
+    match (sandbox_policy, split_policies) {
+        (Some(sandbox_policy), Some((file_system_sandbox_policy, network_sandbox_policy))) => {
             EffectiveSandboxPolicies {
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
             }
         }
-        (Some(sandbox_policy), None, None) => EffectiveSandboxPolicies {
+        (Some(sandbox_policy), None) => EffectiveSandboxPolicies {
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
             network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
             sandbox_policy,
         },
-        (None, Some(file_system_sandbox_policy), Some(network_sandbox_policy)) => {
+        (None, Some((file_system_sandbox_policy, network_sandbox_policy))) => {
             let sandbox_policy = file_system_sandbox_policy
                 .to_legacy_sandbox_policy(network_sandbox_policy, sandbox_policy_cwd)
                 .unwrap_or_else(|err| {
@@ -242,8 +249,7 @@ fn resolve_sandbox_policies(
                 network_sandbox_policy,
             }
         }
-        (None, None, None) => panic!("missing sandbox policy configuration"),
-        _ => panic!("file-system and network sandbox policies must be provided together"),
+        (None, None) => panic!("missing sandbox policy configuration"),
     }
 }
 
