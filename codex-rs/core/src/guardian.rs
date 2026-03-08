@@ -135,6 +135,7 @@ pub(crate) enum GuardianApprovalRequest {
         justification: Option<String>,
         tty: bool,
     },
+    #[cfg(unix)]
     Execve {
         tool_name: String,
         program: String,
@@ -784,6 +785,7 @@ fn format_guardian_action_pretty(action: &GuardianApprovalRequest) -> String {
             }
             action
         }
+        #[cfg(unix)]
         GuardianApprovalRequest::Execve {
             tool_name,
             program,
