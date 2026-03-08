@@ -204,6 +204,7 @@ mod tests {
     use codex_protocol::protocol::FileSystemSpecialPath;
     use codex_protocol::protocol::RejectConfig;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     #[test]
@@ -383,6 +384,49 @@ mod tests {
                     path: blocked_absolute,
                 },
                 access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        assert!(!is_write_patch_constrained_to_writable_paths(
+            &action,
+            &file_system_sandbox_policy,
+            &cwd,
+        ));
+        assert_eq!(
+            assess_patch_safety(
+                &action,
+                AskForApproval::OnRequest,
+                &sandbox_policy,
+                &file_system_sandbox_policy,
+                &cwd,
+                WindowsSandboxLevel::Disabled,
+            ),
+            SafetyCheck::AskUser,
+        );
+    }
+
+    #[test]
+    fn explicit_read_only_subpaths_prevent_auto_approval_for_external_sandbox() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_path_buf();
+        let blocked_path = cwd.join("docs").join("blocked.txt");
+        let docs_absolute = AbsolutePathBuf::resolve_path_against_base("docs", &cwd).unwrap();
+        let action = ApplyPatchAction::new_add_for_test(&blocked_path, "".to_string());
+        let sandbox_policy = SandboxPolicy::ExternalSandbox {
+            network_access: codex_protocol::protocol::NetworkAccess::Restricted,
+        };
+        let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: docs_absolute,
+                },
+                access: FileSystemAccessMode::Read,
             },
         ]);
 

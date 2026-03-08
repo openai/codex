@@ -163,6 +163,34 @@ impl FileSystemSandboxPolicy {
         }
     }
 
+    /// Converts a legacy sandbox policy into an equivalent filesystem policy
+    /// for the provided cwd.
+    ///
+    /// Legacy `WorkspaceWrite` policies may list readable roots that live
+    /// under an already-writable root. Those paths were redundant in the
+    /// legacy model and should not become read-only carveouts when projected
+    /// into split filesystem policy.
+    pub fn from_legacy_sandbox_policy(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Self {
+        let mut file_system_policy = Self::from(sandbox_policy);
+        if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+            let legacy_writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
+            file_system_policy.entries.retain(|entry| {
+                if entry.access != FileSystemAccessMode::Read {
+                    return true;
+                }
+
+                match &entry.path {
+                    FileSystemPath::Path { path } => !legacy_writable_roots
+                        .iter()
+                        .any(|root| root.is_path_writable(path.as_path())),
+                    FileSystemPath::Special { .. } => true,
+                }
+            });
+        }
+
+        file_system_policy
+    }
+
     /// Returns true when filesystem reads are unrestricted.
     pub fn has_full_disk_read_access(&self) -> bool {
         match self.kind {
@@ -236,7 +264,13 @@ impl FileSystemSandboxPolicy {
         }
 
         let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
-        let unreadable_roots = self.get_unreadable_roots_with_cwd(cwd);
+        let read_only_roots = dedup_absolute_paths(
+            self.entries
+                .iter()
+                .filter(|entry| !entry.access.can_write())
+                .filter_map(|entry| resolve_file_system_path(&entry.path, cwd_absolute.as_ref()))
+                .collect(),
+        );
         let mut writable_roots = Vec::new();
         if self.has_root_access(FileSystemAccessMode::can_write)
             && let Some(cwd_absolute) = cwd_absolute.as_ref()
@@ -260,9 +294,13 @@ impl FileSystemSandboxPolicy {
         .into_iter()
         .map(|root| {
             let mut read_only_subpaths = default_read_only_subpaths_for_writable_root(&root);
+            // Narrower explicit non-write entries carve out broader writable roots.
+            // More specific write entries still remain writable because they appear
+            // as separate WritableRoot values and are checked independently.
             read_only_subpaths.extend(
-                unreadable_roots
+                read_only_roots
                     .iter()
+                    .filter(|path| path.as_path() != root.as_path())
                     .filter(|path| path.as_path().starts_with(root.as_path()))
                     .cloned(),
             );
