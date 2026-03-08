@@ -106,6 +106,27 @@ use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::InProcessAgentContext;
 use crate::version::CODEX_CLI_VERSION;
 
+#[cfg(test)]
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+#[cfg(test)]
+use codex_app_server_protocol::DynamicToolCallParams;
+#[cfg(test)]
+use codex_app_server_protocol::ExecCommandApprovalParams;
+#[cfg(test)]
+use codex_app_server_protocol::FileChangeRequestApprovalParams;
+#[cfg(test)]
+use codex_app_server_protocol::McpElicitationObjectType;
+#[cfg(test)]
+use codex_app_server_protocol::McpElicitationSchema;
+#[cfg(test)]
+use codex_app_server_protocol::McpServerElicitationRequestParams;
+#[cfg(test)]
+use codex_app_server_protocol::ToolRequestUserInputOption;
+#[cfg(test)]
+use codex_app_server_protocol::ToolRequestUserInputParams;
+#[cfg(test)]
+use codex_app_server_protocol::ToolRequestUserInputQuestion;
+
 const TUI_NOTIFY_CLIENT: &str = "codex-tui";
 const HISTORY_FILENAME: &str = "history.jsonl";
 const HISTORY_SOFT_CAP_RATIO: f64 = 0.8;
@@ -118,6 +139,24 @@ const IN_PROCESS_TYPED_EVENT_LEGACY_OPTOUTS: &[&str] = &[
     "codex/event/elicitation_request",
     "codex/event/dynamic_tool_call_request",
 ];
+
+#[cfg(test)]
+fn legacy_opt_out_for_typed_server_request(request: &ServerRequest) -> Option<&'static str> {
+    match request {
+        ServerRequest::CommandExecutionRequestApproval { .. }
+        | ServerRequest::ExecCommandApproval { .. } => Some("codex/event/exec_approval_request"),
+        ServerRequest::FileChangeRequestApproval { .. }
+        | ServerRequest::ApplyPatchApproval { .. } => {
+            Some("codex/event/apply_patch_approval_request")
+        }
+        ServerRequest::ToolRequestUserInput { .. } => Some("codex/event/request_user_input"),
+        ServerRequest::McpServerElicitationRequest { .. } => {
+            Some("codex/event/elicitation_request")
+        }
+        ServerRequest::DynamicToolCall { .. } => Some("codex/event/dynamic_tool_call_request"),
+        _ => None,
+    }
+}
 
 async fn initialize_app_server_client_name(thread: &CodexThread) {
     if let Err(err) = thread
@@ -2900,6 +2939,121 @@ mod tests {
                 .map(|method| (*method).to_string())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn typed_interactive_server_requests_and_legacy_opt_outs_stay_in_sync() {
+        let requests = [
+            ServerRequest::CommandExecutionRequestApproval {
+                request_id: RequestId::Integer(1),
+                params: CommandExecutionRequestApprovalParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "item-1".to_string(),
+                    approval_id: Some("approval-1".to_string()),
+                    reason: Some("needs approval".to_string()),
+                    network_approval_context: None,
+                    command: Some("echo hello".to_string()),
+                    cwd: Some(PathBuf::from("/tmp/project")),
+                    command_actions: None,
+                    additional_permissions: None,
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
+                    available_decisions: None,
+                },
+            },
+            ServerRequest::ExecCommandApproval {
+                request_id: RequestId::Integer(2),
+                params: ExecCommandApprovalParams {
+                    conversation_id: ThreadId::new(),
+                    call_id: "call-1".to_string(),
+                    approval_id: Some("approval-legacy-1".to_string()),
+                    command: vec!["echo".to_string(), "hello".to_string()],
+                    cwd: PathBuf::from("/tmp/project"),
+                    reason: Some("legacy approval".to_string()),
+                    parsed_cmd: Vec::new(),
+                },
+            },
+            ServerRequest::FileChangeRequestApproval {
+                request_id: RequestId::Integer(3),
+                params: FileChangeRequestApprovalParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "patch-1".to_string(),
+                    reason: Some("write access".to_string()),
+                    grant_root: None,
+                },
+            },
+            ServerRequest::ApplyPatchApproval {
+                request_id: RequestId::Integer(4),
+                params: codex_app_server_protocol::ApplyPatchApprovalParams {
+                    conversation_id: ThreadId::new(),
+                    call_id: "patch-legacy-1".to_string(),
+                    file_changes: HashMap::new(),
+                    reason: Some("legacy patch".to_string()),
+                    grant_root: None,
+                },
+            },
+            ServerRequest::ToolRequestUserInput {
+                request_id: RequestId::Integer(5),
+                params: ToolRequestUserInputParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "input-1".to_string(),
+                    questions: vec![ToolRequestUserInputQuestion {
+                        id: "q1".to_string(),
+                        header: "Header".to_string(),
+                        question: "Question?".to_string(),
+                        is_other: false,
+                        is_secret: false,
+                        options: Some(vec![ToolRequestUserInputOption {
+                            label: "Option".to_string(),
+                            description: "Description".to_string(),
+                        }]),
+                    }],
+                },
+            },
+            ServerRequest::McpServerElicitationRequest {
+                request_id: RequestId::Integer(6),
+                params: McpServerElicitationRequestParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    server_name: "server-1".to_string(),
+                    request: McpServerElicitationRequest::Form {
+                        meta: None,
+                        message: "Allow this request?".to_string(),
+                        requested_schema: McpElicitationSchema {
+                            schema_uri: None,
+                            type_: McpElicitationObjectType::Object,
+                            properties: Default::default(),
+                            required: None,
+                        },
+                    },
+                },
+            },
+            ServerRequest::DynamicToolCall {
+                request_id: RequestId::Integer(7),
+                params: DynamicToolCallParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    call_id: "dynamic-1".to_string(),
+                    tool: "tool".to_string(),
+                    arguments: serde_json::json!({ "arg": 1 }),
+                },
+            },
+        ];
+
+        let mut mapped_methods = requests
+            .iter()
+            .filter_map(legacy_opt_out_for_typed_server_request)
+            .collect::<Vec<_>>();
+        mapped_methods.sort_unstable();
+        mapped_methods.dedup();
+
+        let mut expected_methods = IN_PROCESS_TYPED_EVENT_LEGACY_OPTOUTS.to_vec();
+        expected_methods.sort_unstable();
+
+        assert_eq!(mapped_methods, expected_methods);
     }
 
     #[tokio::test]

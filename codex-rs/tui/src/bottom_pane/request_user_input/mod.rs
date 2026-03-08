@@ -173,6 +173,10 @@ impl RequestUserInputOverlay {
         overlay
     }
 
+    fn same_request_identity(left: &RequestUserInputEvent, right: &RequestUserInputEvent) -> bool {
+        left.turn_id == right.turn_id && left.call_id == right.call_id
+    }
+
     fn current_index(&self) -> usize {
         self.current_idx
     }
@@ -1270,6 +1274,14 @@ impl BottomPaneView for RequestUserInputOverlay {
         &mut self,
         request: RequestUserInputEvent,
     ) -> Option<RequestUserInputEvent> {
+        if Self::same_request_identity(&self.request, &request)
+            || self
+                .queue
+                .iter()
+                .any(|queued| Self::same_request_identity(queued, &request))
+        {
+            return None;
+        }
         self.queue.push_back(request);
         None
     }
@@ -1503,6 +1515,30 @@ mod tests {
 
         overlay.submit_answers();
         assert_eq!(overlay.request.turn_id, "turn-3");
+    }
+
+    #[test]
+    fn duplicate_request_is_not_queued_twice() {
+        let (tx, mut rx) = test_sender();
+        let request = request_event("turn-1", vec![question_with_options("q1", "First")]);
+        let mut overlay = RequestUserInputOverlay::new(request.clone(), tx, true, false, false);
+
+        overlay.try_consume_user_input_request(request);
+        overlay.submit_answers();
+
+        assert!(overlay.done, "expected duplicate request to be ignored");
+
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        let answer_count = events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::CodexOp(Op::UserInputAnswer { .. })))
+            .count();
+        let history_count = events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::InsertHistoryCell(_)))
+            .count();
+        assert_eq!(answer_count, 1);
+        assert_eq!(history_count, 1);
     }
 
     #[test]
