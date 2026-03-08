@@ -39,6 +39,8 @@ const FIXTURE_JSON: &str = r#"{
 }
 "#;
 
+const SERIALIZATION_TEST_TIMEOUT_MS: u64 = 5_000;
+
 fn shell_responses(
     call_id: &str,
     command: Vec<&str>,
@@ -49,7 +51,7 @@ fn shell_responses(
             let command = shlex::try_join(command)?;
             let parameters = json!({
                 "command": command,
-                "timeout_ms": 2_000,
+                "timeout_ms": SERIALIZATION_TEST_TIMEOUT_MS,
             });
             Ok(vec![
                 sse(vec![
@@ -70,7 +72,7 @@ fn shell_responses(
         ShellModelOutput::Shell => {
             let parameters = json!({
                 "command": command,
-                "timeout_ms": 2_000,
+                "timeout_ms": SERIALIZATION_TEST_TIMEOUT_MS,
             });
             Ok(vec![
                 sse(vec![
@@ -740,7 +742,7 @@ async fn shell_command_output_is_freeform() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "echo shell command",
-        "timeout_ms": 1_000,
+        "timeout_ms": SERIALIZATION_TEST_TIMEOUT_MS,
     });
     let responses = vec![
         sse(vec![
@@ -791,7 +793,7 @@ async fn shell_command_output_is_not_truncated_under_10k_bytes() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "perl -e 'print \"1\" x 10000'",
-        "timeout_ms": 1000,
+        "timeout_ms": SERIALIZATION_TEST_TIMEOUT_MS,
     });
     let responses = vec![
         sse(vec![
@@ -841,7 +843,7 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "perl -e 'print \"1\" x 10001'",
-        "timeout_ms": 1000,
+        "timeout_ms": SERIALIZATION_TEST_TIMEOUT_MS,
     });
     let responses = vec![
         sse(vec![

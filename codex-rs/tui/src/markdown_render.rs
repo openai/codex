@@ -16,7 +16,11 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
 use regex_lite::Regex;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::LazyLock;
+use url::Url;
+use urlencoding::decode;
 
 struct MarkdownStyles {
     h1: Style,
@@ -80,10 +84,18 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
 }
 
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
+    render_markdown_text_with_width_and_cwd(input, width, None)
+}
+
+pub(crate) fn render_markdown_text_with_width_and_cwd(
+    input: &str,
+    width: Option<usize>,
+    cwd: Option<&Path>,
+) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(parser, width);
+    let mut w = Writer::new(parser, width, cwd);
     w.run();
     w.text
 }
@@ -92,9 +104,7 @@ pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>)
 struct LinkState {
     destination: String,
     show_destination: bool,
-    hidden_location_suffix: Option<String>,
-    label_start_span_idx: usize,
-    label_styled: bool,
+    local_display_text: Option<String>,
 }
 
 fn should_render_link_destination(dest_url: &str) -> bool {
@@ -130,6 +140,64 @@ fn is_local_path_like_link(dest_url: &str) -> bool {
         )
 }
 
+fn local_link_display_text(dest_url: &str, cwd: Option<&Path>) -> Option<String> {
+    if !is_local_path_like_link(dest_url) {
+        return None;
+    }
+    let (path, location_suffix) = split_local_link_destination(dest_url)?;
+    let display_path = cwd.map_or_else(
+        || path.display().to_string(),
+        |cwd| match path.strip_prefix(cwd) {
+            Ok(stripped) => stripped.display().to_string(),
+            Err(_) => path.display().to_string(),
+        },
+    );
+    Some(format!("{display_path}{location_suffix}"))
+}
+
+fn split_local_link_destination(dest_url: &str) -> Option<(PathBuf, String)> {
+    if dest_url.starts_with("file://") {
+        let url = Url::parse(dest_url).ok()?;
+        let path = url.to_file_path().ok().or_else(|| {
+            let decoded_path = decode(url.path()).ok()?.into_owned();
+            if decoded_path.is_empty() {
+                return None;
+            }
+            let file_path = match url.host_str() {
+                Some(host) if !host.is_empty() && host != "localhost" => {
+                    format!("//{host}{decoded_path}")
+                }
+                _ => decoded_path,
+            };
+            Some(PathBuf::from(file_path))
+        })?;
+        let location_suffix = url
+            .fragment()
+            .map(|fragment| format!("#{fragment}"))
+            .and_then(|suffix| normalize_markdown_hash_location_suffix(&suffix))
+            .unwrap_or_default();
+        return Some((path, location_suffix));
+    }
+
+    if let Some((path_part, fragment)) = dest_url.rsplit_once('#')
+        && HASH_LOCATION_SUFFIX_RE.is_match(fragment)
+    {
+        let location_suffix =
+            normalize_markdown_hash_location_suffix(&format!("#{fragment}")).unwrap_or_default();
+        return Some((PathBuf::from(path_part), location_suffix));
+    }
+
+    if let Some(location_match) = COLON_LOCATION_SUFFIX_RE.find(dest_url) {
+        let path_part = &dest_url[..location_match.start()];
+        return Some((
+            PathBuf::from(path_part),
+            location_match.as_str().to_string(),
+        ));
+    }
+
+    Some((PathBuf::from(dest_url), String::new()))
+}
+
 struct Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
@@ -153,13 +221,14 @@ where
     current_subsequent_indent: Vec<Span<'static>>,
     current_line_style: Style,
     current_line_in_code_block: bool,
+    cwd: Option<PathBuf>,
 }
 
 impl<'a, I> Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
 {
-    fn new(iter: I, wrap_width: Option<usize>) -> Self {
+    fn new(iter: I, wrap_width: Option<usize>, cwd: Option<&Path>) -> Self {
         Self {
             iter,
             text: Text::default(),
@@ -180,7 +249,15 @@ where
             current_subsequent_indent: Vec::new(),
             current_line_style: Style::default(),
             current_line_in_code_block: false,
+            cwd: cwd.map(Path::to_path_buf),
         }
+    }
+
+    fn suppress_local_link_label(&self) -> bool {
+        self.link
+            .as_ref()
+            .and_then(|link| link.local_display_text.as_ref())
+            .is_some()
     }
 
     fn run(&mut self) {
@@ -194,10 +271,26 @@ where
         match event {
             Event::Start(tag) => self.start_tag(tag),
             Event::End(tag) => self.end_tag(tag),
-            Event::Text(text) => self.text(text),
-            Event::Code(code) => self.code(code),
-            Event::SoftBreak => self.soft_break(),
-            Event::HardBreak => self.hard_break(),
+            Event::Text(text) => {
+                if !self.suppress_local_link_label() {
+                    self.text(text);
+                }
+            }
+            Event::Code(code) => {
+                if !self.suppress_local_link_label() {
+                    self.code(code);
+                }
+            }
+            Event::SoftBreak => {
+                if !self.suppress_local_link_label() {
+                    self.soft_break();
+                }
+            }
+            Event::HardBreak => {
+                if !self.suppress_local_link_label() {
+                    self.hard_break();
+                }
+            }
             Event::Rule => {
                 self.flush_current_line();
                 if !self.text.lines.is_empty() {
@@ -206,8 +299,16 @@ where
                 self.push_line(Line::from("———"));
                 self.needs_newline = true;
             }
-            Event::Html(html) => self.html(html, false),
-            Event::InlineHtml(html) => self.html(html, true),
+            Event::Html(html) => {
+                if !self.suppress_local_link_label() {
+                    self.html(html, false);
+                }
+            }
+            Event::InlineHtml(html) => {
+                if !self.suppress_local_link_label() {
+                    self.html(html, true);
+                }
+            }
             Event::FootnoteReference(_) => {}
             Event::TaskListMarker(_) => {}
         }
@@ -231,9 +332,21 @@ where
             }
             Tag::List(start) => self.start_list(start),
             Tag::Item => self.start_item(),
-            Tag::Emphasis => self.push_inline_style(self.styles.emphasis),
-            Tag::Strong => self.push_inline_style(self.styles.strong),
-            Tag::Strikethrough => self.push_inline_style(self.styles.strikethrough),
+            Tag::Emphasis => {
+                if !self.suppress_local_link_label() {
+                    self.push_inline_style(self.styles.emphasis);
+                }
+            }
+            Tag::Strong => {
+                if !self.suppress_local_link_label() {
+                    self.push_inline_style(self.styles.strong);
+                }
+            }
+            Tag::Strikethrough => {
+                if !self.suppress_local_link_label() {
+                    self.push_inline_style(self.styles.strikethrough);
+                }
+            }
             Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string()),
             Tag::HtmlBlock
             | Tag::FootnoteDefinition(_)
@@ -257,7 +370,11 @@ where
                 self.indent_stack.pop();
                 self.pending_marker_line = false;
             }
-            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => self.pop_inline_style(),
+            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
+                if !self.suppress_local_link_label() {
+                    self.pop_inline_style();
+                }
+            }
             TagEnd::Link => self.pop_link(),
             TagEnd::HtmlBlock
             | TagEnd::FootnoteDefinition
@@ -513,36 +630,9 @@ where
 
     fn push_link(&mut self, dest_url: String) {
         let show_destination = should_render_link_destination(&dest_url);
-        let label_styled = !show_destination;
-        let label_start_span_idx = self
-            .current_line_content
-            .as_ref()
-            .map(|line| line.spans.len())
-            .unwrap_or(0);
-        if label_styled {
-            self.push_inline_style(self.styles.code);
-        }
         self.link = Some(LinkState {
             show_destination,
-            hidden_location_suffix: if is_local_path_like_link(&dest_url) {
-                dest_url
-                    .rsplit_once('#')
-                    .and_then(|(_, fragment)| {
-                        HASH_LOCATION_SUFFIX_RE
-                            .is_match(fragment)
-                            .then(|| format!("#{fragment}"))
-                    })
-                    .and_then(|suffix| normalize_markdown_hash_location_suffix(&suffix))
-                    .or_else(|| {
-                        COLON_LOCATION_SUFFIX_RE
-                            .find(&dest_url)
-                            .map(|m| m.as_str().to_string())
-                    })
-            } else {
-                None
-            },
-            label_start_span_idx,
-            label_styled,
+            local_display_text: local_link_display_text(&dest_url, self.cwd.as_deref()),
             destination: dest_url,
         });
     }
@@ -550,39 +640,11 @@ where
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
             if link.show_destination {
-                if link.label_styled {
-                    self.pop_inline_style();
-                }
                 self.push_span(" (".into());
                 self.push_span(Span::styled(link.destination, self.styles.link));
                 self.push_span(")".into());
-            } else if let Some(location_suffix) = link.hidden_location_suffix.as_deref() {
-                let label_text = self
-                    .current_line_content
-                    .as_ref()
-                    .and_then(|line| {
-                        line.spans.get(link.label_start_span_idx..).map(|spans| {
-                            spans
-                                .iter()
-                                .map(|span| span.content.as_ref())
-                                .collect::<String>()
-                        })
-                    })
-                    .unwrap_or_default();
-                if label_text
-                    .rsplit_once('#')
-                    .is_some_and(|(_, fragment)| HASH_LOCATION_SUFFIX_RE.is_match(fragment))
-                    || COLON_LOCATION_SUFFIX_RE.find(&label_text).is_some()
-                {
-                    // The label already carries a location suffix; don't duplicate it.
-                } else {
-                    self.push_span(Span::styled(location_suffix.to_string(), self.styles.code));
-                }
-                if link.label_styled {
-                    self.pop_inline_style();
-                }
-            } else if link.label_styled {
-                self.pop_inline_style();
+            } else if let Some(local_display_text) = link.local_display_text {
+                self.push_span(Span::styled(local_display_text, self.styles.code));
             }
         }
     }

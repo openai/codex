@@ -1,10 +1,25 @@
 use ratatui::text::Line;
+use std::path::Path;
+
 pub(crate) fn append_markdown(
     markdown_source: &str,
     width: Option<usize>,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let rendered = crate::markdown_render::render_markdown_text_with_width(markdown_source, width);
+    append_markdown_with_cwd(markdown_source, width, None, lines);
+}
+
+pub(crate) fn append_markdown_with_cwd(
+    markdown_source: &str,
+    width: Option<usize>,
+    cwd: Option<&Path>,
+    lines: &mut Vec<Line<'static>>,
+) {
+    let rendered = crate::markdown_render::render_markdown_text_with_width_and_cwd(
+        markdown_source,
+        width,
+        cwd,
+    );
     crate::render::line_utils::push_owned_lines(&rendered.lines, lines);
 }
 

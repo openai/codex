@@ -2511,6 +2511,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width 0.2.1",
  "url",
+ "urlencoding",
  "uuid",
  "vt100",
  "webbrowser",

@@ -10,6 +10,7 @@
 //! arrival timestamp so policy code can reason about oldest queued age without peeking into text.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -34,9 +35,9 @@ pub(crate) struct StreamState {
 
 impl StreamState {
     /// Creates an empty stream state with an optional target wrap width.
-    pub(crate) fn new(width: Option<usize>) -> Self {
+    pub(crate) fn new(width: Option<usize>, cwd: Option<PathBuf>) -> Self {
         Self {
-            collector: MarkdownStreamCollector::new(width),
+            collector: MarkdownStreamCollector::new(width, cwd),
             queued_lines: VecDeque::new(),
             has_seen_delta: false,
         }
@@ -105,7 +106,7 @@ mod tests {
 
     #[test]
     fn drain_n_clamps_to_available_lines() {
-        let mut state = StreamState::new(None);
+        let mut state = StreamState::new(None, None);
         state.enqueue(vec![Line::from("one")]);
 
         let drained = state.drain_n(8);

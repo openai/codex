@@ -1,4 +1,5 @@
 use ratatui::text::Line;
+use std::path::PathBuf;
 
 use crate::markdown;
 
@@ -8,14 +9,16 @@ pub(crate) struct MarkdownStreamCollector {
     buffer: String,
     committed_line_count: usize,
     width: Option<usize>,
+    cwd: Option<PathBuf>,
 }
 
 impl MarkdownStreamCollector {
-    pub fn new(width: Option<usize>) -> Self {
+    pub fn new(width: Option<usize>, cwd: Option<PathBuf>) -> Self {
         Self {
             buffer: String::new(),
             committed_line_count: 0,
             width,
+            cwd,
         }
     }
 
@@ -41,7 +44,7 @@ impl MarkdownStreamCollector {
             return Vec::new();
         };
         let mut rendered: Vec<Line<'static>> = Vec::new();
-        markdown::append_markdown(&source, self.width, &mut rendered);
+        markdown::append_markdown_with_cwd(&source, self.width, self.cwd.as_deref(), &mut rendered);
         let mut complete_line_count = rendered.len();
         if complete_line_count > 0
             && crate::render::line_utils::is_blank_line_spaces_only(
@@ -82,7 +85,7 @@ impl MarkdownStreamCollector {
         tracing::trace!("markdown finalize (raw source):\n---\n{source}\n---");
 
         let mut rendered: Vec<Line<'static>> = Vec::new();
-        markdown::append_markdown(&source, self.width, &mut rendered);
+        markdown::append_markdown_with_cwd(&source, self.width, self.cwd.as_deref(), &mut rendered);
 
         let out = if self.committed_line_count >= rendered.len() {
             Vec::new()
@@ -101,7 +104,7 @@ pub(crate) fn simulate_stream_markdown_for_tests(
     deltas: &[&str],
     finalize: bool,
 ) -> Vec<Line<'static>> {
-    let mut collector = MarkdownStreamCollector::new(None);
+    let mut collector = MarkdownStreamCollector::new(None, None);
     let mut out = Vec::new();
     for d in deltas {
         collector.push_delta(d);
@@ -122,7 +125,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_commit_until_newline() {
-        let mut c = super::MarkdownStreamCollector::new(None);
+        let mut c = super::MarkdownStreamCollector::new(None, None);
         c.push_delta("Hello, world");
         let out = c.commit_complete_lines();
         assert!(out.is_empty(), "should not commit without newline");
@@ -133,7 +136,7 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_commits_partial_line() {
-        let mut c = super::MarkdownStreamCollector::new(None);
+        let mut c = super::MarkdownStreamCollector::new(None, None);
         c.push_delta("Line without newline");
         let out = c.finalize_and_drain();
         assert_eq!(out.len(), 1);
@@ -253,7 +256,7 @@ mod tests {
     async fn heading_starts_on_new_line_when_following_paragraph() {
         // Stream a paragraph line, then a heading on the next line.
         // Expect two distinct rendered lines: "Hello." and "Heading".
-        let mut c = super::MarkdownStreamCollector::new(None);
+        let mut c = super::MarkdownStreamCollector::new(None, None);
         c.push_delta("Hello.\n");
         let out1 = c.commit_complete_lines();
         let s1: Vec<String> = out1
@@ -309,7 +312,7 @@ mod tests {
         // Paragraph without trailing newline, then a chunk that starts with the newline
         // and the heading text, then a final newline. The collector should first commit
         // only the paragraph line, and later commit the heading as its own line.
-        let mut c = super::MarkdownStreamCollector::new(None);
+        let mut c = super::MarkdownStreamCollector::new(None, None);
         c.push_delta("Sounds good!");
         // No commit yet
         assert!(c.commit_complete_lines().is_empty());
