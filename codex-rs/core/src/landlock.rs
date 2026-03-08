@@ -80,15 +80,12 @@ pub(crate) fn create_linux_sandbox_command_args_for_policies(
     use_bwrap_sandbox: bool,
     allow_network_for_proxy: bool,
 ) -> Vec<String> {
-    #[expect(clippy::expect_used)]
-    let sandbox_policy_json =
-        serde_json::to_string(sandbox_policy).expect("Failed to serialize SandboxPolicy to JSON");
-    #[expect(clippy::expect_used)]
+    let sandbox_policy_json = serde_json::to_string(sandbox_policy)
+        .unwrap_or_else(|err| panic!("failed to serialize sandbox policy: {err}"));
     let file_system_policy_json = serde_json::to_string(file_system_sandbox_policy)
-        .expect("Failed to serialize FileSystemSandboxPolicy to JSON");
-    #[expect(clippy::expect_used)]
+        .unwrap_or_else(|err| panic!("failed to serialize filesystem sandbox policy: {err}"));
     let network_policy_json = serde_json::to_string(&network_sandbox_policy)
-        .expect("Failed to serialize NetworkSandboxPolicy to JSON");
+        .unwrap_or_else(|err| panic!("failed to serialize network sandbox policy: {err}"));
 
     let mut linux_cmd = create_linux_sandbox_command_args(
         command,
@@ -118,10 +115,9 @@ pub(crate) fn create_linux_sandbox_command_args(
     use_bwrap_sandbox: bool,
     allow_network_for_proxy: bool,
 ) -> Vec<String> {
-    #[expect(clippy::expect_used)]
     let sandbox_policy_cwd = sandbox_policy_cwd
         .to_str()
-        .expect("cwd must be valid UTF-8")
+        .unwrap_or_else(|| panic!("cwd must be valid UTF-8"))
         .to_string();
 
     let mut linux_cmd: Vec<String> = vec!["--sandbox-policy-cwd".to_string(), sandbox_policy_cwd];
