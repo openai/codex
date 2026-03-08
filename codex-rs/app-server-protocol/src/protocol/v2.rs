@@ -22,6 +22,7 @@ use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
@@ -375,8 +376,7 @@ pub struct SandboxWorkspaceWrite {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
-    #[serde(alias = "web_search_request")]
-    pub web_search: Option<bool>,
+    pub web_search: Option<WebSearchToolConfig>,
     pub view_image: Option<bool>,
 }
 
@@ -401,6 +401,7 @@ pub struct ProfileV2 {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub web_search: Option<WebSearchMode>,
+    pub tools: Option<ToolsV2>,
     pub chatgpt_base_url: Option<String>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
@@ -1804,27 +1805,182 @@ pub struct FeedbackUploadResponse {
     pub thread_id: String,
 }
 
+/// PTY size in character cells for `command/exec` PTY sessions.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecTerminalSize {
+    /// Terminal height in character cells.
+    pub rows: u16,
+    /// Terminal width in character cells.
+    pub cols: u16,
+}
+
+/// Run a standalone command (argv vector) in the server sandbox without
+/// creating a thread or turn.
+///
+/// The final `command/exec` response is deferred until the process exits and is
+/// sent only after all `command/exec/outputDelta` notifications for that
+/// connection have been emitted.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CommandExecParams {
+    /// Command argv vector. Empty arrays are rejected.
     pub command: Vec<String>,
+    /// Optional client-supplied, connection-scoped process id.
+    ///
+    /// Required for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up
+    /// `command/exec/write`, `command/exec/resize`, and
+    /// `command/exec/terminate` calls. When omitted, buffered execution gets an
+    /// internal id that is not exposed to the client.
+    #[ts(optional = nullable)]
+    pub process_id: Option<String>,
+    /// Enable PTY mode.
+    ///
+    /// This implies `streamStdin` and `streamStdoutStderr`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tty: bool,
+    /// Allow follow-up `command/exec/write` requests to write stdin bytes.
+    ///
+    /// Requires a client-supplied `processId`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream_stdin: bool,
+    /// Stream stdout/stderr via `command/exec/outputDelta` notifications.
+    ///
+    /// Streamed bytes are not duplicated into the final response and require a
+    /// client-supplied `processId`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream_stdout_stderr: bool,
+    /// Optional per-stream stdout/stderr capture cap in bytes.
+    ///
+    /// When omitted, the server default applies. Cannot be combined with
+    /// `disableOutputCap`.
+    #[ts(type = "number | null")]
+    #[ts(optional = nullable)]
+    pub output_bytes_cap: Option<usize>,
+    /// Disable stdout/stderr capture truncation for this request.
+    ///
+    /// Cannot be combined with `outputBytesCap`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_output_cap: bool,
+    /// Disable the timeout entirely for this request.
+    ///
+    /// Cannot be combined with `timeoutMs`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_timeout: bool,
+    /// Optional timeout in milliseconds.
+    ///
+    /// When omitted, the server default applies. Cannot be combined with
+    /// `disableTimeout`.
     #[ts(type = "number | null")]
     #[ts(optional = nullable)]
     pub timeout_ms: Option<i64>,
+    /// Optional working directory. Defaults to the server cwd.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
+    /// Optional environment overrides merged into the server-computed
+    /// environment.
+    ///
+    /// Matching names override inherited values. Set a key to `null` to unset
+    /// an inherited variable.
+    #[ts(optional = nullable)]
+    pub env: Option<HashMap<String, Option<String>>>,
+    /// Optional initial PTY size in character cells. Only valid when `tty` is
+    /// true.
+    #[ts(optional = nullable)]
+    pub size: Option<CommandExecTerminalSize>,
+    /// Optional sandbox policy for this command.
+    ///
+    /// Uses the same shape as thread/turn execution sandbox configuration and
+    /// defaults to the user's configured policy when omitted.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
 }
 
+/// Final buffered result for `command/exec`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CommandExecResponse {
+    /// Process exit code.
     pub exit_code: i32,
+    /// Buffered stdout capture.
+    ///
+    /// Empty when stdout was streamed via `command/exec/outputDelta`.
     pub stdout: String,
+    /// Buffered stderr capture.
+    ///
+    /// Empty when stderr was streamed via `command/exec/outputDelta`.
     pub stderr: String,
+}
+
+/// Write stdin bytes to a running `command/exec` session, close stdin, or
+/// both.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecWriteParams {
+    /// Client-supplied, connection-scoped `processId` from the original
+    /// `command/exec` request.
+    pub process_id: String,
+    /// Optional base64-encoded stdin bytes to write.
+    #[ts(optional = nullable)]
+    pub delta_base64: Option<String>,
+    /// Close stdin after writing `deltaBase64`, if present.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub close_stdin: bool,
+}
+
+/// Empty success response for `command/exec/write`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecWriteResponse {}
+
+/// Terminate a running `command/exec` session.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecTerminateParams {
+    /// Client-supplied, connection-scoped `processId` from the original
+    /// `command/exec` request.
+    pub process_id: String,
+}
+
+/// Empty success response for `command/exec/terminate`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecTerminateResponse {}
+
+/// Resize a running PTY-backed `command/exec` session.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecResizeParams {
+    /// Client-supplied, connection-scoped `processId` from the original
+    /// `command/exec` request.
+    pub process_id: String,
+    /// New PTY size in character cells.
+    pub size: CommandExecTerminalSize,
+}
+
+/// Empty success response for `command/exec/resize`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecResizeResponse {}
+
+/// Stream label for `command/exec/outputDelta` notifications.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum CommandExecOutputStream {
+    /// stdout stream. PTY mode multiplexes terminal output here.
+    Stdout,
+    /// stderr stream.
+    Stderr,
 }
 
 // === Threads, Turns, and Items ===
@@ -2397,7 +2553,7 @@ pub struct SkillsListResponse {
 #[ts(export_to = "v2/")]
 pub struct PluginListParams {
     /// Optional working directories used to discover repo marketplaces. When omitted,
-    /// only home-scoped marketplaces are considered.
+    /// only home-scoped marketplaces and the official curated marketplace are considered.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<AbsolutePathBuf>>,
 }
@@ -2577,7 +2733,7 @@ pub struct SkillsListEntry {
 #[ts(export_to = "v2/")]
 pub struct PluginMarketplaceEntry {
     pub name: String,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub plugins: Vec<PluginSummary>,
 }
 
@@ -2585,9 +2741,32 @@ pub struct PluginMarketplaceEntry {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginSummary {
+    pub id: String,
     pub name: String,
     pub source: PluginSource,
+    pub installed: bool,
     pub enabled: bool,
+    pub interface: Option<PluginInterface>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginInterface {
+    pub display_name: Option<String>,
+    pub short_description: Option<String>,
+    pub long_description: Option<String>,
+    pub developer_name: Option<String>,
+    pub category: Option<String>,
+    pub capabilities: Vec<String>,
+    pub website_url: Option<String>,
+    pub privacy_policy_url: Option<String>,
+    pub terms_of_service_url: Option<String>,
+    pub default_prompt: Option<String>,
+    pub brand_color: Option<String>,
+    pub composer_icon: Option<AbsolutePathBuf>,
+    pub logo: Option<AbsolutePathBuf>,
+    pub screenshots: Vec<AbsolutePathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2597,7 +2776,7 @@ pub struct PluginSummary {
 pub enum PluginSource {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    Local { path: PathBuf },
+    Local { path: AbsolutePathBuf },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3048,7 +3227,8 @@ pub struct TurnStartParams {
     /// Override the personality for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
-    /// Optional JSON Schema used to constrain the final assistant message for this turn.
+    /// Optional JSON Schema used to constrain the final assistant message for
+    /// this turn.
     #[ts(optional = nullable)]
     pub output_schema: Option<JsonValue>,
 
@@ -3965,6 +4145,26 @@ pub struct CommandExecutionOutputDeltaNotification {
     pub delta: String,
 }
 
+/// Base64-encoded output chunk emitted for a streaming `command/exec` request.
+///
+/// These notifications are connection-scoped. If the originating connection
+/// closes, the server terminates the process.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecOutputDeltaNotification {
+    /// Client-supplied, connection-scoped `processId` from the original
+    /// `command/exec` request.
+    pub process_id: String,
+    /// Output stream for this chunk.
+    pub stream: CommandExecOutputStream,
+    /// Base64-encoded output bytes.
+    pub delta_base64: String,
+    /// `true` on the final streamed chunk for a stream when `outputBytesCap`
+    /// truncated later output on that stream.
+    pub cap_reached: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4027,7 +4227,7 @@ pub enum WindowsSandboxSetupMode {
 pub struct WindowsSandboxSetupStartParams {
     pub mode: WindowsSandboxSetupMode,
     #[ts(optional = nullable)]
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4945,6 +5145,300 @@ mod tests {
                 "com.apple.Notes".to_string(),
             ]))
         );
+    }
+
+    #[test]
+    fn command_exec_params_default_optional_streaming_flags() {
+        let params = serde_json::from_value::<CommandExecParams>(json!({
+            "command": ["ls", "-la"],
+            "timeoutMs": 1000,
+            "cwd": "/tmp"
+        }))
+        .expect("command/exec payload should deserialize");
+
+        assert_eq!(
+            params,
+            CommandExecParams {
+                command: vec!["ls".to_string(), "-la".to_string()],
+                process_id: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: None,
+                disable_output_cap: false,
+                disable_timeout: false,
+                timeout_ms: Some(1000),
+                cwd: Some(PathBuf::from("/tmp")),
+                env: None,
+                size: None,
+                sandbox_policy: None,
+            }
+        );
+    }
+
+    #[test]
+    fn command_exec_params_round_trips_disable_timeout() {
+        let params = CommandExecParams {
+            command: vec!["sleep".to_string(), "30".to_string()],
+            process_id: Some("sleep-1".to_string()),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: true,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize command/exec params");
+        assert_eq!(
+            value,
+            json!({
+                "command": ["sleep", "30"],
+                "processId": "sleep-1",
+                "disableTimeout": true,
+                "timeoutMs": null,
+                "cwd": null,
+                "env": null,
+                "size": null,
+                "sandboxPolicy": null,
+                "outputBytesCap": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<CommandExecParams>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn command_exec_params_round_trips_disable_output_cap() {
+        let params = CommandExecParams {
+            command: vec!["yes".to_string()],
+            process_id: Some("yes-1".to_string()),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: true,
+            output_bytes_cap: None,
+            disable_output_cap: true,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize command/exec params");
+        assert_eq!(
+            value,
+            json!({
+                "command": ["yes"],
+                "processId": "yes-1",
+                "streamStdoutStderr": true,
+                "outputBytesCap": null,
+                "disableOutputCap": true,
+                "timeoutMs": null,
+                "cwd": null,
+                "env": null,
+                "size": null,
+                "sandboxPolicy": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<CommandExecParams>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn command_exec_params_round_trips_env_overrides_and_unsets() {
+        let params = CommandExecParams {
+            command: vec!["printenv".to_string(), "FOO".to_string()],
+            process_id: Some("env-1".to_string()),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: Some(HashMap::from([
+                ("FOO".to_string(), Some("override".to_string())),
+                ("BAR".to_string(), Some("added".to_string())),
+                ("BAZ".to_string(), None),
+            ])),
+            size: None,
+            sandbox_policy: None,
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize command/exec params");
+        assert_eq!(
+            value,
+            json!({
+                "command": ["printenv", "FOO"],
+                "processId": "env-1",
+                "outputBytesCap": null,
+                "timeoutMs": null,
+                "cwd": null,
+                "env": {
+                    "FOO": "override",
+                    "BAR": "added",
+                    "BAZ": null,
+                },
+                "size": null,
+                "sandboxPolicy": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<CommandExecParams>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn command_exec_write_round_trips_close_only_payload() {
+        let params = CommandExecWriteParams {
+            process_id: "proc-7".to_string(),
+            delta_base64: None,
+            close_stdin: true,
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize command/exec/write params");
+        assert_eq!(
+            value,
+            json!({
+                "processId": "proc-7",
+                "deltaBase64": null,
+                "closeStdin": true,
+            })
+        );
+
+        let decoded = serde_json::from_value::<CommandExecWriteParams>(value)
+            .expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn command_exec_terminate_round_trips() {
+        let params = CommandExecTerminateParams {
+            process_id: "proc-8".to_string(),
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize command/exec/terminate params");
+        assert_eq!(
+            value,
+            json!({
+                "processId": "proc-8",
+            })
+        );
+
+        let decoded = serde_json::from_value::<CommandExecTerminateParams>(value)
+            .expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn command_exec_params_round_trip_with_size() {
+        let params = CommandExecParams {
+            command: vec!["top".to_string()],
+            process_id: Some("pty-1".to_string()),
+            tty: true,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: Some(CommandExecTerminalSize {
+                rows: 40,
+                cols: 120,
+            }),
+            sandbox_policy: None,
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize command/exec params");
+        assert_eq!(
+            value,
+            json!({
+                "command": ["top"],
+                "processId": "pty-1",
+                "tty": true,
+                "outputBytesCap": null,
+                "timeoutMs": null,
+                "cwd": null,
+                "env": null,
+                "size": {
+                    "rows": 40,
+                    "cols": 120,
+                },
+                "sandboxPolicy": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<CommandExecParams>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn command_exec_resize_round_trips() {
+        let params = CommandExecResizeParams {
+            process_id: "proc-9".to_string(),
+            size: CommandExecTerminalSize {
+                rows: 50,
+                cols: 160,
+            },
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize command/exec/resize params");
+        assert_eq!(
+            value,
+            json!({
+                "processId": "proc-9",
+                "size": {
+                    "rows": 50,
+                    "cols": 160,
+                },
+            })
+        );
+
+        let decoded = serde_json::from_value::<CommandExecResizeParams>(value)
+            .expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn command_exec_output_delta_round_trips() {
+        let notification = CommandExecOutputDeltaNotification {
+            process_id: "proc-1".to_string(),
+            stream: CommandExecOutputStream::Stdout,
+            delta_base64: "AQI=".to_string(),
+            cap_reached: false,
+        };
+
+        let value = serde_json::to_value(&notification)
+            .expect("serialize command/exec/outputDelta notification");
+        assert_eq!(
+            value,
+            json!({
+                "processId": "proc-1",
+                "stream": "stdout",
+                "deltaBase64": "AQI=",
+                "capReached": false,
+            })
+        );
+
+        let decoded = serde_json::from_value::<CommandExecOutputDeltaNotification>(value)
+            .expect("deserialize round-trip");
+        assert_eq!(decoded, notification);
     }
 
     #[test]

@@ -247,6 +247,7 @@ fn merge_file_system_policy_with_additional_permissions(
         }
     }
 }
+
 fn merge_read_only_access_with_additional_reads(
     read_only_access: &ReadOnlyAccess,
     extra_reads: Vec<AbsolutePathBuf>,
@@ -370,6 +371,7 @@ pub(crate) fn should_require_platform_sandbox(
         FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => false,
     }
 }
+
 #[derive(Default)]
 pub struct SandboxManager;
 

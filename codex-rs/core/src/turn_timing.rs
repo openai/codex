@@ -21,7 +21,7 @@ pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &
         return;
     };
     turn_context
-        .otel_manager
+        .session_telemetry
         .record_duration(TURN_TTFT_DURATION_METRIC, duration, &[]);
 }
 
@@ -34,7 +34,7 @@ pub(crate) async fn record_turn_ttfm_metric(turn_context: &TurnContext, item: &T
         return;
     };
     turn_context
-        .otel_manager
+        .session_telemetry
         .record_duration(TURN_TTFM_DURATION_METRIC, duration, &[]);
 }
 

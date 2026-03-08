@@ -90,7 +90,7 @@ where
 
     let decision = fetch().await;
 
-    services.otel_manager.counter(
+    services.session_telemetry.counter(
         "codex.approval.requested",
         1,
         &[
@@ -111,8 +111,8 @@ where
 
 #[derive(Clone)]
 pub(crate) struct ApprovalCtx<'a> {
-    pub session: &'a Session,
-    pub turn: &'a TurnContext,
+    pub session: &'a Arc<Session>,
+    pub turn: &'a Arc<TurnContext>,
     pub call_id: &'a str,
     pub retry_reason: Option<String>,
     pub network_approval_context: Option<NetworkApprovalContext>,
@@ -439,6 +439,20 @@ mod tests {
                 SandboxPermissions::WithAdditionalPermissions,
                 &ExecApprovalRequirement::Skip {
                     bypass_sandbox: true,
+                    proposed_execpolicy_amendment: None,
+                },
+            ),
+            SandboxOverride::BypassSandboxFirstAttempt
+        );
+    }
+
+    #[test]
+    fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
+        assert_eq!(
+            sandbox_override_for_first_attempt(
+                SandboxPermissions::RequireEscalated,
+                &ExecApprovalRequirement::Skip {
+                    bypass_sandbox: false,
                     proposed_execpolicy_amendment: None,
                 },
             ),

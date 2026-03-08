@@ -47,7 +47,7 @@ denied_domains = ["evil.example"]
 # If false, local/private networking is rejected. Explicit allowlisting of local IP literals
 # (or `localhost`) is required to permit them.
 # Hostnames that resolve to local/private IPs are still blocked even if allowlisted.
-allow_local_binding = true
+allow_local_binding = false
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
 allow_unix_sockets = ["/tmp/example.sock"]

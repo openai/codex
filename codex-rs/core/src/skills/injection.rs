@@ -7,9 +7,10 @@ use crate::analytics_client::InvocationType;
 use crate::analytics_client::SkillInvocation;
 use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
+use crate::mention_syntax::TOOL_MENTION_SIGIL;
 use crate::mentions::build_skill_name_counts;
 use crate::skills::SkillMetadata;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use tokio::fs;
@@ -22,7 +23,7 @@ pub(crate) struct SkillInjections {
 
 pub(crate) async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
-    otel: Option<&OtelManager>,
+    otel: Option<&SessionTelemetry>,
     analytics_client: &AnalyticsEventsClient,
     tracking: TrackEventsContext,
 ) -> SkillInjections {
@@ -69,7 +70,11 @@ pub(crate) async fn build_skill_injections(
     result
 }
 
-fn emit_skill_injected_metric(otel: Option<&OtelManager>, skill: &SkillMetadata, status: &str) {
+fn emit_skill_injected_metric(
+    otel: Option<&SessionTelemetry>,
+    skill: &SkillMetadata,
+    status: &str,
+) {
     let Some(otel) = otel else {
         return;
     };
@@ -228,10 +233,10 @@ pub(crate) fn normalize_skill_path(path: &str) -> &str {
 /// resource path is present, it is captured for exact path matching while also tracking
 /// the name for fallback matching.
 pub(crate) fn extract_tool_mentions(text: &str) -> ToolMentions<'_> {
-    extract_tool_mentions_with_sigil(text, '$')
+    extract_tool_mentions_with_sigil(text, TOOL_MENTION_SIGIL)
 }
 
-fn extract_tool_mentions_with_sigil(text: &str, sigil: char) -> ToolMentions<'_> {
+pub(crate) fn extract_tool_mentions_with_sigil(text: &str, sigil: char) -> ToolMentions<'_> {
     let text_bytes = text.as_bytes();
     let mut mentioned_names: HashSet<&str> = HashSet::new();
     let mut mentioned_paths: HashSet<&str> = HashSet::new();

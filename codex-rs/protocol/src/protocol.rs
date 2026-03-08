@@ -3190,10 +3190,66 @@ mod tests {
     use crate::permissions::FileSystemSpecialPath;
     use crate::permissions::NetworkSandboxPolicy;
     use anyhow::Result;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::path::PathBuf;
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
+
+    fn sorted_paths(paths: Vec<AbsolutePathBuf>) -> Vec<PathBuf> {
+        let mut sorted: Vec<PathBuf> = paths.into_iter().map(|path| path.to_path_buf()).collect();
+        sorted.sort();
+        sorted
+    }
+
+    fn sorted_writable_roots(roots: Vec<WritableRoot>) -> Vec<(PathBuf, Vec<PathBuf>)> {
+        let mut sorted_roots: Vec<(PathBuf, Vec<PathBuf>)> = roots
+            .into_iter()
+            .map(|root| {
+                let mut read_only_subpaths: Vec<PathBuf> = root
+                    .read_only_subpaths
+                    .into_iter()
+                    .map(|path| path.to_path_buf())
+                    .collect();
+                read_only_subpaths.sort();
+                (root.root.to_path_buf(), read_only_subpaths)
+            })
+            .collect();
+        sorted_roots.sort_by(|left, right| left.0.cmp(&right.0));
+        sorted_roots
+    }
+
+    fn assert_same_sandbox_policy_semantics(
+        expected: &SandboxPolicy,
+        actual: &SandboxPolicy,
+        cwd: &Path,
+    ) {
+        assert_eq!(
+            actual.has_full_disk_read_access(),
+            expected.has_full_disk_read_access()
+        );
+        assert_eq!(
+            actual.has_full_disk_write_access(),
+            expected.has_full_disk_write_access()
+        );
+        assert_eq!(
+            actual.has_full_network_access(),
+            expected.has_full_network_access()
+        );
+        assert_eq!(
+            actual.include_platform_defaults(),
+            expected.include_platform_defaults()
+        );
+        assert_eq!(
+            sorted_paths(actual.get_readable_roots_with_cwd(cwd)),
+            sorted_paths(expected.get_readable_roots_with_cwd(cwd))
+        );
+        assert_eq!(
+            sorted_writable_roots(actual.get_writable_roots_with_cwd(cwd)),
+            sorted_writable_roots(expected.get_writable_roots_with_cwd(cwd))
+        );
+    }
 
     #[test]
     fn external_sandbox_reports_full_access_flags() {
@@ -3443,6 +3499,60 @@ mod tests {
                 .contains("filesystem writes outside the workspace root"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn legacy_sandbox_policy_semantics_survive_split_bridge() {
+        let cwd = TempDir::new().expect("tempdir");
+        let readable_root = AbsolutePathBuf::resolve_path_against_base("readable", cwd.path())
+            .expect("resolve readable root");
+        let writable_root = AbsolutePathBuf::resolve_path_against_base("writable", cwd.path())
+            .expect("resolve writable root");
+        let policies = [
+            SandboxPolicy::DangerFullAccess,
+            SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Restricted,
+            },
+            SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled,
+            },
+            SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+            },
+            SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: vec![readable_root.clone()],
+                },
+                network_access: true,
+            },
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                read_only_access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            },
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![writable_root],
+                read_only_access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: vec![readable_root],
+                },
+                network_access: true,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: true,
+            },
+        ];
+
+        for expected in policies {
+            let actual = FileSystemSandboxPolicy::from(&expected)
+                .to_legacy_sandbox_policy(NetworkSandboxPolicy::from(&expected), cwd.path())
+                .expect("legacy bridge should preserve legacy policy semantics");
+
+            assert_same_sandbox_policy_semantics(&expected, &actual, cwd.path());
+        }
     }
 
     #[test]

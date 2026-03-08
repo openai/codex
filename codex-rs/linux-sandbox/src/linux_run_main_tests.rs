@@ -111,16 +111,16 @@ fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
 #[test]
 fn managed_proxy_inner_command_includes_route_spec() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let args = build_inner_seccomp_command(
-        Path::new("/tmp"),
-        &sandbox_policy,
-        &FileSystemSandboxPolicy::from(&sandbox_policy),
-        NetworkSandboxPolicy::Restricted,
-        true,
-        true,
-        Some("{\"routes\":[]}".to_string()),
-        vec!["/bin/true".to_string()],
-    );
+    let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
+        sandbox_policy_cwd: Path::new("/tmp"),
+        sandbox_policy: &sandbox_policy,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        use_bwrap_sandbox: true,
+        allow_network_for_proxy: true,
+        proxy_route_spec: Some("{\"routes\":[]}".to_string()),
+        command: vec!["/bin/true".to_string()],
+    });
 
     assert!(args.iter().any(|arg| arg == "--proxy-route-spec"));
     assert!(args.iter().any(|arg| arg == "{\"routes\":[]}"));
@@ -129,16 +129,16 @@ fn managed_proxy_inner_command_includes_route_spec() {
 #[test]
 fn inner_command_includes_split_policy_flags() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let args = build_inner_seccomp_command(
-        Path::new("/tmp"),
-        &sandbox_policy,
-        &FileSystemSandboxPolicy::from(&sandbox_policy),
-        NetworkSandboxPolicy::Restricted,
-        true,
-        false,
-        None,
-        vec!["/bin/true".to_string()],
-    );
+    let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
+        sandbox_policy_cwd: Path::new("/tmp"),
+        sandbox_policy: &sandbox_policy,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        use_bwrap_sandbox: true,
+        allow_network_for_proxy: false,
+        proxy_route_spec: None,
+        command: vec!["/bin/true".to_string()],
+    });
 
     assert!(args.iter().any(|arg| arg == "--file-system-sandbox-policy"));
     assert!(args.iter().any(|arg| arg == "--network-sandbox-policy"));
@@ -147,16 +147,16 @@ fn inner_command_includes_split_policy_flags() {
 #[test]
 fn non_managed_inner_command_omits_route_spec() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let args = build_inner_seccomp_command(
-        Path::new("/tmp"),
-        &sandbox_policy,
-        &FileSystemSandboxPolicy::from(&sandbox_policy),
-        NetworkSandboxPolicy::Restricted,
-        true,
-        false,
-        None,
-        vec!["/bin/true".to_string()],
-    );
+    let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
+        sandbox_policy_cwd: Path::new("/tmp"),
+        sandbox_policy: &sandbox_policy,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        use_bwrap_sandbox: true,
+        allow_network_for_proxy: false,
+        proxy_route_spec: None,
+        command: vec!["/bin/true".to_string()],
+    });
 
     assert!(!args.iter().any(|arg| arg == "--proxy-route-spec"));
 }
@@ -165,16 +165,16 @@ fn non_managed_inner_command_omits_route_spec() {
 fn managed_proxy_inner_command_requires_route_spec() {
     let result = std::panic::catch_unwind(|| {
         let sandbox_policy = SandboxPolicy::new_read_only_policy();
-        build_inner_seccomp_command(
-            Path::new("/tmp"),
-            &sandbox_policy,
-            &FileSystemSandboxPolicy::from(&sandbox_policy),
-            NetworkSandboxPolicy::Restricted,
-            true,
-            true,
-            None,
-            vec!["/bin/true".to_string()],
-        )
+        build_inner_seccomp_command(InnerSeccompCommandArgs {
+            sandbox_policy_cwd: Path::new("/tmp"),
+            sandbox_policy: &sandbox_policy,
+            file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
+            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+            use_bwrap_sandbox: true,
+            allow_network_for_proxy: true,
+            proxy_route_spec: None,
+            command: vec!["/bin/true".to_string()],
+        })
     });
     assert!(result.is_err());
 }
@@ -186,7 +186,7 @@ fn resolve_sandbox_policies_derives_split_policies_from_legacy_policy() {
     let resolved =
         resolve_sandbox_policies(Path::new("/tmp"), Some(sandbox_policy.clone()), None, None);
 
-    assert_eq!(resolved.sandbox_policy, sandbox_policy.clone());
+    assert_eq!(resolved.sandbox_policy, sandbox_policy);
     assert_eq!(
         resolved.file_system_sandbox_policy,
         FileSystemSandboxPolicy::from(&sandbox_policy)

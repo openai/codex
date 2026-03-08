@@ -37,6 +37,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::process_group::kill_child_process_group;
 
 pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
@@ -56,11 +57,20 @@ const AGGREGATE_BUFFER_INITIAL_CAPACITY: usize = 8 * 1024; // 8 KiB
 ///
 /// This mirrors unified exec's output cap so a single runaway command cannot
 /// OOM the process by dumping huge amounts of data to stdout/stderr.
-const EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
+const EXEC_OUTPUT_MAX_BYTES: usize = DEFAULT_OUTPUT_BYTES_CAP;
 
 /// Limit the number of ExecCommandOutputDelta events emitted per exec call.
 /// Aggregation still collects full output; only the live event stream is capped.
 pub(crate) const MAX_EXEC_OUTPUT_DELTAS_PER_CALL: usize = 10_000;
+
+// Wait for the stdout/stderr collection tasks but guard against them
+// hanging forever. In the normal case, both pipes are closed once the child
+// terminates so the tasks exit quickly. However, if the child process
+// spawned grandchildren that inherited its stdout/stderr file descriptors
+// those pipes may stay open after we `kill` the direct child on timeout.
+// That would cause the `read_capped` tasks to block on `read()`
+// indefinitely, effectively hanging the whole agent.
+pub const IO_DRAIN_TIMEOUT_MS: u64 = 2_000; // 2 s should be plenty for local pipes
 
 #[derive(Debug)]
 pub struct ExecParams {
@@ -178,6 +188,31 @@ pub async fn process_exec_tool_call(
     use_linux_sandbox_bwrap: bool,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
+    let exec_req = build_exec_request(
+        params,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        sandbox_cwd,
+        codex_linux_sandbox_exe,
+        use_linux_sandbox_bwrap,
+    )?;
+
+    // Route through the sandboxing module for a single, unified execution path.
+    crate::sandboxing::execute_env(exec_req, stdout_stream).await
+}
+
+/// Transform a portable exec request into the concrete argv/env that should be
+/// spawned under the requested sandbox policy.
+pub fn build_exec_request(
+    params: ExecParams,
+    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    sandbox_cwd: &Path,
+    codex_linux_sandbox_exe: &Option<PathBuf>,
+    use_linux_sandbox_bwrap: bool,
+) -> Result<ExecRequest> {
     let windows_sandbox_level = params.windows_sandbox_level;
     let enforce_managed_network = params.network.is_some();
     let sandbox_type = select_process_exec_tool_sandbox_type(
@@ -238,9 +273,7 @@ pub async fn process_exec_tool_call(
             windows_sandbox_level,
         })
         .map_err(CodexErr::from)?;
-
-    // Route through the sandboxing module for a single, unified execution path.
-    crate::sandboxing::execute_env(exec_req, stdout_stream).await
+    Ok(exec_req)
 }
 
 pub(crate) async fn execute_exec_request(
@@ -723,11 +756,15 @@ async fn exec(
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
-    if should_use_windows_restricted_token_sandbox(
-        sandbox,
-        sandbox_policy,
-        file_system_sandbox_policy,
-    ) {
+    if sandbox == SandboxType::WindowsRestrictedToken {
+        if let Some(reason) = unsupported_windows_restricted_token_sandbox_reason(
+            sandbox,
+            sandbox_policy,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+        ) {
+            return Err(CodexErr::Io(io::Error::other(reason)));
+        }
         return exec_windows_sandbox(params, sandbox_policy).await;
     }
     let ExecParams {
@@ -785,6 +822,28 @@ fn should_use_windows_restricted_token_sandbox(
         )
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn unsupported_windows_restricted_token_sandbox_reason(
+    sandbox: SandboxType,
+    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+) -> Option<String> {
+    if should_use_windows_restricted_token_sandbox(
+        sandbox,
+        sandbox_policy,
+        file_system_sandbox_policy,
+    ) {
+        return None;
+    }
+
+    (sandbox == SandboxType::WindowsRestrictedToken).then(|| {
+        format!(
+            "windows sandbox backend cannot enforce file_system={:?}, network={network_sandbox_policy:?}, legacy_policy={sandbox_policy:?}; refusing to run unsandboxed",
+            file_system_sandbox_policy.kind,
+        )
+    })
+}
 /// Consumes the output of a child process, truncating it so it is suitable for
 /// use as the output of a `shell` tool call. Also enforces specified timeout.
 async fn consume_truncated_output(
@@ -834,16 +893,6 @@ async fn consume_truncated_output(
             (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
         }
     };
-
-    // Wait for the stdout/stderr collection tasks but guard against them
-    // hanging forever. In the normal case, both pipes are closed once the child
-    // terminates so the tasks exit quickly. However, if the child process
-    // spawned grandchildren that inherited its stdout/stderr file descriptors
-    // those pipes may stay open after we `kill` the direct child on timeout.
-    // That would cause the `read_capped` tasks to block on `read()`
-    // indefinitely, effectively hanging the whole agent.
-
-    const IO_DRAIN_TIMEOUT_MS: u64 = 2_000; // 2 s should be plenty for local pipes
 
     // We need mutable bindings so we can `abort()` them on timeout.
     use tokio::task::JoinHandle;
@@ -1166,6 +1215,64 @@ mod tests {
                 &file_system_policy,
             ),
             true
+        );
+    }
+
+    #[test]
+    fn windows_restricted_token_rejects_network_only_restrictions() {
+        let policy = SandboxPolicy::ExternalSandbox {
+            network_access: codex_protocol::protocol::NetworkAccess::Restricted,
+        };
+        let file_system_policy = FileSystemSandboxPolicy::unrestricted();
+
+        assert_eq!(
+            unsupported_windows_restricted_token_sandbox_reason(
+                SandboxType::WindowsRestrictedToken,
+                &policy,
+                &file_system_policy,
+                NetworkSandboxPolicy::Restricted,
+            ),
+            Some(
+                "windows sandbox backend cannot enforce file_system=Unrestricted, network=Restricted, legacy_policy=ExternalSandbox { network_access: Restricted }; refusing to run unsandboxed".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn windows_restricted_token_allows_legacy_restricted_policies() {
+        let policy = SandboxPolicy::new_read_only_policy();
+        let file_system_policy = FileSystemSandboxPolicy::restricted(vec![]);
+
+        assert_eq!(
+            unsupported_windows_restricted_token_sandbox_reason(
+                SandboxType::WindowsRestrictedToken,
+                &policy,
+                &file_system_policy,
+                NetworkSandboxPolicy::Restricted,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_restricted_token_allows_legacy_workspace_write_policies() {
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        let file_system_policy = FileSystemSandboxPolicy::from(&policy);
+
+        assert_eq!(
+            unsupported_windows_restricted_token_sandbox_reason(
+                SandboxType::WindowsRestrictedToken,
+                &policy,
+                &file_system_policy,
+                NetworkSandboxPolicy::Restricted,
+            ),
+            None
         );
     }
 
