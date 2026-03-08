@@ -498,7 +498,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
         #[cfg(not(windows))]
         {
             let (cmd, args) = action.command_args();
-            let command_path = crate::wsl_paths::normalize_for_wsl(cmd);
+            let command_path = crate::wsl_paths::normalize_for_wsl(&cmd);
             let normalized_args: Vec<String> = args
                 .iter()
                 .map(crate::wsl_paths::normalize_for_wsl)

@@ -2199,6 +2199,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-install-context"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "tempfile",
+ "toml 0.9.11+spec-1.1.0",
+]
+
+[[package]]
 name = "codex-instructions"
 version = "0.0.0"
 dependencies = [
@@ -2799,6 +2809,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-git-utils",
+ "codex-install-context",
  "codex-login",
  "codex-mcp",
  "codex-model-provider-info",
