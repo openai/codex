@@ -166,16 +166,16 @@ pub fn run_main() -> ! {
             } else {
                 None
             };
-        let inner = build_inner_seccomp_command(
-            &sandbox_policy_cwd,
-            &sandbox_policy,
-            &file_system_sandbox_policy,
+        let inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
+            sandbox_policy_cwd: &sandbox_policy_cwd,
+            sandbox_policy: &sandbox_policy,
+            file_system_sandbox_policy: &file_system_sandbox_policy,
             network_sandbox_policy,
             use_bwrap_sandbox,
             allow_network_for_proxy,
             proxy_route_spec,
             command,
-        );
+        });
         run_bwrap_with_proc_fallback(
             &sandbox_policy_cwd,
             &sandbox_policy,
@@ -437,17 +437,29 @@ fn is_proc_mount_failure(stderr: &str) -> bool {
             || stderr.contains("Permission denied"))
 }
 
-/// Build the inner command that applies seccomp after bubblewrap.
-fn build_inner_seccomp_command(
-    sandbox_policy_cwd: &Path,
-    sandbox_policy: &SandboxPolicy,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+struct InnerSeccompCommandArgs<'a> {
+    sandbox_policy_cwd: &'a Path,
+    sandbox_policy: &'a SandboxPolicy,
+    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     use_bwrap_sandbox: bool,
     allow_network_for_proxy: bool,
     proxy_route_spec: Option<String>,
     command: Vec<String>,
-) -> Vec<String> {
+}
+
+/// Build the inner command that applies seccomp after bubblewrap.
+fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String> {
+    let InnerSeccompCommandArgs {
+        sandbox_policy_cwd,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        use_bwrap_sandbox,
+        allow_network_for_proxy,
+        proxy_route_spec,
+        command,
+    } = args;
     let current_exe = match std::env::current_exe() {
         Ok(path) => path,
         Err(err) => panic!("failed to resolve current executable path: {err}"),
