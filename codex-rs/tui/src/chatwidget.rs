@@ -1035,6 +1035,10 @@ impl ChatWidget {
         self.bottom_pane.set_status_line(status_line);
     }
 
+    pub(crate) fn set_active_agent_label(&mut self, active_agent_label: Option<String>) {
+        self.bottom_pane.set_active_agent_label(active_agent_label);
+    }
+
     /// Recomputes footer status-line content from config and current runtime state.
     ///
     /// This method is the status-line orchestrator: it parses configured item identifiers,
@@ -3740,6 +3744,10 @@ impl ChatWidget {
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
+    }
+
+    pub(crate) fn no_modal_or_popup_active(&self) -> bool {
+        self.bottom_pane.no_modal_or_popup_active()
     }
 
     pub(crate) fn can_launch_external_editor(&self) -> bool {
@@ -7993,6 +8001,11 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn pending_thread_approvals(&self) -> &[String] {
         self.bottom_pane.pending_thread_approvals()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_agent_label(&self) -> Option<&str> {
+        self.bottom_pane.active_agent_label()
     }
 
     #[cfg(test)]

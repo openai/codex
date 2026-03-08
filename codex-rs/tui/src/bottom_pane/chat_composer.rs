@@ -166,6 +166,7 @@ use super::footer::footer_hint_items_width;
 use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
 use super::footer::max_left_width_for_right;
+use super::footer::passive_footer_status_line;
 use super::footer::render_context_right;
 use super::footer::render_footer_from_props;
 use super::footer::render_footer_hint_items;
@@ -173,6 +174,7 @@ use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
 use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
+use super::footer::uses_passive_footer_status_layout;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use super::skill_popup::MentionItem;
@@ -406,6 +408,7 @@ pub(crate) struct ChatComposer {
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
+    active_agent_label: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -525,6 +528,7 @@ impl ChatComposer {
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
+            active_agent_label: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -3163,6 +3167,7 @@ impl ChatComposer {
             context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
+            active_agent_label: self.active_agent_label.clone(),
         }
     }
 
@@ -3691,6 +3696,19 @@ impl ChatComposer {
         self.status_line_enabled = enabled;
         true
     }
+
+    pub(crate) fn set_active_agent_label(&mut self, active_agent_label: Option<String>) -> bool {
+        if self.active_agent_label == active_agent_label {
+            return false;
+        }
+        self.active_agent_label = active_agent_label;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_agent_label(&self) -> Option<&str> {
+        self.active_agent_label.as_deref()
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -4124,26 +4142,19 @@ impl ChatComposer {
                 };
                 let available_width =
                     hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
-                let status_line = footer_props
-                    .status_line_value
-                    .as_ref()
-                    .map(|line| line.clone().dim());
-                let status_line_candidate = footer_props.status_line_enabled
-                    && match footer_props.mode {
-                        FooterMode::ComposerEmpty => true,
-                        FooterMode::ComposerHasDraft => !footer_props.is_task_running,
-                        FooterMode::QuitShortcutReminder
-                        | FooterMode::ShortcutOverlay
-                        | FooterMode::EscHint => false,
-                    };
-                let mut truncated_status_line = if status_line_candidate {
-                    status_line.as_ref().map(|line| {
+                let status_line_active = uses_passive_footer_status_layout(&footer_props);
+                let combined_status_line = if status_line_active {
+                    passive_footer_status_line(&footer_props).map(ratatui::prelude::Stylize::dim)
+                } else {
+                    None
+                };
+                let mut truncated_status_line = if status_line_active {
+                    combined_status_line.as_ref().map(|line| {
                         truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
                     })
                 } else {
                     None
                 };
-                let status_line_active = status_line_candidate && truncated_status_line.is_some();
                 let left_mode_indicator = if status_line_active {
                     None
                 } else {
@@ -4190,7 +4201,7 @@ impl ChatComposer {
                 if status_line_active
                     && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)
                     && left_width > max_left
-                    && let Some(line) = status_line.as_ref().map(|line| {
+                    && let Some(line) = combined_status_line.as_ref().map(|line| {
                         truncate_line_with_ellipsis_if_overflow(line.clone(), max_left as usize)
                     })
                 {

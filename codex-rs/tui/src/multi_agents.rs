@@ -12,6 +12,10 @@ use codex_protocol::protocol::CollabResumeBeginEvent;
 use codex_protocol::protocol::CollabResumeEndEvent;
 use codex_protocol::protocol::CollabWaitingBeginEvent;
 use codex_protocol::protocol::CollabWaitingEndEvent;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -66,12 +70,75 @@ pub(crate) fn format_agent_picker_item_name(
     }
 }
 
-pub(crate) fn sort_agent_picker_threads(agent_threads: &mut [(ThreadId, AgentPickerThreadEntry)]) {
-    agent_threads.sort_by(|(left_id, left), (right_id, right)| {
-        left.is_closed
-            .cmp(&right.is_closed)
-            .then_with(|| left_id.to_string().cmp(&right_id.to_string()))
-    });
+pub(crate) fn previous_agent_shortcut() -> crate::key_hint::KeyBinding {
+    crate::key_hint::alt(KeyCode::Left)
+}
+
+pub(crate) fn next_agent_shortcut() -> crate::key_hint::KeyBinding {
+    crate::key_hint::alt(KeyCode::Right)
+}
+
+pub(crate) fn previous_agent_shortcut_matches(
+    key_event: KeyEvent,
+    allow_word_motion_fallback: bool,
+) -> bool {
+    previous_agent_shortcut().is_press(key_event)
+        || previous_agent_word_motion_fallback(key_event, allow_word_motion_fallback)
+}
+
+pub(crate) fn next_agent_shortcut_matches(
+    key_event: KeyEvent,
+    allow_word_motion_fallback: bool,
+) -> bool {
+    next_agent_shortcut().is_press(key_event)
+        || next_agent_word_motion_fallback(key_event, allow_word_motion_fallback)
+}
+
+#[cfg(target_os = "macos")]
+fn previous_agent_word_motion_fallback(
+    key_event: KeyEvent,
+    allow_word_motion_fallback: bool,
+) -> bool {
+    allow_word_motion_fallback
+        && matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::ALT,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }
+        )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn previous_agent_word_motion_fallback(
+    _key_event: KeyEvent,
+    _allow_word_motion_fallback: bool,
+) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn next_agent_word_motion_fallback(key_event: KeyEvent, allow_word_motion_fallback: bool) -> bool {
+    allow_word_motion_fallback
+        && matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::ALT,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }
+        )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn next_agent_word_motion_fallback(
+    _key_event: KeyEvent,
+    _allow_word_motion_fallback: bool,
+) -> bool {
+    false
 }
 
 pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
@@ -446,6 +513,8 @@ fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
 mod tests {
     use super::*;
     use crate::history_cell::HistoryCell;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::style::Color;
@@ -532,6 +601,27 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n\n");
         assert_snapshot!("collab_agent_transcript", snapshot);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn agent_shortcut_matches_option_arrow_word_motion_fallbacks() {
+        assert!(previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
+            true,
+        ));
+        assert!(next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT),
+            true,
+        ));
+        assert!(!previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
+            false,
+        ));
+        assert!(!next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT),
+            false,
+        ));
     }
 
     #[test]

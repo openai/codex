@@ -806,6 +806,11 @@ impl BottomPane {
         self.pending_thread_approvals.threads()
     }
 
+    #[cfg(test)]
+    pub(crate) fn active_agent_label(&self) -> Option<&str> {
+        self.composer.active_agent_label()
+    }
+
     /// Update the unified-exec process set and refresh whichever summary surface is active.
     ///
     /// The summary may be displayed inline in the status row or as a dedicated
@@ -1064,6 +1069,12 @@ impl BottomPane {
 
     pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
         if self.composer.set_status_line_enabled(enabled) {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_active_agent_label(&mut self, active_agent_label: Option<String>) {
+        if self.composer.set_active_agent_label(active_agent_label) {
             self.request_redraw();
         }
     }
