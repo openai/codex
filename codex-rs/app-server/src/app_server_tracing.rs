@@ -1,3 +1,9 @@
+//! Tracing helpers shared by socket and in-process app-server entry points.
+//!
+//! The in-process path intentionally reuses the same span shape as JSON-RPC
+//! transports so request telemetry stays comparable across stdio, websocket,
+//! and embedded callers.
+
 use crate::message_processor::ConnectionSessionState;
 use crate::outgoing_message::ConnectionId;
 use crate::transport::AppServerTransport;
@@ -156,6 +162,10 @@ fn initialize_client_info_from_typed_request(request: &ClientRequest) -> Option<
     }
 }
 
+/// Extracts the request id from a typed in-process request.
+///
+/// This duplicates the `ClientRequest` variant match locally so the protocol
+/// crate does not need an in-process-specific helper just for tracing.
 pub(crate) fn client_request_id(request: &ClientRequest) -> &RequestId {
     match request {
         ClientRequest::Initialize { request_id, .. }

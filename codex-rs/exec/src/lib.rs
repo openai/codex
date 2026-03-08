@@ -941,6 +941,13 @@ where
     })
 }
 
+/// Waits for the authoritative bootstrap `SessionConfigured` event.
+///
+/// `thread/start` and `thread/resume` provide enough data to synthesize a
+/// session configuration, but exec prefers the streamed event when it arrives
+/// in time because that payload is the closest match to main's startup data.
+/// Non-bootstrap events are buffered so the main event loop can process them in
+/// order once startup finishes.
 async fn await_session_configured_event(
     client: &mut InProcessAppServerClient,
     config: &Config,
@@ -987,6 +994,14 @@ enum BootstrapEventAction {
     SessionConfigured(SessionConfiguredEvent),
 }
 
+/// Classifies early events seen before exec has finished bootstrap.
+///
+/// The bootstrap phase has two jobs:
+/// - answer server requests that would otherwise stall startup
+/// - capture the matching `SessionConfigured` event for the primary thread
+///
+/// Everything else is buffered and replayed by the main loop so startup does
+/// not reorder or discard early notifications.
 fn classify_bootstrap_event(
     server_event: InProcessServerEvent,
     thread_id: &str,
@@ -1063,6 +1078,12 @@ fn session_configured_from_thread_resume_response(
     clippy::too_many_arguments,
     reason = "session mapping keeps explicit fields"
 )]
+/// Synthesizes startup session metadata from `thread/start` or `thread/resume`.
+///
+/// This is a compatibility bridge for the current in-process architecture.
+/// Some session fields are not available synchronously from the start/resume
+/// response, so callers must treat the result as a best-effort fallback until
+/// a later `SessionConfigured` event proves otherwise.
 fn session_configured_from_thread_response(
     thread_id: &str,
     thread_name: Option<String>,
