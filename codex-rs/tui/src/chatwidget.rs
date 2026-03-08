@@ -2023,16 +2023,23 @@ impl ChatWidget {
         if reason == TurnAbortReason::Interrupted {
             self.clear_unified_exec_processes();
         }
+        let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
+        self.submit_pending_steers_after_interrupt = false;
         if reason != TurnAbortReason::ReviewEnded {
-            self.add_to_history(history_cell::new_error_event(
-                "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
-            ));
+            if send_pending_steers_immediately {
+                self.add_to_history(history_cell::new_info_event(
+                    "Model interrupted to submit steer instructions.".to_owned(),
+                    None,
+                ));
+            } else {
+                self.add_to_history(history_cell::new_error_event(
+                    "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
+                ));
+            }
         }
 
         // Core clears pending_input before emitting TurnAborted, so any unacknowledged steers
         // still tracked here must be restored locally instead of waiting for a later commit.
-        let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
-        self.submit_pending_steers_after_interrupt = false;
         if send_pending_steers_immediately {
             let pending_steers: Vec<UserMessage> = self
                 .pending_steers

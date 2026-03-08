@@ -6358,6 +6358,42 @@ async fn interrupted_turn_error_message_snapshot() {
     assert_snapshot!("interrupted_turn_error_message", last);
 }
 
+// Snapshot test: interrupting specifically to submit pending steers shows an
+// informational banner instead of the generic "tell the model what to do
+// differently" error prompt.
+#[tokio::test]
+async fn interrupted_turn_pending_steers_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.pending_steers.push_back(pending_steer("steer 1"));
+    chat.submit_pending_steers_after_interrupt = true;
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let info = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .find(|line| line.contains("Model interrupted to submit steer instructions."))
+        .expect("expected steer interrupt info message to be inserted");
+    assert_snapshot!("interrupted_turn_pending_steers_message", info);
+}
+
 /// Opening custom prompt from the review popup, pressing Esc returns to the
 /// parent popup, pressing Esc again dismisses all panels (back to normal mode).
 #[tokio::test]
