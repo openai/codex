@@ -60,8 +60,8 @@ pub type RequestResult = std::result::Result<JsonRpcResult, JSONRPCErrorError>;
 /// Layered error for [`InProcessAppServerClient::request_typed`].
 ///
 /// This keeps transport failures, server-side JSON-RPC failures, and response
-/// shape mismatches distinct so callers can decide whether to retry, surface a
-/// server error, or treat the response as protocol drift.
+/// decode failures distinct so callers can decide whether to retry, surface a
+/// server error, or treat the response as an internal request/response mismatch.
 #[derive(Debug)]
 pub enum TypedRequestError {
     Transport {
@@ -88,7 +88,7 @@ impl fmt::Display for TypedRequestError {
                 write!(f, "{method} failed: {}", source.message)
             }
             Self::Deserialize { method, source } => {
-                write!(f, "{method} invalid response payload: {source}")
+                write!(f, "{method} response decode error: {source}")
             }
         }
     }
@@ -373,8 +373,9 @@ impl InProcessAppServerClient {
     /// Sends a typed client request and decodes the successful response body.
     ///
     /// This still deserializes from a JSON value produced by app-server's
-    /// JSON-RPC result envelope. Callers should treat `Deserialize` failures as
-    /// a protocol-shape mismatch rather than a transport problem.
+    /// JSON-RPC result envelope. Because the caller chooses `T`, `Deserialize`
+    /// failures indicate an internal request/response mismatch at the call site
+    /// (or an in-process bug), not transport skew from an external client.
     pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
     where
         T: DeserializeOwned,
