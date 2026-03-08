@@ -68,6 +68,7 @@ use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -4971,11 +4972,26 @@ pub struct PermissionsRequestApprovalParams {
     pub permissions: AdditionalPermissionProfile,
 }
 
+v2_enum_from_core!(
+    pub enum PermissionGrantScope from CorePermissionGrantScope {
+        Turn,
+        Session
+    }
+);
+
+impl Default for PermissionGrantScope {
+    fn default() -> Self {
+        Self::Turn
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PermissionsRequestApprovalResponse {
     pub permissions: GrantedPermissionProfile,
+    #[serde(default)]
+    pub scope: PermissionGrantScope,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -5437,6 +5453,7 @@ mod tests {
                 }),
                 ..Default::default()
             },
+            scope: PermissionGrantScope::Turn,
         };
 
         assert_eq!(
@@ -5447,8 +5464,19 @@ mod tests {
                         "accessibility": true,
                     },
                 },
+                "scope": "turn",
             })
         );
+    }
+
+    #[test]
+    fn permissions_request_approval_response_defaults_scope_to_turn() {
+        let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
+            "permissions": {},
+        }))
+        .expect("response should deserialize");
+
+        assert_eq!(response.scope, PermissionGrantScope::Turn);
     }
 
     #[test]

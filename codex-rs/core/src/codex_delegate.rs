@@ -13,6 +13,7 @@ use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -505,6 +506,7 @@ where
         _ = cancel_token.cancelled() => {
             let empty = RequestPermissionsResponse {
                 permissions: Default::default(),
+                scope: PermissionGrantScope::Turn,
             };
             parent_session
                 .notify_request_permissions_response(call_id, empty.clone())
@@ -513,6 +515,7 @@ where
         }
         response = fut => response.unwrap_or_else(|| RequestPermissionsResponse {
             permissions: Default::default(),
+            scope: PermissionGrantScope::Turn,
         }),
     }
 }
@@ -698,6 +701,7 @@ mod tests {
                 }),
                 ..PermissionProfile::default()
             },
+            scope: PermissionGrantScope::Turn,
         };
         let cancel_token = CancellationToken::new();
         let request_call_id = call_id.clone();
