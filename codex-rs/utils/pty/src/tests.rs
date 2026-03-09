@@ -306,6 +306,8 @@ async fn pipe_process_round_trips_stdin() -> anyhow::Result<()> {
     let (session, output_rx, exit_rx) = combine_spawned_output(spawned);
     let writer = session.writer_sender();
     writer.send(b"roundtrip\n".to_vec()).await?;
+    drop(writer);
+    session.close_stdin();
 
     let (output, code) = collect_output_until_exit(output_rx, exit_rx, 5_000).await;
     let text = String::from_utf8_lossy(&output);
