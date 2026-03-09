@@ -11,6 +11,7 @@ expression: "normalize_snapshot_paths(render_overlay_lines(&view, 120))"
 
 › 1. Yes, grant these permissions (y)
   2. Yes, grant these permissions for this session (a)
-  3. No, continue without permissions (n)
+  3. Yes, always allow these permissions (p)
+  4. No, continue without permissions (n)
 
   Press enter to confirm or esc to cancel

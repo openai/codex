@@ -149,7 +149,8 @@
     "PermissionGrantScope": {
       "enum": [
         "turn",
-        "session"
+        "session",
+        "alwaysAllow"
       ],
       "type": "string"
     }

@@ -664,7 +664,9 @@ fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpTool
         ReviewDecision::Approved
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
-        ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
+        ReviewDecision::ApprovedForSession | ReviewDecision::ApprovedForAlways => {
+            McpToolApprovalDecision::AcceptForSession
+        }
         ReviewDecision::Denied | ReviewDecision::Abort => McpToolApprovalDecision::Decline,
     }
 }

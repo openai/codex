@@ -667,6 +667,58 @@
         }
       ]
     },
+    "MacOsAutomationPermission": {
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "all"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bundle_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "bundle_ids"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MacOsPermissionsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "accessibility": {
+          "type": "boolean"
+        },
+        "automations": {
+          "$ref": "#/definitions/MacOsAutomationPermission"
+        },
+        "calendar": {
+          "type": "boolean"
+        },
+        "preferences": {
+          "$ref": "#/definitions/MacOsPreferencesPermission"
+        }
+      },
+      "type": "object"
+    },
+    "MacOsPreferencesPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
     "MemoriesToml": {
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
@@ -1124,6 +1176,9 @@
       "properties": {
         "filesystem": {
           "$ref": "#/definitions/FilesystemPermissionsToml"
+        },
+        "macos": {
+          "$ref": "#/definitions/MacOsPermissionsToml"
         },
         "network": {
           "$ref": "#/definitions/NetworkToml"

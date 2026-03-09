@@ -10,6 +10,7 @@ pub enum PermissionGrantScope {
     #[default]
     Turn,
     Session,
+    AlwaysAllow,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

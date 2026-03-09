@@ -278,19 +278,23 @@ impl ApprovalOverlay {
             return;
         };
         let granted_permissions = match decision {
-            ReviewDecision::Approved | ReviewDecision::ApprovedForSession => permissions.clone(),
+            ReviewDecision::Approved
+            | ReviewDecision::ApprovedForSession
+            | ReviewDecision::ApprovedForAlways => permissions.clone(),
             ReviewDecision::Denied | ReviewDecision::Abort => Default::default(),
             ReviewDecision::ApprovedExecpolicyAmendment { .. }
             | ReviewDecision::NetworkPolicyAmendment { .. } => Default::default(),
         };
-        let scope = if matches!(decision, ReviewDecision::ApprovedForSession) {
-            PermissionGrantScope::Session
-        } else {
-            PermissionGrantScope::Turn
+        let scope = match decision {
+            ReviewDecision::ApprovedForSession => PermissionGrantScope::Session,
+            ReviewDecision::ApprovedForAlways => PermissionGrantScope::AlwaysAllow,
+            _ => PermissionGrantScope::Turn,
         };
         if request.thread_label().is_none() {
             let message = if granted_permissions.is_empty() {
                 "You did not grant additional permissions"
+            } else if matches!(scope, PermissionGrantScope::AlwaysAllow) {
+                "You granted additional permissions and saved them for future sessions"
             } else if matches!(scope, PermissionGrantScope::Session) {
                 "You granted additional permissions for this session"
             } else {
@@ -703,6 +707,14 @@ fn exec_options(
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
             }),
+            ReviewDecision::ApprovedForAlways => {
+                additional_permissions.as_ref().map(|_| ApprovalOption {
+                    label: "Yes, and always allow these permissions".to_string(),
+                    decision: ApprovalDecision::Review(ReviewDecision::ApprovedForAlways),
+                    display_shortcut: None,
+                    additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
+                })
+            }
             ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment,
             } => {
@@ -845,6 +857,12 @@ fn permissions_options() -> Vec<ApprovalOption> {
             decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+        },
+        ApprovalOption {
+            label: "Yes, always allow these permissions".to_string(),
+            decision: ApprovalDecision::Review(ReviewDecision::ApprovedForAlways),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
         },
         ApprovalOption {
             label: "No, continue without permissions".to_string(),
@@ -1260,6 +1278,7 @@ mod tests {
             vec![
                 "Yes, grant these permissions".to_string(),
                 "Yes, grant these permissions for this session".to_string(),
+                "Yes, always allow these permissions".to_string(),
                 "No, continue without permissions".to_string(),
             ]
         );
@@ -1289,6 +1308,33 @@ mod tests {
         assert!(
             saw_op,
             "expected permission approval decision to emit a session-scoped response"
+        );
+    }
+
+    #[test]
+    fn permissions_always_shortcut_submits_always_allow_scope() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view =
+            ApprovalOverlay::new(make_permissions_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+
+        let mut saw_op = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::RequestPermissionsResponse { response, .. },
+                ..
+            } = ev
+            {
+                assert_eq!(response.scope, PermissionGrantScope::AlwaysAllow);
+                saw_op = true;
+                break;
+            }
+        }
+        assert!(
+            saw_op,
+            "expected permission approval decision to emit an always-allow response"
         );
     }
 
