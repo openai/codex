@@ -764,6 +764,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_thread_manager_reuses_configured_auth_manager() {
+        let mut config = build_test_config().await;
+        config.forced_chatgpt_workspace_id = Some("workspace-123".to_string());
+        let config = Arc::new(config);
+        let thread_manager = shared_test_thread_manager(&config);
+
+        assert_eq!(
+            thread_manager.auth_manager().forced_chatgpt_workspace_id(),
+            None
+        );
+        assert_eq!(
+            thread_manager.auth_manager().has_external_auth_refresher(),
+            false
+        );
+
+        let client = InProcessAppServerClient::start(InProcessClientStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config,
+            thread_manager: Some(Arc::clone(&thread_manager)),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("in-process app-server client should start");
+
+        assert_eq!(
+            thread_manager.auth_manager().forced_chatgpt_workspace_id(),
+            Some("workspace-123".to_string())
+        );
+        assert_eq!(
+            thread_manager.auth_manager().has_external_auth_refresher(),
+            true
+        );
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
     async fn tiny_channel_capacity_still_supports_request_roundtrip() {
         let client = start_test_client_with_capacity(SessionSource::Exec, 1).await;
         let _response: ConfigRequirementsReadResponse = client

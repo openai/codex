@@ -501,6 +501,10 @@ impl ThreadManager {
         AgentControl::new(Arc::downgrade(&self.state))
     }
 
+    pub fn auth_manager(&self) -> Arc<AuthManager> {
+        Arc::clone(&self.state.auth_manager)
+    }
+
     #[cfg(test)]
     pub(crate) fn captured_ops(&self) -> Vec<(ThreadId, Op)> {
         self.state
