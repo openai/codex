@@ -2017,11 +2017,11 @@ pub(crate) fn build_specs(
             filters: config
                 .web_search_config
                 .as_ref()
-                .and_then(|cfg| cfg.filters.clone()),
+                .and_then(|cfg| cfg.filters.clone().map(Into::into)),
             user_location: config
                 .web_search_config
                 .as_ref()
-                .and_then(|cfg| cfg.user_location.clone()),
+                .and_then(|cfg| cfg.user_location.clone().map(Into::into)),
             search_context_size: config
                 .web_search_config
                 .as_ref()
@@ -2766,8 +2766,12 @@ mod tests {
             tool.spec,
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
-                filters: web_search_config.filters,
-                user_location: web_search_config.user_location,
+                filters: web_search_config
+                    .filters
+                    .map(crate::client_common::tools::ResponsesApiWebSearchFilters::from),
+                user_location: web_search_config
+                    .user_location
+                    .map(crate::client_common::tools::ResponsesApiWebSearchUserLocation::from),
                 search_context_size: web_search_config.search_context_size,
                 search_content_types: None,
             }
