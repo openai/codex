@@ -273,9 +273,3 @@ To create a new plan, call `update_plan` with a short list of 1‑sentence steps
 When steps have been completed, use `update_plan` to mark each finished step as `completed` and the next step you are working on as `in_progress`. There should always be exactly one `in_progress` step until everything is done. You can mark multiple items as complete in a single `update_plan` call.
 
 If all steps are complete, ensure you call `update_plan` to mark all steps as `completed`.
-
-## `image_generation`
-
-A tool named `image_generation` is available to you. you can use it to generate images to satisfy user request. 
-
-You should only return one image per call. If the user asks for N images, emit exactly N image-generation calls total. Do not try to satisfy "5 images" with one call that asks for a multi-image set. Keep an internal count of image-generation calls already emitted for the current user request. 
