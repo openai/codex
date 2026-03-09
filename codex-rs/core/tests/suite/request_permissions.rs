@@ -1363,12 +1363,7 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
     let approval_file_system = approval_permissions
         .file_system
         .unwrap_or_else(|| panic!("expected filesystem permissions"));
-    assert!(
-        approval_file_system
-            .read
-            .as_ref()
-            .map_or(true, Vec::is_empty)
-    );
+    assert!(approval_file_system.read.as_ref().is_none_or(Vec::is_empty));
 
     let mut approval_writes = approval_file_system.write.unwrap_or_default();
     approval_writes.sort_by_key(|path| path.display().to_string());
