@@ -3245,12 +3245,20 @@ impl CodexMessageProcessor {
                     .upsert_thread(thread.clone())
                     .await;
 
-                thread.status = resolve_thread_status(
+                let status = resolve_thread_status(
                     self.thread_watch_manager
                         .loaded_status_for_thread(&thread.id)
                         .await,
                     false,
                 );
+                if !matches!(status, ThreadStatus::Active { .. }) {
+                    for turn in &mut thread.turns {
+                        if matches!(turn.status, TurnStatus::InProgress) {
+                            turn.status = TurnStatus::Interrupted;
+                        }
+                    }
+                }
+                thread.status = status;
 
                 let response = ThreadResumeResponse {
                     thread,
