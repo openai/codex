@@ -20,6 +20,7 @@ use codex_core::features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::RequestId;
 use codex_protocol::models::MacOsAutomationPermission;
+use codex_protocol::models::MacOsContactsPermission;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ElicitationAction;
@@ -800,6 +801,17 @@ pub(crate) fn format_additional_permissions_rule(
         if macos.macos_calendar {
             parts.push("macOS calendar".to_string());
         }
+        if macos.macos_reminders {
+            parts.push("macOS reminders".to_string());
+        }
+        if !matches!(macos.macos_contacts, MacOsContactsPermission::None) {
+            let value = match macos.macos_contacts {
+                MacOsContactsPermission::None => "none",
+                MacOsContactsPermission::ReadOnly => "readonly",
+                MacOsContactsPermission::ReadWrite => "readwrite",
+            };
+            parts.push(format!("macOS contacts {value}"));
+        }
     }
 
     if parts.is_empty() {
@@ -1401,8 +1413,11 @@ mod tests {
                         "com.apple.Calendar".to_string(),
                         "com.apple.Notes".to_string(),
                     ]),
+                    macos_launch_services: false,
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_reminders: true,
+                    macos_contacts: MacOsContactsPermission::None,
                 }),
                 ..Default::default()
             }),

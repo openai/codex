@@ -31,6 +31,7 @@ use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::MacOsAutomationPermission as CoreMacOsAutomationPermission;
+use codex_protocol::models::MacOsContactsPermission as CoreMacOsContactsPermission;
 use codex_protocol::models::MacOsPreferencesPermission as CoreMacOsPreferencesPermission;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions as CoreMacOsSeatbeltProfileExtensions;
 use codex_protocol::models::MessagePhase;
@@ -964,8 +965,11 @@ impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
 pub struct AdditionalMacOsPermissions {
     pub preferences: CoreMacOsPreferencesPermission,
     pub automations: CoreMacOsAutomationPermission,
+    pub launch_services: bool,
     pub accessibility: bool,
     pub calendar: bool,
+    pub reminders: bool,
+    pub contacts: CoreMacOsContactsPermission,
 }
 
 impl From<CoreMacOsSeatbeltProfileExtensions> for AdditionalMacOsPermissions {
@@ -973,8 +977,11 @@ impl From<CoreMacOsSeatbeltProfileExtensions> for AdditionalMacOsPermissions {
         Self {
             preferences: value.macos_preferences,
             automations: value.macos_automation,
+            launch_services: value.macos_launch_services,
             accessibility: value.macos_accessibility,
             calendar: value.macos_calendar,
+            reminders: value.macos_reminders,
+            contacts: value.macos_contacts,
         }
     }
 }
@@ -984,8 +991,11 @@ impl From<AdditionalMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
         Self {
             macos_preferences: value.preferences,
             macos_automation: value.automations,
+            macos_launch_services: value.launch_services,
             macos_accessibility: value.accessibility,
             macos_calendar: value.calendar,
+            macos_reminders: value.reminders,
+            macos_contacts: value.contacts,
         }
     }
 }
@@ -1054,10 +1064,19 @@ pub struct GrantedMacOsPermissions {
     pub automations: Option<CoreMacOsAutomationPermission>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub launch_services: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub accessibility: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub calendar: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reminders: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub contacts: Option<CoreMacOsContactsPermission>,
 }
 
 impl From<GrantedMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
@@ -1069,8 +1088,11 @@ impl From<GrantedMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
             macos_automation: value
                 .automations
                 .unwrap_or(CoreMacOsAutomationPermission::None),
+            macos_launch_services: value.launch_services.unwrap_or(false),
             macos_accessibility: value.accessibility.unwrap_or(false),
             macos_calendar: value.calendar.unwrap_or(false),
+            macos_reminders: value.reminders.unwrap_or(false),
+            macos_contacts: value.contacts.unwrap_or(CoreMacOsContactsPermission::None),
         }
     }
 }
@@ -1095,8 +1117,11 @@ impl From<GrantedPermissionProfile> for CorePermissionProfile {
         let macos = value.macos.and_then(|macos| {
             if macos.preferences.is_none()
                 && macos.automations.is_none()
+                && macos.launch_services.is_none()
                 && macos.accessibility.is_none()
                 && macos.calendar.is_none()
+                && macos.reminders.is_none()
+                && macos.contacts.is_none()
             {
                 None
             } else {
@@ -5471,8 +5496,11 @@ mod tests {
                     "automations": {
                         "bundle_ids": ["com.apple.Notes"]
                     },
+                    "launchServices": false,
                     "accessibility": false,
-                    "calendar": false
+                    "calendar": false,
+                    "reminders": false,
+                    "contacts": "read_only"
                 }
             },
             "skillMetadata": null,
@@ -5486,10 +5514,52 @@ mod tests {
             params
                 .additional_permissions
                 .and_then(|permissions| permissions.macos)
-                .map(|macos| macos.automations),
-            Some(CoreMacOsAutomationPermission::BundleIds(vec![
-                "com.apple.Notes".to_string(),
-            ]))
+                .map(|macos| (macos.automations, macos.launch_services, macos.contacts)),
+            Some((
+                CoreMacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string(),]),
+                false,
+                CoreMacOsContactsPermission::ReadOnly,
+            ))
+        );
+    }
+
+    #[test]
+    fn command_execution_request_approval_accepts_macos_reminders_permission() {
+        let params = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
+            "threadId": "thr_123",
+            "turnId": "turn_123",
+            "itemId": "call_123",
+            "command": "cat file",
+            "cwd": "/tmp",
+            "commandActions": null,
+            "reason": null,
+            "networkApprovalContext": null,
+            "additionalPermissions": {
+                "network": null,
+                "fileSystem": null,
+                "macos": {
+                    "preferences": "read_only",
+                    "automations": "none",
+                    "launchServices": false,
+                    "accessibility": false,
+                    "calendar": false,
+                    "reminders": true,
+                    "contacts": "none"
+                }
+            },
+            "skillMetadata": null,
+            "proposedExecpolicyAmendment": null,
+            "proposedNetworkPolicyAmendments": null,
+            "availableDecisions": null
+        }))
+        .expect("reminders permission should deserialize");
+
+        assert_eq!(
+            params
+                .additional_permissions
+                .and_then(|permissions| permissions.macos)
+                .map(|macos| macos.reminders),
+            Some(true)
         );
     }
 
@@ -5537,8 +5607,11 @@ mod tests {
                 Some(CoreMacOsSeatbeltProfileExtensions {
                     macos_preferences: CoreMacOsPreferencesPermission::ReadOnly,
                     macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_launch_services: false,
                     macos_accessibility: false,
                     macos_calendar: false,
+                    macos_reminders: false,
+                    macos_contacts: CoreMacOsContactsPermission::None,
                 }),
             ),
             (
@@ -5558,8 +5631,29 @@ mod tests {
                     macos_automation: CoreMacOsAutomationPermission::BundleIds(vec![
                         "com.apple.Notes".to_string(),
                     ]),
+                    macos_launch_services: false,
                     macos_accessibility: false,
                     macos_calendar: false,
+                    macos_reminders: false,
+                    macos_contacts: CoreMacOsContactsPermission::None,
+                }),
+            ),
+            (
+                json!({
+                    "launchServices": true,
+                }),
+                Some(GrantedMacOsPermissions {
+                    launch_services: Some(true),
+                    ..Default::default()
+                }),
+                Some(CoreMacOsSeatbeltProfileExtensions {
+                    macos_preferences: CoreMacOsPreferencesPermission::None,
+                    macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_launch_services: true,
+                    macos_accessibility: false,
+                    macos_calendar: false,
+                    macos_reminders: false,
+                    macos_contacts: CoreMacOsContactsPermission::None,
                 }),
             ),
             (
@@ -5573,8 +5667,11 @@ mod tests {
                 Some(CoreMacOsSeatbeltProfileExtensions {
                     macos_preferences: CoreMacOsPreferencesPermission::None,
                     macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_launch_services: false,
                     macos_accessibility: true,
                     macos_calendar: false,
+                    macos_reminders: false,
+                    macos_contacts: CoreMacOsContactsPermission::None,
                 }),
             ),
             (
@@ -5588,8 +5685,47 @@ mod tests {
                 Some(CoreMacOsSeatbeltProfileExtensions {
                     macos_preferences: CoreMacOsPreferencesPermission::None,
                     macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_launch_services: false,
                     macos_accessibility: false,
                     macos_calendar: true,
+                    macos_reminders: false,
+                    macos_contacts: CoreMacOsContactsPermission::None,
+                }),
+            ),
+            (
+                json!({
+                    "reminders": true,
+                }),
+                Some(GrantedMacOsPermissions {
+                    reminders: Some(true),
+                    ..Default::default()
+                }),
+                Some(CoreMacOsSeatbeltProfileExtensions {
+                    macos_preferences: CoreMacOsPreferencesPermission::None,
+                    macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_launch_services: false,
+                    macos_accessibility: false,
+                    macos_calendar: false,
+                    macos_reminders: true,
+                    macos_contacts: CoreMacOsContactsPermission::None,
+                }),
+            ),
+            (
+                json!({
+                    "contacts": "read_only",
+                }),
+                Some(GrantedMacOsPermissions {
+                    contacts: Some(CoreMacOsContactsPermission::ReadOnly),
+                    ..Default::default()
+                }),
+                Some(CoreMacOsSeatbeltProfileExtensions {
+                    macos_preferences: CoreMacOsPreferencesPermission::None,
+                    macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_launch_services: false,
+                    macos_accessibility: false,
+                    macos_calendar: false,
+                    macos_reminders: false,
+                    macos_contacts: CoreMacOsContactsPermission::ReadOnly,
                 }),
             ),
         ];

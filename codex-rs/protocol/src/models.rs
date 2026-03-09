@@ -110,6 +110,28 @@ pub enum MacOsPreferencesPermission {
     ReadWrite,
 }
 
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    TS,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum MacOsContactsPermission {
+    #[default]
+    None,
+    ReadOnly,
+    ReadWrite,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case", try_from = "MacOsAutomationPermissionDe")]
 pub enum MacOsAutomationPermission {
@@ -174,10 +196,16 @@ pub struct MacOsSeatbeltProfileExtensions {
     pub macos_preferences: MacOsPreferencesPermission,
     #[serde(alias = "automations")]
     pub macos_automation: MacOsAutomationPermission,
+    #[serde(alias = "launch_services")]
+    pub macos_launch_services: bool,
     #[serde(alias = "accessibility")]
     pub macos_accessibility: bool,
     #[serde(alias = "calendar")]
     pub macos_calendar: bool,
+    #[serde(alias = "reminders")]
+    pub macos_reminders: bool,
+    #[serde(alias = "contacts")]
+    pub macos_contacts: MacOsContactsPermission,
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1494,6 +1522,12 @@ mod tests {
     }
 
     #[test]
+    fn macos_contacts_permission_order_matches_permissiveness() {
+        assert!(MacOsContactsPermission::None < MacOsContactsPermission::ReadOnly);
+        assert!(MacOsContactsPermission::ReadOnly < MacOsContactsPermission::ReadWrite);
+    }
+
+    #[test]
     fn permission_profile_deserializes_macos_seatbelt_profile_extensions() {
         let permission_profile = serde_json::from_value::<PermissionProfile>(serde_json::json!({
             "network": null,
@@ -1501,6 +1535,7 @@ mod tests {
             "macos": {
                 "macos_preferences": "read_write",
                 "macos_automation": ["com.apple.Notes"],
+                "macos_launch_services": true,
                 "macos_accessibility": true,
                 "macos_calendar": true
             }
@@ -1517,8 +1552,38 @@ mod tests {
                     macos_automation: MacOsAutomationPermission::BundleIds(vec![
                         "com.apple.Notes".to_string(),
                     ]),
+                    macos_launch_services: true,
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_reminders: false,
+                    macos_contacts: MacOsContactsPermission::None,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn permission_profile_deserializes_macos_reminders_permission() {
+        let permission_profile = serde_json::from_value::<PermissionProfile>(serde_json::json!({
+            "macos": {
+                "macos_reminders": true
+            }
+        }))
+        .expect("deserialize reminders permission profile");
+
+        assert_eq!(
+            permission_profile,
+            PermissionProfile {
+                network: None,
+                file_system: None,
+                macos: Some(MacOsSeatbeltProfileExtensions {
+                    macos_preferences: MacOsPreferencesPermission::ReadOnly,
+                    macos_automation: MacOsAutomationPermission::None,
+                    macos_launch_services: false,
+                    macos_accessibility: false,
+                    macos_calendar: false,
+                    macos_reminders: true,
+                    macos_contacts: MacOsContactsPermission::None,
                 }),
             }
         );
@@ -1539,8 +1604,11 @@ mod tests {
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
                 ]),
+                macos_launch_services: false,
                 macos_accessibility: false,
                 macos_calendar: false,
+                macos_reminders: false,
+                macos_contacts: MacOsContactsPermission::None,
             }
         );
     }
@@ -1551,8 +1619,11 @@ mod tests {
             serde_json::from_value::<MacOsSeatbeltProfileExtensions>(serde_json::json!({
                 "preferences": "read_write",
                 "automations": ["com.apple.Notes"],
+                "launch_services": true,
                 "accessibility": true,
-                "calendar": true
+                "calendar": true,
+                "reminders": true,
+                "contacts": "read_only"
             }))
             .expect("deserialize macos permissions");
 
@@ -1563,8 +1634,11 @@ mod tests {
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
                 ]),
+                macos_launch_services: true,
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_reminders: true,
+                macos_contacts: MacOsContactsPermission::ReadOnly,
             }
         );
     }

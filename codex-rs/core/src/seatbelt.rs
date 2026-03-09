@@ -27,7 +27,8 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
-const MACOS_SEATBELT_PLATFORM_DEFAULTS: &str = include_str!("seatbelt_platform_defaults.sbpl");
+const MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS: &str =
+    include_str!("restricted_read_only_platform_defaults.sbpl");
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the
@@ -529,7 +530,7 @@ pub(crate) fn create_seatbelt_command_args_for_policies_with_extensions(
         network_policy,
     ];
     if include_platform_defaults {
-        policy_sections.push(MACOS_SEATBELT_PLATFORM_DEFAULTS.to_string());
+        policy_sections.push(MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS.to_string());
     }
     if !seatbelt_extensions.policy.is_empty() {
         policy_sections.push(seatbelt_extensions.policy.clone());
@@ -599,6 +600,7 @@ mod tests {
     use crate::protocol::SandboxPolicy;
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
     use crate::seatbelt_permissions::MacOsAutomationPermission;
+    use crate::seatbelt_permissions::MacOsContactsPermission;
     use crate::seatbelt_permissions::MacOsPreferencesPermission;
     use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
     use codex_protocol::permissions::FileSystemAccessMode;
@@ -787,8 +789,11 @@ mod tests {
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
                 ]),
+                macos_launch_services: true,
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_reminders: false,
+                macos_contacts: MacOsContactsPermission::None,
             }),
         );
         let policy = &args[1];
