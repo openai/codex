@@ -1,9 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+#![cfg(target_os = "macos")]
 
 use anyhow::Result;
-#[cfg(target_os = "macos")]
 use codex_core::config::Constrained;
-#[cfg(target_os = "macos")]
 use codex_core::features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -24,7 +23,6 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-#[cfg(target_os = "macos")]
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
