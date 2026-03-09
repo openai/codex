@@ -3201,7 +3201,7 @@ mod tests {
                     },
                 ),
             },
-            conversation_id.clone(),
+            conversation_id,
             conversation,
             thread_manager,
             outgoing,
