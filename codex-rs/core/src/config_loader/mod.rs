@@ -18,9 +18,9 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dunce::canonicalize as normalize_path;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::io;
 use std::path::Path;
-#[cfg(windows)]
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
@@ -702,6 +702,125 @@ async fn project_trust_context(
     })
 }
 
+fn project_trust_context_sync(
+    merged_config: &TomlValue,
+    cwd: &AbsolutePathBuf,
+    project_root_markers: &[String],
+    user_config_file: &AbsolutePathBuf,
+) -> io::Result<ProjectTrustContext> {
+    let project_trust_config: ProjectTrustConfigToml = merged_config
+        .clone()
+        .try_into()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+
+    let project_root = find_project_root_sync(cwd, project_root_markers)?;
+    let projects = project_trust_config.projects.unwrap_or_default();
+
+    let project_root_key = project_root.as_path().to_string_lossy().to_string();
+    let repo_root = resolve_root_git_project_for_trust(cwd.as_path());
+    let repo_root_key = repo_root
+        .as_ref()
+        .map(|root| root.to_string_lossy().to_string());
+
+    let projects_trust = projects
+        .into_iter()
+        .filter_map(|(key, project)| project.trust_level.map(|trust_level| (key, trust_level)))
+        .collect();
+
+    Ok(ProjectTrustContext {
+        project_root,
+        project_root_key,
+        repo_root_key,
+        projects_trust,
+        user_config_file: user_config_file.clone(),
+    })
+}
+
+pub(crate) fn trust_disabled_project_dirs_from_layer_stack(
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &Path,
+) -> HashSet<PathBuf> {
+    let Ok(cwd_abs) = AbsolutePathBuf::from_absolute_path(cwd) else {
+        return HashSet::new();
+    };
+
+    let mut merged = TomlValue::Table(toml::map::Map::new());
+    for layer in
+        config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
+    {
+        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
+            continue;
+        }
+        merge_toml_values(&mut merged, &layer.config);
+    }
+
+    let project_root_markers = match project_root_markers_from_config(&merged) {
+        Ok(Some(markers)) => markers,
+        Ok(None) => default_project_root_markers(),
+        Err(err) => {
+            tracing::warn!("invalid project_root_markers while gating skills: {err}");
+            default_project_root_markers()
+        }
+    };
+
+    let user_config_file = config_layer_stack
+        .get_user_layer()
+        .and_then(|layer| match &layer.name {
+            ConfigLayerSource::User { file } => Some(file.clone()),
+            _ => None,
+        })
+        .or_else(|| cwd_abs.join(CONFIG_TOML_FILE).ok());
+    let Some(user_config_file) = user_config_file else {
+        tracing::warn!("failed to synthesize a user config path while gating skills");
+        return HashSet::new();
+    };
+
+    let trust_context = match project_trust_context_sync(
+        &merged,
+        &cwd_abs,
+        &project_root_markers,
+        &user_config_file,
+    ) {
+        Ok(context) => context,
+        Err(err) => {
+            tracing::warn!("failed to evaluate project trust while gating skills: {err}");
+            return HashSet::new();
+        }
+    };
+
+    let mut disabled = HashSet::new();
+    let dirs = cwd_abs
+        .as_path()
+        .ancestors()
+        .scan(false, |done, ancestor| {
+            if *done {
+                None
+            } else {
+                if ancestor == trust_context.project_root.as_path() {
+                    *done = true;
+                }
+                Some(ancestor)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    for dir in dirs {
+        let Ok(dir_abs) = AbsolutePathBuf::from_absolute_path(dir) else {
+            continue;
+        };
+        if trust_context.decision_for_dir(&dir_abs).is_trusted() {
+            continue;
+        }
+
+        disabled.insert(dir_abs.to_path_buf());
+        let normalized =
+            normalize_path(dir_abs.as_path()).unwrap_or_else(|_| dir_abs.to_path_buf());
+        disabled.insert(normalized);
+    }
+
+    disabled
+}
+
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,
 /// resolving any `AbsolutePathBuf` fields against `base_dir`, returning a new
 /// `toml::Value` with the same shape but with paths resolved.
@@ -778,6 +897,25 @@ async fn find_project_root(
             }
         }
     }
+    Ok(cwd.clone())
+}
+
+fn find_project_root_sync(
+    cwd: &AbsolutePathBuf,
+    project_root_markers: &[String],
+) -> io::Result<AbsolutePathBuf> {
+    if project_root_markers.is_empty() {
+        return Ok(cwd.clone());
+    }
+
+    for ancestor in cwd.as_path().ancestors() {
+        for marker in project_root_markers {
+            if ancestor.join(marker).exists() {
+                return AbsolutePathBuf::from_absolute_path(ancestor);
+            }
+        }
+    }
+
     Ok(cwd.clone())
 }
 
