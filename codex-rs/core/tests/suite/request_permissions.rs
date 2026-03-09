@@ -308,6 +308,10 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
             .features
             .enable(Feature::RequestPermissions)
             .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -392,6 +396,10 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
         config
             .features
             .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
             .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
@@ -490,6 +498,10 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_cwd
             .features
             .enable(Feature::RequestPermissions)
             .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -586,6 +598,10 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_tmp
             .features
             .enable(Feature::RequestPermissions)
             .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -681,6 +697,10 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
         config
             .features
             .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
             .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
@@ -783,6 +803,10 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
             .features
             .enable(Feature::RequestPermissions)
             .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -884,6 +908,10 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
         config
             .features
             .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
             .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
@@ -1000,6 +1028,10 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
             .features
             .enable(Feature::RequestPermissions)
             .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -1107,6 +1139,10 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Resu
             .features
             .enable(Feature::RequestPermissions)
             .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -1206,6 +1242,10 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
         config
             .features
             .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
             .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
@@ -1340,6 +1380,10 @@ async fn request_permissions_grants_do_not_carry_across_turns() -> Result<()> {
         config
             .features
             .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
             .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
