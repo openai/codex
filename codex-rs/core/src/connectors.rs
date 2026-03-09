@@ -1,7 +1,9 @@
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -26,11 +28,14 @@ use crate::default_client::is_first_party_chat_originator;
 use crate::default_client::originator;
 use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::McpManager;
+use crate::mcp::ToolPluginProvenance;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::plugins::AppConnectorId;
+use crate::plugins::PluginsManager;
 use crate::token_data::TokenData;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -123,9 +128,12 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     let auth_manager = auth_manager_from_config(config);
     let auth = auth_manager.auth().await;
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
+    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
+    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
         let cached_connectors = filter_disallowed_connectors(cached_connectors);
+        let cached_connectors = with_app_plugin_sources(cached_connectors, &tool_plugin_provenance);
         return Ok(AccessibleConnectorsStatus {
             connectors: cached_connectors,
             codex_apps_ready: true,
@@ -162,6 +170,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         sandbox_state,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth.as_ref()),
+        ToolPluginProvenance::default(),
     )
     .await;
 
@@ -210,6 +219,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     if codex_apps_ready || !accessible_connectors.is_empty() {
         write_cached_accessible_connectors(cache_key, &accessible_connectors);
     }
+    let accessible_connectors =
+        with_app_plugin_sources(accessible_connectors, &tool_plugin_provenance);
     Ok(AccessibleConnectorsStatus {
         connectors: accessible_connectors,
         codex_apps_ready,
@@ -291,13 +302,19 @@ pub fn connector_mention_slug(connector: &AppInfo) -> String {
 pub(crate) fn accessible_connectors_from_mcp_tools(
     mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
 ) -> Vec<AppInfo> {
+    // ToolInfo already carries plugin provenance, so app-level plugin sources
+    // can be derived here instead of requiring a separate enrichment pass.
     let tools = mcp_tools.values().filter_map(|tool| {
         if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
             return None;
         }
         let connector_id = tool.connector_id.as_deref()?;
         let connector_name = normalize_connector_value(tool.connector_name.as_deref());
-        Some((connector_id.to_string(), connector_name))
+        Some((
+            connector_id.to_string(),
+            connector_name,
+            tool.plugin_display_names.clone(),
+        ))
     });
     collect_accessible_connectors(tools)
 }
@@ -334,6 +351,9 @@ pub fn merge_connectors(
             if existing.distribution_channel.is_none() && connector.distribution_channel.is_some() {
                 existing.distribution_channel = connector.distribution_channel;
             }
+            existing
+                .plugin_display_names
+                .extend(connector.plugin_display_names);
         } else {
             merged.insert(connector_id, connector);
         }
@@ -344,6 +364,8 @@ pub fn merge_connectors(
         if connector.install_url.is_none() {
             connector.install_url = Some(connector_install_url(&connector.name, &connector.id));
         }
+        connector.plugin_display_names.sort_unstable();
+        connector.plugin_display_names.dedup();
     }
     merged.sort_by(|left, right| {
         right
@@ -403,6 +425,18 @@ pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> 
         for connector in &mut connectors {
             connector.is_enabled = app_is_enabled(apps_config, Some(connector.id.as_str()));
         }
+    }
+    connectors
+}
+
+pub fn with_app_plugin_sources(
+    mut connectors: Vec<AppInfo>,
+    tool_plugin_provenance: &ToolPluginProvenance,
+) -> Vec<AppInfo> {
+    for connector in &mut connectors {
+        connector.plugin_display_names = tool_plugin_provenance
+            .plugin_display_names_for_connector_id(connector.id.as_str())
+            .to_vec();
     }
     connectors
 }
@@ -579,35 +613,49 @@ fn app_tool_policy_from_apps_config(
 
 fn collect_accessible_connectors<I>(tools: I) -> Vec<AppInfo>
 where
-    I: IntoIterator<Item = (String, Option<String>)>,
+    I: IntoIterator<Item = (String, Option<String>, Vec<String>)>,
 {
-    let mut connectors: HashMap<String, String> = HashMap::new();
-    for (connector_id, connector_name) in tools {
+    let mut connectors: HashMap<String, (String, BTreeSet<String>)> = HashMap::new();
+    for (connector_id, connector_name, plugin_display_names) in tools {
         let connector_name = connector_name.unwrap_or_else(|| connector_id.clone());
-        if let Some(existing_name) = connectors.get_mut(&connector_id) {
+        if let Some((existing_name, existing_plugin_display_names)) =
+            connectors.get_mut(&connector_id)
+        {
             if existing_name == &connector_id && connector_name != connector_id {
                 *existing_name = connector_name;
             }
+            existing_plugin_display_names.extend(plugin_display_names);
         } else {
-            connectors.insert(connector_id, connector_name);
+            connectors.insert(
+                connector_id,
+                (
+                    connector_name,
+                    plugin_display_names
+                        .into_iter()
+                        .collect::<BTreeSet<String>>(),
+                ),
+            );
         }
     }
     let mut accessible: Vec<AppInfo> = connectors
         .into_iter()
-        .map(|(connector_id, connector_name)| AppInfo {
-            id: connector_id.clone(),
-            name: connector_name.clone(),
-            description: None,
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            install_url: Some(connector_install_url(&connector_name, &connector_id)),
-            is_accessible: true,
-            is_enabled: true,
-        })
+        .map(
+            |(connector_id, (connector_name, plugin_display_names))| AppInfo {
+                id: connector_id.clone(),
+                name: connector_name.clone(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some(connector_install_url(&connector_name, &connector_id)),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_display_names.into_iter().collect(),
+            },
+        )
         .collect();
     accessible.sort_by(|left, right| {
         right
@@ -638,6 +686,7 @@ fn plugin_app_to_app_info(connector_id: AppConnectorId) -> AppInfo {
         install_url: Some(connector_install_url(&name, &connector_id)),
         is_accessible: false,
         is_enabled: true,
+        plugin_display_names: Vec::new(),
     }
 }
 
@@ -681,7 +730,11 @@ mod tests {
     use crate::config::types::AppToolConfig;
     use crate::config::types::AppToolsConfig;
     use crate::config::types::AppsDefaultConfig;
+    use crate::mcp_connection_manager::ToolInfo;
     use pretty_assertions::assert_eq;
+    use rmcp::model::JsonObject;
+    use rmcp::model::Tool;
+    use std::sync::Arc;
 
     fn annotations(
         destructive_hint: Option<bool>,
@@ -710,13 +763,30 @@ mod tests {
             labels: None,
             is_accessible: false,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         }
     }
 
-    #[test]
-    fn merge_connectors_replaces_plugin_placeholder_name_with_accessible_name() {
-        let plugin = plugin_app_to_app_info(AppConnectorId("calendar".to_string()));
-        let accessible = AppInfo {
+    fn plugin_names(names: &[&str]) -> Vec<String> {
+        names.iter().map(ToString::to_string).collect()
+    }
+
+    fn test_tool_definition(tool_name: &str) -> Tool {
+        Tool {
+            name: tool_name.to_string().into(),
+            title: None,
+            description: None,
+            input_schema: Arc::new(JsonObject::default()),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        }
+    }
+
+    fn google_calendar_accessible_connector(plugin_display_names: &[&str]) -> AppInfo {
+        AppInfo {
             id: "calendar".to_string(),
             name: "Google Calendar".to_string(),
             description: Some("Plan events".to_string()),
@@ -729,7 +799,30 @@ mod tests {
             install_url: None,
             is_accessible: true,
             is_enabled: true,
-        };
+            plugin_display_names: plugin_names(plugin_display_names),
+        }
+    }
+
+    fn codex_app_tool(
+        tool_name: &str,
+        connector_id: &str,
+        connector_name: Option<&str>,
+        plugin_display_names: &[&str],
+    ) -> ToolInfo {
+        ToolInfo {
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool_name: tool_name.to_string(),
+            tool: test_tool_definition(tool_name),
+            connector_id: Some(connector_id.to_string()),
+            connector_name: connector_name.map(ToOwned::to_owned),
+            plugin_display_names: plugin_names(plugin_display_names),
+        }
+    }
+
+    #[test]
+    fn merge_connectors_replaces_plugin_placeholder_name_with_accessible_name() {
+        let plugin = plugin_app_to_app_info(AppConnectorId("calendar".to_string()));
+        let accessible = google_calendar_accessible_connector(&[]);
 
         let merged = merge_connectors(vec![plugin], vec![accessible]);
 
@@ -748,9 +841,95 @@ mod tests {
                 install_url: Some(connector_install_url("calendar", "calendar")),
                 is_accessible: true,
                 is_enabled: true,
+                plugin_display_names: Vec::new(),
             }]
         );
         assert_eq!(connector_mention_slug(&merged[0]), "google-calendar");
+    }
+
+    #[test]
+    fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
+        let tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_list_events".to_string(),
+                codex_app_tool(
+                    "calendar_list_events",
+                    "calendar",
+                    None,
+                    &["sample", "sample"],
+                ),
+            ),
+            (
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                codex_app_tool(
+                    "calendar_create_event",
+                    "calendar",
+                    Some("Google Calendar"),
+                    &["beta", "sample"],
+                ),
+            ),
+            (
+                "mcp__sample__echo".to_string(),
+                ToolInfo {
+                    server_name: "sample".to_string(),
+                    tool_name: "echo".to_string(),
+                    tool: test_tool_definition("echo"),
+                    connector_id: None,
+                    connector_name: None,
+                    plugin_display_names: plugin_names(&["ignored"]),
+                },
+            ),
+        ]);
+
+        let connectors = accessible_connectors_from_mcp_tools(&tools);
+
+        assert_eq!(
+            connectors,
+            vec![AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Google Calendar", "calendar")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_names(&["beta", "sample"]),
+            }]
+        );
+    }
+
+    #[test]
+    fn merge_connectors_unions_and_dedupes_plugin_display_names() {
+        let mut plugin = plugin_app_to_app_info(AppConnectorId("calendar".to_string()));
+        plugin.plugin_display_names = plugin_names(&["sample", "alpha", "sample"]);
+
+        let accessible = google_calendar_accessible_connector(&["beta", "alpha"]);
+
+        let merged = merge_connectors(vec![plugin], vec![accessible]);
+
+        assert_eq!(
+            merged,
+            vec![AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Plan events".to_string()),
+                logo_url: Some("https://example.com/logo.png".to_string()),
+                logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
+                distribution_channel: Some("workspace".to_string()),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some(connector_install_url("calendar", "calendar")),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_names(&["alpha", "beta", "sample"]),
+            }]
+        );
     }
 
     #[test]

@@ -10,4 +10,8 @@ export type McpServerElicitationRequestResponse = { action: McpServerElicitation
  *
  * This is nullable because decline/cancel responses have no content.
  */
-content: JsonValue | null, };
+content: JsonValue | null, 
+/**
+ * Optional client metadata for form-mode action handling.
+ */
+_meta: JsonValue | null, };

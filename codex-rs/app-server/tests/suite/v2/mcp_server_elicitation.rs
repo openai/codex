@@ -16,6 +16,7 @@ use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
@@ -186,12 +187,12 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
     let ServerRequest::McpServerElicitationRequest { request_id, params } = server_req else {
         panic!("expected McpServerElicitationRequest request, got: {server_req:?}");
     };
-    let requested_schema = serde_json::to_value(
+    let requested_schema: McpElicitationSchema = serde_json::from_value(serde_json::to_value(
         ElicitationSchema::builder()
             .required_property("confirmed", PrimitiveSchema::Boolean(BooleanSchema::new()))
             .build()
             .map_err(anyhow::Error::msg)?,
-    )?;
+    )?)?;
 
     assert_eq!(
         params,
@@ -200,6 +201,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
             turn_id: Some(turn.id.clone()),
             server_name: "codex_apps".to_string(),
             request: McpServerElicitationRequest::Form {
+                meta: None,
                 message: ELICITATION_MESSAGE.to_string(),
                 requested_schema,
             },
@@ -214,6 +216,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
             content: Some(json!({
                 "confirmed": true,
             })),
+            meta: None,
         })?,
     )
     .await?;

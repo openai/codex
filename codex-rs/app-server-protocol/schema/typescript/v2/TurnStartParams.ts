@@ -36,7 +36,8 @@ summary?: ReasoningSummary | null, /**
  * Override the personality for this turn and subsequent turns.
  */
 personality?: Personality | null, /**
- * Optional JSON Schema used to constrain the final assistant message for this turn.
+ * Optional JSON Schema used to constrain the final assistant message for
+ * this turn.
  */
 outputSchema?: JsonValue | null, /**
  * EXPERIMENTAL - Set a pre-set collaboration mode.

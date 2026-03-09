@@ -132,12 +132,6 @@
             "null"
           ]
         },
-        "dangerouslyAllowNonLoopbackAdmin": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "dangerouslyAllowNonLoopbackProxy": {
           "type": [
             "boolean",

@@ -11,6 +11,9 @@
     }
   },
   "properties": {
+    "_meta": {
+      "description": "Optional client metadata for form-mode action handling."
+    },
     "action": {
       "$ref": "#/definitions/McpServerElicitationAction"
     },

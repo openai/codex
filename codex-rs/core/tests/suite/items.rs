@@ -269,7 +269,7 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+    let TestCodex { codex, cwd, .. } = test_codex().build(&server).await?;
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
@@ -304,6 +304,59 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     assert_eq!(end.status, "completed");
     assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
     assert_eq!(end.result, "Zm9v");
+    let expected_saved_path = cwd.path().join("ig_123.png");
+    assert_eq!(
+        end.saved_path,
+        Some(expected_saved_path.to_string_lossy().into_owned())
+    );
+    assert_eq!(std::fs::read(expected_saved_path)?, b"foo");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn image_generation_call_event_is_emitted_when_image_save_fails() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex { codex, cwd, .. } = test_codex().build(&server).await?;
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_image_generation_call("ig_invalid", "completed", "broken payload", "_-8"),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, first_response).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "generate an image".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let begin = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let end = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(begin.call_id, "ig_invalid");
+    assert_eq!(end.call_id, "ig_invalid");
+    assert_eq!(end.status, "completed");
+    assert_eq!(end.revised_prompt, Some("broken payload".to_string()));
+    assert_eq!(end.result, "_-8");
+    assert_eq!(end.saved_path, None);
+    assert!(!cwd.path().join("ig_invalid.png").exists());
 
     Ok(())
 }

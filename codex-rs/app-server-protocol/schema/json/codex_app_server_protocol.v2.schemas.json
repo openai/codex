@@ -404,6 +404,13 @@
         },
         "name": {
           "type": "string"
+        },
+        "pluginDisplayNames": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -550,6 +557,34 @@
       },
       "required": [
         "userPrompt"
+      ],
+      "type": "object"
+    },
+    "AppSummary": {
+      "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "installUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
       ],
       "type": "object"
     },
@@ -1211,6 +1246,30 @@
             },
             "method": {
               "enum": [
+                "plugin/list"
+              ],
+              "title": "Plugin/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PluginListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/remote/list"
               ],
               "title": "Skills/remote/listRequestMethod",
@@ -1682,7 +1741,7 @@
           "type": "object"
         },
         {
-          "description": "Execute a command (argv vector) under the server's sandbox.",
+          "description": "Execute a standalone command (argv vector) under the server's sandbox.",
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
@@ -1704,6 +1763,81 @@
             "params"
           ],
           "title": "Command/execRequest",
+          "type": "object"
+        },
+        {
+          "description": "Write stdin bytes to a running `command/exec` session or close stdin.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec/write"
+              ],
+              "title": "Command/exec/writeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecWriteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/writeRequest",
+          "type": "object"
+        },
+        {
+          "description": "Terminate a running `command/exec` session by client-supplied `processId`.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec/terminate"
+              ],
+              "title": "Command/exec/terminateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecTerminateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/terminateRequest",
+          "type": "object"
+        },
+        {
+          "description": "Resize a running PTY-backed `command/exec` session by client-supplied `processId`.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec/resize"
+              ],
+              "title": "Command/exec/resizeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecResizeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/resizeRequest",
           "type": "object"
         },
         {
@@ -2300,16 +2434,109 @@
         }
       ]
     },
+    "CommandExecOutputDeltaNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Base64-encoded output chunk emitted for a streaming `command/exec` request.\n\nThese notifications are connection-scoped. If the originating connection closes, the server terminates the process.",
+      "properties": {
+        "capReached": {
+          "description": "`true` on the final streamed chunk for a stream when `outputBytesCap` truncated later output on that stream.",
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "description": "Base64-encoded output bytes.",
+          "type": "string"
+        },
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        },
+        "stream": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CommandExecOutputStream"
+            }
+          ],
+          "description": "Output stream for this chunk."
+        }
+      },
+      "required": [
+        "capReached",
+        "deltaBase64",
+        "processId",
+        "stream"
+      ],
+      "title": "CommandExecOutputDeltaNotification",
+      "type": "object"
+    },
+    "CommandExecOutputStream": {
+      "description": "Stream label for `command/exec/outputDelta` notifications.",
+      "oneOf": [
+        {
+          "description": "stdout stream. PTY mode multiplexes terminal output here.",
+          "enum": [
+            "stdout"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "stderr stream.",
+          "enum": [
+            "stderr"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "CommandExecParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Run a standalone command (argv vector) in the server sandbox without creating a thread or turn.\n\nThe final `command/exec` response is deferred until the process exits and is sent only after all `command/exec/outputDelta` notifications for that connection have been emitted.",
       "properties": {
         "command": {
+          "description": "Command argv vector. Empty arrays are rejected.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "cwd": {
+          "description": "Optional working directory. Defaults to the server cwd.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disableOutputCap": {
+          "description": "Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
+          "type": "boolean"
+        },
+        "disableTimeout": {
+          "description": "Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
+          "type": "boolean"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "outputBytesCap": {
+          "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "processId": {
+          "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
           "type": [
             "string",
             "null"
@@ -2323,14 +2550,39 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted."
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CommandExecTerminalSize"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional initial PTY size in character cells. Only valid when `tty` is true."
+        },
+        "streamStdin": {
+          "description": "Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
+          "type": "boolean"
+        },
+        "streamStdoutStderr": {
+          "description": "Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
+          "type": "boolean"
         },
         "timeoutMs": {
+          "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
           "format": "int64",
           "type": [
             "integer",
             "null"
           ]
+        },
+        "tty": {
+          "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -2339,17 +2591,51 @@
       "title": "CommandExecParams",
       "type": "object"
     },
+    "CommandExecResizeParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Resize a running PTY-backed `command/exec` session.",
+      "properties": {
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        },
+        "size": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CommandExecTerminalSize"
+            }
+          ],
+          "description": "New PTY size in character cells."
+        }
+      },
+      "required": [
+        "processId",
+        "size"
+      ],
+      "title": "CommandExecResizeParams",
+      "type": "object"
+    },
+    "CommandExecResizeResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Empty success response for `command/exec/resize`.",
+      "title": "CommandExecResizeResponse",
+      "type": "object"
+    },
     "CommandExecResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Final buffered result for `command/exec`.",
       "properties": {
         "exitCode": {
+          "description": "Process exit code.",
           "format": "int32",
           "type": "integer"
         },
         "stderr": {
+          "description": "Buffered stderr capture.\n\nEmpty when stderr was streamed via `command/exec/outputDelta`.",
           "type": "string"
         },
         "stdout": {
+          "description": "Buffered stdout capture.\n\nEmpty when stdout was streamed via `command/exec/outputDelta`.",
           "type": "string"
         }
       },
@@ -2359,6 +2645,81 @@
         "stdout"
       ],
       "title": "CommandExecResponse",
+      "type": "object"
+    },
+    "CommandExecTerminalSize": {
+      "description": "PTY size in character cells for `command/exec` PTY sessions.",
+      "properties": {
+        "cols": {
+          "description": "Terminal width in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rows": {
+          "description": "Terminal height in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "CommandExecTerminateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Terminate a running `command/exec` session.",
+      "properties": {
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "processId"
+      ],
+      "title": "CommandExecTerminateParams",
+      "type": "object"
+    },
+    "CommandExecTerminateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Empty success response for `command/exec/terminate`.",
+      "title": "CommandExecTerminateResponse",
+      "type": "object"
+    },
+    "CommandExecWriteParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Write stdin bytes to a running `command/exec` session, close stdin, or both.",
+      "properties": {
+        "closeStdin": {
+          "description": "Close stdin after writing `deltaBase64`, if present.",
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "description": "Optional base64-encoded stdin bytes to write.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "processId"
+      ],
+      "title": "CommandExecWriteParams",
+      "type": "object"
+    },
+    "CommandExecWriteResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Empty success response for `command/exec/write`.",
+      "title": "CommandExecWriteResponse",
       "type": "object"
     },
     "CommandExecutionOutputDeltaNotification": {
@@ -2601,6 +2962,10 @@
             "string",
             "null"
           ]
+        },
+        "reloadUserConfig": {
+          "description": "When true, hot-reload the updated user config into all loaded threads after writing.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -3290,6 +3655,7 @@
       "oneOf": [
         {
           "properties": {
+            "_meta": true,
             "message": {
               "type": "string"
             },
@@ -3310,6 +3676,7 @@
         },
         {
           "properties": {
+            "_meta": true,
             "elicitation_id": {
               "type": "string"
             },
@@ -4180,7 +4547,7 @@
         {
           "properties": {
             "action": {
-              "$ref": "#/definitions/WebSearchAction"
+              "$ref": "#/definitions/ResponsesApiWebSearchAction"
             },
             "call_id": {
               "type": "string"
@@ -4234,6 +4601,12 @@
               "type": "string"
             },
             "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
               "type": [
                 "string",
                 "null"
@@ -4626,6 +4999,17 @@
                 "null"
               ]
             },
+            "skill_metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ExecApprovalRequestSkillMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional skill metadata when the approval was triggered by a skill script."
+            },
             "turn_id": {
               "default": "",
               "description": "Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
@@ -4647,6 +5031,42 @@
             "type"
           ],
           "title": "ExecApprovalRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "description": "Responses API call id for the associated tool call, if available.",
+              "type": "string"
+            },
+            "permissions": {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "default": "",
+              "description": "Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "request_permissions"
+              ],
+              "title": "RequestPermissionsEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "permissions",
+            "type"
+          ],
+          "title": "RequestPermissionsEventMsg",
           "type": "object"
         },
         {
@@ -4786,6 +5206,13 @@
             },
             "server_name": {
               "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this elicitation belongs to, when known.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -6196,6 +6623,17 @@
       ],
       "title": "EventMsg"
     },
+    "ExecApprovalRequestSkillMetadata": {
+      "properties": {
+        "path_to_skills_md": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path_to_skills_md"
+      ],
+      "type": "object"
+    },
     "ExecCommandSource": {
       "enum": [
         "agent",
@@ -7343,65 +7781,69 @@
       "title": "LogoutAccountResponse",
       "type": "object"
     },
-    "MacOsAutomationValue": {
-      "anyOf": [
+    "MacOsAutomationPermission": {
+      "oneOf": [
         {
-          "type": "boolean"
+          "enum": [
+            "none",
+            "all"
+          ],
+          "type": "string"
         },
         {
-          "items": {
-            "type": "string"
+          "additionalProperties": false,
+          "properties": {
+            "bundle_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
           },
-          "type": "array"
+          "required": [
+            "bundle_ids"
+          ],
+          "title": "BundleIdsMacOsAutomationPermission",
+          "type": "object"
         }
       ]
     },
-    "MacOsPermissions": {
+    "MacOsPreferencesPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
+    "MacOsSeatbeltProfileExtensions": {
       "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_accessibility": {
+          "default": false,
+          "type": "boolean"
         },
-        "automations": {
-          "anyOf": [
+        "macos_automation": {
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsAutomationPermission"
             }
-          ]
+          ],
+          "default": "none"
         },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_calendar": {
+          "default": false,
+          "type": "boolean"
         },
-        "preferences": {
-          "anyOf": [
+        "macos_preferences": {
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsPreferencesPermission"
             }
-          ]
+          ],
+          "default": "read_only"
         }
       },
       "type": "object"
-    },
-    "MacOsPreferencesValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "string"
-        }
-      ]
     },
     "McpAuthStatus": {
       "enum": [
@@ -8023,12 +8465,6 @@
             "null"
           ]
         },
-        "dangerouslyAllowNonLoopbackAdmin": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "dangerouslyAllowNonLoopbackProxy": {
           "type": [
             "boolean",
@@ -8279,7 +8715,7 @@
         "macos": {
           "anyOf": [
             {
-              "$ref": "#/definitions/MacOsPermissions"
+              "$ref": "#/definitions/MacOsSeatbeltProfileExtensions"
             },
             {
               "type": "null"
@@ -8366,21 +8802,15 @@
     "PluginInstallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "cwd": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "marketplaceName": {
-          "type": "string"
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
         },
         "pluginName": {
           "type": "string"
         }
       },
       "required": [
-        "marketplaceName",
+        "marketplacePath",
         "pluginName"
       ],
       "title": "PluginInstallParams",
@@ -8388,7 +8818,235 @@
     },
     "PluginInstallResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "appsNeedingAuth": {
+          "items": {
+            "$ref": "#/definitions/AppSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "appsNeedingAuth"
+      ],
       "title": "PluginInstallResponse",
+      "type": "object"
+    },
+    "PluginInterface": {
+      "properties": {
+        "brandColor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "composerIcon": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultPrompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "developerName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logo": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "longDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "privacyPolicyUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "screenshots": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "shortDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "termsOfServiceUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "websiteUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "capabilities",
+        "screenshots"
+      ],
+      "type": "object"
+    },
+    "PluginListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cwds": {
+          "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "title": "PluginListParams",
+      "type": "object"
+    },
+    "PluginListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplaces": {
+          "items": {
+            "$ref": "#/definitions/PluginMarketplaceEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "marketplaces"
+      ],
+      "title": "PluginListResponse",
+      "type": "object"
+    },
+    "PluginMarketplaceEntry": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "plugins": {
+          "items": {
+            "$ref": "#/definitions/PluginSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "plugins"
+      ],
+      "type": "object"
+    },
+    "PluginSource": {
+      "oneOf": [
+        {
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "local"
+              ],
+              "title": "LocalPluginSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalPluginSource",
+          "type": "object"
+        }
+      ]
+    },
+    "PluginSummary": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PluginInterface"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/PluginSource"
+        }
+      },
+      "required": [
+        "enabled",
+        "id",
+        "installed",
+        "name",
+        "source"
+      ],
       "type": "object"
     },
     "ProductSurface": {
@@ -8465,6 +9123,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolsV2"
             },
             {
               "type": "null"
@@ -9446,7 +10114,7 @@
             "action": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/WebSearchAction"
+                  "$ref": "#/definitions/ResponsesApiWebSearchAction"
                 },
                 {
                   "type": "null"
@@ -9568,6 +10236,107 @@
             "type"
           ],
           "title": "OtherResponseItem",
+          "type": "object"
+        }
+      ]
+    },
+    "ResponsesApiWebSearchAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "queries": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "search"
+              ],
+              "title": "SearchResponsesApiWebSearchActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "SearchResponsesApiWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "open_page"
+              ],
+              "title": "OpenPageResponsesApiWebSearchActionType",
+              "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OpenPageResponsesApiWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "pattern": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "find_in_page"
+              ],
+              "title": "FindInPageResponsesApiWebSearchActionType",
+              "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FindInPageResponsesApiWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "other"
+              ],
+              "title": "OtherResponsesApiWebSearchActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OtherResponsesApiWebSearchAction",
           "type": "object"
         }
       ]
@@ -10417,6 +11186,27 @@
           "type": "object"
         },
         {
+          "description": "Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "command/exec/outputDelta"
+              ],
+              "title": "Command/exec/outputDeltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecOutputDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/outputDeltaNotification",
+          "type": "object"
+        },
+        {
           "properties": {
             "method": {
               "enum": [
@@ -10967,9 +11757,6 @@
     },
     "SessionNetworkProxyRuntime": {
       "properties": {
-        "admin_addr": {
-          "type": "string"
-        },
         "http_addr": {
           "type": "string"
         },
@@ -10978,7 +11765,6 @@
         }
       },
       "required": [
-        "admin_addr",
         "http_addr",
         "socks_addr"
       ],
@@ -13590,9 +14376,13 @@
           ]
         },
         "web_search": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchToolConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -13858,7 +14648,7 @@
         {
           "properties": {
             "action": {
-              "$ref": "#/definitions/WebSearchAction"
+              "$ref": "#/definitions/ResponsesApiWebSearchAction"
             },
             "id": {
               "type": "string"
@@ -13892,6 +14682,12 @@
               "type": "string"
             },
             "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
               "type": [
                 "string",
                 "null"
@@ -14345,7 +15141,7 @@
           "properties": {
             "type": {
               "enum": [
-                "open_page"
+                "openPage"
               ],
               "title": "OpenPageWebSearchActionType",
               "type": "string"
@@ -14373,7 +15169,7 @@
             },
             "type": {
               "enum": [
-                "find_in_page"
+                "findInPage"
               ],
               "title": "FindInPageWebSearchActionType",
               "type": "string"
@@ -14409,6 +15205,44 @@
         }
       ]
     },
+    "WebSearchContextSize": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "WebSearchLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "city": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "country": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "WebSearchMode": {
       "enum": [
         "disabled",
@@ -14416,6 +15250,41 @@
         "live"
       ],
       "type": "string"
+    },
+    "WebSearchToolConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "context_size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchContextSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "WindowsSandboxSetupCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -14451,9 +15320,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "cwd": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "mode": {

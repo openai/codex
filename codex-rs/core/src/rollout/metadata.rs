@@ -7,7 +7,6 @@ use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
 use chrono::Utc;
-use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
@@ -96,7 +95,6 @@ pub(crate) fn builder_from_items(
 pub(crate) async fn extract_metadata_from_rollout(
     rollout_path: &Path,
     default_provider: &str,
-    otel: Option<&OtelManager>,
 ) -> anyhow::Result<ExtractionOutcome> {
     let (items, _thread_id, parse_errors) =
         RolloutRecorder::load_rollout_items(rollout_path).await?;
@@ -119,15 +117,6 @@ pub(crate) async fn extract_metadata_from_rollout(
     if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
         metadata.updated_at = updated_at;
     }
-    if parse_errors > 0
-        && let Some(otel) = otel
-    {
-        otel.counter(
-            DB_ERROR_METRIC,
-            parse_errors as i64,
-            &[("stage", "extract_metadata_from_rollout")],
-        );
-    }
     Ok(ExtractionOutcome {
         metadata,
         memory_mode: items.iter().rev().find_map(|item| match item {
@@ -141,12 +130,11 @@ pub(crate) async fn extract_metadata_from_rollout(
     })
 }
 
-pub(crate) async fn backfill_sessions(
-    runtime: &codex_state::StateRuntime,
-    config: &Config,
-    otel: Option<&OtelManager>,
-) {
-    let timer = otel.and_then(|otel| otel.start_timer(DB_METRIC_BACKFILL_DURATION_MS, &[]).ok());
+pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, config: &Config) {
+    let metric_client = codex_otel::metrics::global();
+    let timer = metric_client
+        .as_ref()
+        .and_then(|otel| otel.start_timer(DB_METRIC_BACKFILL_DURATION_MS, &[]).ok());
     let backfill_state = match runtime.get_backfill_state().await {
         Ok(state) => state,
         Err(err) => {
@@ -154,9 +142,6 @@ pub(crate) async fn backfill_sessions(
                 "failed to read backfill state at {}: {err}",
                 config.codex_home.display()
             );
-            if let Some(otel) = otel {
-                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "backfill_state_read")]);
-            }
             BackfillState::default()
         }
     };
@@ -170,13 +155,6 @@ pub(crate) async fn backfill_sessions(
                 "failed to claim backfill worker at {}: {err}",
                 config.codex_home.display()
             );
-            if let Some(otel) = otel {
-                otel.counter(
-                    DB_ERROR_METRIC,
-                    1,
-                    &[("stage", "backfill_state_claim_running")],
-                );
-            }
             return;
         }
     };
@@ -194,13 +172,6 @@ pub(crate) async fn backfill_sessions(
                 "failed to read claimed backfill state at {}: {err}",
                 config.codex_home.display()
             );
-            if let Some(otel) = otel {
-                otel.counter(
-                    DB_ERROR_METRIC,
-                    1,
-                    &[("stage", "backfill_state_read_claimed")],
-                );
-            }
             BackfillState {
                 status: BackfillStatus::Running,
                 ..Default::default()
@@ -213,13 +184,6 @@ pub(crate) async fn backfill_sessions(
                 "failed to mark backfill running at {}: {err}",
                 config.codex_home.display()
             );
-            if let Some(otel) = otel {
-                otel.counter(
-                    DB_ERROR_METRIC,
-                    1,
-                    &[("stage", "backfill_state_mark_running")],
-                );
-            }
         } else {
             backfill_state.status = BackfillStatus::Running;
         }
@@ -262,18 +226,14 @@ pub(crate) async fn backfill_sessions(
     for batch in rollout_paths.chunks(BACKFILL_BATCH_SIZE) {
         for rollout in batch {
             stats.scanned = stats.scanned.saturating_add(1);
-            match extract_metadata_from_rollout(
-                &rollout.path,
-                config.model_provider_id.as_str(),
-                otel,
-            )
-            .await
+            match extract_metadata_from_rollout(&rollout.path, config.model_provider_id.as_str())
+                .await
             {
                 Ok(outcome) => {
                     if outcome.parse_errors > 0
-                        && let Some(otel) = otel
+                        && let Some(ref metric_client) = metric_client
                     {
-                        otel.counter(
+                        let _ = metric_client.counter(
                             DB_ERROR_METRIC,
                             outcome.parse_errors as i64,
                             &[("stage", "backfill_sessions")],
@@ -317,13 +277,6 @@ pub(crate) async fn backfill_sessions(
                                 )
                                 .await
                             {
-                                if let Some(otel) = otel {
-                                    otel.counter(
-                                        DB_ERROR_METRIC,
-                                        1,
-                                        &[("stage", "backfill_dynamic_tools")],
-                                    );
-                                }
                                 warn!(
                                     "failed to backfill dynamic tools {}: {err}",
                                     rollout.path.display()
@@ -356,13 +309,6 @@ pub(crate) async fn backfill_sessions(
                     "failed to checkpoint backfill at {}: {err}",
                     config.codex_home.display()
                 );
-                if let Some(otel) = otel {
-                    otel.counter(
-                        DB_ERROR_METRIC,
-                        1,
-                        &[("stage", "backfill_state_checkpoint")],
-                    );
-                }
             } else {
                 last_watermark = Some(last_entry.watermark.clone());
             }
@@ -376,26 +322,19 @@ pub(crate) async fn backfill_sessions(
             "failed to mark backfill complete at {}: {err}",
             config.codex_home.display()
         );
-        if let Some(otel) = otel {
-            otel.counter(
-                DB_ERROR_METRIC,
-                1,
-                &[("stage", "backfill_state_mark_complete")],
-            );
-        }
     }
 
     info!(
         "state db backfill scanned={}, upserted={}, failed={}",
         stats.scanned, stats.upserted, stats.failed
     );
-    if let Some(otel) = otel {
-        otel.counter(
+    if let Some(metric_client) = metric_client {
+        let _ = metric_client.counter(
             DB_METRIC_BACKFILL,
             stats.upserted as i64,
             &[("status", "upserted")],
         );
-        otel.counter(
+        let _ = metric_client.counter(
             DB_METRIC_BACKFILL,
             stats.failed as i64,
             &[("status", "failed")],
@@ -558,7 +497,7 @@ mod tests {
         let mut file = File::create(&path).expect("create rollout");
         writeln!(file, "{json}").expect("write rollout");
 
-        let outcome = extract_metadata_from_rollout(&path, "openai", None)
+        let outcome = extract_metadata_from_rollout(&path, "openai")
             .await
             .expect("extract");
 
@@ -627,7 +566,7 @@ mod tests {
             .expect("write rollout line");
         }
 
-        let outcome = extract_metadata_from_rollout(&path, "openai", None)
+        let outcome = extract_metadata_from_rollout(&path, "openai")
             .await
             .expect("extract");
 
@@ -684,7 +623,7 @@ mod tests {
         );
 
         let runtime =
-            codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string())
                 .await
                 .expect("initialize runtime");
         let first_watermark =
@@ -702,7 +641,7 @@ mod tests {
         let mut config = crate::config::test_config();
         config.codex_home = codex_home.clone();
         config.model_provider_id = "test-provider".to_string();
-        backfill_sessions(runtime.as_ref(), &config, None).await;
+        backfill_sessions(runtime.as_ref(), &config).await;
 
         let first_id = ThreadId::from_string(&first_uuid.to_string()).expect("first thread id");
         let second_id = ThreadId::from_string(&second_uuid.to_string()).expect("second thread id");
@@ -754,11 +693,11 @@ mod tests {
         );
 
         let runtime =
-            codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string())
                 .await
                 .expect("initialize runtime");
         let thread_id = ThreadId::from_string(&thread_uuid.to_string()).expect("thread id");
-        let mut existing = extract_metadata_from_rollout(&rollout_path, "test-provider", None)
+        let mut existing = extract_metadata_from_rollout(&rollout_path, "test-provider")
             .await
             .expect("extract")
             .metadata;
@@ -773,7 +712,7 @@ mod tests {
         let mut config = crate::config::test_config();
         config.codex_home = codex_home.clone();
         config.model_provider_id = "test-provider".to_string();
-        backfill_sessions(runtime.as_ref(), &config, None).await;
+        backfill_sessions(runtime.as_ref(), &config).await;
 
         let persisted = runtime
             .get_thread(thread_id)
@@ -804,14 +743,14 @@ mod tests {
         );
 
         let runtime =
-            codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            codex_state::StateRuntime::init(codex_home.clone(), "test-provider".to_string())
                 .await
                 .expect("initialize runtime");
 
         let mut config = crate::config::test_config();
         config.codex_home = codex_home.clone();
         config.model_provider_id = "test-provider".to_string();
-        backfill_sessions(runtime.as_ref(), &config, None).await;
+        backfill_sessions(runtime.as_ref(), &config).await;
 
         let thread_id = ThreadId::from_string(&thread_uuid.to_string()).expect("thread id");
         let stored = runtime
