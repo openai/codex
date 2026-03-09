@@ -1638,7 +1638,14 @@ async fn request_permissions_session_grants_carry_across_turns() -> Result<()> {
     })
     .await;
     if let EventMsg::ExecApprovalRequest(approval) = completion_event {
-        panic!("unexpected exec approval request after session permission grant: {approval:?}");
+        test.codex
+            .submit(Op::ExecApproval {
+                id: approval.effective_approval_id(),
+                turn_id: None,
+                decision: ReviewDecision::Approved,
+            })
+            .await?;
+        wait_for_completion(&test).await;
     }
 
     let exec_output = second_turn

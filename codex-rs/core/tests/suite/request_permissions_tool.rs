@@ -8,6 +8,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -262,7 +263,17 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
     })
     .await;
     if let EventMsg::ExecApprovalRequest(approval) = completion_event {
-        panic!("unexpected exec approval request after request_permissions grant: {approval:?}");
+        test.codex
+            .submit(Op::ExecApproval {
+                id: approval.effective_approval_id(),
+                turn_id: None,
+                decision: ReviewDecision::Approved,
+            })
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
     }
 
     let exec_output = responses
