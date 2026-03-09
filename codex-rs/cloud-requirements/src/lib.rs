@@ -44,6 +44,9 @@ const CLOUD_REQUIREMENTS_MAX_ATTEMPTS: usize = 5;
 const CLOUD_REQUIREMENTS_CACHE_FILENAME: &str = "cloud-requirements-cache.json";
 const CLOUD_REQUIREMENTS_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const CLOUD_REQUIREMENTS_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+const CLOUD_REQUIREMENTS_FETCH_ATTEMPT_METRIC: &str = "codex.cloud_requirements.fetch_attempt";
+const CLOUD_REQUIREMENTS_FETCH_FINAL_METRIC: &str = "codex.cloud_requirements.fetch_final";
+const CLOUD_REQUIREMENTS_LOAD_METRIC: &str = "codex.cloud_requirements.load";
 const CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY: &[u8] =
     b"codex-cloud-requirements-cache-v3-064f8542-75b4-494c-a294-97d3ce597271";
 const CLOUD_REQUIREMENTS_CACHE_READ_HMAC_KEYS: &[&[u8]] =
@@ -59,7 +62,16 @@ fn refresher_task_slot() -> &'static Mutex<Option<JoinHandle<()>>> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FetchCloudRequirementsStatus {
     BackendClientInit,
-    Request,
+    Request { status_code: Option<u16> },
+}
+
+impl FetchCloudRequirementsStatus {
+    fn status_code(self) -> Option<u16> {
+        match self {
+            Self::BackendClientInit => None,
+            Self::Request { status_code } => status_code,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -185,7 +197,9 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
             .get_config_requirements_file()
             .await
             .inspect_err(|err| tracing::warn!(error = %err, "Failed to fetch cloud requirements"))
-            .map_err(|_| FetchCloudRequirementsStatus::Request)?;
+            .map_err(|err| FetchCloudRequirementsStatus::Request {
+                status_code: parse_http_status_code(err.to_string().as_str()),
+            })?;
 
         let Some(contents) = response.contents else {
             tracing::info!(
@@ -227,46 +241,45 @@ impl CloudRequirementsService {
         let _timer =
             codex_otel::start_global_timer("codex.cloud_requirements.fetch.duration_ms", &[]);
         let started_at = Instant::now();
-        let result = timeout(self.timeout, self.fetch())
-            .await
-            .inspect_err(|_| {
+        let result = match timeout(self.timeout, self.fetch()).await {
+            Ok(result) => result,
+            Err(_) => {
                 let message = format!(
                     "Timed out waiting for cloud requirements after {}s",
                     self.timeout.as_secs()
                 );
                 tracing::error!("{message}");
-                if let Some(metrics) = codex_otel::metrics::global() {
-                    let _ = metrics.counter(
-                        "codex.cloud_requirements.load_failure",
-                        1,
-                        &[("trigger", "startup")],
-                    );
-                }
-            })
-            .map_err(|_| {
-                CloudRequirementsLoadError::new(format!(
+                emit_load_metric("startup", "timeout");
+                return Err(CloudRequirementsLoadError::new(format!(
                     "timed out waiting for cloud requirements after {}s",
                     self.timeout.as_secs()
-                ))
-            })??;
+                )));
+            }
+        };
 
-        match result.as_ref() {
-            Some(requirements) => {
+        match result {
+            Ok(Some(requirements)) => {
                 tracing::info!(
                     elapsed_ms = started_at.elapsed().as_millis(),
                     requirements = ?requirements,
                     "Cloud requirements load completed"
                 );
+                emit_load_metric("startup", "success");
+                Ok(Some(requirements))
             }
-            None => {
+            Ok(None) => {
                 tracing::info!(
                     elapsed_ms = started_at.elapsed().as_millis(),
                     "Cloud requirements load completed (none)"
                 );
+                emit_load_metric("startup", "none");
+                Ok(None)
+            }
+            Err(err) => {
+                emit_load_metric("startup", "failure");
+                Err(err)
             }
         }
-
-        Ok(result)
     }
 
     async fn fetch(&self) -> Result<Option<ConfigRequirementsToml>, CloudRequirementsLoadError> {
@@ -301,7 +314,7 @@ impl CloudRequirementsService {
             }
         }
 
-        self.fetch_with_retries(&auth, chatgpt_user_id, account_id)
+        self.fetch_with_retries(&auth, chatgpt_user_id, account_id, "startup")
             .await
             .ok_or_else(|| {
                 let message = "failed to load your workspace-managed config";
@@ -318,11 +331,16 @@ impl CloudRequirementsService {
         auth: &CodexAuth,
         chatgpt_user_id: Option<&str>,
         account_id: Option<&str>,
+        trigger: &'static str,
     ) -> Option<Option<ConfigRequirementsToml>> {
+        let mut last_status_code = None;
         for attempt in 1..=CLOUD_REQUIREMENTS_MAX_ATTEMPTS {
             let contents = match self.fetcher.fetch_requirements(auth).await {
                 Ok(contents) => contents,
                 Err(status) => {
+                    let status_code = status.status_code();
+                    last_status_code = status_code;
+                    emit_fetch_attempt_metric(trigger, attempt, "failure", status_code);
                     if attempt < CLOUD_REQUIREMENTS_MAX_ATTEMPTS {
                         tracing::warn!(
                             status = ?status,
@@ -335,12 +353,14 @@ impl CloudRequirementsService {
                     continue;
                 }
             };
+            emit_fetch_attempt_metric(trigger, attempt, "success", None);
 
             let requirements = match contents.as_deref() {
                 Some(contents) => match parse_cloud_requirements(contents) {
                     Ok(requirements) => requirements,
                     Err(err) => {
                         tracing::error!(error = %err, "Failed to parse cloud requirements");
+                        emit_fetch_final_metric(trigger, "failure", attempt, last_status_code);
                         return None;
                     }
                 },
@@ -358,9 +378,21 @@ impl CloudRequirementsService {
                 tracing::warn!(error = %err, "Failed to write cloud requirements cache");
             }
 
+            let outcome = if requirements.is_some() {
+                "success"
+            } else {
+                "none"
+            };
+            emit_fetch_final_metric(trigger, outcome, attempt, None);
             return Some(requirements);
         }
 
+        emit_fetch_final_metric(
+            trigger,
+            "failure",
+            CLOUD_REQUIREMENTS_MAX_ATTEMPTS,
+            last_status_code,
+        );
         None
     }
 
@@ -374,6 +406,7 @@ impl CloudRequirementsService {
                     tracing::error!(
                         "Timed out refreshing cloud requirements cache from remote; keeping existing cache"
                     );
+                    emit_load_metric("refresh", "timeout");
                 }
             }
         }
@@ -399,21 +432,18 @@ impl CloudRequirementsService {
         let account_id = auth.get_account_id();
         let account_id = account_id.as_deref();
 
-        if self
-            .fetch_with_retries(&auth, chatgpt_user_id, account_id)
+        match self
+            .fetch_with_retries(&auth, chatgpt_user_id, account_id, "refresh")
             .await
-            .is_none()
         {
-            tracing::error!(
-                path = %self.cache_path.display(),
-                "Failed to refresh cloud requirements cache from remote"
-            );
-            if let Some(metrics) = codex_otel::metrics::global() {
-                let _ = metrics.counter(
-                    "codex.cloud_requirements.load_failure",
-                    1,
-                    &[("trigger", "refresh")],
+            Some(Some(_)) => emit_load_metric("refresh", "success"),
+            Some(None) => emit_load_metric("refresh", "none"),
+            None => {
+                tracing::error!(
+                    path = %self.cache_path.display(),
+                    "Failed to refresh cloud requirements cache from remote"
                 );
+                emit_load_metric("refresh", "failure");
             }
         }
         true
@@ -577,6 +607,83 @@ fn parse_cloud_requirements(
         Ok(None)
     } else {
         Ok(Some(requirements))
+    }
+}
+
+fn parse_http_status_code(message: &str) -> Option<u16> {
+    let marker = "failed: ";
+    let start = message.find(marker)? + marker.len();
+    let digits: String = message[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    if digits.len() != 3 {
+        return None;
+    }
+    digits.parse::<u16>().ok()
+}
+
+fn emit_fetch_attempt_metric(
+    trigger: &str,
+    attempt: usize,
+    outcome: &str,
+    status_code: Option<u16>,
+) {
+    let attempt_tag = attempt.to_string();
+    let status_code_tag = status_code_tag(status_code);
+    emit_metric(
+        CLOUD_REQUIREMENTS_FETCH_ATTEMPT_METRIC,
+        vec![
+            ("trigger", trigger.to_string()),
+            ("attempt", attempt_tag),
+            ("outcome", outcome.to_string()),
+            ("status_code", status_code_tag),
+        ],
+    );
+}
+
+fn emit_fetch_final_metric(
+    trigger: &str,
+    outcome: &str,
+    attempt_count: usize,
+    status_code: Option<u16>,
+) {
+    let attempt_count_tag = attempt_count.to_string();
+    let status_code_tag = status_code_tag(status_code);
+    emit_metric(
+        CLOUD_REQUIREMENTS_FETCH_FINAL_METRIC,
+        vec![
+            ("trigger", trigger.to_string()),
+            ("outcome", outcome.to_string()),
+            ("attempt_count", attempt_count_tag),
+            ("status_code", status_code_tag),
+        ],
+    );
+}
+
+fn emit_load_metric(trigger: &str, outcome: &str) {
+    emit_metric(
+        CLOUD_REQUIREMENTS_LOAD_METRIC,
+        vec![
+            ("trigger", trigger.to_string()),
+            ("outcome", outcome.to_string()),
+        ],
+    );
+}
+
+fn status_code_tag(status_code: Option<u16>) -> String {
+    status_code
+        .map(|status_code| status_code.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn emit_metric(metric_name: &str, tags: Vec<(&str, String)>) {
+    if let Some(metrics) = codex_otel::metrics::global() {
+        let tag_refs = tags
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect::<Vec<_>>();
+        let _ = metrics.counter(metric_name, 1, &tag_refs);
     }
 }
 
@@ -837,7 +944,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn fetch_cloud_requirements_retries_until_success() {
         let fetcher = Arc::new(SequenceFetcher::new(vec![
-            Err(FetchCloudRequirementsStatus::Request),
+            Err(FetchCloudRequirementsStatus::Request { status_code: None }),
             Ok(Some("allowed_approval_policies = [\"never\"]".to_string())),
         ]));
         let codex_home = tempdir().expect("tempdir");
@@ -900,7 +1007,7 @@ mod tests {
         let _ = prime_service.fetch().await;
 
         let fetcher = Arc::new(SequenceFetcher::new(vec![Err(
-            FetchCloudRequirementsStatus::Request,
+            FetchCloudRequirementsStatus::Request { status_code: None },
         )]));
         let service = CloudRequirementsService::new(
             auth_manager_with_plan("business"),
@@ -1211,7 +1318,7 @@ mod tests {
     async fn fetch_cloud_requirements_none_is_success_without_retry() {
         let fetcher = Arc::new(SequenceFetcher::new(vec![
             Ok(None),
-            Err(FetchCloudRequirementsStatus::Request),
+            Err(FetchCloudRequirementsStatus::Request { status_code: None }),
         ]));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
@@ -1229,7 +1336,7 @@ mod tests {
     async fn fetch_cloud_requirements_stops_after_max_retries() {
         let fetcher = Arc::new(SequenceFetcher::new(vec![
             Err(
-                FetchCloudRequirementsStatus::Request
+                FetchCloudRequirementsStatus::Request { status_code: None }
             );
             CLOUD_REQUIREMENTS_MAX_ATTEMPTS
         ]));
