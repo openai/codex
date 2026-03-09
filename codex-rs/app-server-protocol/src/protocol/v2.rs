@@ -373,7 +373,7 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_slash_tmp: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
@@ -3598,7 +3598,7 @@ impl UserInput {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
@@ -3752,6 +3752,24 @@ impl ThreadItem {
             | ThreadItem::ExitedReviewMode { id, .. }
             | ThreadItem::ContextCompaction { id, .. } => id,
         }
+    }
+
+    pub fn is_experimental(&self) -> bool {
+        crate::experimental_api::ExperimentalApi::experimental_reason(self).is_some()
+    }
+}
+
+impl Thread {
+    pub fn strip_experimental_thread_items(&mut self) {
+        for turn in &mut self.turns {
+            turn.strip_experimental_thread_items();
+        }
+    }
+}
+
+impl Turn {
+    pub fn strip_experimental_thread_items(&mut self) {
+        self.items.retain(|item| !item.is_experimental());
     }
 }
 

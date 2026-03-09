@@ -7,6 +7,8 @@ use crate::outgoing_message::OutgoingMessage;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::filter_experimental_thread_items_in_server_notification;
+use codex_app_server_protocol::strip_experimental_thread_items_from_serialized_response;
 use futures::SinkExt;
 use futures::StreamExt;
 use owo_colors::OwoColorize;
@@ -584,7 +586,9 @@ async fn send_message_to_connection(
         warn!("dropping message for disconnected connection: {connection_id:?}");
         return false;
     };
-    let message = filter_outgoing_message_for_connection(connection_state, message);
+    let Some(message) = filter_outgoing_message_for_connection(connection_state, message) else {
+        return false;
+    };
     if should_skip_notification_for_connection(connection_state, &message) {
         return false;
     }
@@ -613,7 +617,7 @@ async fn send_message_to_connection(
 fn filter_outgoing_message_for_connection(
     connection_state: &OutboundConnectionState,
     message: OutgoingMessage,
-) -> OutgoingMessage {
+) -> Option<OutgoingMessage> {
     let experimental_api_enabled = connection_state
         .experimental_api_enabled
         .load(Ordering::Acquire);
@@ -625,12 +629,25 @@ fn filter_outgoing_message_for_connection(
             if !experimental_api_enabled {
                 params.strip_experimental_fields();
             }
-            OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
-                request_id,
-                params,
-            })
+            Some(OutgoingMessage::Request(
+                ServerRequest::CommandExecutionRequestApproval { request_id, params },
+            ))
         }
-        _ => message,
+        OutgoingMessage::AppServerNotification(notification) => {
+            if experimental_api_enabled {
+                Some(OutgoingMessage::AppServerNotification(notification))
+            } else {
+                filter_experimental_thread_items_in_server_notification(notification)
+                    .map(OutgoingMessage::AppServerNotification)
+            }
+        }
+        OutgoingMessage::Response(mut response) => {
+            if !experimental_api_enabled {
+                strip_experimental_thread_items_from_serialized_response(&mut response.result);
+            }
+            Some(OutgoingMessage::Response(response))
+        }
+        _ => Some(message),
     }
 }
 

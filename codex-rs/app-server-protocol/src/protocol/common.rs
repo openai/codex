@@ -1,8 +1,12 @@
+use std::collections::HashSet;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
 use crate::RequestId;
+use crate::experimental_api::ExperimentalEnumVariantEncoding;
+use crate::experimental_api::experimental_enum_variants;
 use crate::export::GeneratedSchema;
 use crate::export::write_json_schema;
 use crate::protocol::v1;
@@ -11,6 +15,7 @@ use codex_experimental_api_macros::ExperimentalApi;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use strum_macros::Display;
 use ts_rs::TS;
 
@@ -657,6 +662,89 @@ macro_rules! client_notification_definitions {
             Ok(schemas)
         }
     };
+}
+
+pub fn filter_experimental_thread_items_in_server_notification(
+    notification: ServerNotification,
+) -> Option<ServerNotification> {
+    match notification {
+        ServerNotification::ThreadStarted(mut notification) => {
+            notification.thread.strip_experimental_thread_items();
+            Some(ServerNotification::ThreadStarted(notification))
+        }
+        ServerNotification::ItemStarted(notification) if notification.item.is_experimental() => {
+            None
+        }
+        ServerNotification::ItemCompleted(notification) if notification.item.is_experimental() => {
+            None
+        }
+        ServerNotification::TurnStarted(mut notification) => {
+            notification.turn.strip_experimental_thread_items();
+            Some(ServerNotification::TurnStarted(notification))
+        }
+        ServerNotification::TurnCompleted(mut notification) => {
+            notification.turn.strip_experimental_thread_items();
+            Some(ServerNotification::TurnCompleted(notification))
+        }
+        _ => Some(notification),
+    }
+}
+
+/// Transport serializes app-server responses before per-connection filtering,
+/// so stable clients need a last-mile scrub pass over the response JSON.
+pub fn strip_experimental_thread_items_from_serialized_response(result: &mut Value) {
+    match result {
+        Value::Object(map) => {
+            for (key, value) in map {
+                if key == "items" {
+                    if let Value::Array(items) = value {
+                        items.retain(|item| !is_experimental_thread_item_value(item));
+                        for item in items {
+                            strip_experimental_thread_items_from_serialized_response(item);
+                        }
+                    }
+                } else {
+                    strip_experimental_thread_items_from_serialized_response(value);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                strip_experimental_thread_items_from_serialized_response(value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn is_experimental_thread_item_value(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Object(map)
+            if matches!(
+                map.get("type"),
+                Some(Value::String(kind))
+                    if experimental_thread_item_variant_tags().contains(kind.as_str())
+            )
+    )
+}
+
+fn experimental_thread_item_variant_tags() -> &'static HashSet<&'static str> {
+    static TAGS: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    TAGS.get_or_init(|| {
+        experimental_enum_variants()
+            .into_iter()
+            .filter_map(|variant| match variant {
+                crate::experimental_api::ExperimentalEnumVariant {
+                    type_name: "ThreadItem",
+                    serialized_name,
+                    encoding: ExperimentalEnumVariantEncoding::TaggedObject { tag_name: "type" },
+                    ..
+                } => Some(*serialized_name),
+                _ => None,
+            })
+            .collect()
+    })
 }
 
 impl TryFrom<JSONRPCRequest> for ServerRequest {
