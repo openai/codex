@@ -13,6 +13,7 @@ use crate::winutil::format_last_error;
 use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
 use anyhow::Result;
+use codex_utils_pty::RawConPty;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
@@ -21,9 +22,6 @@ use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::System::Console::ClosePseudoConsole;
-use windows_sys::Win32::System::Console::CreatePseudoConsole;
-use windows_sys::Win32::System::Console::COORD;
-use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
@@ -69,46 +67,13 @@ impl ConptyInstance {
 /// This is public so callers that need lower-level PTY setup can build on the same
 /// primitive, although the common entry point is `spawn_conpty_process_as_user`.
 pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
-    let mut in_read: HANDLE = 0;
-    let mut in_write: HANDLE = 0;
-    let mut out_read: HANDLE = 0;
-    let mut out_write: HANDLE = 0;
-    unsafe {
-        if CreatePipe(&mut in_read, &mut in_write, std::ptr::null_mut(), 0) == 0 {
-            return Err(anyhow::anyhow!(
-                "CreatePipe stdin failed: {}",
-                GetLastError()
-            ));
-        }
-        if CreatePipe(&mut out_read, &mut out_write, std::ptr::null_mut(), 0) == 0 {
-            CloseHandle(in_read);
-            CloseHandle(in_write);
-            return Err(anyhow::anyhow!(
-                "CreatePipe stdout failed: {}",
-                GetLastError()
-            ));
-        }
-    }
-
-    let mut hpc: HANDLE = 0;
-    let size = COORD { X: cols, Y: rows };
-    let hr = unsafe { CreatePseudoConsole(size, in_read, out_write, 0, &mut hpc) };
-    unsafe {
-        CloseHandle(in_read);
-        CloseHandle(out_write);
-    }
-    if hr != 0 {
-        unsafe {
-            CloseHandle(in_write);
-            CloseHandle(out_read);
-        }
-        return Err(anyhow::anyhow!("CreatePseudoConsole failed: {}", hr));
-    }
+    let raw = RawConPty::new(cols, rows)?;
+    let (hpc, input_write, output_read) = raw.into_raw_handles();
 
     Ok(ConptyInstance {
-        hpc,
-        input_write: in_write,
-        output_read: out_read,
+        hpc: hpc as HANDLE,
+        input_write: input_write as HANDLE,
+        output_read: output_read as HANDLE,
     })
 }
 
