@@ -1436,6 +1436,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-utils-json-to-toml",
+ "codex-utils-pty",
  "core_test_support",
  "futures",
  "owo-colors",
@@ -1455,6 +1456,24 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "codex-app-server-client"
+version = "0.0.0"
+dependencies = [
+ "codex-app-server",
+ "codex-app-server-protocol",
+ "codex-arg0",
+ "codex-core",
+ "codex-feedback",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
 ]
 
 [[package]]
@@ -1898,10 +1917,13 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "codex-app-server-client",
+ "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-feedback",
  "codex-otel",
  "codex-protocol",
  "codex-utils-absolute-path",
@@ -2397,7 +2419,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "codex-otel",
  "codex-protocol",
  "dirs",
  "log",

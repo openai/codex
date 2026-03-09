@@ -852,7 +852,8 @@ impl JsReplManager {
             .network
             .is_some();
         let sandbox_type = sandbox.select_initial(
-            &turn.sandbox_policy,
+            &turn.file_system_sandbox_policy,
+            turn.network_sandbox_policy,
             SandboxablePreference::Auto,
             turn.windows_sandbox_level,
             has_managed_network_requirements,
@@ -861,6 +862,8 @@ impl JsReplManager {
             .transform(crate::sandboxing::SandboxTransformRequest {
                 spec,
                 policy: &turn.sandbox_policy,
+                file_system_policy: &turn.file_system_sandbox_policy,
+                network_policy: turn.network_sandbox_policy,
                 sandbox: sandbox_type,
                 enforce_managed_network: has_managed_network_requirements,
                 network: None,
@@ -1747,6 +1750,16 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
 
+    fn set_danger_full_access(turn: &mut crate::codex::TurnContext) {
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
+        turn.file_system_sandbox_policy =
+            crate::protocol::FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
+        turn.network_sandbox_policy =
+            crate::protocol::NetworkSandboxPolicy::from(turn.sandbox_policy.get());
+    }
+
     #[test]
     fn node_version_parses_v_prefix_and_suffix() {
         let version = NodeVersion::parse("v25.1.0-nightly.2024").unwrap();
@@ -2464,9 +2477,7 @@ mod tests {
         turn.approval_policy
             .set(AskForApproval::Never)
             .expect("test setup should allow updating approval policy");
-        turn.sandbox_policy
-            .set(SandboxPolicy::DangerFullAccess)
-            .expect("test setup should allow updating sandbox policy");
+        set_danger_full_access(&mut turn);
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);
@@ -2518,9 +2529,7 @@ console.log("cell-complete");
         turn.approval_policy
             .set(AskForApproval::Never)
             .expect("test setup should allow updating approval policy");
-        turn.sandbox_policy
-            .set(SandboxPolicy::DangerFullAccess)
-            .expect("test setup should allow updating sandbox policy");
+        set_danger_full_access(&mut turn);
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);
@@ -2576,9 +2585,7 @@ console.log(out.type);
         turn.approval_policy
             .set(AskForApproval::Never)
             .expect("test setup should allow updating approval policy");
-        turn.sandbox_policy
-            .set(SandboxPolicy::DangerFullAccess)
-            .expect("test setup should allow updating sandbox policy");
+        set_danger_full_access(&mut turn);
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);

@@ -1,3 +1,4 @@
+mod curated_repo;
 mod injection;
 mod manager;
 mod manifest;
@@ -5,6 +6,8 @@ mod marketplace;
 mod render;
 mod store;
 
+pub(crate) use curated_repo::curated_plugins_repo_path;
+pub(crate) use curated_repo::sync_openai_plugins_repo;
 pub(crate) use injection::build_plugin_injections;
 pub use manager::AppConnectorId;
 pub use manager::ConfiguredMarketplacePluginSummary;
@@ -17,8 +20,12 @@ pub use manager::PluginLoadOutcome;
 pub use manager::PluginsManager;
 pub use manager::load_plugin_apps;
 pub(crate) use manager::plugin_namespace_for_skill_path;
+pub use manifest::PluginManifestInterfaceSummary;
+pub(crate) use manifest::PluginManifestPaths;
 pub(crate) use manifest::load_plugin_manifest;
+pub(crate) use manifest::plugin_manifest_interface;
 pub(crate) use manifest::plugin_manifest_name;
+pub(crate) use manifest::plugin_manifest_paths;
 pub use marketplace::MarketplaceError;
 pub use marketplace::MarketplacePluginSourceSummary;
 pub(crate) use render::render_explicit_plugin_instructions;

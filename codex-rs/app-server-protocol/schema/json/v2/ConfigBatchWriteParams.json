@@ -45,6 +45,10 @@
         "string",
         "null"
       ]
+    },
+    "reloadUserConfig": {
+      "description": "When true, hot-reload the updated user config into all loaded threads after writing.",
+      "type": "boolean"
     }
   },
   "required": [

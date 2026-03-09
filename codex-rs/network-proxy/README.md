@@ -13,10 +13,12 @@ It enforces an allow/deny policy and a "limited" mode intended for read-only net
 
 `codex-network-proxy` reads from Codex's merged `config.toml` (via `codex-core` config loading).
 
-Example config:
+Network settings live under the selected permissions profile. Example config:
 
 ```toml
-[network]
+default_permissions = "workspace"
+
+[permissions.workspace.network]
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 # SOCKS5 listener (enabled by default).
@@ -45,7 +47,7 @@ denied_domains = ["evil.example"]
 # If false, local/private networking is rejected. Explicit allowlisting of local IP literals
 # (or `localhost`) is required to permit them.
 # Hostnames that resolve to local/private IPs are still blocked even if allowlisted.
-allow_local_binding = true
+allow_local_binding = false
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
 allow_unix_sockets = ["/tmp/example.sock"]

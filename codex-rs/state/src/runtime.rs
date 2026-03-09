@@ -5,13 +5,11 @@ use crate::AgentJobItemCreateParams;
 use crate::AgentJobItemStatus;
 use crate::AgentJobProgress;
 use crate::AgentJobStatus;
-use crate::DB_ERROR_METRIC;
 use crate::LOGS_DB_FILENAME;
 use crate::LOGS_DB_VERSION;
 use crate::LogEntry;
 use crate::LogQuery;
 use crate::LogRow;
-use crate::METRIC_DB_INIT;
 use crate::STATE_DB_FILENAME;
 use crate::STATE_DB_VERSION;
 use crate::SortKey;
@@ -28,7 +26,6 @@ use crate::model::datetime_to_epoch_seconds;
 use crate::paths::file_modified_time_utc;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
@@ -81,11 +78,7 @@ impl StateRuntime {
     /// This opens (and migrates) the SQLite databases under `codex_home`,
     /// keeping logs in a dedicated file to reduce lock contention with the
     /// rest of the state store.
-    pub async fn init(
-        codex_home: PathBuf,
-        default_provider: String,
-        otel: Option<OtelManager>,
-    ) -> anyhow::Result<Arc<Self>> {
+    pub async fn init(codex_home: PathBuf, default_provider: String) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&codex_home).await?;
         let current_state_name = state_db_filename();
         let current_logs_name = logs_db_filename();
@@ -105,14 +98,10 @@ impl StateRuntime {
         .await;
         let state_path = state_db_path(codex_home.as_path());
         let logs_path = logs_db_path(codex_home.as_path());
-        let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
         let pool = match open_sqlite(&state_path, &STATE_MIGRATOR).await {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open state db at {}: {err}", state_path.display());
-                if let Some(otel) = otel.as_ref() {
-                    otel.counter(METRIC_DB_INIT, 1, &[("status", "open_error")]);
-                }
                 return Err(err);
             }
         };
@@ -120,24 +109,15 @@ impl StateRuntime {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open logs db at {}: {err}", logs_path.display());
-                if let Some(otel) = otel.as_ref() {
-                    otel.counter(METRIC_DB_INIT, 1, &[("status", "open_error")]);
-                }
                 return Err(err);
             }
         };
-        if let Some(otel) = otel.as_ref() {
-            otel.counter(METRIC_DB_INIT, 1, &[("status", "opened")]);
-        }
         let runtime = Arc::new(Self {
             pool,
             logs_pool,
             codex_home,
             default_provider,
         });
-        if !existed && let Some(otel) = otel.as_ref() {
-            otel.counter(METRIC_DB_INIT, 1, &[("status", "created")]);
-        }
         Ok(runtime)
     }
 

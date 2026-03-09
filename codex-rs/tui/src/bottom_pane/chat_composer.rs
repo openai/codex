@@ -1120,6 +1120,16 @@ impl ChatComposer {
             .collect()
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_line_text(&self) -> Option<String> {
+        self.status_line_value.as_ref().map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+    }
+
     pub(crate) fn local_images(&self) -> Vec<LocalImageAttachment> {
         self.attached_images
             .iter()

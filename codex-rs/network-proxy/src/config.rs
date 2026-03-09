@@ -60,7 +60,7 @@ impl Default for NetworkProxySettings {
             allowed_domains: Vec::new(),
             denied_domains: Vec::new(),
             allow_unix_sockets: Vec::new(),
-            allow_local_binding: true,
+            allow_local_binding: false,
             mitm: false,
         }
     }
@@ -374,7 +374,7 @@ mod tests {
                 allowed_domains: Vec::new(),
                 denied_domains: Vec::new(),
                 allow_unix_sockets: Vec::new(),
-                allow_local_binding: true,
+                allow_local_binding: false,
                 mitm: false,
             }
         );

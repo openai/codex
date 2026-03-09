@@ -214,7 +214,7 @@ mod spawn {
             .await;
         let new_thread_id = result?;
         let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-        turn.otel_manager
+        turn.session_telemetry
             .counter("codex.multi_agent.spawn", 1, &[("role", role_tag)]);
 
         let content = serde_json::to_string(&SpawnAgentResult {
@@ -425,7 +425,7 @@ mod resume_agent {
         if let Some(err) = error {
             return Err(err);
         }
-        turn.otel_manager
+        turn.session_telemetry
             .counter("codex.multi_agent.resume", 1, &[]);
 
         let content = serde_json::to_string(&ResumeAgentResult { status }).map_err(|err| {

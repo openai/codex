@@ -887,6 +887,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::UndoStarted(_)
             | EventMsg::ThreadRolledBack(_)
             | EventMsg::RequestUserInput(_)
+            | EventMsg::RequestPermissions(_)
             | EventMsg::CollabResumeBegin(_)
             | EventMsg::CollabResumeEnd(_)
             | EventMsg::RealtimeConversationStarted(_)
@@ -1048,6 +1049,7 @@ impl EventProcessorWithHumanOutput {
                     | EventMsg::UndoStarted(_)
                     | EventMsg::ThreadRolledBack(_)
                     | EventMsg::RequestUserInput(_)
+                    | EventMsg::RequestPermissions(_)
                     | EventMsg::DynamicToolCallRequest(_)
                     | EventMsg::DynamicToolCallResponse(_)
             ),
