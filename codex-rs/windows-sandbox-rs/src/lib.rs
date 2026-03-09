@@ -25,6 +25,14 @@ windows_modules!(
 );
 
 #[cfg(target_os = "windows")]
+#[path = "conpty/mod.rs"]
+mod conpty;
+
+#[cfg(target_os = "windows")]
+#[path = "elevated/ipc_framed.rs"]
+pub mod ipc_framed;
+
+#[cfg(target_os = "windows")]
 #[path = "setup_orchestrator.rs"]
 mod setup;
 
@@ -36,6 +44,7 @@ mod setup_error;
 
 #[cfg(target_os = "windows")]
 pub use acl::add_deny_write_ace;
+
 #[cfg(target_os = "windows")]
 pub use acl::allow_null_device;
 #[cfg(target_os = "windows")]
@@ -55,6 +64,8 @@ pub use cap::load_or_create_cap_sids;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_cap_sid_for_cwd;
 #[cfg(target_os = "windows")]
+pub use conpty::spawn_conpty_process_as_user;
+#[cfg(target_os = "windows")]
 pub use dpapi::protect as dpapi_protect;
 #[cfg(target_os = "windows")]
 pub use dpapi::unprotect as dpapi_unprotect;
@@ -71,17 +82,29 @@ pub use identity::require_logon_sandbox_creds;
 #[cfg(target_os = "windows")]
 pub use identity::sandbox_setup_is_complete;
 #[cfg(target_os = "windows")]
-pub use logging::log_note;
-#[cfg(target_os = "windows")]
 pub use logging::LOG_FILE_NAME;
+#[cfg(target_os = "windows")]
+pub use logging::log_note;
 #[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
 #[cfg(target_os = "windows")]
-pub use policy::parse_policy;
-#[cfg(target_os = "windows")]
 pub use policy::SandboxPolicy;
 #[cfg(target_os = "windows")]
+pub use policy::parse_policy;
+#[cfg(target_os = "windows")]
+pub use process::PipeSpawnHandles;
+#[cfg(target_os = "windows")]
+pub use process::StderrMode;
+#[cfg(target_os = "windows")]
+pub use process::StdinMode;
+#[cfg(target_os = "windows")]
 pub use process::create_process_as_user;
+#[cfg(target_os = "windows")]
+pub use process::read_handle_loop;
+#[cfg(target_os = "windows")]
+pub use process::spawn_process_with_pipes;
+#[cfg(target_os = "windows")]
+pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
 pub use setup::run_elevated_setup;
 #[cfg(target_os = "windows")]
@@ -95,7 +118,11 @@ pub use setup::sandbox_dir;
 #[cfg(target_os = "windows")]
 pub use setup::sandbox_secrets_dir;
 #[cfg(target_os = "windows")]
-pub use setup::SETUP_VERSION;
+pub use setup_error::SetupErrorCode;
+#[cfg(target_os = "windows")]
+pub use setup_error::SetupErrorReport;
+#[cfg(target_os = "windows")]
+pub use setup_error::SetupFailure;
 #[cfg(target_os = "windows")]
 pub use setup_error::extract_failure as extract_setup_failure;
 #[cfg(target_os = "windows")]
@@ -104,12 +131,6 @@ pub use setup_error::sanitize_setup_metric_tag_value;
 pub use setup_error::setup_error_path;
 #[cfg(target_os = "windows")]
 pub use setup_error::write_setup_error_report;
-#[cfg(target_os = "windows")]
-pub use setup_error::SetupErrorCode;
-#[cfg(target_os = "windows")]
-pub use setup_error::SetupErrorReport;
-#[cfg(target_os = "windows")]
-pub use setup_error::SetupFailure;
 #[cfg(target_os = "windows")]
 pub use token::convert_string_sid_to_sid;
 #[cfg(target_os = "windows")]
@@ -121,11 +142,11 @@ pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(target_os = "windows")]
 pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
+pub use windows_impl::CaptureResult;
+#[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_legacy_preflight;
-#[cfg(target_os = "windows")]
-pub use windows_impl::CaptureResult;
 #[cfg(target_os = "windows")]
 pub use winutil::quote_windows_arg;
 #[cfg(target_os = "windows")]
@@ -140,13 +161,13 @@ pub use workspace_acl::protect_workspace_agents_dir;
 pub use workspace_acl::protect_workspace_codex_dir;
 
 #[cfg(not(target_os = "windows"))]
+pub use stub::CaptureResult;
+#[cfg(not(target_os = "windows"))]
 pub use stub::apply_world_writable_scan_and_denies;
 #[cfg(not(target_os = "windows"))]
 pub use stub::run_windows_sandbox_capture;
 #[cfg(not(target_os = "windows"))]
 pub use stub::run_windows_sandbox_legacy_preflight;
-#[cfg(not(target_os = "windows"))]
-pub use stub::CaptureResult;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
@@ -154,8 +175,8 @@ mod windows_impl {
     use super::acl::add_deny_write_ace;
     use super::acl::allow_null_device;
     use super::acl::revoke_ace;
-    use super::allow::compute_allow_paths;
     use super::allow::AllowDenyPaths;
+    use super::allow::compute_allow_paths;
     use super::cap::load_or_create_cap_sids;
     use super::cap::workspace_cap_sid_for_cwd;
     use super::env::apply_no_network_to_env;
@@ -165,9 +186,9 @@ mod windows_impl {
     use super::logging::log_start;
     use super::logging::log_success;
     use super::path_normalization::canonicalize_path;
-    use super::policy::parse_policy;
     use super::policy::SandboxPolicy;
     use super::process::create_process_as_user;
+    use super::policy::parse_policy;
     use super::token::convert_string_sid_to_sid;
     use super::token::create_workspace_write_token_with_caps_from;
     use super::workspace_acl::is_command_cwd_root;
@@ -182,9 +203,9 @@ mod windows_impl {
     use std::ptr;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Foundation::GetLastError;
-    use windows_sys::Win32::Foundation::SetHandleInformation;
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
+    use windows_sys::Win32::Foundation::SetHandleInformation;
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::GetExitCodeProcess;
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
@@ -572,8 +593,8 @@ mod windows_impl {
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
-    use anyhow::bail;
     use anyhow::Result;
+    use anyhow::bail;
     use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::path::Path;
