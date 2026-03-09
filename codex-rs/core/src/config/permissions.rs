@@ -272,6 +272,11 @@ fn compile_scoped_filesystem_path(
     Ok(FileSystemPath::Path { path })
 }
 
+// WARNING: keep this parser forward-compatible.
+// Adding a new `:special_path` must not make older Codex versions reject the
+// config. Unknown values intentionally round-trip through
+// `FileSystemSpecialPath::Unknown` so they can be surfaced as warnings and
+// ignored, rather than aborting config load.
 fn parse_special_path(path: &str) -> Option<FileSystemSpecialPath> {
     match path {
         ":root" => Some(FileSystemSpecialPath::Root),
