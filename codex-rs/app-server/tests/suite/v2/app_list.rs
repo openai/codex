@@ -501,16 +501,6 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
         })
         .await?;
 
-    let maybe_update = timeout(
-        Duration::from_millis(150),
-        read_app_list_updated_notification(&mut mcp),
-    )
-    .await;
-    assert!(
-        maybe_update.is_err(),
-        "unexpected directory-only app/list update before accessible apps loaded"
-    );
-
     let expected = vec![
         AppInfo {
             id: "beta".to_string(),
@@ -544,8 +534,17 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
         },
     ];
 
-    let update = read_app_list_updated_notification(&mut mcp).await?;
-    assert_eq!(update.data, expected);
+    loop {
+        let update = read_app_list_updated_notification(&mut mcp).await?;
+        if update.data == expected {
+            break;
+        }
+
+        assert!(
+            !update.data.is_empty() && update.data.iter().all(|connector| connector.is_accessible),
+            "unexpected directory-only app/list update before accessible apps loaded"
+        );
+    }
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
