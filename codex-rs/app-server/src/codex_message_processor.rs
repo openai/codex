@@ -6723,6 +6723,7 @@ impl CodexMessageProcessor {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_thread_listener_command(
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
@@ -6763,6 +6764,7 @@ async fn handle_thread_listener_command(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
