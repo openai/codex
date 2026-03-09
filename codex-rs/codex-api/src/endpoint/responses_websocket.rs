@@ -53,9 +53,6 @@ enum WsCommand {
         message: Message,
         tx_result: oneshot::Sender<Result<(), WsError>>,
     },
-    Close {
-        tx_result: oneshot::Sender<Result<(), WsError>>,
-    },
 }
 
 impl WsStream {
@@ -79,11 +76,6 @@ impl WsStream {
                                 if should_break {
                                     break;
                                 }
-                            }
-                            WsCommand::Close { tx_result } => {
-                                let result = inner.close(None).await;
-                                let _ = tx_result.send(result);
-                                break;
                             }
                         }
                     }
@@ -141,11 +133,6 @@ impl WsStream {
 
     async fn send(&self, message: Message) -> Result<(), WsError> {
         self.request(|tx_result| WsCommand::Send { message, tx_result })
-            .await
-    }
-
-    async fn close(&self) -> Result<(), WsError> {
-        self.request(|tx_result| WsCommand::Close { tx_result })
             .await
     }
 
