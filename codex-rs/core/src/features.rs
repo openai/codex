@@ -782,7 +782,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GuardianApproval,
         key: "guardian_approval",
         stage: Stage::Experimental {
-            name: "Automatic approval review",
+            name: "Smart Approvals",
             menu_description: "Dispatch `on-request` approval prompts (for e.g. sandbox escapes or blocked network access) to a carefully-prompted security reviewer subagent rather than blocking the agent on your input.",
             announcement: "",
         },

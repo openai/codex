@@ -8372,6 +8372,7 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
 
     chat.open_permissions_popup();
     chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
@@ -8424,6 +8425,84 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
 }
 
 #[tokio::test]
+async fn permissions_selection_can_enable_smart_approvals() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    #[cfg(target_os = "windows")]
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateFeatureFlags { updates }
+                if *updates == vec![(Feature::GuardianApproval, true)]
+        )),
+        "expected smart approvals selection to enable the guardian approval feature: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateAskForApprovalPolicy(AskForApproval::OnRequest)
+        )),
+        "expected smart approvals selection to set on-request approval: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateSandboxPolicy(policy)
+                if *policy == SandboxPolicy::new_workspace_write_policy()
+        )),
+        "expected smart approvals selection to set workspace-write sandbox: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_can_disable_smart_approvals() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+    chat.set_feature_enabled(Feature::GuardianApproval, true);
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateFeatureFlags { updates }
+                if *updates == vec![(Feature::GuardianApproval, false)]
+        )),
+        "expected selecting Default from Smart Approvals to disable the guardian approval feature: {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn permissions_full_access_history_cell_emitted_only_after_confirmation() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     #[cfg(target_os = "windows")]
@@ -8434,6 +8513,7 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
     chat.config.notices.hide_full_access_warning = None;
 
     chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     #[cfg(target_os = "windows")]
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));

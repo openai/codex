@@ -837,6 +837,7 @@ impl App {
             return;
         }
 
+        let smart_approvals_sandbox = SandboxPolicy::new_workspace_write_policy();
         let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
             matches!(
                 feature,
@@ -848,6 +849,36 @@ impl App {
 
         for (feature, enabled) in updates {
             let feature_key = feature.key();
+            if feature == Feature::GuardianApproval && enabled {
+                if let Err(err) = self
+                    .config
+                    .permissions
+                    .approval_policy
+                    .can_set(&AskForApproval::OnRequest)
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to enable smart approvals due to approval policy constraints"
+                    );
+                    self.chat_widget
+                        .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
+                    continue;
+                }
+                if let Err(err) = self
+                    .config
+                    .permissions
+                    .sandbox_policy
+                    .can_set(&smart_approvals_sandbox)
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to enable smart approvals due to sandbox constraints"
+                    );
+                    self.chat_widget
+                        .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
+                    continue;
+                }
+            }
             if let Err(err) = self.config.features.set_enabled(feature, enabled) {
                 tracing::error!(
                     error = %err,
@@ -862,6 +893,60 @@ impl App {
             let effective_enabled = self.config.features.enabled(feature);
             self.chat_widget
                 .set_feature_enabled(feature, effective_enabled);
+            if feature == Feature::GuardianApproval && effective_enabled {
+                if let Err(err) = self
+                    .config
+                    .permissions
+                    .approval_policy
+                    .set(AskForApproval::OnRequest)
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to set smart approvals approval policy on app config"
+                    );
+                    self.chat_widget
+                        .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
+                    continue;
+                }
+                if let Err(err) = self
+                    .config
+                    .permissions
+                    .sandbox_policy
+                    .set(smart_approvals_sandbox.clone())
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to set smart approvals sandbox policy on app config"
+                    );
+                    self.chat_widget
+                        .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
+                    continue;
+                }
+                self.chat_widget
+                    .set_approval_policy(AskForApproval::OnRequest);
+                if let Err(err) = self
+                    .chat_widget
+                    .set_sandbox_policy(smart_approvals_sandbox.clone())
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to set smart approvals sandbox policy on chat config"
+                    );
+                    self.chat_widget
+                        .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
+                    continue;
+                }
+                builder = builder.with_edits([
+                    ConfigEdit::SetPath {
+                        segments: vec!["approval_policy".to_string()],
+                        value: "on-request".into(),
+                    },
+                    ConfigEdit::SetPath {
+                        segments: vec!["sandbox_mode".to_string()],
+                        value: "workspace-write".into(),
+                    },
+                ]);
+            }
             if effective_enabled {
                 builder = builder.set_feature_enabled(feature_key, true);
             } else if feature.default_enabled() {
@@ -5099,16 +5184,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_feature_flags_enabling_guardian_persists_only_the_feature_flag() -> Result<()> {
+    async fn update_feature_flags_enabling_guardian_selects_smart_approvals() -> Result<()> {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let current_session_policy = app
-            .chat_widget
-            .config_ref()
-            .permissions
-            .approval_policy
-            .value();
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
             .await;
@@ -5122,7 +5201,7 @@ mod tests {
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
-            current_session_policy
+            AskForApproval::OnRequest
         );
         assert_eq!(
             app.chat_widget
@@ -5130,9 +5209,18 @@ mod tests {
                 .permissions
                 .approval_policy
                 .value(),
-            current_session_policy
+            AskForApproval::OnRequest
+        );
+        assert_eq!(
+            app.chat_widget
+                .config_ref()
+                .permissions
+                .sandbox_policy
+                .get(),
+            &SandboxPolicy::new_workspace_write_policy()
         );
         assert_eq!(app.runtime_approval_policy_override, None);
+        assert_eq!(app.runtime_sandbox_policy_override, None);
         assert!(
             op_rx.try_recv().is_err(),
             "feature toggle should not patch the active session"
@@ -5140,25 +5228,37 @@ mod tests {
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(config.contains("guardian_approval = true"));
-        assert!(!config.contains("approval_policy"));
+        assert!(config.contains("approval_policy = \"on-request\""));
+        assert!(config.contains("sandbox_mode = \"workspace-write\""));
         Ok(())
     }
 
     #[tokio::test]
-    async fn update_feature_flags_disabling_guardian_clears_only_the_feature_flag() -> Result<()> {
+    async fn update_feature_flags_disabling_guardian_keeps_default_permissions() -> Result<()> {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         std::fs::write(
             codex_home.path().join("config.toml"),
-            "[features]\nguardian_approval = true\n",
+            "approval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n",
         )?;
         app.config
             .features
             .set_enabled(Feature::GuardianApproval, true)?;
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, true);
-        let current_session_policy = app.config.permissions.approval_policy.value();
+        app.config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::OnRequest)?;
+        app.config
+            .permissions
+            .sandbox_policy
+            .set(SandboxPolicy::new_workspace_write_policy())?;
+        app.chat_widget
+            .set_approval_policy(AskForApproval::OnRequest);
+        app.chat_widget
+            .set_sandbox_policy(SandboxPolicy::new_workspace_write_policy())?;
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
             .await;
@@ -5172,7 +5272,7 @@ mod tests {
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
-            current_session_policy
+            AskForApproval::OnRequest
         );
         assert_eq!(app.runtime_approval_policy_override, None);
         assert!(
@@ -5182,7 +5282,8 @@ mod tests {
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("guardian_approval = true"));
-        assert!(!config.contains("approval_policy"));
+        assert!(config.contains("approval_policy = \"on-request\""));
+        assert!(config.contains("sandbox_mode = \"workspace-write\""));
         Ok(())
     }
 
