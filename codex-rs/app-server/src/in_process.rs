@@ -74,6 +74,7 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
@@ -116,6 +117,8 @@ pub struct InProcessStartArgs {
     pub arg0_paths: Arg0DispatchPaths,
     /// Shared base config used to initialize core components.
     pub config: Arc<Config>,
+    /// Optional thread manager to reuse instead of creating a private one.
+    pub thread_manager: Option<Arc<ThreadManager>>,
     /// CLI config overrides that are already parsed into TOML values.
     pub cli_overrides: Vec<(String, TomlValue)>,
     /// Loader override knobs used by config API paths.
@@ -401,6 +404,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,
+                thread_manager: args.thread_manager,
                 cli_overrides: args.cli_overrides,
                 loader_overrides: args.loader_overrides,
                 cloud_requirements: args.cloud_requirements,
@@ -746,6 +750,7 @@ mod tests {
         let args = InProcessStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
             config: Arc::new(build_test_config().await),
+            thread_manager: None,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),

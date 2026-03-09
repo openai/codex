@@ -250,7 +250,7 @@ async fn initialize_app_server_client_name(thread: &CodexThread) {
 /// instance and communicates over in-memory channels.
 fn in_process_start_args(
     config: &Config,
-    _thread_manager: Arc<ThreadManager>,
+    thread_manager: Arc<ThreadManager>,
     arg0_paths: codex_arg0::Arg0DispatchPaths,
     cli_overrides: Vec<(String, TomlValue)>,
     cloud_requirements: CloudRequirementsLoader,
@@ -269,6 +269,7 @@ fn in_process_start_args(
     InProcessClientStartArgs {
         arg0_paths,
         config: Arc::new(config.clone()),
+        thread_manager: Some(thread_manager),
         cli_overrides,
         loader_overrides: LoaderOverrides::default(),
         cloud_requirements,
