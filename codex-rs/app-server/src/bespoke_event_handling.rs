@@ -3172,9 +3172,19 @@ mod tests {
             vec![ConnectionId(1)],
             ThreadId::new(),
         );
-        let thread_manager = Arc::new(ThreadManager::default());
         let codex_home = tempfile::tempdir()?;
-        let conversation = Arc::new(CodexThread::new(conversation_id.clone(), None));
+        let mut config = codex_core::config::ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await?;
+        config.model_provider_id = "openai".to_string();
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider(
+                codex_core::CodexAuth::from_api_key("dummy"),
+                codex_core::built_in_model_providers()["openai"].clone(),
+            ),
+        );
+        let conversation = thread_manager.start_thread(config).await?.thread;
 
         apply_bespoke_event_handling(
             Event {
