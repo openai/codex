@@ -23,7 +23,7 @@ filter = 'package(codex-app-server-protocol) & (test(typescript_schema_fixtures_
 test-group = 'app_server_protocol_codegen'
 
 [[profile.default.overrides]]
-# These tests spawn a fresh app-server subprocess per case. Serializing them keeps
-# Windows startup deterministic without widening the read timeouts.
-filter = 'package(codex-app-server)'
+# These integration tests spawn a fresh app-server subprocess per case.
+# Keep the library unit tests parallel.
+filter = 'package(codex-app-server) & kind(test)'
 test-group = 'app_server_integration'
