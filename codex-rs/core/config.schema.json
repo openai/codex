@@ -284,6 +284,16 @@
         }
       ]
     },
+    "BundledSkillsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -1452,6 +1462,9 @@
     "SkillsConfig": {
       "additionalProperties": false,
       "properties": {
+        "bundled": {
+          "$ref": "#/definitions/BundledSkillsConfig"
+        },
         "config": {
           "items": {
             "$ref": "#/definitions/SkillConfig"

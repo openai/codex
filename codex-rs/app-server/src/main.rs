@@ -21,10 +21,6 @@ struct AppServerArgs {
         default_value = AppServerTransport::DEFAULT_LISTEN_URL
     )]
     listen: AppServerTransport,
-
-    /// Disable Codex's bundled system skills and remove any cached `.system` copy.
-    #[arg(long = "disable-bundled-system-skills")]
-    disable_bundled_system_skills: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -42,7 +38,6 @@ fn main() -> anyhow::Result<()> {
             CliConfigOverrides::default(),
             loader_overrides,
             false,
-            args.disable_bundled_system_skills,
             transport,
         )
         .await?;

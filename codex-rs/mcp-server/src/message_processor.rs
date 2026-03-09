@@ -59,16 +59,14 @@ impl MessageProcessor {
             config.cli_auth_credentials_store_mode,
         );
         let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
+            config.as_ref(),
             auth_manager,
             SessionSource::Mcp,
-            config.model_catalog.clone(),
             CollaborationModesConfig {
                 default_mode_request_user_input: config
                     .features
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
-            false,
         ));
         Self {
             outgoing,

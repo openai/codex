@@ -143,8 +143,6 @@ pub struct InProcessClientStartArgs {
     pub session_source: SessionSource,
     /// Whether auth loading should honor the `CODEX_API_KEY` environment variable.
     pub enable_codex_api_key_env: bool,
-    /// Whether bundled system skills should be disabled for this runtime.
-    pub disable_bundled_system_skills: bool,
     /// Client name reported during initialize.
     pub client_name: String,
     /// Client version reported during initialize.
@@ -159,7 +157,7 @@ pub struct InProcessClientStartArgs {
 
 impl InProcessClientStartArgs {
     /// Builds initialize params from caller-provided metadata.
-pub fn initialize_params(&self) -> InitializeParams {
+    pub fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
             experimental_api: self.experimental_api,
             opt_out_notification_methods: if self.opt_out_notification_methods.is_empty() {
@@ -191,7 +189,6 @@ pub fn initialize_params(&self) -> InitializeParams {
             config_warnings: self.config_warnings,
             session_source: self.session_source,
             enable_codex_api_key_env: self.enable_codex_api_key_env,
-            disable_bundled_system_skills: self.disable_bundled_system_skills,
             initialize,
             channel_capacity: self.channel_capacity,
         }
@@ -636,7 +633,6 @@ mod tests {
             config_warnings: Vec::new(),
             session_source,
             enable_codex_api_key_env: false,
-            disable_bundled_system_skills: false,
             client_name: "codex-app-server-client-test".to_string(),
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,

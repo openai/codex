@@ -73,8 +73,6 @@ Clients must send a single `initialize` request per transport connection before 
 
 `initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
 
-If you do not want app-server to use Codex's bundled system skills, start it with `--disable-bundled-system-skills`. This is a process startup setting, not part of the per-connection `initialize` handshake. When set, app-server also removes any existing cached bundled system skills under `CODEX_HOME/skills/.system`.
-
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If

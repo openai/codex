@@ -152,7 +152,6 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
-    pub(crate) disable_bundled_system_skills: bool,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
@@ -171,7 +170,6 @@ impl MessageProcessor {
             outgoing,
             arg0_paths,
             config,
-            disable_bundled_system_skills,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
@@ -191,16 +189,14 @@ impl MessageProcessor {
             outgoing: outgoing.clone(),
         }));
         let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
+            config.as_ref(),
             auth_manager.clone(),
             session_source,
-            config.model_catalog.clone(),
             CollaborationModesConfig {
                 default_mode_request_user_input: config
                     .features
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
-            disable_bundled_system_skills,
         ));
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager

@@ -1693,16 +1693,14 @@ impl App {
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
         let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
+            &config,
             auth_manager.clone(),
             SessionSource::Cli,
-            config.model_catalog.clone(),
             CollaborationModesConfig {
                 default_mode_request_user_input: config
                     .features
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
-            false,
         ));
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
