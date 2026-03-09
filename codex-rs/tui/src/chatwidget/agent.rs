@@ -26,6 +26,8 @@ use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
+use codex_app_server_protocol::GrantedMacOsPermissions;
+use codex_app_server_protocol::GrantedPermissionProfile;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::McpServerElicitationAction;
@@ -35,6 +37,7 @@ use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::PatchChangeKind;
+use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
@@ -98,6 +101,7 @@ use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::WarningEvent;
+use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::UnboundedSender;
@@ -110,6 +114,10 @@ use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::InProcessAgentContext;
 use crate::version::CODEX_CLI_VERSION;
 
+#[cfg(test)]
+use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
+#[cfg(test)]
+use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 #[cfg(test)]
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 #[cfg(test)]
@@ -124,6 +132,8 @@ use codex_app_server_protocol::McpElicitationObjectType;
 use codex_app_server_protocol::McpElicitationSchema;
 #[cfg(test)]
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+#[cfg(test)]
+use codex_app_server_protocol::PermissionsRequestApprovalParams;
 #[cfg(test)]
 use codex_app_server_protocol::ToolRequestUserInputOption;
 #[cfg(test)]
@@ -191,7 +201,8 @@ fn in_process_typed_interactive_request(
         ServerRequest::DynamicToolCall { .. } => {
             Some(InProcessTypedInteractiveRequest::DynamicToolCall)
         }
-        _ => None,
+        ServerRequest::PermissionsRequestApproval { .. }
+        | ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
     }
 }
 
@@ -281,6 +292,7 @@ struct PendingServerRequests {
     exec_approvals: HashMap<String, PendingExecApprovalRequest>,
     patch_approvals: HashMap<String, PendingPatchApprovalRequest>,
     mcp_elicitations: HashMap<RequestId, (String, codex_protocol::mcp::RequestId)>,
+    request_permissions: HashMap<String, RequestId>,
     request_user_input: HashMap<String, VecDeque<RequestId>>,
     dynamic_tool_calls: HashMap<String, RequestId>,
     pending_file_changes: HashMap<String, HashMap<PathBuf, FileChange>>,
@@ -292,6 +304,7 @@ impl PendingServerRequests {
         self.patch_approvals.clear();
         // MCP elicitation requests can outlive turn boundaries (turn_id is best-effort),
         // so clear them only via resolve path or serverRequest/resolved notifications.
+        self.request_permissions.clear();
         self.request_user_input.clear();
         self.dynamic_tool_calls.clear();
         self.pending_file_changes.clear();
@@ -408,6 +421,60 @@ fn additional_permission_profile_to_core(
             macos_accessibility: macos.accessibility,
             macos_calendar: macos.calendar,
         }),
+    }
+}
+
+fn granted_permission_profile_from_core(value: PermissionProfile) -> GrantedPermissionProfile {
+    let network = value.network.and_then(|network| {
+        if network.enabled.unwrap_or(false) {
+            Some(codex_app_server_protocol::AdditionalNetworkPermissions {
+                enabled: Some(true),
+            })
+        } else {
+            None
+        }
+    });
+    let file_system = value.file_system.and_then(|file_system| {
+        if file_system.is_empty() {
+            None
+        } else {
+            Some(codex_app_server_protocol::AdditionalFileSystemPermissions {
+                read: file_system.read,
+                write: file_system.write,
+            })
+        }
+    });
+    let macos = value.macos.and_then(|macos| {
+        let preferences = match macos.macos_preferences {
+            codex_protocol::models::MacOsPreferencesPermission::None => None,
+            preferences => Some(preferences),
+        };
+        let automations = match macos.macos_automation {
+            codex_protocol::models::MacOsAutomationPermission::None => None,
+            automations => Some(automations),
+        };
+        let accessibility = macos.macos_accessibility.then_some(true);
+        let calendar = macos.macos_calendar.then_some(true);
+        if preferences.is_none()
+            && automations.is_none()
+            && accessibility.is_none()
+            && calendar.is_none()
+        {
+            None
+        } else {
+            Some(GrantedMacOsPermissions {
+                preferences,
+                automations,
+                accessibility,
+                calendar,
+            })
+        }
+    });
+
+    GrantedPermissionProfile {
+        network,
+        file_system,
+        macos,
     }
 }
 
@@ -1837,6 +1904,39 @@ async fn process_in_process_command(
             )
             .await;
         }
+        Op::RequestPermissionsResponse { id, response } => {
+            let Some(request_id) = pending_server_requests.request_permissions.remove(&id) else {
+                send_warning_event(
+                    app_event_tx,
+                    format!(
+                        "request_permissions response ignored because request id `{id}` was not pending"
+                    ),
+                );
+                return false;
+            };
+
+            let response = PermissionsRequestApprovalResponse {
+                permissions: granted_permission_profile_from_core(response.permissions),
+            };
+            let result = match serde_json::to_value(response) {
+                Ok(value) => value,
+                Err(err) => {
+                    send_error_event(
+                        app_event_tx,
+                        format!("failed to encode request_permissions response: {err}"),
+                    );
+                    return false;
+                }
+            };
+            resolve_server_request(
+                client,
+                request_id,
+                result,
+                "item/permissions/requestApproval",
+                app_event_tx,
+            )
+            .await;
+        }
         Op::UserInputAnswer { id, response } => {
             let Some(request_id) = pending_server_requests.pop_request_user_input_request_id(&id)
             else {
@@ -2337,6 +2437,37 @@ async fn run_in_process_agent_loop(
                                         turn_id: params.turn_id,
                                         questions: request_user_input_questions_to_core(
                                             params.questions,
+                                        ),
+                                    }),
+                                );
+                            }
+                            ServerRequest::PermissionsRequestApproval { request_id, params } => {
+                                if params.thread_id != thread_id {
+                                    reject_server_request(
+                                        &client,
+                                        request_id,
+                                        &method,
+                                        format!(
+                                            "request targets thread `{}`, but active thread is `{thread_id}`",
+                                            params.thread_id
+                                        ),
+                                        &app_event_tx,
+                                    )
+                                    .await;
+                                    continue;
+                                }
+
+                                pending_server_requests
+                                    .request_permissions
+                                    .insert(params.item_id.clone(), request_id);
+                                send_codex_event(
+                                    &app_event_tx,
+                                    EventMsg::RequestPermissions(RequestPermissionsEvent {
+                                        call_id: params.item_id,
+                                        turn_id: params.turn_id,
+                                        reason: params.reason,
+                                        permissions: additional_permission_profile_to_core(
+                                            params.permissions,
                                         ),
                                     }),
                                 );
@@ -3241,6 +3372,27 @@ mod tests {
                     call_id: "dynamic-1".to_string(),
                     tool: "tool".to_string(),
                     arguments: serde_json::json!({ "arg": 1 }),
+                },
+            },
+            ServerRequest::PermissionsRequestApproval {
+                request_id: RequestId::Integer(8),
+                params: PermissionsRequestApprovalParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "permissions-1".to_string(),
+                    reason: Some("Select a root".to_string()),
+                    permissions: codex_app_server_protocol::AdditionalPermissionProfile {
+                        network: None,
+                        file_system: None,
+                        macos: None,
+                    },
+                },
+            },
+            ServerRequest::ChatgptAuthTokensRefresh {
+                request_id: RequestId::Integer(9),
+                params: ChatgptAuthTokensRefreshParams {
+                    reason: ChatgptAuthTokensRefreshReason::Unauthorized,
+                    previous_account_id: None,
                 },
             },
         ];

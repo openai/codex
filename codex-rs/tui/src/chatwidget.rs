@@ -2271,6 +2271,14 @@ impl ChatWidget {
         );
     }
 
+    fn on_request_permissions(&mut self, ev: RequestPermissionsEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_request_permissions(ev),
+            |s| s.handle_request_permissions_now(ev2),
+        );
+    }
+
     fn on_request_user_input(&mut self, ev: RequestUserInputEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(
@@ -3034,6 +3042,27 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn handle_request_permissions_now(&mut self, ev: RequestPermissionsEvent) {
+        self.flush_answer_stream_with_separator();
+        self.notify(Notification::PermissionsRequested {
+            summary: ev
+                .reason
+                .clone()
+                .or_else(|| Notification::permission_request_summary(&ev.permissions)),
+        });
+        self.bottom_pane.push_approval_request(
+            ApprovalRequest::Permissions {
+                thread_id: self.thread_id.unwrap_or_default(),
+                thread_label: None,
+                id: ev.call_id,
+                reason: ev.reason,
+                permissions: ev.permissions,
+            },
+            &self.config.features,
+        );
+        self.request_redraw();
+    }
+
     pub(crate) fn push_approval_request(&mut self, request: ApprovalRequest) {
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -3589,7 +3618,7 @@ impl ChatWidget {
             .and_then(|mask| mask.model.clone())
             .unwrap_or(header_model);
 
-        let current_cwd = Some(session_configured.cwd.clone());
+        let current_cwd = Some(session_configured.cwd);
         let codex_op_tx = spawn_op_forwarder(conversation);
 
         let fallback_default = Settings {
@@ -8825,6 +8854,9 @@ enum Notification {
     ElicitationRequested {
         server_name: String,
     },
+    PermissionsRequested {
+        summary: Option<String>,
+    },
     PlanModePrompt {
         title: String,
     },
@@ -8858,6 +8890,10 @@ impl Notification {
             Notification::ElicitationRequested { server_name } => {
                 format!("Approval requested by {server_name}")
             }
+            Notification::PermissionsRequested { summary } => summary
+                .as_deref()
+                .map(|summary| format!("Permissions requested: {summary}"))
+                .unwrap_or_else(|| "Permissions requested".to_string()),
             Notification::PlanModePrompt { title } => {
                 format!("Plan mode prompt: {title}")
             }
@@ -8877,7 +8913,8 @@ impl Notification {
             Notification::AgentTurnComplete { .. } => "agent-turn-complete",
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
-            | Notification::ElicitationRequested { .. } => "approval-requested",
+            | Notification::ElicitationRequested { .. }
+            | Notification::PermissionsRequested { .. } => "approval-requested",
             Notification::PlanModePrompt { .. } => "plan-mode-prompt",
             Notification::UserInputRequested { .. } => "user-input-requested",
         }
@@ -8889,6 +8926,7 @@ impl Notification {
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. }
+            | Notification::PermissionsRequested { .. }
             | Notification::PlanModePrompt { .. }
             | Notification::UserInputRequested { .. } => 1,
         }
@@ -8930,6 +8968,46 @@ impl Notification {
             None
         } else {
             Some(truncate_text(summary, 30))
+        }
+    }
+
+    fn permission_request_summary(
+        permissions: &codex_protocol::models::PermissionProfile,
+    ) -> Option<String> {
+        let mut parts = Vec::new();
+        if permissions
+            .network
+            .as_ref()
+            .and_then(|network| network.enabled)
+            .unwrap_or(false)
+        {
+            parts.push("network".to_string());
+        }
+        if let Some(file_system) = permissions.file_system.as_ref() {
+            let read_count = file_system.read.as_ref().map(Vec::len).unwrap_or(0);
+            let write_count = file_system.write.as_ref().map(Vec::len).unwrap_or(0);
+            if read_count > 0 {
+                parts.push(if read_count == 1 {
+                    "1 read root".to_string()
+                } else {
+                    format!("{read_count} read roots")
+                });
+            }
+            if write_count > 0 {
+                parts.push(if write_count == 1 {
+                    "1 write root".to_string()
+                } else {
+                    format!("{write_count} write roots")
+                });
+            }
+        }
+        if permissions.macos.is_some() {
+            parts.push("macOS access".to_string());
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(truncate_text(&parts.join(", "), 30))
         }
     }
 }

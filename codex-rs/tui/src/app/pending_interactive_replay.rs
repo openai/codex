@@ -170,6 +170,13 @@ impl PendingInteractiveReplayState {
                     ev.id.clone(),
                 ));
             }
+            EventMsg::RequestPermissions(ev) => {
+                self.request_permissions_call_ids.insert(ev.call_id.clone());
+                self.request_permissions_call_ids_by_turn_id
+                    .entry(ev.turn_id.clone())
+                    .or_default()
+                    .push(ev.call_id.clone());
+            }
             EventMsg::RequestUserInput(ev) => {
                 self.request_user_input_call_ids.insert(ev.call_id.clone());
                 self.request_user_input_call_ids_by_turn_id
@@ -231,6 +238,14 @@ impl PendingInteractiveReplayState {
                         ev.id.clone(),
                     ));
             }
+            EventMsg::RequestPermissions(ev) => {
+                self.request_permissions_call_ids.remove(&ev.call_id);
+                Self::remove_call_id_from_turn_map_entry(
+                    &mut self.request_permissions_call_ids_by_turn_id,
+                    &ev.turn_id,
+                    &ev.call_id,
+                );
+            }
             EventMsg::RequestUserInput(ev) => {
                 self.request_user_input_call_ids.remove(&ev.call_id);
                 let mut remove_turn_entry = false;
@@ -284,6 +299,9 @@ impl PendingInteractiveReplayState {
                         ev.id.clone(),
                     ))
             }
+            EventMsg::RequestPermissions(ev) => {
+                self.request_permissions_call_ids.contains(&ev.call_id)
+            }
             EventMsg::RequestUserInput(ev) => {
                 self.request_user_input_call_ids.contains(&ev.call_id)
             }
@@ -329,6 +347,14 @@ impl PendingInteractiveReplayState {
         if let Some(call_ids) = self.patch_approval_call_ids_by_turn_id.remove(turn_id) {
             for call_id in call_ids {
                 self.patch_approval_call_ids.remove(&call_id);
+            }
+        }
+    }
+
+    fn clear_request_permissions_turn(&mut self, turn_id: &str) {
+        if let Some(call_ids) = self.request_permissions_call_ids_by_turn_id.remove(turn_id) {
+            for call_id in call_ids {
+                self.request_permissions_call_ids.remove(&call_id);
             }
         }
     }
@@ -384,6 +410,20 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    fn request_permissions_event(call_id: &str, turn_id: &str) -> Event {
+        Event {
+            id: format!("ev-{call_id}"),
+            msg: EventMsg::RequestPermissions(
+                codex_protocol::request_permissions::RequestPermissionsEvent {
+                    call_id: call_id.to_string(),
+                    turn_id: turn_id.to_string(),
+                    reason: Some("Select a root".to_string()),
+                    permissions: codex_protocol::models::PermissionProfile::default(),
+                },
+            ),
+        }
+    }
+
     #[test]
     fn thread_event_snapshot_keeps_pending_request_user_input() {
         let mut store = ThreadEventStore::new(8);
@@ -406,6 +446,38 @@ mod tests {
             snapshot.events.first().map(|event| &event.msg),
             Some(EventMsg::RequestUserInput(_))
         ));
+    }
+
+    #[test]
+    fn thread_event_snapshot_keeps_pending_request_permissions() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(request_permissions_event("call-1", "turn-1"));
+
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.events.len(), 1);
+        assert!(matches!(
+            snapshot.events.first().map(|event| &event.msg),
+            Some(EventMsg::RequestPermissions(_))
+        ));
+    }
+
+    #[test]
+    fn thread_event_snapshot_drops_resolved_request_permissions_after_response() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(request_permissions_event("call-1", "turn-1"));
+
+        store.note_outbound_op(&Op::RequestPermissionsResponse {
+            id: "call-1".to_string(),
+            response: codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: codex_protocol::models::PermissionProfile::default(),
+            },
+        });
+
+        let snapshot = store.snapshot();
+        assert!(
+            snapshot.events.is_empty(),
+            "resolved request_permissions prompt should not replay on thread switch"
+        );
     }
 
     #[test]
@@ -617,6 +689,17 @@ mod tests {
         });
         store.push_event(Event {
             id: "ev-3".to_string(),
+            msg: EventMsg::RequestPermissions(
+                codex_protocol::request_permissions::RequestPermissionsEvent {
+                    call_id: "permissions-call-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    reason: Some("Select a root".to_string()),
+                    permissions: codex_protocol::models::PermissionProfile::default(),
+                },
+            ),
+        });
+        store.push_event(Event {
+            id: "ev-4".to_string(),
             msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
                 turn_id: Some("turn-1".to_string()),
                 reason: TurnAbortReason::Replaced,
@@ -627,7 +710,9 @@ mod tests {
         assert!(snapshot.events.iter().all(|event| {
             !matches!(
                 &event.msg,
-                EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_)
+                EventMsg::ExecApprovalRequest(_)
+                    | EventMsg::ApplyPatchApprovalRequest(_)
+                    | EventMsg::RequestPermissions(_)
             )
         }));
     }
@@ -700,6 +785,23 @@ mod tests {
             id: "call-1".to_string(),
             turn_id: Some("turn-1".to_string()),
             decision: codex_protocol::protocol::ReviewDecision::Approved,
+        });
+
+        assert_eq!(store.has_pending_thread_approvals(), false);
+    }
+
+    #[test]
+    fn request_permissions_counts_as_pending_thread_approval() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(request_permissions_event("call-1", "turn-1"));
+
+        assert_eq!(store.has_pending_thread_approvals(), true);
+
+        store.note_outbound_op(&Op::RequestPermissionsResponse {
+            id: "call-1".to_string(),
+            response: codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: codex_protocol::models::PermissionProfile::default(),
+            },
         });
 
         assert_eq!(store.has_pending_thread_approvals(), false);
