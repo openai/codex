@@ -675,6 +675,72 @@ async fn spawn_agent_inherits_parent_turn_permissions_for_first_child_turn() {
 }
 
 #[tokio::test]
+async fn spawn_agent_seeds_permissions_before_thread_created_notification() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let child_write_root =
+        AbsolutePathBuf::from_absolute_path(harness._home.path().join("testing3"))
+            .expect("temp child write root should be absolute");
+    let expected_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![child_write_root.clone()]),
+            write: Some(vec![child_write_root]),
+        }),
+        ..PermissionProfile::default()
+    };
+    let active_turn = ActiveTurn::default();
+    {
+        let mut turn_state = active_turn.turn_state.lock().await;
+        turn_state.record_granted_permissions(expected_permissions.clone());
+    }
+    *parent_thread.codex.session.active_turn.lock().await = Some(active_turn);
+
+    let mut thread_created_rx = harness.manager.subscribe_thread_created();
+    let control = harness.control.clone();
+    let config = harness.config.clone();
+    let spawn = tokio::spawn(async move {
+        control
+            .spawn_agent(
+                config,
+                Vec::new(),
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth: 1,
+                    agent_nickname: None,
+                    agent_role: None,
+                })),
+            )
+            .await
+            .expect("child spawn should succeed")
+    });
+
+    let child_thread_id = timeout(Duration::from_secs(2), thread_created_rx.recv())
+        .await
+        .expect("thread-created notification should arrive")
+        .expect("thread-created channel should stay open");
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+
+    let inherited = child_thread
+        .codex
+        .session
+        .take_inherited_next_turn_permissions()
+        .await;
+    assert_eq!(inherited, Some(expected_permissions.clone()));
+    child_thread
+        .codex
+        .session
+        .seed_inherited_next_turn_permissions(expected_permissions)
+        .await;
+
+    let spawned_thread_id = spawn.await.expect("spawn task should complete");
+    assert_eq!(spawned_thread_id, child_thread_id);
+}
+
+#[tokio::test]
 async fn spawn_agent_respects_max_threads_limit() {
     let max_threads = 1usize;
     let (_home, config) = test_config_with_cli_overrides(vec![(
