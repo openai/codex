@@ -551,10 +551,19 @@ impl InProcessAppServerClient {
     /// If graceful shutdown exceeds timeout, the worker task is aborted to
     /// avoid leaking background tasks in embedding callers.
     pub async fn shutdown(self) -> IoResult<()> {
-        let mut worker_handle = self.worker_handle;
+        let Self {
+            command_tx,
+            event_rx,
+            worker_handle,
+        } = self;
+        let mut worker_handle = worker_handle;
+        // Drop the caller-facing receiver before asking the worker to shut
+        // down. That unblocks any pending must-deliver `event_tx.send(..)`
+        // so the worker can reach `handle.shutdown()` instead of timing out
+        // and getting aborted with the runtime still attached.
+        drop(event_rx);
         let (response_tx, response_rx) = oneshot::channel();
-        if self
-            .command_tx
+        if command_tx
             .send(ClientCommand::Shutdown { response_tx })
             .await
             .is_ok()
