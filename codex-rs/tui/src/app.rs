@@ -82,6 +82,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -127,6 +128,7 @@ const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
+    UserInput(RequestUserInputEvent),
 }
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
@@ -650,7 +652,11 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) active_profile: Option<String>,
+    /// Binary dispatch paths used to locate the codex executable and related
+    /// tools. Passed through to each agent's `InProcessAgentContext`.
     arg0_paths: Arg0DispatchPaths,
+    /// Cloud-requirement loader shared with the in-process app-server client so
+    /// it can resolve cloud-specific config constraints at session start.
     cloud_requirements: CloudRequirementsLoader,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
@@ -705,6 +711,9 @@ pub(crate) struct App {
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
+    /// When `true`, the primary session's events arrive through the in-process
+    /// app-server event stream, so `register_live_thread` must *not* spawn a
+    /// competing `next_event()` listener for the primary thread.
     active_session_events_via_app_server: bool,
     agent_navigation: AgentNavigationState,
     active_thread_id: Option<ThreadId>,
@@ -1219,6 +1228,7 @@ impl App {
                     permissions: ev.permissions.clone(),
                 },
             )),
+            EventMsg::RequestUserInput(ev) => Some(ThreadInteractiveRequest::UserInput(ev.clone())),
             _ => None,
         }
     }
@@ -1329,6 +1339,9 @@ impl App {
                     self.chat_widget
                         .push_mcp_server_elicitation_request(request);
                 }
+                ThreadInteractiveRequest::UserInput(request) => {
+                    self.chat_widget.push_user_input_request(request);
+                }
             }
         }
         if refresh_pending_thread_approvals {
@@ -1343,8 +1356,11 @@ impl App {
         event: Event,
     ) -> Result<()> {
         if !self.thread_event_channels.contains_key(&thread_id) {
-            tracing::debug!("dropping stale event for untracked thread {thread_id}");
-            return Ok(());
+            self.handle_thread_created(thread_id).await?;
+            if !self.thread_event_channels.contains_key(&thread_id) {
+                tracing::debug!("dropping stale event for untracked thread {thread_id}");
+                return Ok(());
+            }
         }
 
         self.enqueue_thread_event(thread_id, event).await
@@ -3614,6 +3630,13 @@ impl App {
         Ok(())
     }
 
+    /// Register a `CodexThread` with the multi-thread infrastructure: create
+    /// its event channel, add it to the agent picker, and optionally spawn a
+    /// `next_event()` listener task.
+    ///
+    /// `spawn_listener` should be `false` when the thread's events already
+    /// arrive through another path (e.g. the in-process app-server stream).
+    /// `primary` marks the thread as the main session and activates its channel.
     async fn register_live_thread(
         &mut self,
         thread: Arc<codex_core::CodexThread>,
@@ -3663,6 +3686,12 @@ impl App {
         }
     }
 
+    /// Adopt a `CodexThread` obtained from `ThreadManager` (resume or fork) as
+    /// the primary session. Unlike a fresh `spawn_agent` session the thread
+    /// already exists, so this method registers it with a `next_event()`
+    /// listener and flips `active_session_events_via_app_server` off so
+    /// subsequent `register_live_thread` calls know the primary thread's events
+    /// come from the direct listener, not the app-server stream.
     async fn attach_existing_primary_thread(
         &mut self,
         thread: Arc<codex_core::CodexThread>,
@@ -4017,6 +4046,7 @@ mod tests {
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -5431,6 +5461,317 @@ mod tests {
         assert_eq!(
             app.chat_widget.pending_thread_approvals(),
             &["Robie [explorer]".to_string()]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_patch_approval_bubbles_into_active_view() -> Result<()> {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000031").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000032").expect("valid thread");
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels
+            .insert(main_thread_id, ThreadEventChannel::new(1));
+        app.thread_event_channels.insert(
+            agent_thread_id,
+            ThreadEventChannel::new_with_session_configured(
+                1,
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                        session_id: agent_thread_id,
+                        forked_from_id: None,
+                        thread_name: None,
+                        model: "gpt-5".to_string(),
+                        model_provider_id: "test-provider".to_string(),
+                        service_tier: None,
+                        approval_policy: AskForApproval::OnRequest,
+                        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                        cwd: PathBuf::from("/tmp/agent"),
+                        reasoning_effort: None,
+                        history_log_id: 0,
+                        history_entry_count: 0,
+                        initial_messages: None,
+                        network_proxy: None,
+                        rollout_path: Some(PathBuf::from("/tmp/agent-rollout.jsonl")),
+                    }),
+                },
+            ),
+        );
+        app.agent_picker_threads.insert(
+            agent_thread_id,
+            AgentPickerThreadEntry {
+                agent_nickname: Some("Patcher".to_string()),
+                agent_role: Some("worker".to_string()),
+                is_closed: false,
+            },
+        );
+
+        let mut changes = HashMap::new();
+        changes.insert(
+            PathBuf::from("agent.txt"),
+            codex_protocol::protocol::FileChange::Add {
+                content: "created".to_string(),
+            },
+        );
+        app.enqueue_thread_event(
+            agent_thread_id,
+            Event {
+                id: "ev-patch-approval".to_string(),
+                msg: EventMsg::ApplyPatchApprovalRequest(
+                    codex_protocol::protocol::ApplyPatchApprovalRequestEvent {
+                        call_id: "call-patch-approval".to_string(),
+                        turn_id: "turn-patch-approval".to_string(),
+                        changes,
+                        reason: Some("need patch approval".to_string()),
+                        grant_root: None,
+                    },
+                ),
+            },
+        )
+        .await?;
+
+        assert_eq!(app.chat_widget.has_active_view(), true);
+        assert_eq!(
+            app.chat_widget.pending_thread_approvals(),
+            &["Patcher [worker]".to_string()]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_permissions_request_bubbles_into_active_view() -> Result<()> {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000041").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000042").expect("valid thread");
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels
+            .insert(main_thread_id, ThreadEventChannel::new(1));
+        app.thread_event_channels.insert(
+            agent_thread_id,
+            ThreadEventChannel::new_with_session_configured(
+                1,
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                        session_id: agent_thread_id,
+                        forked_from_id: None,
+                        thread_name: None,
+                        model: "gpt-5".to_string(),
+                        model_provider_id: "test-provider".to_string(),
+                        service_tier: None,
+                        approval_policy: AskForApproval::OnRequest,
+                        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                        cwd: PathBuf::from("/tmp/agent"),
+                        reasoning_effort: None,
+                        history_log_id: 0,
+                        history_entry_count: 0,
+                        initial_messages: None,
+                        network_proxy: None,
+                        rollout_path: Some(PathBuf::from("/tmp/agent-rollout.jsonl")),
+                    }),
+                },
+            ),
+        );
+        app.agent_picker_threads.insert(
+            agent_thread_id,
+            AgentPickerThreadEntry {
+                agent_nickname: Some("Perms".to_string()),
+                agent_role: Some("worker".to_string()),
+                is_closed: false,
+            },
+        );
+
+        app.enqueue_thread_event(
+            agent_thread_id,
+            Event {
+                id: "ev-permissions".to_string(),
+                msg: EventMsg::RequestPermissions(
+                    codex_protocol::request_permissions::RequestPermissionsEvent {
+                        call_id: "call-permissions".to_string(),
+                        turn_id: "turn-permissions".to_string(),
+                        reason: Some("need write access".to_string()),
+                        permissions: codex_protocol::models::PermissionProfile::default(),
+                    },
+                ),
+            },
+        )
+        .await?;
+
+        assert_eq!(app.chat_widget.has_active_view(), true);
+        assert_eq!(
+            app.chat_widget.pending_thread_approvals(),
+            &["Perms [worker]".to_string()]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_request_user_input_bubbles_into_active_view() -> Result<()> {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000051").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000052").expect("valid thread");
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels
+            .insert(main_thread_id, ThreadEventChannel::new(1));
+        app.thread_event_channels.insert(
+            agent_thread_id,
+            ThreadEventChannel::new_with_session_configured(
+                1,
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                        session_id: agent_thread_id,
+                        forked_from_id: None,
+                        thread_name: None,
+                        model: "gpt-5".to_string(),
+                        model_provider_id: "test-provider".to_string(),
+                        service_tier: None,
+                        approval_policy: AskForApproval::OnRequest,
+                        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                        cwd: PathBuf::from("/tmp/agent"),
+                        reasoning_effort: None,
+                        history_log_id: 0,
+                        history_entry_count: 0,
+                        initial_messages: None,
+                        network_proxy: None,
+                        rollout_path: Some(PathBuf::from("/tmp/agent-rollout.jsonl")),
+                    }),
+                },
+            ),
+        );
+        app.agent_picker_threads.insert(
+            agent_thread_id,
+            AgentPickerThreadEntry {
+                agent_nickname: Some("Input".to_string()),
+                agent_role: Some("worker".to_string()),
+                is_closed: false,
+            },
+        );
+
+        app.enqueue_thread_event(
+            agent_thread_id,
+            Event {
+                id: "ev-user-input".to_string(),
+                msg: EventMsg::RequestUserInput(
+                    codex_protocol::request_user_input::RequestUserInputEvent {
+                        call_id: "call-user-input".to_string(),
+                        turn_id: "turn-user-input".to_string(),
+                        questions: vec![
+                            codex_protocol::request_user_input::RequestUserInputQuestion {
+                                id: "q1".to_string(),
+                                header: "Question".to_string(),
+                                question: "Pick one?".to_string(),
+                                is_other: false,
+                                is_secret: false,
+                                options: Some(vec![
+                                codex_protocol::request_user_input::RequestUserInputQuestionOption {
+                                    label: "One".to_string(),
+                                    description: "First option".to_string(),
+                                },
+                            ]),
+                            },
+                        ],
+                    },
+                ),
+            },
+        )
+        .await?;
+
+        assert_eq!(app.chat_widget.has_active_view(), true);
+        assert!(app.chat_widget.pending_thread_approvals().is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_mcp_elicitation_bubbles_into_active_view() -> Result<()> {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000061").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000062").expect("valid thread");
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels
+            .insert(main_thread_id, ThreadEventChannel::new(1));
+        app.thread_event_channels.insert(
+            agent_thread_id,
+            ThreadEventChannel::new_with_session_configured(
+                1,
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                        session_id: agent_thread_id,
+                        forked_from_id: None,
+                        thread_name: None,
+                        model: "gpt-5".to_string(),
+                        model_provider_id: "test-provider".to_string(),
+                        service_tier: None,
+                        approval_policy: AskForApproval::OnRequest,
+                        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                        cwd: PathBuf::from("/tmp/agent"),
+                        reasoning_effort: None,
+                        history_log_id: 0,
+                        history_entry_count: 0,
+                        initial_messages: None,
+                        network_proxy: None,
+                        rollout_path: Some(PathBuf::from("/tmp/agent-rollout.jsonl")),
+                    }),
+                },
+            ),
+        );
+        app.agent_picker_threads.insert(
+            agent_thread_id,
+            AgentPickerThreadEntry {
+                agent_nickname: Some("MCP".to_string()),
+                agent_role: Some("worker".to_string()),
+                is_closed: false,
+            },
+        );
+
+        app.enqueue_thread_event(
+            agent_thread_id,
+            Event {
+                id: "ev-elicitation".to_string(),
+                msg: EventMsg::ElicitationRequest(
+                    codex_protocol::approvals::ElicitationRequestEvent {
+                        turn_id: Some("turn-elicitation".to_string()),
+                        server_name: "server-1".to_string(),
+                        id: codex_protocol::mcp::RequestId::Integer(7),
+                        request: codex_protocol::approvals::ElicitationRequest::Url {
+                            meta: None,
+                            message: "Open this URL?".to_string(),
+                            url: "https://example.com".to_string(),
+                            elicitation_id: "elicitation-1".to_string(),
+                        },
+                    },
+                ),
+            },
+        )
+        .await?;
+
+        assert_eq!(app.chat_widget.has_active_view(), true);
+        assert_eq!(
+            app.chat_widget.pending_thread_approvals(),
+            &["MCP [worker]".to_string()]
         );
 
         Ok(())

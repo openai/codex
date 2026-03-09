@@ -477,6 +477,9 @@ pub(crate) struct InProcessAgentContext {
     pub(crate) cloud_requirements: CloudRequirementsLoader,
 }
 
+/// Common initialization parameters shared by all `ChatWidget` constructors
+/// (fresh session, resume, fork). Bundled into a struct to keep constructor
+/// signatures manageable.
 pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
     pub(crate) frame_requester: FrameRequester,
@@ -3075,6 +3078,11 @@ impl ChatWidget {
     ) {
         self.bottom_pane
             .push_mcp_server_elicitation_request(request);
+        self.request_redraw();
+    }
+
+    pub(crate) fn push_user_input_request(&mut self, request: RequestUserInputEvent) {
+        self.bottom_pane.push_user_input_request(request);
         self.request_redraw();
     }
 

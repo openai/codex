@@ -1,3 +1,21 @@
+//! In-process app-server agent for the TUI.
+//!
+//! This module owns the background task that bridges the TUI's `Op`-driven
+//! command model and the app-server's JSON-RPC protocol. On startup it creates
+//! an [`InProcessAppServerClient`], opens a thread via `thread/start`, and then
+//! enters a `select!` loop that:
+//!
+//! 1. Receives `Op` values from the `ChatWidget` and translates them into
+//!    app-server client requests (`turn/start`, `turn/interrupt`, approvals,
+//!    etc.).
+//! 2. Receives server events (`ServerRequest`, `ServerNotification`, legacy
+//!    `JSONRPCNotification`) from the app-server and converts them into
+//!    `EventMsg` values that the TUI already knows how to render.
+//!
+//! The module also contains local history I/O, protocol-type conversion
+//! helpers, and the `spawn_op_forwarder` used for resumed/forked threads that
+//! bypass the in-process client.
+
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
@@ -147,9 +165,13 @@ const HISTORY_SOFT_CAP_RATIO: f64 = 0.8;
 const HISTORY_LOCK_MAX_RETRIES: usize = 10;
 const HISTORY_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(100);
 
-// Keep this mapping as the single source of truth for typed in-process requests
-// that replace legacy `codex/event/...` notifications. New interactive request
-// variants should be added here unless dual delivery is intentional.
+/// Interactive request types that the in-process app-server delivers as typed
+/// `ServerRequest` variants instead of legacy `codex/event/…` notifications.
+///
+/// This enum is the single source of truth for the opt-out list passed to the
+/// app-server at startup. When a new interactive request type is promoted from
+/// the legacy notification path to a typed request, add it here so the
+/// app-server stops sending the duplicate legacy notification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InProcessTypedInteractiveRequest {
     ExecApproval,
@@ -223,6 +245,9 @@ async fn initialize_app_server_client_name(thread: &CodexThread) {
     }
 }
 
+/// Build the initialization payload for an in-process app-server client from
+/// the TUI's runtime state. The resulting client embeds its own app-server
+/// instance and communicates over in-memory channels.
 fn in_process_start_args(
     config: &Config,
     _thread_manager: Arc<ThreadManager>,
@@ -259,6 +284,9 @@ fn in_process_start_args(
     }
 }
 
+/// Monotonically increasing counter for JSON-RPC request IDs within a single
+/// agent session. Each `InProcessAppServerClient` uses its own sequencer so IDs
+/// are unique per session but not globally.
 struct RequestIdSequencer {
     next: i64,
 }
@@ -275,18 +303,32 @@ impl RequestIdSequencer {
     }
 }
 
+/// Tracks an outstanding exec-approval server request so the agent can resolve
+/// it when the user decides. V1 and V2 correspond to the legacy and current
+/// app-server request schemas; the response format differs between them.
 #[derive(Debug, Clone)]
 enum PendingExecApprovalRequest {
     V1(RequestId),
     V2(RequestId),
 }
 
+/// Same as [`PendingExecApprovalRequest`] but for file-change (patch) approvals.
 #[derive(Debug, Clone)]
 enum PendingPatchApprovalRequest {
     V1(RequestId),
     V2(RequestId),
 }
 
+/// Bookkeeping for server requests that are awaiting a user response.
+///
+/// When the app-server sends a `ServerRequest` (e.g. an exec approval prompt),
+/// the agent records the request ID here. When the TUI user makes a decision
+/// and the corresponding `Op` arrives, the agent looks up the request ID and
+/// calls `resolve_server_request` / `reject_server_request` to unblock the
+/// app-server.
+///
+/// All fields except `mcp_elicitations` are turn-scoped and cleared on turn
+/// completion or abort via [`clear_turn_scoped`](Self::clear_turn_scoped).
 #[derive(Default)]
 struct PendingServerRequests {
     exec_approvals: HashMap<String, PendingExecApprovalRequest>,
@@ -1131,6 +1173,26 @@ fn send_codex_event(app_event_tx: &AppEventSender, msg: EventMsg) {
     }));
 }
 
+fn send_routed_codex_event(
+    app_event_tx: &AppEventSender,
+    session_id: ThreadId,
+    event_thread_id: ThreadId,
+    msg: EventMsg,
+) {
+    let event = Event {
+        id: String::new(),
+        msg,
+    };
+    if event_thread_id == session_id {
+        app_event_tx.send(AppEvent::CodexEvent(event));
+    } else {
+        app_event_tx.send(AppEvent::ThreadEvent {
+            thread_id: event_thread_id,
+            event,
+        });
+    }
+}
+
 fn send_warning_event(app_event_tx: &AppEventSender, message: String) {
     send_codex_event(app_event_tx, EventMsg::Warning(WarningEvent { message }));
 }
@@ -1401,6 +1463,9 @@ fn legacy_notification_to_event(notification: JSONRPCNotification) -> Result<Eve
     decode_legacy_notification(notification).map(|decoded| decoded.event)
 }
 
+/// Translate a single TUI `Op` into the corresponding app-server client
+/// request. Returns `true` when the op was `Op::Shutdown`, signalling the
+/// caller to exit the agent loop.
 #[expect(
     clippy::too_many_arguments,
     reason = "migration routing keeps dependencies explicit"
@@ -2235,20 +2300,17 @@ async fn run_in_process_agent_loop(
                         let method = server_request_method_name(&request);
                         match request {
                             ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
-                                if params.thread_id != thread_id {
+                                let Ok(request_thread_id) = ThreadId::from_string(&params.thread_id) else {
                                     reject_server_request(
                                         &client,
                                         request_id,
                                         &method,
-                                        format!(
-                                            "request targets thread `{}`, but active thread is `{thread_id}`",
-                                            params.thread_id
-                                        ),
+                                        format!("request carried invalid thread id `{}`", params.thread_id),
                                         &app_event_tx,
                                     )
                                     .await;
                                     continue;
-                                }
+                                };
 
                                 let command = command_text_to_tokens(params.command.clone());
                                 let parsed_cmd = command_actions_to_core(
@@ -2263,8 +2325,10 @@ async fn run_in_process_agent_loop(
                                     approval_id,
                                     PendingExecApprovalRequest::V2(request_id),
                                 );
-                                send_codex_event(
+                                send_routed_codex_event(
                                     &app_event_tx,
+                                    session_id,
+                                    request_thread_id,
                                     EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                                         call_id: params.item_id,
                                         approval_id: params.approval_id,
@@ -2304,21 +2368,6 @@ async fn run_in_process_agent_loop(
                                 );
                             }
                             ServerRequest::ExecCommandApproval { request_id, params } => {
-                                if params.conversation_id.to_string() != thread_id {
-                                    reject_server_request(
-                                        &client,
-                                        request_id,
-                                        &method,
-                                        format!(
-                                            "request targets thread `{}`, but active thread is `{thread_id}`",
-                                            params.conversation_id
-                                        ),
-                                        &app_event_tx,
-                                    )
-                                    .await;
-                                    continue;
-                                }
-
                                 let approval_id = params
                                     .approval_id
                                     .clone()
@@ -2327,8 +2376,10 @@ async fn run_in_process_agent_loop(
                                     approval_id,
                                     PendingExecApprovalRequest::V1(request_id),
                                 );
-                                send_codex_event(
+                                send_routed_codex_event(
                                     &app_event_tx,
+                                    session_id,
+                                    params.conversation_id,
                                     EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                                         call_id: params.call_id,
                                         approval_id: params.approval_id,
@@ -2347,20 +2398,17 @@ async fn run_in_process_agent_loop(
                                 );
                             }
                             ServerRequest::FileChangeRequestApproval { request_id, params } => {
-                                if params.thread_id != thread_id {
+                                let Ok(request_thread_id) = ThreadId::from_string(&params.thread_id) else {
                                     reject_server_request(
                                         &client,
                                         request_id,
                                         &method,
-                                        format!(
-                                            "request targets thread `{}`, but active thread is `{thread_id}`",
-                                            params.thread_id
-                                        ),
+                                        format!("request carried invalid thread id `{}`", params.thread_id),
                                         &app_event_tx,
                                     )
                                     .await;
                                     continue;
-                                }
+                                };
 
                                 let changes = pending_server_requests
                                     .pending_file_changes
@@ -2370,8 +2418,10 @@ async fn run_in_process_agent_loop(
                                     params.item_id.clone(),
                                     PendingPatchApprovalRequest::V2(request_id),
                                 );
-                                send_codex_event(
+                                send_routed_codex_event(
                                     &app_event_tx,
+                                    session_id,
+                                    request_thread_id,
                                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                                         call_id: params.item_id,
                                         turn_id: params.turn_id,
@@ -2382,27 +2432,14 @@ async fn run_in_process_agent_loop(
                                 );
                             }
                             ServerRequest::ApplyPatchApproval { request_id, params } => {
-                                if params.conversation_id.to_string() != thread_id {
-                                    reject_server_request(
-                                        &client,
-                                        request_id,
-                                        &method,
-                                        format!(
-                                            "request targets thread `{}`, but active thread is `{thread_id}`",
-                                            params.conversation_id
-                                        ),
-                                        &app_event_tx,
-                                    )
-                                    .await;
-                                    continue;
-                                }
-
                                 pending_server_requests.patch_approvals.insert(
                                     params.call_id.clone(),
                                     PendingPatchApprovalRequest::V1(request_id),
                                 );
-                                send_codex_event(
+                                send_routed_codex_event(
                                     &app_event_tx,
+                                    session_id,
+                                    params.conversation_id,
                                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                                         call_id: params.call_id,
                                         turn_id: String::new(),
@@ -2413,25 +2450,24 @@ async fn run_in_process_agent_loop(
                                 );
                             }
                             ServerRequest::ToolRequestUserInput { request_id, params } => {
-                                if params.thread_id != thread_id {
+                                let Ok(request_thread_id) = ThreadId::from_string(&params.thread_id) else {
                                     reject_server_request(
                                         &client,
                                         request_id,
                                         &method,
-                                        format!(
-                                            "request targets thread `{}`, but active thread is `{thread_id}`",
-                                            params.thread_id
-                                        ),
+                                        format!("request carried invalid thread id `{}`", params.thread_id),
                                         &app_event_tx,
                                     )
                                     .await;
                                     continue;
-                                }
+                                };
 
                                 pending_server_requests
                                     .register_request_user_input(params.turn_id.clone(), request_id);
-                                send_codex_event(
+                                send_routed_codex_event(
                                     &app_event_tx,
+                                    session_id,
+                                    request_thread_id,
                                     EventMsg::RequestUserInput(RequestUserInputEvent {
                                         call_id: params.item_id,
                                         turn_id: params.turn_id,
@@ -2442,26 +2478,25 @@ async fn run_in_process_agent_loop(
                                 );
                             }
                             ServerRequest::PermissionsRequestApproval { request_id, params } => {
-                                if params.thread_id != thread_id {
+                                let Ok(request_thread_id) = ThreadId::from_string(&params.thread_id) else {
                                     reject_server_request(
                                         &client,
                                         request_id,
                                         &method,
-                                        format!(
-                                            "request targets thread `{}`, but active thread is `{thread_id}`",
-                                            params.thread_id
-                                        ),
+                                        format!("request carried invalid thread id `{}`", params.thread_id),
                                         &app_event_tx,
                                     )
                                     .await;
                                     continue;
-                                }
+                                };
 
                                 pending_server_requests
                                     .request_permissions
                                     .insert(params.item_id.clone(), request_id);
-                                send_codex_event(
+                                send_routed_codex_event(
                                     &app_event_tx,
+                                    session_id,
+                                    request_thread_id,
                                     EventMsg::RequestPermissions(RequestPermissionsEvent {
                                         call_id: params.item_id,
                                         turn_id: params.turn_id,
@@ -2473,20 +2508,17 @@ async fn run_in_process_agent_loop(
                                 );
                             }
                             ServerRequest::McpServerElicitationRequest { request_id, params } => {
-                                if params.thread_id != thread_id {
+                                let Ok(request_thread_id) = ThreadId::from_string(&params.thread_id) else {
                                     reject_server_request(
                                         &client,
                                         request_id,
                                         &method,
-                                        format!(
-                                            "request targets thread `{}`, but active thread is `{thread_id}`",
-                                            params.thread_id
-                                        ),
+                                        format!("request carried invalid thread id `{}`", params.thread_id),
                                         &app_event_tx,
                                     )
                                     .await;
                                     continue;
-                                }
+                                };
 
                                 let elicitation_id = app_server_request_id_to_mcp(request_id.clone());
                                 pending_server_requests.register_mcp_elicitation(
@@ -2494,8 +2526,10 @@ async fn run_in_process_agent_loop(
                                     params.server_name.clone(),
                                     elicitation_id.clone(),
                                 );
-                                send_codex_event(
+                                send_routed_codex_event(
                                     &app_event_tx,
+                                    session_id,
+                                    request_thread_id,
                                     EventMsg::ElicitationRequest(ElicitationRequestEvent {
                                         turn_id: params.turn_id,
                                         server_name: params.server_name,
@@ -2505,26 +2539,25 @@ async fn run_in_process_agent_loop(
                                 );
                             }
                             ServerRequest::DynamicToolCall { request_id, params } => {
-                                if params.thread_id != thread_id {
+                                let Ok(request_thread_id) = ThreadId::from_string(&params.thread_id) else {
                                     reject_server_request(
                                         &client,
                                         request_id,
                                         &method,
-                                        format!(
-                                            "request targets thread `{}`, but active thread is `{thread_id}`",
-                                            params.thread_id
-                                        ),
+                                        format!("request carried invalid thread id `{}`", params.thread_id),
                                         &app_event_tx,
                                     )
                                     .await;
                                     continue;
-                                }
+                                };
 
                                 pending_server_requests
                                     .dynamic_tool_calls
                                     .insert(params.call_id.clone(), request_id);
-                                send_codex_event(
+                                send_routed_codex_event(
                                     &app_event_tx,
+                                    session_id,
+                                    request_thread_id,
                                     EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
                                         call_id: params.call_id,
                                         turn_id: params.turn_id,
@@ -2974,6 +3007,91 @@ mod tests {
             panic!("expected codex event");
         };
         event
+    }
+
+    #[test]
+    fn send_routed_codex_event_keeps_primary_thread_events_on_primary_bus() {
+        let session_id = ThreadId::new();
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+
+        send_routed_codex_event(
+            &app_event_tx,
+            session_id,
+            session_id,
+            EventMsg::Warning(WarningEvent {
+                message: "primary".to_string(),
+            }),
+        );
+
+        let event = rx.try_recv().expect("expected app event");
+        let AppEvent::CodexEvent(event) = event else {
+            panic!("expected primary codex event");
+        };
+        let EventMsg::Warning(warning) = event.msg else {
+            panic!("expected warning event");
+        };
+        assert_eq!(warning.message, "primary".to_string());
+    }
+
+    #[test]
+    fn send_routed_codex_event_routes_child_thread_events() {
+        let session_id = ThreadId::new();
+        let child_thread_id = ThreadId::new();
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+
+        send_routed_codex_event(
+            &app_event_tx,
+            session_id,
+            child_thread_id,
+            EventMsg::Warning(WarningEvent {
+                message: "child".to_string(),
+            }),
+        );
+
+        let event = rx.try_recv().expect("expected app event");
+        let AppEvent::ThreadEvent { thread_id, event } = event else {
+            panic!("expected routed thread event");
+        };
+        assert_eq!(thread_id, child_thread_id);
+        let EventMsg::Warning(warning) = event.msg else {
+            panic!("expected warning event");
+        };
+        assert_eq!(warning.message, "child".to_string());
+    }
+
+    #[test]
+    fn send_routed_codex_event_routes_child_dynamic_tool_call_requests() {
+        let session_id = ThreadId::new();
+        let child_thread_id = ThreadId::new();
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+
+        send_routed_codex_event(
+            &app_event_tx,
+            session_id,
+            child_thread_id,
+            EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
+                call_id: "call-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                tool: "demo".to_string(),
+                arguments: serde_json::json!({ "value": 1 }),
+            }),
+        );
+
+        let event = rx.try_recv().expect("expected app event");
+        let AppEvent::ThreadEvent { thread_id, event } = event else {
+            panic!("expected routed thread event");
+        };
+        assert_eq!(thread_id, child_thread_id);
+        let EventMsg::DynamicToolCallRequest(request) = event.msg else {
+            panic!("expected dynamic tool call request event");
+        };
+        assert_eq!(request.call_id, "call-1".to_string());
+        assert_eq!(request.turn_id, "turn-1".to_string());
+        assert_eq!(request.tool, "demo".to_string());
+        assert_eq!(request.arguments, serde_json::json!({ "value": 1 }));
     }
 
     fn warning_from_event(event: codex_protocol::protocol::Event) -> WarningEvent {
