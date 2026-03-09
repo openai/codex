@@ -307,14 +307,14 @@ impl RequestIdSequencer {
 /// Tracks an outstanding exec-approval server request so the agent can resolve
 /// it when the user decides. V1 and V2 correspond to the legacy and current
 /// app-server request schemas; the response format differs between them.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PendingExecApprovalRequest {
     V1(RequestId),
     V2(RequestId),
 }
 
 /// Same as [`PendingExecApprovalRequest`] but for file-change (patch) approvals.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PendingPatchApprovalRequest {
     V1(RequestId),
     V2(RequestId),
@@ -332,13 +332,19 @@ enum PendingPatchApprovalRequest {
 /// completion or abort via [`clear_turn_scoped`](Self::clear_turn_scoped).
 #[derive(Default)]
 struct PendingServerRequests {
-    exec_approvals: HashMap<String, PendingExecApprovalRequest>,
-    patch_approvals: HashMap<String, PendingPatchApprovalRequest>,
-    mcp_elicitations: HashMap<RequestId, (String, codex_protocol::mcp::RequestId)>,
-    request_permissions: HashMap<String, RequestId>,
-    request_user_input: HashMap<String, VecDeque<RequestId>>,
-    dynamic_tool_calls: HashMap<String, RequestId>,
+    exec_approvals: HashMap<(String, String), PendingExecApprovalRequest>,
+    patch_approvals: HashMap<(String, String), PendingPatchApprovalRequest>,
+    mcp_elicitations: HashMap<RequestId, PendingMcpElicitationRequest>,
+    request_permissions: HashMap<(String, String), RequestId>,
+    request_user_input: HashMap<(String, String), VecDeque<RequestId>>,
+    dynamic_tool_calls: HashMap<(String, String), RequestId>,
     pending_file_changes: HashMap<(String, String), HashMap<PathBuf, FileChange>>,
+}
+
+struct PendingMcpElicitationRequest {
+    thread_id: String,
+    server_name: String,
+    request_id: codex_protocol::mcp::RequestId,
 }
 
 impl PendingServerRequests {
@@ -353,9 +359,14 @@ impl PendingServerRequests {
         self.pending_file_changes.clear();
     }
 
-    fn register_request_user_input(&mut self, turn_id: String, request_id: RequestId) {
+    fn register_request_user_input(
+        &mut self,
+        thread_id: String,
+        turn_id: String,
+        request_id: RequestId,
+    ) {
         self.request_user_input
-            .entry(turn_id)
+            .entry((thread_id, turn_id))
             .or_default()
             .push_back(request_id);
     }
@@ -380,39 +391,55 @@ impl PendingServerRequests {
             .unwrap_or_default()
     }
 
-    fn pop_request_user_input_request_id(&mut self, turn_id: &str) -> Option<RequestId> {
+    fn pop_request_user_input_request_id(
+        &mut self,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Option<RequestId> {
+        let key = (thread_id.to_string(), turn_id.to_string());
         let request_id = self
             .request_user_input
-            .get_mut(turn_id)
+            .get_mut(&key)
             .and_then(VecDeque::pop_front);
         if self
             .request_user_input
-            .get(turn_id)
+            .get(&key)
             .is_some_and(VecDeque::is_empty)
         {
-            self.request_user_input.remove(turn_id);
+            self.request_user_input.remove(&key);
         }
         request_id
     }
 
     fn register_mcp_elicitation(
         &mut self,
+        thread_id: String,
         pending_request_id: RequestId,
         server_name: String,
         request_id: codex_protocol::mcp::RequestId,
     ) {
-        self.mcp_elicitations
-            .insert(pending_request_id, (server_name, request_id));
+        self.mcp_elicitations.insert(
+            pending_request_id,
+            PendingMcpElicitationRequest {
+                thread_id,
+                server_name,
+                request_id,
+            },
+        );
     }
 
     fn pop_mcp_elicitation_request_id(
         &mut self,
+        thread_id: &str,
         server_name: &str,
         request_id: &codex_protocol::mcp::RequestId,
     ) -> Option<RequestId> {
         let pending_request_id = self.mcp_elicitations.iter().find_map(
-            |(pending_request_id, (pending_server_name, pending_request_id_value))| {
-                if pending_server_name == server_name && pending_request_id_value == request_id {
+            |(pending_request_id, pending_elicitation)| {
+                if pending_elicitation.thread_id == thread_id
+                    && pending_elicitation.server_name == server_name
+                    && pending_elicitation.request_id == *request_id
+                {
                     Some(pending_request_id.clone())
                 } else {
                     None
@@ -1909,7 +1936,10 @@ async fn process_in_process_command(
             }
         }
         Op::ExecApproval { id, decision, .. } => {
-            let Some(pending_request) = pending_server_requests.exec_approvals.remove(&id) else {
+            let Some(pending_request) = pending_server_requests
+                .exec_approvals
+                .remove(&(thread_id.to_string(), id.clone()))
+            else {
                 send_warning_event(
                     app_event_tx,
                     format!("exec approval ignored because request id `{id}` was not pending"),
@@ -1960,7 +1990,10 @@ async fn process_in_process_command(
             .await;
         }
         Op::PatchApproval { id, decision } => {
-            let Some(pending_request) = pending_server_requests.patch_approvals.remove(&id) else {
+            let Some(pending_request) = pending_server_requests
+                .patch_approvals
+                .remove(&(thread_id.to_string(), id.clone()))
+            else {
                 send_warning_event(
                     app_event_tx,
                     format!("patch approval ignored because request id `{id}` was not pending"),
@@ -2017,7 +2050,10 @@ async fn process_in_process_command(
             .await;
         }
         Op::RequestPermissionsResponse { id, response } => {
-            let Some(request_id) = pending_server_requests.request_permissions.remove(&id) else {
+            let Some(request_id) = pending_server_requests
+                .request_permissions
+                .remove(&(thread_id.to_string(), id.clone()))
+            else {
                 send_warning_event(
                     app_event_tx,
                     format!(
@@ -2050,7 +2086,8 @@ async fn process_in_process_command(
             .await;
         }
         Op::UserInputAnswer { id, response } => {
-            let Some(request_id) = pending_server_requests.pop_request_user_input_request_id(&id)
+            let Some(request_id) =
+                pending_server_requests.pop_request_user_input_request_id(thread_id, &id)
             else {
                 send_warning_event(
                     app_event_tx,
@@ -2095,7 +2132,10 @@ async fn process_in_process_command(
             .await;
         }
         Op::DynamicToolResponse { id, response } => {
-            let Some(request_id) = pending_server_requests.dynamic_tool_calls.remove(&id) else {
+            let Some(request_id) = pending_server_requests
+                .dynamic_tool_calls
+                .remove(&(thread_id.to_string(), id.clone()))
+            else {
                 send_warning_event(
                     app_event_tx,
                     format!(
@@ -2210,9 +2250,11 @@ async fn process_in_process_command(
             content,
             meta,
         } => {
-            let Some(pending_request_id) =
-                pending_server_requests.pop_mcp_elicitation_request_id(&server_name, &request_id)
-            else {
+            let Some(pending_request_id) = pending_server_requests.pop_mcp_elicitation_request_id(
+                thread_id,
+                &server_name,
+                &request_id,
+            ) else {
                 send_warning_event(
                     app_event_tx,
                     format!(
@@ -2369,7 +2411,7 @@ async fn run_in_process_agent_loop(
                                     .clone()
                                     .unwrap_or_else(|| params.item_id.clone());
                                 pending_server_requests.exec_approvals.insert(
-                                    approval_id,
+                                    (params.thread_id.clone(), approval_id),
                                     PendingExecApprovalRequest::V2(request_id),
                                 );
                                 send_routed_codex_event(
@@ -2420,7 +2462,7 @@ async fn run_in_process_agent_loop(
                                     .clone()
                                     .unwrap_or_else(|| params.call_id.clone());
                                 pending_server_requests.exec_approvals.insert(
-                                    approval_id,
+                                    (params.conversation_id.to_string(), approval_id),
                                     PendingExecApprovalRequest::V1(request_id),
                                 );
                                 send_routed_codex_event(
@@ -2460,7 +2502,7 @@ async fn run_in_process_agent_loop(
                                 let changes = pending_server_requests
                                     .take_file_changes(&params.thread_id, &params.item_id);
                                 pending_server_requests.patch_approvals.insert(
-                                    params.item_id.clone(),
+                                    (params.thread_id.clone(), params.item_id.clone()),
                                     PendingPatchApprovalRequest::V2(request_id),
                                 );
                                 send_routed_codex_event(
@@ -2478,7 +2520,7 @@ async fn run_in_process_agent_loop(
                             }
                             ServerRequest::ApplyPatchApproval { request_id, params } => {
                                 pending_server_requests.patch_approvals.insert(
-                                    params.call_id.clone(),
+                                    (params.conversation_id.to_string(), params.call_id.clone()),
                                     PendingPatchApprovalRequest::V1(request_id),
                                 );
                                 send_routed_codex_event(
@@ -2508,7 +2550,11 @@ async fn run_in_process_agent_loop(
                                 };
 
                                 pending_server_requests
-                                    .register_request_user_input(params.turn_id.clone(), request_id);
+                                    .register_request_user_input(
+                                        params.thread_id.clone(),
+                                        params.turn_id.clone(),
+                                        request_id,
+                                    );
                                 send_routed_codex_event(
                                     &app_event_tx,
                                     session_id,
@@ -2537,7 +2583,7 @@ async fn run_in_process_agent_loop(
 
                                 pending_server_requests
                                     .request_permissions
-                                    .insert(params.item_id.clone(), request_id);
+                                    .insert((params.thread_id.clone(), params.item_id.clone()), request_id);
                                 send_routed_codex_event(
                                     &app_event_tx,
                                     session_id,
@@ -2567,6 +2613,7 @@ async fn run_in_process_agent_loop(
 
                                 let elicitation_id = app_server_request_id_to_mcp(request_id.clone());
                                 pending_server_requests.register_mcp_elicitation(
+                                    params.thread_id.clone(),
                                     request_id,
                                     params.server_name.clone(),
                                     elicitation_id.clone(),
@@ -2598,7 +2645,7 @@ async fn run_in_process_agent_loop(
 
                                 pending_server_requests
                                     .dynamic_tool_calls
-                                    .insert(params.call_id.clone(), request_id);
+                                    .insert((params.thread_id.clone(), params.call_id.clone()), request_id);
                                 send_routed_codex_event(
                                     &app_event_tx,
                                     session_id,
@@ -3160,10 +3207,12 @@ mod tests {
     #[test]
     fn clear_turn_scoped_preserves_pending_mcp_elicitation_requests() {
         let mut pending = PendingServerRequests::default();
+        let thread_id = "thread-1".to_string();
         let pending_request_id = RequestId::Integer(42);
         let server_name = "test-server".to_string();
         let elicitation_id = codex_protocol::mcp::RequestId::Integer(7);
         pending.register_mcp_elicitation(
+            thread_id.clone(),
             pending_request_id.clone(),
             server_name.clone(),
             elicitation_id.clone(),
@@ -3172,7 +3221,7 @@ mod tests {
         pending.clear_turn_scoped();
 
         assert_eq!(
-            pending.pop_mcp_elicitation_request_id(&server_name, &elicitation_id),
+            pending.pop_mcp_elicitation_request_id(&thread_id, &server_name, &elicitation_id),
             Some(pending_request_id)
         );
     }
@@ -3184,17 +3233,22 @@ mod tests {
         let mut current_turn_id = Some("primary-turn".to_string());
         let mut pending_server_requests = PendingServerRequests::default();
         pending_server_requests.exec_approvals.insert(
-            "exec-1".to_string(),
+            (session_id.to_string(), "exec-1".to_string()),
             PendingExecApprovalRequest::V2(RequestId::Integer(1)),
         );
-        pending_server_requests
-            .request_permissions
-            .insert("perm-1".to_string(), RequestId::Integer(2));
-        pending_server_requests
-            .register_request_user_input("primary-turn".to_string(), RequestId::Integer(3));
-        pending_server_requests
-            .dynamic_tool_calls
-            .insert("tool-1".to_string(), RequestId::Integer(4));
+        pending_server_requests.request_permissions.insert(
+            (session_id.to_string(), "perm-1".to_string()),
+            RequestId::Integer(2),
+        );
+        pending_server_requests.register_request_user_input(
+            session_id.to_string(),
+            "primary-turn".to_string(),
+            RequestId::Integer(3),
+        );
+        pending_server_requests.dynamic_tool_calls.insert(
+            (session_id.to_string(), "tool-1".to_string()),
+            RequestId::Integer(4),
+        );
 
         let child_turn_started = Event {
             id: "child-turn-started".to_string(),
@@ -3221,18 +3275,22 @@ mod tests {
             "child turn start should not clear primary exec approvals"
         );
         assert_eq!(
-            pending_server_requests.request_permissions.get("perm-1"),
+            pending_server_requests
+                .request_permissions
+                .get(&(session_id.to_string(), "perm-1".to_string())),
             Some(&RequestId::Integer(2))
         );
         assert_eq!(
             pending_server_requests
                 .request_user_input
-                .get("primary-turn")
+                .get(&(session_id.to_string(), "primary-turn".to_string()))
                 .map(VecDeque::len),
             Some(1)
         );
         assert_eq!(
-            pending_server_requests.dynamic_tool_calls.get("tool-1"),
+            pending_server_requests
+                .dynamic_tool_calls
+                .get(&(session_id.to_string(), "tool-1".to_string())),
             Some(&RequestId::Integer(4))
         );
 
@@ -3260,18 +3318,22 @@ mod tests {
             "child turn completion should not clear primary exec approvals"
         );
         assert_eq!(
-            pending_server_requests.request_permissions.get("perm-1"),
+            pending_server_requests
+                .request_permissions
+                .get(&(session_id.to_string(), "perm-1".to_string())),
             Some(&RequestId::Integer(2))
         );
         assert_eq!(
             pending_server_requests
                 .request_user_input
-                .get("primary-turn")
+                .get(&(session_id.to_string(), "primary-turn".to_string()))
                 .map(VecDeque::len),
             Some(1)
         );
         assert_eq!(
-            pending_server_requests.dynamic_tool_calls.get("tool-1"),
+            pending_server_requests
+                .dynamic_tool_calls
+                .get(&(session_id.to_string(), "tool-1".to_string())),
             Some(&RequestId::Integer(4))
         );
     }
@@ -3319,10 +3381,12 @@ mod tests {
     #[test]
     fn server_request_resolved_clears_pending_mcp_elicitation_request() {
         let mut pending = PendingServerRequests::default();
+        let thread_id = "thread-1".to_string();
         let pending_request_id = RequestId::Integer(5);
         let server_name = "test-server".to_string();
         let elicitation_id = codex_protocol::mcp::RequestId::String("abc".to_string());
         pending.register_mcp_elicitation(
+            thread_id.clone(),
             pending_request_id.clone(),
             server_name.clone(),
             elicitation_id.clone(),
@@ -3331,8 +3395,141 @@ mod tests {
         pending.clear_mcp_elicitation_by_request_id(&pending_request_id);
 
         assert_eq!(
-            pending.pop_mcp_elicitation_request_id(&server_name, &elicitation_id),
+            pending.pop_mcp_elicitation_request_id(&thread_id, &server_name, &elicitation_id),
             None
+        );
+    }
+
+    #[test]
+    fn pending_request_lookups_are_scoped_by_thread() {
+        let mut pending = PendingServerRequests::default();
+
+        pending.exec_approvals.insert(
+            ("thread-a".to_string(), "exec-1".to_string()),
+            PendingExecApprovalRequest::V2(RequestId::Integer(1)),
+        );
+        pending.exec_approvals.insert(
+            ("thread-b".to_string(), "exec-1".to_string()),
+            PendingExecApprovalRequest::V2(RequestId::Integer(2)),
+        );
+        pending.patch_approvals.insert(
+            ("thread-a".to_string(), "patch-1".to_string()),
+            PendingPatchApprovalRequest::V2(RequestId::Integer(3)),
+        );
+        pending.patch_approvals.insert(
+            ("thread-b".to_string(), "patch-1".to_string()),
+            PendingPatchApprovalRequest::V2(RequestId::Integer(4)),
+        );
+        pending.request_permissions.insert(
+            ("thread-a".to_string(), "perm-1".to_string()),
+            RequestId::Integer(5),
+        );
+        pending.request_permissions.insert(
+            ("thread-b".to_string(), "perm-1".to_string()),
+            RequestId::Integer(6),
+        );
+        pending.register_request_user_input(
+            "thread-a".to_string(),
+            "turn-1".to_string(),
+            RequestId::Integer(7),
+        );
+        pending.register_request_user_input(
+            "thread-b".to_string(),
+            "turn-1".to_string(),
+            RequestId::Integer(8),
+        );
+        pending.dynamic_tool_calls.insert(
+            ("thread-a".to_string(), "tool-1".to_string()),
+            RequestId::Integer(9),
+        );
+        pending.dynamic_tool_calls.insert(
+            ("thread-b".to_string(), "tool-1".to_string()),
+            RequestId::Integer(10),
+        );
+        pending.register_mcp_elicitation(
+            "thread-a".to_string(),
+            RequestId::Integer(11),
+            "server".to_string(),
+            codex_protocol::mcp::RequestId::Integer(12),
+        );
+        pending.register_mcp_elicitation(
+            "thread-b".to_string(),
+            RequestId::Integer(13),
+            "server".to_string(),
+            codex_protocol::mcp::RequestId::Integer(12),
+        );
+
+        assert_eq!(
+            pending
+                .exec_approvals
+                .remove(&("thread-b".to_string(), "exec-1".to_string())),
+            Some(PendingExecApprovalRequest::V2(RequestId::Integer(2)))
+        );
+        assert_eq!(
+            pending
+                .patch_approvals
+                .remove(&("thread-b".to_string(), "patch-1".to_string())),
+            Some(PendingPatchApprovalRequest::V2(RequestId::Integer(4)))
+        );
+        assert_eq!(
+            pending
+                .request_permissions
+                .remove(&("thread-b".to_string(), "perm-1".to_string())),
+            Some(RequestId::Integer(6))
+        );
+        assert_eq!(
+            pending.pop_request_user_input_request_id("thread-b", "turn-1"),
+            Some(RequestId::Integer(8))
+        );
+        assert_eq!(
+            pending
+                .dynamic_tool_calls
+                .remove(&("thread-b".to_string(), "tool-1".to_string())),
+            Some(RequestId::Integer(10))
+        );
+        assert_eq!(
+            pending.pop_mcp_elicitation_request_id(
+                "thread-b",
+                "server",
+                &codex_protocol::mcp::RequestId::Integer(12),
+            ),
+            Some(RequestId::Integer(13))
+        );
+        assert_eq!(
+            pending
+                .exec_approvals
+                .remove(&("thread-a".to_string(), "exec-1".to_string())),
+            Some(PendingExecApprovalRequest::V2(RequestId::Integer(1)))
+        );
+        assert_eq!(
+            pending
+                .patch_approvals
+                .remove(&("thread-a".to_string(), "patch-1".to_string())),
+            Some(PendingPatchApprovalRequest::V2(RequestId::Integer(3)))
+        );
+        assert_eq!(
+            pending
+                .request_permissions
+                .remove(&("thread-a".to_string(), "perm-1".to_string())),
+            Some(RequestId::Integer(5))
+        );
+        assert_eq!(
+            pending.pop_request_user_input_request_id("thread-a", "turn-1"),
+            Some(RequestId::Integer(7))
+        );
+        assert_eq!(
+            pending
+                .dynamic_tool_calls
+                .remove(&("thread-a".to_string(), "tool-1".to_string())),
+            Some(RequestId::Integer(9))
+        );
+        assert_eq!(
+            pending.pop_mcp_elicitation_request_id(
+                "thread-a",
+                "server",
+                &codex_protocol::mcp::RequestId::Integer(12),
+            ),
+            Some(RequestId::Integer(11))
         );
     }
 
