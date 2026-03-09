@@ -188,6 +188,10 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
             .features
             .enable(Feature::RequestPermissions)
             .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 

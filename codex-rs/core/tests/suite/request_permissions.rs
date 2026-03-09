@@ -1543,6 +1543,10 @@ async fn request_permissions_session_grants_carry_across_turns() -> Result<()> {
             .features
             .enable(Feature::RequestPermissions)
             .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
