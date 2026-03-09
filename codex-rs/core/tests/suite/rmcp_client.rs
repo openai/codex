@@ -854,8 +854,10 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// This test writes to a fallback credentials file in CODEX_HOME.
+/// Ideally, we wouldn't need to serialize the test but it's much more cumbersome to wire CODEX_HOME through the code.
 #[test]
-#[serial(mcp_test_value)]
+#[serial(codex_home)]
 fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
     const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
