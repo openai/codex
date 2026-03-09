@@ -10,6 +10,7 @@ use super::plugin_manifest_name;
 use super::plugin_manifest_paths;
 use super::store::DEFAULT_PLUGIN_VERSION;
 use super::store::PluginId;
+use super::store::PluginIdError;
 use super::store::PluginInstallResult;
 use super::store::PluginStore;
 use super::store::PluginStoreError;
@@ -18,6 +19,8 @@ use crate::config::Config;
 use crate::config::ConfigService;
 use crate::config::ConfigServiceError;
 use crate::config::ConfigToml;
+use crate::config::edit::ConfigEdit;
+use crate::config::edit::ConfigEditsBuilder;
 use crate::config::profile::ConfigProfile;
 use crate::config::types::McpServerConfig;
 use crate::config::types::PluginConfig;
@@ -290,6 +293,24 @@ impl PluginsManager {
         Ok(result)
     }
 
+    pub async fn uninstall_plugin(&self, plugin_id: String) -> Result<(), PluginUninstallError> {
+        let plugin_id = PluginId::parse(&plugin_id)?;
+        let store = self.store.clone();
+        let plugin_id_for_store = plugin_id.clone();
+        tokio::task::spawn_blocking(move || store.uninstall(&plugin_id_for_store))
+            .await
+            .map_err(PluginUninstallError::join)??;
+
+        ConfigEditsBuilder::new(&self.codex_home)
+            .with_edits([ConfigEdit::ClearPath {
+                segments: vec!["plugins".to_string(), plugin_id.as_key()],
+            }])
+            .apply()
+            .await?;
+
+        Ok(())
+    }
+
     pub fn list_marketplaces_for_config(
         &self,
         config: &Config,
@@ -425,6 +446,31 @@ impl PluginInstallError {
                     | MarketplaceError::InvalidPlugin(_)
             ) | Self::Store(PluginStoreError::Invalid(_))
         )
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PluginUninstallError {
+    #[error("{0}")]
+    InvalidPluginId(#[from] PluginIdError),
+
+    #[error("{0}")]
+    Store(#[from] PluginStoreError),
+
+    #[error("{0}")]
+    Config(#[from] anyhow::Error),
+
+    #[error("failed to join plugin uninstall task: {0}")]
+    Join(#[from] tokio::task::JoinError),
+}
+
+impl PluginUninstallError {
+    fn join(source: tokio::task::JoinError) -> Self {
+        Self::Join(source)
+    }
+
+    pub fn is_invalid_request(&self) -> bool {
+        matches!(self, Self::InvalidPluginId(_))
     }
 }
 
@@ -1551,6 +1597,43 @@ mod tests {
         let config = fs::read_to_string(tmp.path().join("config.toml")).unwrap();
         assert!(config.contains(r#"[plugins."sample-plugin@debug"]"#));
         assert!(config.contains("enabled = true"));
+    }
+
+    #[tokio::test]
+    async fn uninstall_plugin_removes_cache_and_config_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            &tmp.path().join("plugins/cache/debug"),
+            "sample-plugin/local",
+            "sample-plugin",
+        );
+        write_file(
+            &tmp.path().join(CONFIG_TOML_FILE),
+            r#"[features]
+plugins = true
+
+[plugins."sample-plugin@debug"]
+enabled = true
+"#,
+        );
+
+        let manager = PluginsManager::new(tmp.path().to_path_buf());
+        manager
+            .uninstall_plugin("sample-plugin@debug".to_string())
+            .await
+            .unwrap();
+        manager
+            .uninstall_plugin("sample-plugin@debug".to_string())
+            .await
+            .unwrap();
+
+        assert!(
+            !tmp.path()
+                .join("plugins/cache/debug/sample-plugin")
+                .exists()
+        );
+        let config = fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap();
+        assert!(!config.contains(r#"[plugins."sample-plugin@debug"]"#));
     }
 
     #[tokio::test]

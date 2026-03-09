@@ -172,6 +172,8 @@ export type { PluginListResponse } from "./PluginListResponse";
 export type { PluginMarketplaceEntry } from "./PluginMarketplaceEntry";
 export type { PluginSource } from "./PluginSource";
 export type { PluginSummary } from "./PluginSummary";
+export type { PluginUninstallParams } from "./PluginUninstallParams";
+export type { PluginUninstallResponse } from "./PluginUninstallResponse";
 export type { ProductSurface } from "./ProductSurface";
 export type { ProfileV2 } from "./ProfileV2";
 export type { RateLimitSnapshot } from "./RateLimitSnapshot";
