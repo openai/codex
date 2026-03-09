@@ -272,6 +272,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             if let ApiVersion::V2 = api_version {
                 match event.payload {
                     RealtimeEvent::SessionUpdated { .. } => {}
+                    RealtimeEvent::InputTranscriptDelta(_) => {}
+                    RealtimeEvent::OutputTranscriptDelta(_) => {}
                     RealtimeEvent::AudioOut(audio) => {
                         let notification = ThreadRealtimeOutputAudioDeltaNotification {
                             thread_id: conversation_id.to_string(),
@@ -303,7 +305,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 "handoff_id": handoff.handoff_id,
                                 "item_id": handoff.item_id,
                                 "input_transcript": handoff.input_transcript,
-                                "messages": handoff.messages,
+                                "active_transcript": handoff.active_transcript,
                             }),
                         };
                         outgoing

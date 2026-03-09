@@ -1,7 +1,8 @@
 pub use codex_protocol::protocol::RealtimeAudioFrame;
 pub use codex_protocol::protocol::RealtimeEvent;
-pub use codex_protocol::protocol::RealtimeHandoffMessage;
 pub use codex_protocol::protocol::RealtimeHandoffRequested;
+pub use codex_protocol::protocol::RealtimeTranscriptDelta;
+pub use codex_protocol::protocol::RealtimeTranscriptEntry;
 use serde::Serialize;
 use serde_json::Value;
 use tracing::debug;
@@ -135,6 +136,16 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
                     .and_then(|v| u32::try_from(v).ok()),
             }))
         }
+        "conversation.input_transcript.delta" => parsed
+            .get("delta")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .map(|delta| RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta { delta })),
+        "conversation.output_transcript.delta" => parsed
+            .get("delta")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .map(|delta| RealtimeEvent::OutputTranscriptDelta(RealtimeTranscriptDelta { delta })),
         "conversation.item.added" => parsed
             .get("item")
             .cloned()
@@ -159,21 +170,11 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
                 .get("input_transcript")
                 .and_then(Value::as_str)
                 .map(str::to_string)?;
-            let messages = parsed
-                .get("messages")
-                .and_then(Value::as_array)?
-                .iter()
-                .filter_map(|message| {
-                    let role = message.get("role").and_then(Value::as_str)?.to_string();
-                    let text = message.get("text").and_then(Value::as_str)?.to_string();
-                    Some(RealtimeHandoffMessage { role, text })
-                })
-                .collect();
             Some(RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
                 handoff_id,
                 item_id,
                 input_transcript,
-                messages,
+                active_transcript: Vec::new(),
             }))
         }
         "error" => parsed

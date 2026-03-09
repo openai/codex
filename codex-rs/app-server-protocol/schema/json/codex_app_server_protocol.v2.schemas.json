@@ -9366,6 +9366,32 @@
         {
           "additionalProperties": false,
           "properties": {
+            "InputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
+            }
+          },
+          "required": [
+            "InputTranscriptDelta"
+          ],
+          "title": "InputTranscriptDeltaRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "OutputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
+            }
+          },
+          "required": [
+            "OutputTranscriptDelta"
+          ],
+          "title": "OutputTranscriptDeltaRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "AudioOut": {
               "$ref": "#/definitions/RealtimeAudioFrame"
             }
@@ -9436,7 +9462,44 @@
         }
       ]
     },
-    "RealtimeHandoffMessage": {
+    "RealtimeHandoffRequested": {
+      "properties": {
+        "active_transcript": {
+          "items": {
+            "$ref": "#/definitions/RealtimeTranscriptEntry"
+          },
+          "type": "array"
+        },
+        "handoff_id": {
+          "type": "string"
+        },
+        "input_transcript": {
+          "type": "string"
+        },
+        "item_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "active_transcript",
+        "handoff_id",
+        "input_transcript",
+        "item_id"
+      ],
+      "type": "object"
+    },
+    "RealtimeTranscriptDelta": {
+      "properties": {
+        "delta": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "delta"
+      ],
+      "type": "object"
+    },
+    "RealtimeTranscriptEntry": {
       "properties": {
         "role": {
           "type": "string"
@@ -9448,32 +9511,6 @@
       "required": [
         "role",
         "text"
-      ],
-      "type": "object"
-    },
-    "RealtimeHandoffRequested": {
-      "properties": {
-        "handoff_id": {
-          "type": "string"
-        },
-        "input_transcript": {
-          "type": "string"
-        },
-        "item_id": {
-          "type": "string"
-        },
-        "messages": {
-          "items": {
-            "$ref": "#/definitions/RealtimeHandoffMessage"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "handoff_id",
-        "input_transcript",
-        "item_id",
-        "messages"
       ],
       "type": "object"
     },
