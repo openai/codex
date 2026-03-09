@@ -2829,6 +2829,25 @@ impl Session {
         call_id: String,
         args: RequestPermissionsArgs,
     ) -> Option<RequestPermissionsResponse> {
+        match turn_context.approval_policy.value() {
+            AskForApproval::Never => {
+                return Some(RequestPermissionsResponse {
+                    permissions: PermissionProfile::default(),
+                });
+            }
+            AskForApproval::Reject(reject_config)
+                if reject_config.rejects_request_permissions() =>
+            {
+                return Some(RequestPermissionsResponse {
+                    permissions: PermissionProfile::default(),
+                });
+            }
+            AskForApproval::OnFailure
+            | AskForApproval::OnRequest
+            | AskForApproval::UnlessTrusted
+            | AskForApproval::Reject(_) => {}
+        }
+
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;

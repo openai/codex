@@ -526,6 +526,8 @@ pub struct RejectConfig {
     pub sandbox_approval: bool,
     /// Reject prompts triggered by execpolicy `prompt` rules.
     pub rules: bool,
+    /// Reject approval prompts related to built-in permission requests.
+    pub request_permissions: bool,
     /// Reject MCP elicitation prompts.
     pub mcp_elicitations: bool,
 }
@@ -537,6 +539,10 @@ impl RejectConfig {
 
     pub const fn rejects_rules_approval(self) -> bool {
         self.rules
+    }
+
+    pub const fn rejects_request_permissions(self) -> bool {
+        self.request_permissions
     }
 
     pub const fn rejects_mcp_elicitations(self) -> bool {
@@ -3298,6 +3304,7 @@ mod tests {
             RejectConfig {
                 sandbox_approval: false,
                 rules: false,
+                request_permissions: false,
                 mcp_elicitations: true,
             }
             .rejects_mcp_elicitations()
@@ -3306,9 +3313,32 @@ mod tests {
             !RejectConfig {
                 sandbox_approval: false,
                 rules: false,
+                request_permissions: false,
                 mcp_elicitations: false,
             }
             .rejects_mcp_elicitations()
+        );
+    }
+
+    #[test]
+    fn reject_config_request_permissions_flag_is_field_driven() {
+        assert!(
+            RejectConfig {
+                sandbox_approval: false,
+                rules: false,
+                request_permissions: true,
+                mcp_elicitations: false,
+            }
+            .rejects_request_permissions()
+        );
+        assert!(
+            !RejectConfig {
+                sandbox_approval: false,
+                rules: false,
+                request_permissions: false,
+                mcp_elicitations: false,
+            }
+            .rejects_request_permissions()
         );
     }
 

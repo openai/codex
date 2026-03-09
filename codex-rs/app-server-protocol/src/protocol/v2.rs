@@ -186,6 +186,7 @@ pub enum AskForApproval {
     Reject {
         sandbox_approval: bool,
         rules: bool,
+        request_permissions: bool,
         mcp_elicitations: bool,
     },
     Never,
@@ -200,10 +201,12 @@ impl AskForApproval {
             AskForApproval::Reject {
                 sandbox_approval,
                 rules,
+                request_permissions,
                 mcp_elicitations,
             } => CoreAskForApproval::Reject(CoreRejectConfig {
                 sandbox_approval,
                 rules,
+                request_permissions,
                 mcp_elicitations,
             }),
             AskForApproval::Never => CoreAskForApproval::Never,
@@ -220,6 +223,7 @@ impl From<CoreAskForApproval> for AskForApproval {
             CoreAskForApproval::Reject(reject_config) => AskForApproval::Reject {
                 sandbox_approval: reject_config.sandbox_approval,
                 rules: reject_config.rules,
+                request_permissions: reject_config.request_permissions,
                 mcp_elicitations: reject_config.mcp_elicitations,
             },
             CoreAskForApproval::Never => AskForApproval::Never,
@@ -5787,6 +5791,30 @@ mod tests {
         );
 
         let back_to_v2 = SandboxPolicy::from(core_policy);
+        assert_eq!(back_to_v2, v2_policy);
+    }
+
+    #[test]
+    fn ask_for_approval_reject_round_trips_request_permissions_flag() {
+        let v2_policy = AskForApproval::Reject {
+            sandbox_approval: true,
+            rules: false,
+            request_permissions: true,
+            mcp_elicitations: false,
+        };
+
+        let core_policy = v2_policy.to_core();
+        assert_eq!(
+            core_policy,
+            CoreAskForApproval::Reject(CoreRejectConfig {
+                sandbox_approval: true,
+                rules: false,
+                request_permissions: true,
+                mcp_elicitations: false,
+            })
+        );
+
+        let back_to_v2 = AskForApproval::from(core_policy);
         assert_eq!(back_to_v2, v2_policy);
     }
 

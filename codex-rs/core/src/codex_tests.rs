@@ -2164,6 +2164,128 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
 }
 
 #[tokio::test]
+async fn request_permissions_emits_event_when_reject_policy_allows_requests() {
+    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    Arc::get_mut(&mut turn_context)
+        .expect("single turn context ref")
+        .approval_policy
+        .set(crate::protocol::AskForApproval::Reject(
+            crate::protocol::RejectConfig {
+                sandbox_approval: true,
+                rules: true,
+                request_permissions: false,
+                mcp_elicitations: true,
+            },
+        ))
+        .expect("test setup should allow updating approval policy");
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let call_id = "call-1".to_string();
+    let expected_response = codex_protocol::request_permissions::RequestPermissionsResponse {
+        permissions: codex_protocol::models::PermissionProfile {
+            network: Some(codex_protocol::models::NetworkPermissions {
+                enabled: Some(true),
+            }),
+            ..Default::default()
+        },
+    };
+
+    let handle = tokio::spawn({
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        let call_id = call_id.clone();
+        async move {
+            session
+                .request_permissions(
+                    turn_context.as_ref(),
+                    call_id,
+                    codex_protocol::request_permissions::RequestPermissionsArgs {
+                        reason: Some("need network".to_string()),
+                        permissions: codex_protocol::models::PermissionProfile {
+                            network: Some(codex_protocol::models::NetworkPermissions {
+                                enabled: Some(true),
+                            }),
+                            ..Default::default()
+                        },
+                    },
+                )
+                .await
+        }
+    });
+
+    let request_event = tokio::time::timeout(StdDuration::from_secs(1), rx.recv())
+        .await
+        .expect("request_permissions event timed out")
+        .expect("request_permissions event missing");
+    let EventMsg::RequestPermissions(request) = request_event.msg else {
+        panic!("expected request_permissions event");
+    };
+    assert_eq!(request.call_id, call_id);
+
+    session
+        .notify_request_permissions_response(&request.call_id, expected_response.clone())
+        .await;
+
+    let response = tokio::time::timeout(StdDuration::from_secs(1), handle)
+        .await
+        .expect("request_permissions future timed out")
+        .expect("request_permissions join error");
+
+    assert_eq!(response, Some(expected_response));
+}
+
+#[tokio::test]
+async fn request_permissions_returns_empty_grant_when_reject_policy_blocks_requests() {
+    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    Arc::get_mut(&mut turn_context)
+        .expect("single turn context ref")
+        .approval_policy
+        .set(crate::protocol::AskForApproval::Reject(
+            crate::protocol::RejectConfig {
+                sandbox_approval: false,
+                rules: false,
+                request_permissions: true,
+                mcp_elicitations: false,
+            },
+        ))
+        .expect("test setup should allow updating approval policy");
+
+    let response = session
+        .request_permissions(
+            &turn_context,
+            "call-1".to_string(),
+            codex_protocol::request_permissions::RequestPermissionsArgs {
+                reason: Some("need network".to_string()),
+                permissions: codex_protocol::models::PermissionProfile {
+                    network: Some(codex_protocol::models::NetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    ..Default::default()
+                },
+            },
+        )
+        .await;
+
+    assert_eq!(
+        response,
+        Some(
+            codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: codex_protocol::models::PermissionProfile::default(),
+            }
+        )
+    );
+    assert!(
+        tokio::time::timeout(StdDuration::from_millis(50), rx.recv())
+            .await
+            .is_err(),
+        "unexpected request_permissions event emitted",
+    );
+}
+
+#[tokio::test]
 async fn submit_with_id_captures_current_span_trace_context() {
     let (session, _turn_context) = make_session_and_context().await;
     let (tx_sub, rx_sub) = async_channel::bounded(1);
