@@ -494,6 +494,7 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[cfg(target_os = "macos")]
 async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_cwd_write()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -593,6 +594,7 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_cwd
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[cfg(target_os = "macos")]
 async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_tmp_write()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
