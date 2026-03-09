@@ -404,7 +404,8 @@ stream_max_retries = 0
 }
 
 #[tokio::test]
-async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is_idle() -> Result<()> {
+async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is_idle() -> Result<()>
+{
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -504,8 +505,9 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread: read_thread } =
-        to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse {
+        thread: read_thread,
+    } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(read_thread.status, ThreadStatus::Idle);
     assert_eq!(read_thread.turns.len(), 2);

@@ -3260,11 +3260,7 @@ impl CodexMessageProcessor {
                     .loaded_status_for_thread(&thread.id)
                     .await;
 
-                set_thread_status_and_interrupt_stale_turns(
-                    &mut thread,
-                    thread_status,
-                    false,
-                );
+                set_thread_status_and_interrupt_stale_turns(&mut thread, thread_status, false);
 
                 let response = ThreadResumeResponse {
                     thread,
