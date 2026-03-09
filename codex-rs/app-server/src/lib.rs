@@ -39,6 +39,7 @@ use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_feedback::CodexFeedback;
+use codex_protocol::protocol::SessionSource;
 use codex_state::log_db;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -65,6 +66,7 @@ mod error_code;
 mod external_agent_config_api;
 mod filters;
 mod fuzzy_file_search;
+pub mod in_process;
 mod message_processor;
 mod models;
 mod outgoing_message;
@@ -597,6 +599,8 @@ pub async fn run_main_with_transport(
             feedback: feedback.clone(),
             log_db,
             config_warnings,
+            session_source: SessionSource::VSCode,
+            enable_codex_api_key_env: false,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();

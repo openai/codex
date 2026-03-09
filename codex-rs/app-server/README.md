@@ -169,7 +169,7 @@ Example with notification opt-out:
 - `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome` and optional `cwds`; each detected item includes `cwd` (`null` for home).
 - `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home).
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
-- `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk.
+- `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk, with optional `reloadUserConfig: true` to hot-reload loaded threads.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), pinned feature values (`featureRequirements`), `enforceResidency`, and `network` constraints.
 
 ### Example: Start or resume a thread
@@ -850,8 +850,8 @@ Order of messages:
 Order of messages:
 
 1. `item/started` — emits a `fileChange` item with `changes` (diff chunk summaries) and `status: "inProgress"`. Show the proposed edits and paths to the user.
-2. `item/fileChange/requestApproval` (request) — includes `itemId`, `threadId`, `turnId`, and an optional `reason`.
-3. Client response — `{ "decision": "accept" }` or `{ "decision": "decline" }`.
+2. `item/fileChange/requestApproval` (request) — includes `itemId`, `threadId`, `turnId`, an optional `reason`, and may include unstable `grantRoot` when the agent is asking for session-scoped write access under a specific root.
+3. Client response — `{ "decision": "accept" }`, `{ "decision": "acceptForSession" }`, `{ "decision": "decline" }`, or `{ "decision": "cancel" }`.
 4. `serverRequest/resolved` — `{ threadId, requestId }` confirms the pending request has been resolved or cleared, including lifecycle cleanup on turn start/complete/interrupt.
 5. `item/completed` — returns the same `fileChange` item with `status` updated to `completed`, `failed`, or `declined` after the patch attempt. Rely on this to show success/failure and finalize the diff state in your UI.
 
@@ -874,6 +874,52 @@ Order of messages:
 3. `serverRequest/resolved` — `{ threadId, requestId }` confirms the pending request has been resolved or cleared, including lifecycle cleanup on turn start/complete/interrupt.
 
 `turnId` is best-effort. When the elicitation is correlated with an active turn, the request includes that turn id; otherwise it is `null`.
+
+### Permission requests
+
+The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. Today that commonly means additional filesystem access, but the payload is intentionally general so future requests can include non-filesystem permissions too. This request is part of the v2 protocol surface.
+
+```json
+{
+  "method": "item/permissions/requestApproval",
+  "id": 61,
+  "params": {
+    "threadId": "thr_123",
+    "turnId": "turn_123",
+    "itemId": "call_123",
+    "reason": "Select a workspace root",
+    "permissions": {
+      "fileSystem": {
+        "write": [
+          "/Users/me/project",
+          "/Users/me/shared"
+        ]
+      }
+    }
+  }
+}
+```
+
+The client responds with `result.permissions`, which should be the granted subset of the requested permission profile:
+
+```json
+{
+  "id": 61,
+  "result": {
+    "permissions": {
+      "fileSystem": {
+        "write": [
+          "/Users/me/project"
+        ]
+      }
+    }
+  }
+}
+```
+
+Only the granted subset matters on the wire. Any permissions omitted from `result.permissions` are treated as denied, including omitted nested keys inside `result.permissions.macos`, so a sparse response like `{ "permissions": { "macos": { "accessibility": true } } }` grants only accessibility. Any permissions not present in the original request are ignored by the server.
+
+Within the same turn, granted permissions are sticky: later shell-like tool calls can automatically reuse the granted subset without reissuing a separate permission request.
 
 ### Dynamic tool calls (experimental)
 

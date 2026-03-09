@@ -93,6 +93,8 @@ pub enum Feature {
     ApplyPatchFreeform,
     /// Allow requesting additional filesystem permissions while staying sandboxed.
     RequestPermissions,
+    /// Expose the built-in request_permissions tool.
+    RequestPermissionsTool,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -582,6 +584,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::RequestPermissionsTool,
+        key: "request_permissions_tool",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
         key: "use_linux_sandbox_bwrap",
         #[cfg(target_os = "linux")]
@@ -918,6 +926,21 @@ mod tests {
         );
         assert_eq!(stage.experimental_announcement(), None);
         assert_eq!(Feature::GuardianApproval.default_enabled(), false);
+    }
+
+    #[test]
+    fn request_permissions_is_under_development() {
+        assert_eq!(Feature::RequestPermissions.stage(), Stage::UnderDevelopment);
+        assert_eq!(Feature::RequestPermissions.default_enabled(), false);
+    }
+
+    #[test]
+    fn request_permissions_tool_is_under_development() {
+        assert_eq!(
+            Feature::RequestPermissionsTool.stage(),
+            Stage::UnderDevelopment
+        );
+        assert_eq!(Feature::RequestPermissionsTool.default_enabled(), false);
     }
 
     #[test]

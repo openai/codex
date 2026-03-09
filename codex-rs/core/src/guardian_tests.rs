@@ -8,6 +8,17 @@ use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::models::ContentItem;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_no_network;
+use insta::Settings;
+use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -212,6 +223,134 @@ fn parse_guardian_assessment_extracts_embedded_json() {
     assert_eq!(parsed.risk_level, GuardianRiskLevel::Medium);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let guardian_assessment = serde_json::json!({
+        "risk_level": "medium",
+        "risk_score": 35,
+        "rationale": "The user explicitly requested pushing the reviewed branch to the known remote.",
+        "evidence": [{
+            "message": "The user asked to check repo visibility and then push the docs fix.",
+            "why": "This authorizes the specific network action under review.",
+        }],
+    })
+    .to_string();
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message("msg-guardian", &guardian_assessment),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+
+    let (mut session, mut turn) = crate::codex::make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    let config = Arc::new(config);
+    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+        config.codex_home.clone(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    ));
+    session.services.models_manager = models_manager;
+    turn.config = Arc::clone(&config);
+    turn.provider = config.model_provider.clone();
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    session
+        .record_into_history(
+            &[
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "Please check the repo visibility and push the docs fix if needed."
+                            .to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "gh_repo_view".to_string(),
+                    arguments: "{\"repo\":\"openai/codex\"}".to_string(),
+                    call_id: "call-1".to_string(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "call-1".to_string(),
+                    output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                        "repo visibility: public".to_string(),
+                    ),
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "The repo is public; I now need approval to push the docs fix."
+                            .to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+            ],
+            turn.as_ref(),
+        )
+        .await;
+
+    let prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        Some("Sandbox denied outbound git push to github.com.".to_string()),
+        GuardianReviewRequest {
+            action: serde_json::json!({
+                "tool": "shell",
+                "command": [
+                    "git",
+                    "push",
+                    "origin",
+                    "guardian-approval-mvp"
+                ],
+                "cwd": "/repo/codex-rs/core",
+                "sandbox_permissions": crate::sandboxing::SandboxPermissions::UseDefault,
+                "justification": "Need to push the reviewed docs fix to the repo remote.",
+            }),
+        },
+    )
+    .await;
+
+    let assessment = run_guardian_subagent(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        prompt,
+        guardian_output_schema(),
+        CancellationToken::new(),
+    )
+    .await?;
+    assert_eq!(assessment.risk_score, 35);
+
+    let request = request_log.single_request();
+    let mut settings = Settings::clone_current();
+    settings.set_snapshot_path("snapshots");
+    settings.set_prepend_module_to_snapshot(false);
+    settings.bind(|| {
+        assert_snapshot!(
+            "codex_core__guardian__tests__guardian_review_request_layout",
+            context_snapshot::format_labeled_requests_snapshot(
+                "Guardian review request layout",
+                &[("Guardian Review Request", &request)],
+                &ContextSnapshotOptions::default(),
+            )
+        );
+    });
+
+    Ok(())
+}
 #[test]
 fn guardian_subagent_config_preserves_parent_network_proxy() {
     let mut parent_config = test_config();

@@ -188,6 +188,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                             .proposed_execpolicy_amendment()
                             .cloned(),
                         req.additional_permissions.clone(),
+                        None,
                         available_decisions,
                     )
                     .await
