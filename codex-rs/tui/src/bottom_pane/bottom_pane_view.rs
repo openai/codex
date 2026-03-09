@@ -87,4 +87,10 @@ pub(crate) trait BottomPaneView: Renderable {
     ) -> Option<McpServerElicitationFormRequest> {
         Some(request)
     }
+
+    /// Whether this view should remain visible after a turn interrupt clears
+    /// turn-scoped approvals.
+    fn preserve_on_turn_interrupt(&self) -> bool {
+        false
+    }
 }

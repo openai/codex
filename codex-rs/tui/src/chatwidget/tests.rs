@@ -17,6 +17,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use codex_arg0::Arg0DispatchPaths;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -25,6 +26,7 @@ use codex_core::config::ConstraintError;
 use codex_core::config::types::Notifications;
 #[cfg(target_os = "windows")]
 use codex_core::config::types::WindowsSandboxModeToml;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::RequirementSource;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
@@ -1743,10 +1745,90 @@ async fn helpers_are_available_and_do_not_panic() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
+        in_process_context: InProcessAgentContext {
+            arg0_paths: Arg0DispatchPaths::default(),
+            cli_kv_overrides: Vec::new(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+        },
     };
     let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
     let _ = &mut w;
+}
+
+#[tokio::test]
+async fn new_from_existing_submits_ops_to_the_provided_thread() {
+    let codex_home = tempdir().expect("tempdir");
+    let cfg = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config");
+    let resolved_model = codex_core::test_support::get_model_offline(cfg.model.as_deref());
+    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
+    let auth_manager = codex_core::test_support::auth_manager_from_auth_with_home(
+        CodexAuth::from_api_key("test"),
+        cfg.codex_home.clone(),
+    );
+    let thread_manager = Arc::new(
+        codex_core::test_support::thread_manager_with_models_provider_and_home(
+            CodexAuth::from_api_key("test"),
+            cfg.model_provider.clone(),
+            cfg.codex_home.clone(),
+        ),
+    );
+    let existing = thread_manager
+        .start_thread(cfg.clone())
+        .await
+        .expect("start thread");
+    let init = ChatWidgetInit {
+        config: cfg,
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        models_manager: thread_manager.get_models_manager(),
+        feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: false,
+        feedback_audience: FeedbackAudience::External,
+        model: Some(resolved_model),
+        startup_tooltip_override: None,
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        session_telemetry,
+        in_process_context: InProcessAgentContext {
+            arg0_paths: Arg0DispatchPaths::default(),
+            cli_kv_overrides: Vec::new(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+        },
+    };
+
+    let mut chat =
+        ChatWidget::new_from_existing(init, existing.thread.clone(), existing.session_configured);
+    assert!(chat.submit_op(Op::Shutdown));
+
+    let shutdown_result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = existing.thread.next_event().await.expect("thread event");
+            if matches!(event.msg, EventMsg::ShutdownComplete) {
+                break;
+            }
+        }
+    })
+    .await;
+
+    if shutdown_result.is_err() {
+        existing
+            .thread
+            .submit(Op::Shutdown)
+            .await
+            .expect("cleanup shutdown");
+    }
+
+    assert!(
+        shutdown_result.is_ok(),
+        "expected reopened widget to forward shutdown to the provided thread"
+    );
 }
 
 fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
@@ -3325,6 +3407,68 @@ async fn exec_approval_uses_approval_id_when_present() {
 }
 
 #[tokio::test]
+async fn interrupted_turn_dismisses_pending_exec_approval_modal() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "sub-approve".into(),
+        msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+            call_id: "call-approve-exec".into(),
+            approval_id: Some("call-approve-exec".into()),
+            turn_id: "turn-1".into(),
+            command: vec![
+                "git".into(),
+                "fetch".into(),
+                "upstream".into(),
+                "main".into(),
+            ],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            reason: Some("need latest upstream".into()),
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: None,
+            skill_metadata: None,
+            available_decisions: None,
+            parsed_cmd: vec![],
+        }),
+    });
+
+    assert!(
+        chat.has_active_view(),
+        "expected approval modal to be visible"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert!(
+        !chat.has_active_view(),
+        "expected interrupted turn to dismiss the stale approval modal"
+    );
+    assert!(
+        op_rx.try_recv().is_err(),
+        "interrupting should dismiss the approval modal without submitting a stale approval op"
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
 async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -4584,6 +4728,49 @@ async fn manual_interrupt_restores_pending_steer_mention_bindings_to_composer() 
 }
 
 #[tokio::test]
+async fn manual_interrupt_keeps_pending_mcp_elicitation_overlay_visible() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.on_task_started();
+    chat.bottom_pane.push_mcp_server_elicitation_request(
+        crate::bottom_pane::McpServerElicitationFormRequest::from_event(
+            thread_id,
+            codex_protocol::approvals::ElicitationRequestEvent {
+                turn_id: Some("turn-1".to_string()),
+                server_name: "test-server".to_string(),
+                id: codex_protocol::mcp::RequestId::String("elicitation-1".to_string()),
+                request: codex_protocol::approvals::ElicitationRequest::Form {
+                    meta: None,
+                    message: "Need input".to_string(),
+                    requested_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "answer": { "type": "string", "title": "Answer" }
+                        },
+                        "required": ["answer"]
+                    }),
+                },
+            },
+        )
+        .expect("supported MCP elicitation request"),
+    );
+
+    assert!(
+        chat.has_active_view(),
+        "expected MCP elicitation modal to be visible"
+    );
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    assert!(
+        chat.has_active_view(),
+        "interrupting should preserve MCP elicitation overlays that can outlive the turn"
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn manual_interrupt_restores_pending_steers_before_queued_messages() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
@@ -5600,6 +5787,11 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
+        in_process_context: InProcessAgentContext {
+            arg0_paths: Arg0DispatchPaths::default(),
+            cli_kv_overrides: Vec::new(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+        },
     };
 
     let chat = ChatWidget::new(init, thread_manager);
@@ -5650,6 +5842,11 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
+        in_process_context: InProcessAgentContext {
+            arg0_paths: Arg0DispatchPaths::default(),
+            cli_kv_overrides: Vec::new(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+        },
     };
 
     let chat = ChatWidget::new(init, thread_manager);

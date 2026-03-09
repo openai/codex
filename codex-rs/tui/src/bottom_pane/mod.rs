@@ -830,6 +830,19 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn dismiss_turn_scoped_views(&mut self) {
+        if self.view_stack.is_empty() {
+            return;
+        }
+
+        self.view_stack
+            .retain(|view| view.preserve_on_turn_interrupt());
+        if self.view_stack.is_empty() {
+            self.on_active_view_complete();
+        }
+        self.request_redraw();
+    }
+
     #[cfg(test)]
     pub(crate) fn pending_thread_approvals(&self) -> &[String] {
         self.pending_thread_approvals.threads()
