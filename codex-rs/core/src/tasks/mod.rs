@@ -201,8 +201,13 @@ impl Session {
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
-        for task in self.take_all_running_tasks().await {
-            self.handle_task_abort(task, reason.clone()).await;
+        if let Some(mut active_turn) = self.take_active_turn().await {
+            for task in active_turn.drain_tasks() {
+                self.handle_task_abort(task, reason.clone()).await;
+            }
+            // Let interrupted tasks observe cancellation before dropping pending approvals, or an
+            // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
+            active_turn.clear_pending().await;
         }
         if reason == TurnAbortReason::Interrupted {
             self.close_unified_exec_processes().await;
@@ -342,16 +347,9 @@ impl Session {
         *active = Some(turn);
     }
 
-    async fn take_all_running_tasks(&self) -> Vec<RunningTask> {
+    async fn take_active_turn(&self) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
-        match active.take() {
-            Some(mut at) => {
-                at.clear_pending().await;
-
-                at.drain_tasks()
-            }
-            None => Vec::new(),
-        }
+        active.take()
     }
 
     pub(crate) async fn close_unified_exec_processes(&self) {
