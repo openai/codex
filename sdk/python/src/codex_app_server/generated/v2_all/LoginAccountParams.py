@@ -19,15 +19,15 @@ class LoginAccountParams1(BaseModel):
     type: Type = Field(..., title="ApiKeyv2::LoginAccountParamsType")
 
 
-class Type81(Enum):
+class Type89(Enum):
     chatgpt = "chatgpt"
 
 
 class LoginAccountParams2(BaseModel):
-    type: Type81 = Field(..., title="Chatgptv2::LoginAccountParamsType")
+    type: Type89 = Field(..., title="Chatgptv2::LoginAccountParamsType")
 
 
-class Type82(Enum):
+class Type90(Enum):
     chatgptAuthTokens = "chatgptAuthTokens"
 
 
@@ -43,7 +43,7 @@ class LoginAccountParams3(BaseModel):
         None,
         description="Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
     )
-    type: Type82 = Field(..., title="ChatgptAuthTokensv2::LoginAccountParamsType")
+    type: Type90 = Field(..., title="ChatgptAuthTokensv2::LoginAccountParamsType")
 
 
 class LoginAccountParams(

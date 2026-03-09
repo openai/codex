@@ -92,6 +92,38 @@ class CommandExecutionStatus(Enum):
     declined = "declined"
 
 
+class Type26(Enum):
+    inputText = "inputText"
+
+
+class DynamicToolCallOutputContentItem1(BaseModel):
+    text: str
+    type: Type26 = Field(..., title="InputTextDynamicToolCallOutputContentItemType")
+
+
+class Type27(Enum):
+    inputImage = "inputImage"
+
+
+class DynamicToolCallOutputContentItem2(BaseModel):
+    imageUrl: str
+    type: Type27 = Field(..., title="InputImageDynamicToolCallOutputContentItemType")
+
+
+class DynamicToolCallOutputContentItem(
+    RootModel[
+        Union[DynamicToolCallOutputContentItem1, DynamicToolCallOutputContentItem2]
+    ]
+):
+    root: Union[DynamicToolCallOutputContentItem1, DynamicToolCallOutputContentItem2]
+
+
+class DynamicToolCallStatus(Enum):
+    inProgress = "inProgress"
+    completed = "completed"
+    failed = "failed"
+
+
 class McpToolCallError(BaseModel):
     message: str
 
@@ -107,6 +139,21 @@ class McpToolCallStatus(Enum):
     failed = "failed"
 
 
+class MessagePhase1(Enum):
+    commentary = "commentary"
+
+
+class MessagePhase2(Enum):
+    final_answer = "final_answer"
+
+
+class MessagePhase(RootModel[Union[MessagePhase1, MessagePhase2]]):
+    root: Union[MessagePhase1, MessagePhase2] = Field(
+        ...,
+        description='Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as "phase unknown" and keep compatibility behavior for legacy models.',
+    )
+
+
 class PatchApplyStatus(Enum):
     inProgress = "inProgress"
     completed = "completed"
@@ -114,29 +161,29 @@ class PatchApplyStatus(Enum):
     declined = "declined"
 
 
-class Type26(Enum):
+class Type28(Enum):
     add = "add"
 
 
 class PatchChangeKind1(BaseModel):
-    type: Type26 = Field(..., title="AddPatchChangeKindType")
+    type: Type28 = Field(..., title="AddPatchChangeKindType")
 
 
-class Type27(Enum):
+class Type29(Enum):
     delete = "delete"
 
 
 class PatchChangeKind2(BaseModel):
-    type: Type27 = Field(..., title="DeletePatchChangeKindType")
+    type: Type29 = Field(..., title="DeletePatchChangeKindType")
 
 
-class Type28(Enum):
+class Type30(Enum):
     update = "update"
 
 
 class PatchChangeKind3(BaseModel):
     move_path: Optional[str] = None
-    type: Type28 = Field(..., title="UpdatePatchChangeKindType")
+    type: Type30 = Field(..., title="UpdatePatchChangeKindType")
 
 
 class PatchChangeKind(
@@ -156,31 +203,32 @@ class TextElement(BaseModel):
     )
 
 
-class Type29(Enum):
+class Type31(Enum):
     userMessage = "userMessage"
 
 
-class Type30(Enum):
+class Type32(Enum):
     agentMessage = "agentMessage"
 
 
 class ThreadItem2(BaseModel):
     id: str
+    phase: Optional[MessagePhase] = None
     text: str
-    type: Type30 = Field(..., title="AgentMessageThreadItemType")
+    type: Type32 = Field(..., title="AgentMessageThreadItemType")
 
 
-class Type31(Enum):
+class Type33(Enum):
     plan = "plan"
 
 
 class ThreadItem3(BaseModel):
     id: str
     text: str
-    type: Type31 = Field(..., title="PlanThreadItemType")
+    type: Type33 = Field(..., title="PlanThreadItemType")
 
 
-class Type32(Enum):
+class Type34(Enum):
     reasoning = "reasoning"
 
 
@@ -188,10 +236,10 @@ class ThreadItem4(BaseModel):
     content: Optional[List[str]] = []
     id: str
     summary: Optional[List[str]] = []
-    type: Type32 = Field(..., title="ReasoningThreadItemType")
+    type: Type34 = Field(..., title="ReasoningThreadItemType")
 
 
-class Type33(Enum):
+class Type35(Enum):
     commandExecution = "commandExecution"
 
 
@@ -214,14 +262,14 @@ class ThreadItem5(BaseModel):
         None, description="Identifier for the underlying PTY process (when available)."
     )
     status: CommandExecutionStatus
-    type: Type33 = Field(..., title="CommandExecutionThreadItemType")
+    type: Type35 = Field(..., title="CommandExecutionThreadItemType")
 
 
-class Type34(Enum):
+class Type36(Enum):
     fileChange = "fileChange"
 
 
-class Type35(Enum):
+class Type37(Enum):
     mcpToolCall = "mcpToolCall"
 
 
@@ -236,57 +284,86 @@ class ThreadItem7(BaseModel):
     server: str
     status: McpToolCallStatus
     tool: str
-    type: Type35 = Field(..., title="McpToolCallThreadItemType")
-
-
-class Type36(Enum):
-    collabAgentToolCall = "collabAgentToolCall"
-
-
-class Type37(Enum):
-    webSearch = "webSearch"
+    type: Type37 = Field(..., title="McpToolCallThreadItemType")
 
 
 class Type38(Enum):
-    imageView = "imageView"
+    dynamicToolCall = "dynamicToolCall"
 
 
-class ThreadItem10(BaseModel):
+class ThreadItem8(BaseModel):
+    arguments: Any
+    contentItems: Optional[List[DynamicToolCallOutputContentItem]] = None
+    durationMs: Optional[int] = Field(
+        None, description="The duration of the dynamic tool call in milliseconds."
+    )
     id: str
-    path: str
-    type: Type38 = Field(..., title="ImageViewThreadItemType")
+    status: DynamicToolCallStatus
+    success: Optional[bool] = None
+    tool: str
+    type: Type38 = Field(..., title="DynamicToolCallThreadItemType")
 
 
 class Type39(Enum):
-    enteredReviewMode = "enteredReviewMode"
+    collabAgentToolCall = "collabAgentToolCall"
+
+
+class Type40(Enum):
+    webSearch = "webSearch"
+
+
+class Type41(Enum):
+    imageView = "imageView"
 
 
 class ThreadItem11(BaseModel):
     id: str
-    review: str
-    type: Type39 = Field(..., title="EnteredReviewModeThreadItemType")
+    path: str
+    type: Type41 = Field(..., title="ImageViewThreadItemType")
 
 
-class Type40(Enum):
-    exitedReviewMode = "exitedReviewMode"
+class Type42(Enum):
+    imageGeneration = "imageGeneration"
 
 
 class ThreadItem12(BaseModel):
     id: str
-    review: str
-    type: Type40 = Field(..., title="ExitedReviewModeThreadItemType")
+    result: str
+    revisedPrompt: Optional[str] = None
+    status: str
+    type: Type42 = Field(..., title="ImageGenerationThreadItemType")
 
 
-class Type41(Enum):
-    contextCompaction = "contextCompaction"
+class Type43(Enum):
+    enteredReviewMode = "enteredReviewMode"
 
 
 class ThreadItem13(BaseModel):
     id: str
-    type: Type41 = Field(..., title="ContextCompactionThreadItemType")
+    review: str
+    type: Type43 = Field(..., title="EnteredReviewModeThreadItemType")
 
 
-class Type42(Enum):
+class Type44(Enum):
+    exitedReviewMode = "exitedReviewMode"
+
+
+class ThreadItem14(BaseModel):
+    id: str
+    review: str
+    type: Type44 = Field(..., title="ExitedReviewModeThreadItemType")
+
+
+class Type45(Enum):
+    contextCompaction = "contextCompaction"
+
+
+class ThreadItem15(BaseModel):
+    id: str
+    type: Type45 = Field(..., title="ContextCompactionThreadItemType")
+
+
+class Type46(Enum):
     text = "text"
 
 
@@ -296,45 +373,45 @@ class UserInput1(BaseModel):
         [],
         description="UI-defined spans within `text` used to render or persist special elements.",
     )
-    type: Type42 = Field(..., title="TextUserInputType")
+    type: Type46 = Field(..., title="TextUserInputType")
 
 
-class Type43(Enum):
+class Type47(Enum):
     image = "image"
 
 
 class UserInput2(BaseModel):
-    type: Type43 = Field(..., title="ImageUserInputType")
+    type: Type47 = Field(..., title="ImageUserInputType")
     url: str
 
 
-class Type44(Enum):
+class Type48(Enum):
     localImage = "localImage"
 
 
 class UserInput3(BaseModel):
     path: str
-    type: Type44 = Field(..., title="LocalImageUserInputType")
+    type: Type48 = Field(..., title="LocalImageUserInputType")
 
 
-class Type45(Enum):
+class Type49(Enum):
     skill = "skill"
 
 
 class UserInput4(BaseModel):
     name: str
     path: str
-    type: Type45 = Field(..., title="SkillUserInputType")
+    type: Type49 = Field(..., title="SkillUserInputType")
 
 
-class Type46(Enum):
+class Type50(Enum):
     mention = "mention"
 
 
 class UserInput5(BaseModel):
     name: str
     path: str
-    type: Type46 = Field(..., title="MentionUserInputType")
+    type: Type50 = Field(..., title="MentionUserInputType")
 
 
 class UserInput(
@@ -343,41 +420,41 @@ class UserInput(
     root: Union[UserInput1, UserInput2, UserInput3, UserInput4, UserInput5]
 
 
-class Type47(Enum):
+class Type51(Enum):
     search = "search"
 
 
 class WebSearchAction1(BaseModel):
     queries: Optional[List[str]] = None
     query: Optional[str] = None
-    type: Type47 = Field(..., title="SearchWebSearchActionType")
+    type: Type51 = Field(..., title="SearchWebSearchActionType")
 
 
-class Type48(Enum):
+class Type52(Enum):
     openPage = "openPage"
 
 
 class WebSearchAction2(BaseModel):
-    type: Type48 = Field(..., title="OpenPageWebSearchActionType")
+    type: Type52 = Field(..., title="OpenPageWebSearchActionType")
     url: Optional[str] = None
 
 
-class Type49(Enum):
+class Type53(Enum):
     findInPage = "findInPage"
 
 
 class WebSearchAction3(BaseModel):
     pattern: Optional[str] = None
-    type: Type49 = Field(..., title="FindInPageWebSearchActionType")
+    type: Type53 = Field(..., title="FindInPageWebSearchActionType")
     url: Optional[str] = None
 
 
-class Type50(Enum):
+class Type54(Enum):
     other = "other"
 
 
 class WebSearchAction4(BaseModel):
-    type: Type50 = Field(..., title="OtherWebSearchActionType")
+    type: Type54 = Field(..., title="OtherWebSearchActionType")
 
 
 class WebSearchAction(
@@ -402,17 +479,17 @@ class FileUpdateChange(BaseModel):
 class ThreadItem1(BaseModel):
     content: List[UserInput]
     id: str
-    type: Type29 = Field(..., title="UserMessageThreadItemType")
+    type: Type31 = Field(..., title="UserMessageThreadItemType")
 
 
 class ThreadItem6(BaseModel):
     changes: List[FileUpdateChange]
     id: str
     status: PatchApplyStatus
-    type: Type34 = Field(..., title="FileChangeThreadItemType")
+    type: Type36 = Field(..., title="FileChangeThreadItemType")
 
 
-class ThreadItem8(BaseModel):
+class ThreadItem9(BaseModel):
     agentsStates: Dict[str, CollabAgentState] = Field(
         ..., description="Last known status of the target agents, when available."
     )
@@ -434,14 +511,14 @@ class ThreadItem8(BaseModel):
     tool: CollabAgentTool = Field(
         ..., description="Name of the collab tool that was invoked."
     )
-    type: Type36 = Field(..., title="CollabAgentToolCallThreadItemType")
+    type: Type39 = Field(..., title="CollabAgentToolCallThreadItemType")
 
 
-class ThreadItem9(BaseModel):
+class ThreadItem10(BaseModel):
     action: Optional[WebSearchAction] = None
     id: str
     query: str
-    type: Type37 = Field(..., title="WebSearchThreadItemType")
+    type: Type40 = Field(..., title="WebSearchThreadItemType")
 
 
 class ThreadItem(
@@ -460,6 +537,8 @@ class ThreadItem(
             ThreadItem11,
             ThreadItem12,
             ThreadItem13,
+            ThreadItem14,
+            ThreadItem15,
         ]
     ]
 ):
@@ -477,6 +556,8 @@ class ThreadItem(
         ThreadItem11,
         ThreadItem12,
         ThreadItem13,
+        ThreadItem14,
+        ThreadItem15,
     ]
 
 

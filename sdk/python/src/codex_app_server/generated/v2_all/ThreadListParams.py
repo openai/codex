@@ -48,6 +48,9 @@ class ThreadListParams(BaseModel):
         None,
         description="Optional provider filter; when set, only sessions recorded under these providers are returned. When present but empty, includes all providers.",
     )
+    searchTerm: Optional[str] = Field(
+        None, description="Optional substring filter for the extracted thread title."
+    )
     sortKey: Optional[ThreadSortKey] = Field(
         None, description="Optional sort key; defaults to created_at."
     )

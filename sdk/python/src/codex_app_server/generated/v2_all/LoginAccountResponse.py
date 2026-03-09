@@ -18,7 +18,7 @@ class LoginAccountResponse1(BaseModel):
     type: Type = Field(..., title="ApiKeyv2::LoginAccountResponseType")
 
 
-class Type84(Enum):
+class Type92(Enum):
     chatgpt = "chatgpt"
 
 
@@ -28,15 +28,15 @@ class LoginAccountResponse2(BaseModel):
         description="URL the client should open in a browser to initiate the OAuth flow.",
     )
     loginId: str
-    type: Type84 = Field(..., title="Chatgptv2::LoginAccountResponseType")
+    type: Type92 = Field(..., title="Chatgptv2::LoginAccountResponseType")
 
 
-class Type85(Enum):
+class Type93(Enum):
     chatgptAuthTokens = "chatgptAuthTokens"
 
 
 class LoginAccountResponse3(BaseModel):
-    type: Type85 = Field(..., title="ChatgptAuthTokensv2::LoginAccountResponseType")
+    type: Type93 = Field(..., title="ChatgptAuthTokensv2::LoginAccountResponseType")
 
 
 class LoginAccountResponse(

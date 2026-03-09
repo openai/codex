@@ -31,7 +31,7 @@ class HttpConnectionFailed(BaseModel):
     httpStatusCode: Optional[conint(ge=0)] = None
 
 
-class CodexErrorInfo62(BaseModel):
+class CodexErrorInfo68(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -42,7 +42,7 @@ class ResponseStreamConnectionFailed(BaseModel):
     httpStatusCode: Optional[conint(ge=0)] = None
 
 
-class CodexErrorInfo63(BaseModel):
+class CodexErrorInfo69(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -53,7 +53,7 @@ class ResponseStreamDisconnected(BaseModel):
     httpStatusCode: Optional[conint(ge=0)] = None
 
 
-class CodexErrorInfo64(BaseModel):
+class CodexErrorInfo70(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -64,30 +64,30 @@ class ResponseTooManyFailedAttempts(BaseModel):
     httpStatusCode: Optional[conint(ge=0)] = None
 
 
-class CodexErrorInfo65(BaseModel):
+class CodexErrorInfo71(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
     responseTooManyFailedAttempts: ResponseTooManyFailedAttempts
 
 
-class CodexErrorInfo60(
+class CodexErrorInfo66(
     RootModel[
         Union[
             CodexErrorInfo,
-            CodexErrorInfo62,
-            CodexErrorInfo63,
-            CodexErrorInfo64,
-            CodexErrorInfo65,
+            CodexErrorInfo68,
+            CodexErrorInfo69,
+            CodexErrorInfo70,
+            CodexErrorInfo71,
         ]
     ]
 ):
     root: Union[
         CodexErrorInfo,
-        CodexErrorInfo62,
-        CodexErrorInfo63,
-        CodexErrorInfo64,
-        CodexErrorInfo65,
+        CodexErrorInfo68,
+        CodexErrorInfo69,
+        CodexErrorInfo70,
+        CodexErrorInfo71,
     ] = Field(
         ...,
         description="This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
@@ -128,40 +128,40 @@ class CommandAction(BaseModel):
     type: Type = Field(..., title="ReadCommandActionType")
 
 
-class Type418(Enum):
+class Type538(Enum):
     listFiles = "listFiles"
 
 
-class CommandAction57(BaseModel):
+class CommandAction62(BaseModel):
     command: str
     path: Optional[str] = None
-    type: Type418 = Field(..., title="ListFilesCommandActionType")
+    type: Type538 = Field(..., title="ListFilesCommandActionType")
 
 
-class Type419(Enum):
+class Type539(Enum):
     search = "search"
 
 
-class CommandAction58(BaseModel):
+class CommandAction63(BaseModel):
     command: str
     path: Optional[str] = None
     query: Optional[str] = None
-    type: Type419 = Field(..., title="SearchCommandActionType")
+    type: Type539 = Field(..., title="SearchCommandActionType")
 
 
-class Type420(Enum):
+class Type540(Enum):
     unknown = "unknown"
 
 
-class CommandAction59(BaseModel):
+class CommandAction64(BaseModel):
     command: str
-    type: Type420 = Field(..., title="UnknownCommandActionType")
+    type: Type540 = Field(..., title="UnknownCommandActionType")
 
 
-class CommandAction55(
-    RootModel[Union[CommandAction, CommandAction57, CommandAction58, CommandAction59]]
+class CommandAction60(
+    RootModel[Union[CommandAction, CommandAction62, CommandAction63, CommandAction64]]
 ):
-    root: Union[CommandAction, CommandAction57, CommandAction58, CommandAction59]
+    root: Union[CommandAction, CommandAction62, CommandAction63, CommandAction64]
 
 
 class CommandExecutionStatus(Enum):
@@ -169,6 +169,38 @@ class CommandExecutionStatus(Enum):
     completed = "completed"
     failed = "failed"
     declined = "declined"
+
+
+class Type541(Enum):
+    inputText = "inputText"
+
+
+class DynamicToolCallOutputContentItem(BaseModel):
+    text: str
+    type: Type541 = Field(..., title="InputTextDynamicToolCallOutputContentItemType")
+
+
+class Type542(Enum):
+    inputImage = "inputImage"
+
+
+class DynamicToolCallOutputContentItem38(BaseModel):
+    imageUrl: str
+    type: Type542 = Field(..., title="InputImageDynamicToolCallOutputContentItemType")
+
+
+class DynamicToolCallOutputContentItem36(
+    RootModel[
+        Union[DynamicToolCallOutputContentItem, DynamicToolCallOutputContentItem38]
+    ]
+):
+    root: Union[DynamicToolCallOutputContentItem, DynamicToolCallOutputContentItem38]
+
+
+class DynamicToolCallStatus(Enum):
+    inProgress = "inProgress"
+    completed = "completed"
+    failed = "failed"
 
 
 class McpToolCallError(BaseModel):
@@ -186,6 +218,21 @@ class McpToolCallStatus(Enum):
     failed = "failed"
 
 
+class MessagePhase(Enum):
+    commentary = "commentary"
+
+
+class MessagePhase44(Enum):
+    final_answer = "final_answer"
+
+
+class MessagePhase42(RootModel[Union[MessagePhase, MessagePhase44]]):
+    root: Union[MessagePhase, MessagePhase44] = Field(
+        ...,
+        description='Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as "phase unknown" and keep compatibility behavior for legacy models.',
+    )
+
+
 class PatchApplyStatus(Enum):
     inProgress = "inProgress"
     completed = "completed"
@@ -193,35 +240,35 @@ class PatchApplyStatus(Enum):
     declined = "declined"
 
 
-class Type421(Enum):
+class Type543(Enum):
     add = "add"
 
 
-class PatchChangeKind34(BaseModel):
-    type: Type421 = Field(..., title="AddPatchChangeKindType")
+class PatchChangeKind37(BaseModel):
+    type: Type543 = Field(..., title="AddPatchChangeKindType")
 
 
-class Type422(Enum):
+class Type544(Enum):
     delete = "delete"
 
 
-class PatchChangeKind35(BaseModel):
-    type: Type422 = Field(..., title="DeletePatchChangeKindType")
+class PatchChangeKind38(BaseModel):
+    type: Type544 = Field(..., title="DeletePatchChangeKindType")
 
 
-class Type423(Enum):
+class Type545(Enum):
     update = "update"
 
 
-class PatchChangeKind36(BaseModel):
+class PatchChangeKind39(BaseModel):
     move_path: Optional[str] = None
-    type: Type423 = Field(..., title="UpdatePatchChangeKindType")
+    type: Type545 = Field(..., title="UpdatePatchChangeKindType")
 
 
 class PatchChangeKind(
-    RootModel[Union[PatchChangeKind34, PatchChangeKind35, PatchChangeKind36]]
+    RootModel[Union[PatchChangeKind37, PatchChangeKind38, PatchChangeKind39]]
 ):
-    root: Union[PatchChangeKind34, PatchChangeKind35, PatchChangeKind36]
+    root: Union[PatchChangeKind37, PatchChangeKind38, PatchChangeKind39]
 
 
 class TextElement(BaseModel):
@@ -235,51 +282,52 @@ class TextElement(BaseModel):
     )
 
 
-class Type424(Enum):
+class Type546(Enum):
     userMessage = "userMessage"
 
 
-class Type425(Enum):
+class Type547(Enum):
     agentMessage = "agentMessage"
 
 
 class ThreadItem(BaseModel):
     id: str
+    phase: Optional[MessagePhase42] = None
     text: str
-    type: Type425 = Field(..., title="AgentMessageThreadItemType")
+    type: Type547 = Field(..., title="AgentMessageThreadItemType")
 
 
-class Type426(Enum):
+class Type548(Enum):
     plan = "plan"
 
 
-class ThreadItem156(BaseModel):
+class ThreadItem194(BaseModel):
     id: str
     text: str
-    type: Type426 = Field(..., title="PlanThreadItemType")
+    type: Type548 = Field(..., title="PlanThreadItemType")
 
 
-class Type427(Enum):
+class Type549(Enum):
     reasoning = "reasoning"
 
 
-class ThreadItem157(BaseModel):
+class ThreadItem195(BaseModel):
     content: Optional[List[str]] = []
     id: str
     summary: Optional[List[str]] = []
-    type: Type427 = Field(..., title="ReasoningThreadItemType")
+    type: Type549 = Field(..., title="ReasoningThreadItemType")
 
 
-class Type428(Enum):
+class Type550(Enum):
     commandExecution = "commandExecution"
 
 
-class ThreadItem158(BaseModel):
+class ThreadItem196(BaseModel):
     aggregatedOutput: Optional[str] = Field(
         None, description="The command's output, aggregated from stdout and stderr."
     )
     command: str = Field(..., description="The command to be executed.")
-    commandActions: List[CommandAction55] = Field(
+    commandActions: List[CommandAction60] = Field(
         ...,
         description="A best-effort parsing of the command to understand the action(s) it will perform. This returns a list of CommandAction objects because a single shell command may be composed of many commands piped together.",
     )
@@ -293,18 +341,18 @@ class ThreadItem158(BaseModel):
         None, description="Identifier for the underlying PTY process (when available)."
     )
     status: CommandExecutionStatus
-    type: Type428 = Field(..., title="CommandExecutionThreadItemType")
+    type: Type550 = Field(..., title="CommandExecutionThreadItemType")
 
 
-class Type429(Enum):
+class Type551(Enum):
     fileChange = "fileChange"
 
 
-class Type430(Enum):
+class Type552(Enum):
     mcpToolCall = "mcpToolCall"
 
 
-class ThreadItem160(BaseModel):
+class ThreadItem198(BaseModel):
     arguments: Any
     durationMs: Optional[int] = Field(
         None, description="The duration of the MCP tool call in milliseconds."
@@ -315,59 +363,88 @@ class ThreadItem160(BaseModel):
     server: str
     status: McpToolCallStatus
     tool: str
-    type: Type430 = Field(..., title="McpToolCallThreadItemType")
+    type: Type552 = Field(..., title="McpToolCallThreadItemType")
 
 
-class Type431(Enum):
+class Type553(Enum):
+    dynamicToolCall = "dynamicToolCall"
+
+
+class ThreadItem199(BaseModel):
+    arguments: Any
+    contentItems: Optional[List[DynamicToolCallOutputContentItem36]] = None
+    durationMs: Optional[int] = Field(
+        None, description="The duration of the dynamic tool call in milliseconds."
+    )
+    id: str
+    status: DynamicToolCallStatus
+    success: Optional[bool] = None
+    tool: str
+    type: Type553 = Field(..., title="DynamicToolCallThreadItemType")
+
+
+class Type554(Enum):
     collabAgentToolCall = "collabAgentToolCall"
 
 
-class Type432(Enum):
+class Type555(Enum):
     webSearch = "webSearch"
 
 
-class Type433(Enum):
+class Type556(Enum):
     imageView = "imageView"
 
 
-class ThreadItem163(BaseModel):
+class ThreadItem202(BaseModel):
     id: str
     path: str
-    type: Type433 = Field(..., title="ImageViewThreadItemType")
+    type: Type556 = Field(..., title="ImageViewThreadItemType")
 
 
-class Type434(Enum):
+class Type557(Enum):
+    imageGeneration = "imageGeneration"
+
+
+class ThreadItem203(BaseModel):
+    id: str
+    result: str
+    revisedPrompt: Optional[str] = None
+    status: str
+    type: Type557 = Field(..., title="ImageGenerationThreadItemType")
+
+
+class Type558(Enum):
     enteredReviewMode = "enteredReviewMode"
 
 
-class ThreadItem164(BaseModel):
+class ThreadItem204(BaseModel):
     id: str
     review: str
-    type: Type434 = Field(..., title="EnteredReviewModeThreadItemType")
+    type: Type558 = Field(..., title="EnteredReviewModeThreadItemType")
 
 
-class Type435(Enum):
+class Type559(Enum):
     exitedReviewMode = "exitedReviewMode"
 
 
-class ThreadItem165(BaseModel):
+class ThreadItem205(BaseModel):
     id: str
     review: str
-    type: Type435 = Field(..., title="ExitedReviewModeThreadItemType")
+    type: Type559 = Field(..., title="ExitedReviewModeThreadItemType")
 
 
-class Type436(Enum):
+class Type560(Enum):
     contextCompaction = "contextCompaction"
 
 
-class ThreadItem166(BaseModel):
+class ThreadItem206(BaseModel):
     id: str
-    type: Type436 = Field(..., title="ContextCompactionThreadItemType")
+    type: Type560 = Field(..., title="ContextCompactionThreadItemType")
 
 
 class TurnError(BaseModel):
     additionalDetails: Optional[str] = None
-    codexErrorInfo: Optional[CodexErrorInfo60] = None
+    codexErrorInfo: Optional[CodexErrorInfo66] = None
     message: str
 
 
@@ -378,109 +455,109 @@ class TurnStatus(Enum):
     inProgress = "inProgress"
 
 
-class Type437(Enum):
+class Type561(Enum):
     text = "text"
 
 
-class UserInput56(BaseModel):
+class UserInput61(BaseModel):
     text: str
     text_elements: Optional[List[TextElement]] = Field(
         [],
         description="UI-defined spans within `text` used to render or persist special elements.",
     )
-    type: Type437 = Field(..., title="TextUserInputType")
+    type: Type561 = Field(..., title="TextUserInputType")
 
 
-class Type438(Enum):
+class Type562(Enum):
     image = "image"
 
 
-class UserInput57(BaseModel):
-    type: Type438 = Field(..., title="ImageUserInputType")
+class UserInput62(BaseModel):
+    type: Type562 = Field(..., title="ImageUserInputType")
     url: str
 
 
-class Type439(Enum):
+class Type563(Enum):
     localImage = "localImage"
 
 
-class UserInput58(BaseModel):
+class UserInput63(BaseModel):
     path: str
-    type: Type439 = Field(..., title="LocalImageUserInputType")
+    type: Type563 = Field(..., title="LocalImageUserInputType")
 
 
-class Type440(Enum):
+class Type564(Enum):
     skill = "skill"
 
 
-class UserInput59(BaseModel):
+class UserInput64(BaseModel):
     name: str
     path: str
-    type: Type440 = Field(..., title="SkillUserInputType")
+    type: Type564 = Field(..., title="SkillUserInputType")
 
 
-class Type441(Enum):
+class Type565(Enum):
     mention = "mention"
 
 
-class UserInput60(BaseModel):
+class UserInput65(BaseModel):
     name: str
     path: str
-    type: Type441 = Field(..., title="MentionUserInputType")
+    type: Type565 = Field(..., title="MentionUserInputType")
 
 
 class UserInput(
-    RootModel[Union[UserInput56, UserInput57, UserInput58, UserInput59, UserInput60]]
+    RootModel[Union[UserInput61, UserInput62, UserInput63, UserInput64, UserInput65]]
 ):
-    root: Union[UserInput56, UserInput57, UserInput58, UserInput59, UserInput60]
+    root: Union[UserInput61, UserInput62, UserInput63, UserInput64, UserInput65]
 
 
-class Type442(Enum):
+class Type566(Enum):
     search = "search"
 
 
-class WebSearchAction53(BaseModel):
+class WebSearchAction49(BaseModel):
     queries: Optional[List[str]] = None
     query: Optional[str] = None
-    type: Type442 = Field(..., title="SearchWebSearchActionType")
+    type: Type566 = Field(..., title="SearchWebSearchActionType")
 
 
-class Type443(Enum):
+class Type567(Enum):
     openPage = "openPage"
 
 
-class WebSearchAction54(BaseModel):
-    type: Type443 = Field(..., title="OpenPageWebSearchActionType")
+class WebSearchAction50(BaseModel):
+    type: Type567 = Field(..., title="OpenPageWebSearchActionType")
     url: Optional[str] = None
 
 
-class Type444(Enum):
+class Type568(Enum):
     findInPage = "findInPage"
 
 
-class WebSearchAction55(BaseModel):
+class WebSearchAction51(BaseModel):
     pattern: Optional[str] = None
-    type: Type444 = Field(..., title="FindInPageWebSearchActionType")
+    type: Type568 = Field(..., title="FindInPageWebSearchActionType")
     url: Optional[str] = None
 
 
-class Type445(Enum):
+class Type569(Enum):
     other = "other"
 
 
-class WebSearchAction56(BaseModel):
-    type: Type445 = Field(..., title="OtherWebSearchActionType")
+class WebSearchAction52(BaseModel):
+    type: Type569 = Field(..., title="OtherWebSearchActionType")
 
 
 class WebSearchAction(
     RootModel[
         Union[
-            WebSearchAction53, WebSearchAction54, WebSearchAction55, WebSearchAction56
+            WebSearchAction49, WebSearchAction50, WebSearchAction51, WebSearchAction52
         ]
     ]
 ):
     root: Union[
-        WebSearchAction53, WebSearchAction54, WebSearchAction55, WebSearchAction56
+        WebSearchAction49, WebSearchAction50, WebSearchAction51, WebSearchAction52
     ]
 
 
@@ -495,20 +572,20 @@ class FileUpdateChange(BaseModel):
     path: str
 
 
-class ThreadItem154(BaseModel):
+class ThreadItem192(BaseModel):
     content: List[UserInput]
     id: str
-    type: Type424 = Field(..., title="UserMessageThreadItemType")
+    type: Type546 = Field(..., title="UserMessageThreadItemType")
 
 
-class ThreadItem159(BaseModel):
+class ThreadItem197(BaseModel):
     changes: List[FileUpdateChange]
     id: str
     status: PatchApplyStatus
-    type: Type429 = Field(..., title="FileChangeThreadItemType")
+    type: Type551 = Field(..., title="FileChangeThreadItemType")
 
 
-class ThreadItem161(BaseModel):
+class ThreadItem200(BaseModel):
     agentsStates: Dict[str, CollabAgentState] = Field(
         ..., description="Last known status of the target agents, when available."
     )
@@ -530,49 +607,53 @@ class ThreadItem161(BaseModel):
     tool: CollabAgentTool = Field(
         ..., description="Name of the collab tool that was invoked."
     )
-    type: Type431 = Field(..., title="CollabAgentToolCallThreadItemType")
+    type: Type554 = Field(..., title="CollabAgentToolCallThreadItemType")
 
 
-class ThreadItem162(BaseModel):
+class ThreadItem201(BaseModel):
     action: Optional[WebSearchAction] = None
     id: str
     query: str
-    type: Type432 = Field(..., title="WebSearchThreadItemType")
+    type: Type555 = Field(..., title="WebSearchThreadItemType")
 
 
-class ThreadItem153(
+class ThreadItem191(
     RootModel[
         Union[
-            ThreadItem154,
+            ThreadItem192,
             ThreadItem,
-            ThreadItem156,
-            ThreadItem157,
-            ThreadItem158,
-            ThreadItem159,
-            ThreadItem160,
-            ThreadItem161,
-            ThreadItem162,
-            ThreadItem163,
-            ThreadItem164,
-            ThreadItem165,
-            ThreadItem166,
+            ThreadItem194,
+            ThreadItem195,
+            ThreadItem196,
+            ThreadItem197,
+            ThreadItem198,
+            ThreadItem199,
+            ThreadItem200,
+            ThreadItem201,
+            ThreadItem202,
+            ThreadItem203,
+            ThreadItem204,
+            ThreadItem205,
+            ThreadItem206,
         ]
     ]
 ):
     root: Union[
-        ThreadItem154,
+        ThreadItem192,
         ThreadItem,
-        ThreadItem156,
-        ThreadItem157,
-        ThreadItem158,
-        ThreadItem159,
-        ThreadItem160,
-        ThreadItem161,
-        ThreadItem162,
-        ThreadItem163,
-        ThreadItem164,
-        ThreadItem165,
-        ThreadItem166,
+        ThreadItem194,
+        ThreadItem195,
+        ThreadItem196,
+        ThreadItem197,
+        ThreadItem198,
+        ThreadItem199,
+        ThreadItem200,
+        ThreadItem201,
+        ThreadItem202,
+        ThreadItem203,
+        ThreadItem204,
+        ThreadItem205,
+        ThreadItem206,
     ]
 
 
@@ -581,7 +662,7 @@ class Turn(BaseModel):
         None, description="Only populated when the Turn's status is failed."
     )
     id: str
-    items: List[ThreadItem153] = Field(
+    items: List[ThreadItem191] = Field(
         ...,
         description="Only populated on a `thread/resume` or `thread/fork` response. For all other responses and notifications returning a Turn, the items field will be an empty list.",
     )

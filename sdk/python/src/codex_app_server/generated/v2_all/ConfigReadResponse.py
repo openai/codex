@@ -24,20 +24,49 @@ class AnalyticsConfig(BaseModel):
     enabled: Optional[bool] = None
 
 
-class AppDisabledReason(Enum):
-    unknown = "unknown"
-    user = "user"
+class AppToolApproval(Enum):
+    auto = "auto"
+    prompt = "prompt"
+    approve = "approve"
 
 
-class AppsConfig(BaseModel):
+class AppToolConfig(BaseModel):
+    approval_mode: Optional[AppToolApproval] = None
+    enabled: Optional[bool] = None
+
+
+class AppToolsConfig(BaseModel):
     pass
 
 
-class AskForApproval(Enum):
+class AppsDefaultConfig(BaseModel):
+    destructive_enabled: Optional[bool] = True
+    enabled: Optional[bool] = True
+    open_world_enabled: Optional[bool] = True
+
+
+class AskForApproval1(Enum):
     untrusted = "untrusted"
     on_failure = "on-failure"
     on_request = "on-request"
     never = "never"
+
+
+class Reject(BaseModel):
+    mcp_elicitations: bool
+    rules: bool
+    sandbox_approval: bool
+
+
+class AskForApproval2(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    reject: Reject
+
+
+class AskForApproval(RootModel[Union[AskForApproval1, AskForApproval2]]):
+    root: Union[AskForApproval1, AskForApproval2]
 
 
 class Type(Enum):
@@ -180,9 +209,9 @@ class SandboxWorkspaceWrite(BaseModel):
     writable_roots: Optional[List[str]] = []
 
 
-class ToolsV2(BaseModel):
-    view_image: Optional[bool] = None
-    web_search: Optional[bool] = None
+class ServiceTier(Enum):
+    fast = "fast"
+    flex = "flex"
 
 
 class Verbosity(Enum):
@@ -191,15 +220,48 @@ class Verbosity(Enum):
     high = "high"
 
 
+class WebSearchContextSize(Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
+class WebSearchLocation(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    city: Optional[str] = None
+    country: Optional[str] = None
+    region: Optional[str] = None
+    timezone: Optional[str] = None
+
+
 class WebSearchMode(Enum):
     disabled = "disabled"
     cached = "cached"
     live = "live"
 
 
+class WebSearchToolConfig(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    allowed_domains: Optional[List[str]] = None
+    context_size: Optional[WebSearchContextSize] = None
+    location: Optional[WebSearchLocation] = None
+
+
 class AppConfig(BaseModel):
-    disabled_reason: Optional[AppDisabledReason] = None
+    default_tools_approval_mode: Optional[AppToolApproval] = None
+    default_tools_enabled: Optional[bool] = None
+    destructive_enabled: Optional[bool] = None
     enabled: Optional[bool] = True
+    open_world_enabled: Optional[bool] = None
+    tools: Optional[AppToolsConfig] = None
+
+
+class AppsConfig(BaseModel):
+    field_default: Optional[AppsDefaultConfig] = Field(None, alias="_default")
 
 
 class ConfigLayer(BaseModel):
@@ -214,6 +276,11 @@ class ConfigLayerMetadata(BaseModel):
     version: str
 
 
+class ToolsV2(BaseModel):
+    view_image: Optional[bool] = None
+    web_search: Optional[WebSearchToolConfig] = None
+
+
 class ProfileV2(BaseModel):
     model_config = ConfigDict(
         extra="allow",
@@ -225,6 +292,8 @@ class ProfileV2(BaseModel):
     model_reasoning_effort: Optional[ReasoningEffort] = None
     model_reasoning_summary: Optional[ReasoningSummary] = None
     model_verbosity: Optional[Verbosity] = None
+    service_tier: Optional[ServiceTier] = None
+    tools: Optional[ToolsV2] = None
     web_search: Optional[WebSearchMode] = None
 
 
@@ -251,6 +320,7 @@ class Config(BaseModel):
     review_model: Optional[str] = None
     sandbox_mode: Optional[SandboxMode] = None
     sandbox_workspace_write: Optional[SandboxWorkspaceWrite] = None
+    service_tier: Optional[ServiceTier] = None
     tools: Optional[ToolsV2] = None
     web_search: Optional[WebSearchMode] = None
 

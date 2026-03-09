@@ -24,6 +24,17 @@ class InputModality(RootModel[Union[InputModality1, InputModality2]]):
     )
 
 
+class ModelAvailabilityNux(BaseModel):
+    message: str
+
+
+class ModelUpgradeInfo(BaseModel):
+    migrationMarkdown: Optional[str] = None
+    model: str
+    modelLink: Optional[str] = None
+    upgradeCopy: Optional[str] = None
+
+
 class ReasoningEffort(Enum):
     none = "none"
     minimal = "minimal"
@@ -39,6 +50,7 @@ class ReasoningEffortOption(BaseModel):
 
 
 class Model(BaseModel):
+    availabilityNux: Optional[ModelAvailabilityNux] = None
     defaultReasoningEffort: ReasoningEffort
     description: str
     displayName: str
@@ -54,6 +66,7 @@ class Model(BaseModel):
     supportedReasoningEfforts: List[ReasoningEffortOption]
     supportsPersonality: Optional[bool] = False
     upgrade: Optional[str] = None
+    upgradeInfo: Optional[ModelUpgradeInfo] = None
 
 
 class ModelListResponse(BaseModel):

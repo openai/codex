@@ -30,7 +30,7 @@ class Type(Enum):
     text = "text"
 
 
-class UserInput76(BaseModel):
+class UserInput81(BaseModel):
     text: str
     text_elements: Optional[List[TextElement]] = Field(
         [],
@@ -39,48 +39,48 @@ class UserInput76(BaseModel):
     type: Type = Field(..., title="TextUserInputType")
 
 
-class Type516(Enum):
+class Type648(Enum):
     image = "image"
 
 
-class UserInput77(BaseModel):
-    type: Type516 = Field(..., title="ImageUserInputType")
+class UserInput82(BaseModel):
+    type: Type648 = Field(..., title="ImageUserInputType")
     url: str
 
 
-class Type517(Enum):
+class Type649(Enum):
     localImage = "localImage"
 
 
-class UserInput78(BaseModel):
+class UserInput83(BaseModel):
     path: str
-    type: Type517 = Field(..., title="LocalImageUserInputType")
+    type: Type649 = Field(..., title="LocalImageUserInputType")
 
 
-class Type518(Enum):
+class Type650(Enum):
     skill = "skill"
 
 
-class UserInput79(BaseModel):
+class UserInput84(BaseModel):
     name: str
     path: str
-    type: Type518 = Field(..., title="SkillUserInputType")
+    type: Type650 = Field(..., title="SkillUserInputType")
 
 
-class Type519(Enum):
+class Type651(Enum):
     mention = "mention"
 
 
-class UserInput80(BaseModel):
+class UserInput85(BaseModel):
     name: str
     path: str
-    type: Type519 = Field(..., title="MentionUserInputType")
+    type: Type651 = Field(..., title="MentionUserInputType")
 
 
 class UserInput(
-    RootModel[Union[UserInput76, UserInput77, UserInput78, UserInput79, UserInput80]]
+    RootModel[Union[UserInput81, UserInput82, UserInput83, UserInput84, UserInput85]]
 ):
-    root: Union[UserInput76, UserInput77, UserInput78, UserInput79, UserInput80]
+    root: Union[UserInput81, UserInput82, UserInput83, UserInput84, UserInput85]
 
 
 class TurnSteerParams(BaseModel):

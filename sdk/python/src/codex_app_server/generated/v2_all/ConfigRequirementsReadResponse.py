@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, conint
+from pydantic import BaseModel, ConfigDict, Field, RootModel, conint
 
 
 class AskForApproval(Enum):
@@ -17,12 +17,29 @@ class AskForApproval(Enum):
     never = "never"
 
 
+class Reject(BaseModel):
+    mcp_elicitations: bool
+    rules: bool
+    sandbox_approval: bool
+
+
+class AskForApproval5(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    reject: Reject
+
+
+class AskForApproval3(RootModel[Union[AskForApproval, AskForApproval5]]):
+    root: Union[AskForApproval, AskForApproval5]
+
+
 class NetworkRequirements(BaseModel):
     allowLocalBinding: Optional[bool] = None
     allowUnixSockets: Optional[List[str]] = None
     allowUpstreamProxy: Optional[bool] = None
     allowedDomains: Optional[List[str]] = None
-    dangerouslyAllowNonLoopbackAdmin: Optional[bool] = None
+    dangerouslyAllowAllUnixSockets: Optional[bool] = None
     dangerouslyAllowNonLoopbackProxy: Optional[bool] = None
     deniedDomains: Optional[List[str]] = None
     enabled: Optional[bool] = None
@@ -47,10 +64,11 @@ class WebSearchMode(Enum):
 
 
 class ConfigRequirements(BaseModel):
-    allowedApprovalPolicies: Optional[List[AskForApproval]] = None
+    allowedApprovalPolicies: Optional[List[AskForApproval3]] = None
     allowedSandboxModes: Optional[List[SandboxMode]] = None
     allowedWebSearchModes: Optional[List[WebSearchMode]] = None
     enforceResidency: Optional[ResidencyRequirement] = None
+    featureRequirements: Optional[Dict[str, Any]] = None
 
 
 class ConfigRequirementsReadResponse(BaseModel):

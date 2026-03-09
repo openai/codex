@@ -7,29 +7,39 @@ from dataclasses import dataclass
 from typing import Any, TypedDict
 
 class ThreadDict(TypedDict, total=False):
+    agentNickname: Any
+    agentRole: Any
     cliVersion: str
     createdAt: int
     cwd: str
+    ephemeral: bool
     gitInfo: Any
     id: str
     modelProvider: str
+    name: Any
     path: Any
     preview: str
     source: Any
+    status: Any
     turns: list[Turn]
     updatedAt: int
 
 @dataclass(slots=True, kw_only=True)
 class Thread:
+    agentNickname: Any = None
+    agentRole: Any = None
     cliVersion: str
     createdAt: int
     cwd: str
+    ephemeral: bool
     gitInfo: Any = None
     id: str
     modelProvider: str
+    name: Any = None
     path: Any = None
     preview: str
     source: Any
+    status: Any
     turns: list[Turn]
     updatedAt: int
 
@@ -47,41 +57,45 @@ class Turn:
     status: str
 
 class ThreadStartResponseDict(TypedDict, total=False):
-    approvalPolicy: str
+    approvalPolicy: Any
     cwd: str
     model: str
     modelProvider: str
     reasoningEffort: Any
     sandbox: Any
+    serviceTier: Any
     thread: Thread
 
 @dataclass(slots=True, kw_only=True)
 class ThreadStartResponse:
-    approvalPolicy: str
+    approvalPolicy: Any
     cwd: str
     model: str
     modelProvider: str
     reasoningEffort: Any = None
     sandbox: Any
+    serviceTier: Any = None
     thread: Thread
 
 class ThreadResumeResponseDict(TypedDict, total=False):
-    approvalPolicy: str
+    approvalPolicy: Any
     cwd: str
     model: str
     modelProvider: str
     reasoningEffort: Any
     sandbox: Any
+    serviceTier: Any
     thread: Thread
 
 @dataclass(slots=True, kw_only=True)
 class ThreadResumeResponse:
-    approvalPolicy: str
+    approvalPolicy: Any
     cwd: str
     model: str
     modelProvider: str
     reasoningEffort: Any = None
     sandbox: Any
+    serviceTier: Any = None
     thread: Thread
 
 class ThreadReadResponseDict(TypedDict, total=False):
@@ -101,22 +115,24 @@ class ThreadListResponse:
     nextCursor: Any = None
 
 class ThreadForkResponseDict(TypedDict, total=False):
-    approvalPolicy: str
+    approvalPolicy: Any
     cwd: str
     model: str
     modelProvider: str
     reasoningEffort: Any
     sandbox: Any
+    serviceTier: Any
     thread: Thread
 
 @dataclass(slots=True, kw_only=True)
 class ThreadForkResponse:
-    approvalPolicy: str
+    approvalPolicy: Any
     cwd: str
     model: str
     modelProvider: str
     reasoningEffort: Any = None
     sandbox: Any
+    serviceTier: Any = None
     thread: Thread
 
 class ThreadArchiveResponseDict(TypedDict, total=False):

@@ -23,16 +23,16 @@ class ReviewTarget1(BaseModel):
     type: Type = Field(..., title="UncommittedChangesReviewTargetType")
 
 
-class Type111(Enum):
+class Type121(Enum):
     baseBranch = "baseBranch"
 
 
 class ReviewTarget2(BaseModel):
     branch: str
-    type: Type111 = Field(..., title="BaseBranchReviewTargetType")
+    type: Type121 = Field(..., title="BaseBranchReviewTargetType")
 
 
-class Type112(Enum):
+class Type122(Enum):
     commit = "commit"
 
 
@@ -42,16 +42,16 @@ class ReviewTarget3(BaseModel):
         None,
         description="Optional human-readable label (e.g., commit subject) for UIs.",
     )
-    type: Type112 = Field(..., title="CommitReviewTargetType")
+    type: Type122 = Field(..., title="CommitReviewTargetType")
 
 
-class Type113(Enum):
+class Type123(Enum):
     custom = "custom"
 
 
 class ReviewTarget4(BaseModel):
     instructions: str
-    type: Type113 = Field(..., title="CustomReviewTargetType")
+    type: Type123 = Field(..., title="CustomReviewTargetType")
 
 
 class ReviewTarget(

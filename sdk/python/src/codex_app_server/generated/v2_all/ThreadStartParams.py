@@ -5,16 +5,33 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, RootModel
 
 
-class AskForApproval(Enum):
+class AskForApproval14(Enum):
     untrusted = "untrusted"
     on_failure = "on-failure"
     on_request = "on-request"
     never = "never"
+
+
+class Reject(BaseModel):
+    mcp_elicitations: bool
+    rules: bool
+    sandbox_approval: bool
+
+
+class AskForApproval15(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    reject: Reject
+
+
+class AskForApproval(RootModel[Union[AskForApproval14, AskForApproval15]]):
+    root: Union[AskForApproval14, AskForApproval15]
 
 
 class DynamicToolSpec(BaseModel):
@@ -35,6 +52,11 @@ class SandboxMode(Enum):
     danger_full_access = "danger-full-access"
 
 
+class ServiceTier(Enum):
+    fast = "fast"
+    flex = "flex"
+
+
 class ThreadStartParams(BaseModel):
     approvalPolicy: Optional[AskForApproval] = None
     baseInstructions: Optional[str] = None
@@ -46,3 +68,5 @@ class ThreadStartParams(BaseModel):
     modelProvider: Optional[str] = None
     personality: Optional[Personality] = None
     sandbox: Optional[SandboxMode] = None
+    serviceName: Optional[str] = None
+    serviceTier: Optional[Optional[ServiceTier]] = None

@@ -28,5 +28,18 @@ class AuthMode(RootModel[Union[AuthMode1, AuthMode2, AuthMode3]]):
     )
 
 
+class PlanType(Enum):
+    free = "free"
+    go = "go"
+    plus = "plus"
+    pro = "pro"
+    team = "team"
+    business = "business"
+    enterprise = "enterprise"
+    edu = "edu"
+    unknown = "unknown"
+
+
 class AccountUpdatedNotification(BaseModel):
     authMode: Optional[AuthMode] = None
+    planType: Optional[PlanType] = None

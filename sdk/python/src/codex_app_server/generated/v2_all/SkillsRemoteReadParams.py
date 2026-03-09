@@ -4,8 +4,27 @@
 
 from __future__ import annotations
 
+from enum import Enum
+from typing import Optional
+
 from pydantic import BaseModel
 
 
+class HazelnutScope(Enum):
+    example = "example"
+    workspace_shared = "workspace-shared"
+    all_shared = "all-shared"
+    personal = "personal"
+
+
+class ProductSurface(Enum):
+    chatgpt = "chatgpt"
+    codex = "codex"
+    api = "api"
+    atlas = "atlas"
+
+
 class SkillsRemoteReadParams(BaseModel):
-    pass
+    enabled: Optional[bool] = False
+    hazelnutScope: Optional[HazelnutScope] = "example"
+    productSurface: Optional[ProductSurface] = "codex"

@@ -10,6 +10,7 @@ from .v2_all.AccountRateLimitsUpdatedNotification import AccountRateLimitsUpdate
 from .v2_all.AccountUpdatedNotification import AccountUpdatedNotification
 from .v2_all.AgentMessageDeltaNotification import AgentMessageDeltaNotification
 from .v2_all.AppListUpdatedNotification import AppListUpdatedNotification
+from .v2_all.CommandExecOutputDeltaNotification import CommandExecOutputDeltaNotification
 from .v2_all.CommandExecutionOutputDeltaNotification import CommandExecutionOutputDeltaNotification
 from .v2_all.ConfigWarningNotification import ConfigWarningNotification
 from .v2_all.ContextCompactedNotification import ContextCompactedNotification
@@ -20,19 +21,31 @@ from .v2_all.ItemCompletedNotification import ItemCompletedNotification
 from .v2_all.ItemStartedNotification import ItemStartedNotification
 from .v2_all.McpServerOauthLoginCompletedNotification import McpServerOauthLoginCompletedNotification
 from .v2_all.McpToolCallProgressNotification import McpToolCallProgressNotification
+from .v2_all.ModelReroutedNotification import ModelReroutedNotification
 from .v2_all.PlanDeltaNotification import PlanDeltaNotification
-from .v2_all.RawResponseItemCompletedNotification import RawResponseItemCompletedNotification
 from .v2_all.ReasoningSummaryPartAddedNotification import ReasoningSummaryPartAddedNotification
 from .v2_all.ReasoningSummaryTextDeltaNotification import ReasoningSummaryTextDeltaNotification
 from .v2_all.ReasoningTextDeltaNotification import ReasoningTextDeltaNotification
+from .v2_all.ServerRequestResolvedNotification import ServerRequestResolvedNotification
+from .v2_all.SkillsChangedNotification import SkillsChangedNotification
 from .v2_all.TerminalInteractionNotification import TerminalInteractionNotification
+from .v2_all.ThreadArchivedNotification import ThreadArchivedNotification
+from .v2_all.ThreadClosedNotification import ThreadClosedNotification
 from .v2_all.ThreadNameUpdatedNotification import ThreadNameUpdatedNotification
+from .v2_all.ThreadRealtimeClosedNotification import ThreadRealtimeClosedNotification
+from .v2_all.ThreadRealtimeErrorNotification import ThreadRealtimeErrorNotification
+from .v2_all.ThreadRealtimeItemAddedNotification import ThreadRealtimeItemAddedNotification
+from .v2_all.ThreadRealtimeOutputAudioDeltaNotification import ThreadRealtimeOutputAudioDeltaNotification
+from .v2_all.ThreadRealtimeStartedNotification import ThreadRealtimeStartedNotification
 from .v2_all.ThreadStartedNotification import ThreadStartedNotification
+from .v2_all.ThreadStatusChangedNotification import ThreadStatusChangedNotification
 from .v2_all.ThreadTokenUsageUpdatedNotification import ThreadTokenUsageUpdatedNotification
+from .v2_all.ThreadUnarchivedNotification import ThreadUnarchivedNotification
 from .v2_all.TurnCompletedNotification import TurnCompletedNotification
 from .v2_all.TurnDiffUpdatedNotification import TurnDiffUpdatedNotification
 from .v2_all.TurnPlanUpdatedNotification import TurnPlanUpdatedNotification
 from .v2_all.TurnStartedNotification import TurnStartedNotification
+from .v2_all.WindowsSandboxSetupCompletedNotification import WindowsSandboxSetupCompletedNotification
 from .v2_all.WindowsWorldWritableWarningNotification import WindowsWorldWritableWarningNotification
 
 NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
@@ -40,6 +53,7 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "account/rateLimits/updated": AccountRateLimitsUpdatedNotification,
     "account/updated": AccountUpdatedNotification,
     "app/list/updated": AppListUpdatedNotification,
+    "command/exec/outputDelta": CommandExecOutputDeltaNotification,
     "configWarning": ConfigWarningNotification,
     "deprecationNotice": DeprecationNoticeNotification,
     "error": ErrorNotification,
@@ -55,14 +69,26 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "item/reasoning/textDelta": ReasoningTextDeltaNotification,
     "item/started": ItemStartedNotification,
     "mcpServer/oauthLogin/completed": McpServerOauthLoginCompletedNotification,
-    "rawResponseItem/completed": RawResponseItemCompletedNotification,
+    "model/rerouted": ModelReroutedNotification,
+    "serverRequest/resolved": ServerRequestResolvedNotification,
+    "skills/changed": SkillsChangedNotification,
+    "thread/archived": ThreadArchivedNotification,
+    "thread/closed": ThreadClosedNotification,
     "thread/compacted": ContextCompactedNotification,
     "thread/name/updated": ThreadNameUpdatedNotification,
+    "thread/realtime/closed": ThreadRealtimeClosedNotification,
+    "thread/realtime/error": ThreadRealtimeErrorNotification,
+    "thread/realtime/itemAdded": ThreadRealtimeItemAddedNotification,
+    "thread/realtime/outputAudio/delta": ThreadRealtimeOutputAudioDeltaNotification,
+    "thread/realtime/started": ThreadRealtimeStartedNotification,
     "thread/started": ThreadStartedNotification,
+    "thread/status/changed": ThreadStatusChangedNotification,
     "thread/tokenUsage/updated": ThreadTokenUsageUpdatedNotification,
+    "thread/unarchived": ThreadUnarchivedNotification,
     "turn/completed": TurnCompletedNotification,
     "turn/diff/updated": TurnDiffUpdatedNotification,
     "turn/plan/updated": TurnPlanUpdatedNotification,
     "turn/started": TurnStartedNotification,
     "windows/worldWritableWarning": WindowsWorldWritableWarningNotification,
+    "windowsSandbox/setupCompleted": WindowsSandboxSetupCompletedNotification,
 }

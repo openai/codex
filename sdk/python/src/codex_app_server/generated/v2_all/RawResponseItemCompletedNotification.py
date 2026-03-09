@@ -19,53 +19,39 @@ class ContentItem1(BaseModel):
     type: Type = Field(..., title="InputTextContentItemType")
 
 
-class Type87(Enum):
+class Type96(Enum):
     input_image = "input_image"
 
 
 class ContentItem2(BaseModel):
     image_url: str
-    type: Type87 = Field(..., title="InputImageContentItemType")
+    type: Type96 = Field(..., title="InputImageContentItemType")
 
 
-class Type88(Enum):
+class Type97(Enum):
     output_text = "output_text"
 
 
 class ContentItem3(BaseModel):
     text: str
-    type: Type88 = Field(..., title="OutputTextContentItemType")
+    type: Type97 = Field(..., title="OutputTextContentItemType")
 
 
 class ContentItem(RootModel[Union[ContentItem1, ContentItem2, ContentItem3]]):
     root: Union[ContentItem1, ContentItem2, ContentItem3]
 
 
-class Type89(Enum):
+class Type98(Enum):
     input_text = "input_text"
 
 
 class FunctionCallOutputContentItem1(BaseModel):
     text: str
-    type: Type89 = Field(..., title="InputTextFunctionCallOutputContentItemType")
+    type: Type98 = Field(..., title="InputTextFunctionCallOutputContentItemType")
 
 
-class Type90(Enum):
+class Type99(Enum):
     input_image = "input_image"
-
-
-class FunctionCallOutputContentItem2(BaseModel):
-    image_url: str
-    type: Type90 = Field(..., title="InputImageFunctionCallOutputContentItemType")
-
-
-class FunctionCallOutputContentItem(
-    RootModel[Union[FunctionCallOutputContentItem1, FunctionCallOutputContentItem2]]
-):
-    root: Union[FunctionCallOutputContentItem1, FunctionCallOutputContentItem2] = Field(
-        ...,
-        description="Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
-    )
 
 
 class GhostCommit(BaseModel):
@@ -75,7 +61,14 @@ class GhostCommit(BaseModel):
     preexisting_untracked_files: List[str]
 
 
-class Type91(Enum):
+class ImageDetail(Enum):
+    auto = "auto"
+    low = "low"
+    high = "high"
+    original = "original"
+
+
+class Type100(Enum):
     exec = "exec"
 
 
@@ -83,7 +76,7 @@ class LocalShellAction1(BaseModel):
     command: List[str]
     env: Optional[Dict[str, Any]] = None
     timeout_ms: Optional[conint(ge=0)] = None
-    type: Type91 = Field(..., title="ExecLocalShellActionType")
+    type: Type100 = Field(..., title="ExecLocalShellActionType")
     user: Optional[str] = None
     working_directory: Optional[str] = None
 
@@ -98,37 +91,37 @@ class LocalShellStatus(Enum):
     incomplete = "incomplete"
 
 
-class MessagePhase1(Enum):
+class MessagePhase(Enum):
     commentary = "commentary"
 
 
-class MessagePhase2(Enum):
+class MessagePhase8(Enum):
     final_answer = "final_answer"
 
 
-class MessagePhase(RootModel[Union[MessagePhase1, MessagePhase2]]):
-    root: Union[MessagePhase1, MessagePhase2] = Field(
+class MessagePhase6(RootModel[Union[MessagePhase, MessagePhase8]]):
+    root: Union[MessagePhase, MessagePhase8] = Field(
         ...,
         description='Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as "phase unknown" and keep compatibility behavior for legacy models.',
     )
 
 
-class Type92(Enum):
+class Type101(Enum):
     reasoning_text = "reasoning_text"
 
 
 class ReasoningItemContent1(BaseModel):
     text: str
-    type: Type92 = Field(..., title="ReasoningTextReasoningItemContentType")
+    type: Type101 = Field(..., title="ReasoningTextReasoningItemContentType")
 
 
-class Type93(Enum):
+class Type102(Enum):
     text = "text"
 
 
 class ReasoningItemContent2(BaseModel):
     text: str
-    type: Type93 = Field(..., title="TextReasoningItemContentType")
+    type: Type102 = Field(..., title="TextReasoningItemContentType")
 
 
 class ReasoningItemContent(
@@ -137,20 +130,20 @@ class ReasoningItemContent(
     root: Union[ReasoningItemContent1, ReasoningItemContent2]
 
 
-class Type94(Enum):
+class Type103(Enum):
     summary_text = "summary_text"
 
 
 class ReasoningItemReasoningSummary1(BaseModel):
     text: str
-    type: Type94 = Field(..., title="SummaryTextReasoningItemReasoningSummaryType")
+    type: Type103 = Field(..., title="SummaryTextReasoningItemReasoningSummaryType")
 
 
 class ReasoningItemReasoningSummary(RootModel[ReasoningItemReasoningSummary1]):
     root: ReasoningItemReasoningSummary1
 
 
-class Type95(Enum):
+class Type104(Enum):
     message = "message"
 
 
@@ -158,12 +151,12 @@ class ResponseItem1(BaseModel):
     content: List[ContentItem]
     end_turn: Optional[bool] = None
     id: Optional[str] = None
-    phase: Optional[MessagePhase] = None
+    phase: Optional[MessagePhase6] = None
     role: str
-    type: Type95 = Field(..., title="MessageResponseItemType")
+    type: Type104 = Field(..., title="MessageResponseItemType")
 
 
-class Type96(Enum):
+class Type105(Enum):
     reasoning = "reasoning"
 
 
@@ -172,10 +165,10 @@ class ResponseItem2(BaseModel):
     encrypted_content: Optional[str] = None
     id: str
     summary: List[ReasoningItemReasoningSummary]
-    type: Type96 = Field(..., title="ReasoningResponseItemType")
+    type: Type105 = Field(..., title="ReasoningResponseItemType")
 
 
-class Type97(Enum):
+class Type106(Enum):
     local_shell_call = "local_shell_call"
 
 
@@ -189,10 +182,10 @@ class ResponseItem3(BaseModel):
         description="Legacy id field retained for compatibility with older payloads.",
     )
     status: LocalShellStatus
-    type: Type97 = Field(..., title="LocalShellCallResponseItemType")
+    type: Type106 = Field(..., title="LocalShellCallResponseItemType")
 
 
-class Type98(Enum):
+class Type107(Enum):
     function_call = "function_call"
 
 
@@ -201,14 +194,14 @@ class ResponseItem4(BaseModel):
     call_id: str
     id: Optional[str] = None
     name: str
-    type: Type98 = Field(..., title="FunctionCallResponseItemType")
+    type: Type107 = Field(..., title="FunctionCallResponseItemType")
 
 
-class Type99(Enum):
+class Type108(Enum):
     function_call_output = "function_call_output"
 
 
-class Type100(Enum):
+class Type109(Enum):
     custom_tool_call = "custom_tool_call"
 
 
@@ -218,94 +211,130 @@ class ResponseItem6(BaseModel):
     input: str
     name: str
     status: Optional[str] = None
-    type: Type100 = Field(..., title="CustomToolCallResponseItemType")
+    type: Type109 = Field(..., title="CustomToolCallResponseItemType")
 
 
-class Type101(Enum):
+class Type110(Enum):
     custom_tool_call_output = "custom_tool_call_output"
 
 
-class ResponseItem7(BaseModel):
-    call_id: str
-    output: str
-    type: Type101 = Field(..., title="CustomToolCallOutputResponseItemType")
-
-
-class Type102(Enum):
+class Type111(Enum):
     web_search_call = "web_search_call"
 
 
-class Type103(Enum):
-    ghost_snapshot = "ghost_snapshot"
+class Type112(Enum):
+    image_generation_call = "image_generation_call"
 
 
 class ResponseItem9(BaseModel):
-    ghost_commit: GhostCommit
-    type: Type103 = Field(..., title="GhostSnapshotResponseItemType")
+    id: str
+    result: str
+    revised_prompt: Optional[str] = None
+    status: str
+    type: Type112 = Field(..., title="ImageGenerationCallResponseItemType")
 
 
-class Type104(Enum):
-    compaction = "compaction"
+class Type113(Enum):
+    ghost_snapshot = "ghost_snapshot"
 
 
 class ResponseItem10(BaseModel):
-    encrypted_content: str
-    type: Type104 = Field(..., title="CompactionResponseItemType")
+    ghost_commit: GhostCommit
+    type: Type113 = Field(..., title="GhostSnapshotResponseItemType")
 
 
-class Type105(Enum):
-    other = "other"
+class Type114(Enum):
+    compaction = "compaction"
 
 
 class ResponseItem11(BaseModel):
-    type: Type105 = Field(..., title="OtherResponseItemType")
+    encrypted_content: str
+    type: Type114 = Field(..., title="CompactionResponseItemType")
 
 
-class Type106(Enum):
-    search = "search"
-
-
-class WebSearchAction9(BaseModel):
-    queries: Optional[List[str]] = None
-    query: Optional[str] = None
-    type: Type106 = Field(..., title="SearchWebSearchActionType")
-
-
-class Type107(Enum):
-    open_page = "open_page"
-
-
-class WebSearchAction10(BaseModel):
-    type: Type107 = Field(..., title="OpenPageWebSearchActionType")
-    url: Optional[str] = None
-
-
-class Type108(Enum):
-    find_in_page = "find_in_page"
-
-
-class WebSearchAction11(BaseModel):
-    pattern: Optional[str] = None
-    type: Type108 = Field(..., title="FindInPageWebSearchActionType")
-    url: Optional[str] = None
-
-
-class Type109(Enum):
+class Type115(Enum):
     other = "other"
 
 
-class WebSearchAction12(BaseModel):
-    type: Type109 = Field(..., title="OtherWebSearchActionType")
+class ResponseItem12(BaseModel):
+    type: Type115 = Field(..., title="OtherResponseItemType")
 
 
-class WebSearchAction(
+class Type116(Enum):
+    search = "search"
+
+
+class ResponsesApiWebSearchAction1(BaseModel):
+    queries: Optional[List[str]] = None
+    query: Optional[str] = None
+    type: Type116 = Field(..., title="SearchResponsesApiWebSearchActionType")
+
+
+class Type117(Enum):
+    open_page = "open_page"
+
+
+class ResponsesApiWebSearchAction2(BaseModel):
+    type: Type117 = Field(..., title="OpenPageResponsesApiWebSearchActionType")
+    url: Optional[str] = None
+
+
+class Type118(Enum):
+    find_in_page = "find_in_page"
+
+
+class ResponsesApiWebSearchAction3(BaseModel):
+    pattern: Optional[str] = None
+    type: Type118 = Field(..., title="FindInPageResponsesApiWebSearchActionType")
+    url: Optional[str] = None
+
+
+class Type119(Enum):
+    other = "other"
+
+
+class ResponsesApiWebSearchAction4(BaseModel):
+    type: Type119 = Field(..., title="OtherResponsesApiWebSearchActionType")
+
+
+class ResponsesApiWebSearchAction(
     RootModel[
-        Union[WebSearchAction9, WebSearchAction10, WebSearchAction11, WebSearchAction12]
+        Union[
+            ResponsesApiWebSearchAction1,
+            ResponsesApiWebSearchAction2,
+            ResponsesApiWebSearchAction3,
+            ResponsesApiWebSearchAction4,
+        ]
     ]
 ):
     root: Union[
-        WebSearchAction9, WebSearchAction10, WebSearchAction11, WebSearchAction12
+        ResponsesApiWebSearchAction1,
+        ResponsesApiWebSearchAction2,
+        ResponsesApiWebSearchAction3,
+        ResponsesApiWebSearchAction4,
     ]
+
+
+class FunctionCallOutputContentItem2(BaseModel):
+    detail: Optional[ImageDetail] = None
+    image_url: str
+    type: Type99 = Field(..., title="InputImageFunctionCallOutputContentItemType")
+
+
+class FunctionCallOutputContentItem(
+    RootModel[Union[FunctionCallOutputContentItem1, FunctionCallOutputContentItem2]]
+):
+    root: Union[FunctionCallOutputContentItem1, FunctionCallOutputContentItem2] = Field(
+        ...,
+        description="Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
+    )
+
+
+class ResponseItem8(BaseModel):
+    action: Optional[ResponsesApiWebSearchAction] = None
+    id: Optional[str] = None
+    status: Optional[str] = None
+    type: Type111 = Field(..., title="WebSearchCallResponseItemType")
 
 
 class FunctionCallOutputBody(
@@ -322,14 +351,13 @@ class FunctionCallOutputPayload(BaseModel):
 class ResponseItem5(BaseModel):
     call_id: str
     output: FunctionCallOutputPayload
-    type: Type99 = Field(..., title="FunctionCallOutputResponseItemType")
+    type: Type108 = Field(..., title="FunctionCallOutputResponseItemType")
 
 
-class ResponseItem8(BaseModel):
-    action: Optional[WebSearchAction] = None
-    id: Optional[str] = None
-    status: Optional[str] = None
-    type: Type102 = Field(..., title="WebSearchCallResponseItemType")
+class ResponseItem7(BaseModel):
+    call_id: str
+    output: FunctionCallOutputPayload
+    type: Type110 = Field(..., title="CustomToolCallOutputResponseItemType")
 
 
 class ResponseItem(
@@ -346,6 +374,7 @@ class ResponseItem(
             ResponseItem9,
             ResponseItem10,
             ResponseItem11,
+            ResponseItem12,
         ]
     ]
 ):
@@ -361,6 +390,7 @@ class ResponseItem(
         ResponseItem9,
         ResponseItem10,
         ResponseItem11,
+        ResponseItem12,
     ]
 
 

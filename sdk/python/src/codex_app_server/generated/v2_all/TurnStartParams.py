@@ -7,7 +7,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, List, Optional, Union
 
-from pydantic import BaseModel, Field, RootModel, conint
+from pydantic import BaseModel, ConfigDict, Field, RootModel, conint
 
 
 class AbsolutePathBuf(RootModel[str]):
@@ -17,11 +17,28 @@ class AbsolutePathBuf(RootModel[str]):
     )
 
 
-class AskForApproval(Enum):
+class AskForApproval18(Enum):
     untrusted = "untrusted"
     on_failure = "on-failure"
     on_request = "on-request"
     never = "never"
+
+
+class Reject(BaseModel):
+    mcp_elicitations: bool
+    rules: bool
+    sandbox_approval: bool
+
+
+class AskForApproval19(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    reject: Reject
+
+
+class AskForApproval(RootModel[Union[AskForApproval18, AskForApproval19]]):
+    root: Union[AskForApproval18, AskForApproval19]
 
 
 class ByteRange(BaseModel):
@@ -55,12 +72,12 @@ class ReadOnlyAccess(BaseModel):
     type: Type = Field(..., title="RestrictedReadOnlyAccessType")
 
 
-class Type447(Enum):
+class Type571(Enum):
     fullAccess = "fullAccess"
 
 
 class ReadOnlyAccess14(BaseModel):
-    type: Type447 = Field(..., title="FullAccessReadOnlyAccessType")
+    type: Type571 = Field(..., title="FullAccessReadOnlyAccessType")
 
 
 class ReadOnlyAccess12(RootModel[Union[ReadOnlyAccess, ReadOnlyAccess14]]):
@@ -93,15 +110,15 @@ class ReasoningSummary(RootModel[Union[ReasoningSummary3, ReasoningSummary4]]):
     )
 
 
-class Type448(Enum):
+class Type572(Enum):
     dangerFullAccess = "dangerFullAccess"
 
 
 class SandboxPolicy17(BaseModel):
-    type: Type448 = Field(..., title="DangerFullAccessSandboxPolicyType")
+    type: Type572 = Field(..., title="DangerFullAccessSandboxPolicyType")
 
 
-class Type449(Enum):
+class Type573(Enum):
     readOnly = "readOnly"
 
 
@@ -109,19 +126,20 @@ class SandboxPolicy18(BaseModel):
     access: Optional[ReadOnlyAccess12] = Field(
         default_factory=lambda: ReadOnlyAccess12.model_validate({"type": "fullAccess"})
     )
-    type: Type449 = Field(..., title="ReadOnlySandboxPolicyType")
+    networkAccess: Optional[bool] = False
+    type: Type573 = Field(..., title="ReadOnlySandboxPolicyType")
 
 
-class Type450(Enum):
+class Type574(Enum):
     externalSandbox = "externalSandbox"
 
 
 class SandboxPolicy19(BaseModel):
     networkAccess: Optional[NetworkAccess] = "restricted"
-    type: Type450 = Field(..., title="ExternalSandboxSandboxPolicyType")
+    type: Type574 = Field(..., title="ExternalSandboxSandboxPolicyType")
 
 
-class Type451(Enum):
+class Type575(Enum):
     workspaceWrite = "workspaceWrite"
 
 
@@ -132,7 +150,7 @@ class SandboxPolicy20(BaseModel):
     readOnlyAccess: Optional[ReadOnlyAccess12] = Field(
         default_factory=lambda: ReadOnlyAccess12.model_validate({"type": "fullAccess"})
     )
-    type: Type451 = Field(..., title="WorkspaceWriteSandboxPolicyType")
+    type: Type575 = Field(..., title="WorkspaceWriteSandboxPolicyType")
     writableRoots: Optional[List[AbsolutePathBuf]] = []
 
 
@@ -140,6 +158,11 @@ class SandboxPolicy(
     RootModel[Union[SandboxPolicy17, SandboxPolicy18, SandboxPolicy19, SandboxPolicy20]]
 ):
     root: Union[SandboxPolicy17, SandboxPolicy18, SandboxPolicy19, SandboxPolicy20]
+
+
+class ServiceTier(Enum):
+    fast = "fast"
+    flex = "flex"
 
 
 class Settings(BaseModel):
@@ -159,61 +182,61 @@ class TextElement(BaseModel):
     )
 
 
-class Type452(Enum):
+class Type576(Enum):
     text = "text"
 
 
-class UserInput61(BaseModel):
+class UserInput66(BaseModel):
     text: str
     text_elements: Optional[List[TextElement]] = Field(
         [],
         description="UI-defined spans within `text` used to render or persist special elements.",
     )
-    type: Type452 = Field(..., title="TextUserInputType")
+    type: Type576 = Field(..., title="TextUserInputType")
 
 
-class Type453(Enum):
+class Type577(Enum):
     image = "image"
 
 
-class UserInput62(BaseModel):
-    type: Type453 = Field(..., title="ImageUserInputType")
+class UserInput67(BaseModel):
+    type: Type577 = Field(..., title="ImageUserInputType")
     url: str
 
 
-class Type454(Enum):
+class Type578(Enum):
     localImage = "localImage"
 
 
-class UserInput63(BaseModel):
+class UserInput68(BaseModel):
     path: str
-    type: Type454 = Field(..., title="LocalImageUserInputType")
+    type: Type578 = Field(..., title="LocalImageUserInputType")
 
 
-class Type455(Enum):
+class Type579(Enum):
     skill = "skill"
 
 
-class UserInput64(BaseModel):
+class UserInput69(BaseModel):
     name: str
     path: str
-    type: Type455 = Field(..., title="SkillUserInputType")
+    type: Type579 = Field(..., title="SkillUserInputType")
 
 
-class Type456(Enum):
+class Type580(Enum):
     mention = "mention"
 
 
-class UserInput65(BaseModel):
+class UserInput70(BaseModel):
     name: str
     path: str
-    type: Type456 = Field(..., title="MentionUserInputType")
+    type: Type580 = Field(..., title="MentionUserInputType")
 
 
 class UserInput(
-    RootModel[Union[UserInput61, UserInput62, UserInput63, UserInput64, UserInput65]]
+    RootModel[Union[UserInput66, UserInput67, UserInput68, UserInput69, UserInput70]]
 ):
-    root: Union[UserInput61, UserInput62, UserInput63, UserInput64, UserInput65]
+    root: Union[UserInput66, UserInput67, UserInput68, UserInput69, UserInput70]
 
 
 class TurnStartParams(BaseModel):
@@ -243,6 +266,10 @@ class TurnStartParams(BaseModel):
     sandboxPolicy: Optional[SandboxPolicy] = Field(
         None,
         description="Override the sandbox policy for this turn and subsequent turns.",
+    )
+    serviceTier: Optional[Optional[ServiceTier]] = Field(
+        None,
+        description="Override the service tier for this turn and subsequent turns.",
     )
     summary: Optional[ReasoningSummary] = Field(
         None,

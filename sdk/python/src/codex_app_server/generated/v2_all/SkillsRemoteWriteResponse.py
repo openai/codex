@@ -9,5 +9,4 @@ from pydantic import BaseModel
 
 class SkillsRemoteWriteResponse(BaseModel):
     id: str
-    name: str
     path: str

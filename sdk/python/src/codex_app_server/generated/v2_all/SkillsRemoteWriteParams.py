@@ -9,4 +9,3 @@ from pydantic import BaseModel
 
 class SkillsRemoteWriteParams(BaseModel):
     hazelnutId: str
-    isPreload: bool

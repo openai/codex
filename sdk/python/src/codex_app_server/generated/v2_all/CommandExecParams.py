@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, RootModel, conint
 
 
 class AbsolutePathBuf(RootModel[str]):
@@ -15,6 +15,11 @@ class AbsolutePathBuf(RootModel[str]):
         ...,
         description="A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
     )
+
+
+class CommandExecTerminalSize(BaseModel):
+    cols: conint(ge=0) = Field(..., description="Terminal width in character cells.")
+    rows: conint(ge=0) = Field(..., description="Terminal height in character cells.")
 
 
 class NetworkAccess(Enum):
@@ -60,6 +65,7 @@ class SandboxPolicy2(BaseModel):
     access: Optional[ReadOnlyAccess] = Field(
         default_factory=lambda: ReadOnlyAccess.model_validate({"type": "fullAccess"})
     )
+    networkAccess: Optional[bool] = False
     type: Type3 = Field(..., title="ReadOnlySandboxPolicyType")
 
 
@@ -94,7 +100,53 @@ class SandboxPolicy(
 
 
 class CommandExecParams(BaseModel):
-    command: List[str]
-    cwd: Optional[str] = None
-    sandboxPolicy: Optional[SandboxPolicy] = None
-    timeoutMs: Optional[int] = None
+    command: List[str] = Field(
+        ..., description="Command argv vector. Empty arrays are rejected."
+    )
+    cwd: Optional[str] = Field(
+        None, description="Optional working directory. Defaults to the server cwd."
+    )
+    disableOutputCap: Optional[bool] = Field(
+        None,
+        description="Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
+    )
+    disableTimeout: Optional[bool] = Field(
+        None,
+        description="Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
+    )
+    env: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+    )
+    outputBytesCap: Optional[conint(ge=0)] = Field(
+        None,
+        description="Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
+    )
+    processId: Optional[str] = Field(
+        None,
+        description="Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
+    )
+    sandboxPolicy: Optional[SandboxPolicy] = Field(
+        None,
+        description="Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted.",
+    )
+    size: Optional[CommandExecTerminalSize] = Field(
+        None,
+        description="Optional initial PTY size in character cells. Only valid when `tty` is true.",
+    )
+    streamStdin: Optional[bool] = Field(
+        None,
+        description="Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
+    )
+    streamStdoutStderr: Optional[bool] = Field(
+        None,
+        description="Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
+    )
+    timeoutMs: Optional[int] = Field(
+        None,
+        description="Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
+    )
+    tty: Optional[bool] = Field(
+        None,
+        description="Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
+    )

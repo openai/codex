@@ -4,10 +4,16 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CommandExecResponse(BaseModel):
-    exitCode: int
-    stderr: str
-    stdout: str
+    exitCode: int = Field(..., description="Process exit code.")
+    stderr: str = Field(
+        ...,
+        description="Buffered stderr capture.\n\nEmpty when stderr was streamed via `command/exec/outputDelta`.",
+    )
+    stdout: str = Field(
+        ...,
+        description="Buffered stdout capture.\n\nEmpty when stdout was streamed via `command/exec/outputDelta`.",
+    )
