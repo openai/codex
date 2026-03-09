@@ -241,7 +241,7 @@ rustls = { version = "0.23", default-features = false, features = [
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 semver = "1.0"
-sentry = "0.46.0"
+sentry = "0.46.2"
 serde = "1"
 serde_json = "1"
 serde_path_to_error = "0.1.20"
