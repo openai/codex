@@ -81,6 +81,13 @@ impl FileSystemSpecialPath {
     pub fn project_roots(subpath: Option<PathBuf>) -> Self {
         Self::ProjectRoots { subpath }
     }
+
+    pub fn unknown(path: impl Into<String>, subpath: Option<PathBuf>) -> Self {
+        Self::Unknown {
+            path: path.into(),
+            subpath,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -762,10 +769,7 @@ mod tests {
     fn unknown_special_paths_are_ignored_by_legacy_bridge() -> std::io::Result<()> {
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::Unknown {
-                    path: ":future_special_path".to_string(),
-                    subpath: None,
-                },
+                value: FileSystemSpecialPath::unknown(":future_special_path", None),
             },
             access: FileSystemAccessMode::Write,
         }]);

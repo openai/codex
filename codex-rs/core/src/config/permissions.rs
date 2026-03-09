@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Component;
@@ -167,41 +168,17 @@ pub(crate) fn compile_permission_profile(
         if filesystem.is_empty() {
             push_warning(
                 startup_warnings,
-                format!(
-                    "Permissions profile `{profile_name}` does not define any recognized filesystem entries for this version of Codex. Filesystem access will remain restricted. Upgrade Codex if this profile expects filesystem permissions."
-                ),
+                missing_filesystem_entries_warning(profile_name),
             );
         } else {
             for (path, permission) in &filesystem.entries {
-                let starting_entry_count = entries.len();
-                compile_filesystem_permission(path, permission, &mut entries)?;
-                for entry in &entries[starting_entry_count..] {
-                    if let FileSystemPath::Special {
-                        value: FileSystemSpecialPath::Unknown { path, subpath },
-                    } = &entry.path
-                    {
-                        push_warning(
-                            startup_warnings,
-                            match subpath.as_deref() {
-                                Some(subpath) => format!(
-                                    "Configured filesystem path `{path}` with nested entry `{}` is not recognized by this version of Codex and will be ignored. Upgrade Codex if this path is required.",
-                                    subpath.display()
-                                ),
-                                None => format!(
-                                    "Configured filesystem path `{path}` is not recognized by this version of Codex and will be ignored. Upgrade Codex if this path is required."
-                                ),
-                            },
-                        );
-                    }
-                }
+                compile_filesystem_permission(path, permission, &mut entries, startup_warnings)?;
             }
         }
     } else {
         push_warning(
             startup_warnings,
-            format!(
-                "Permissions profile `{profile_name}` does not define any recognized filesystem entries for this version of Codex. Filesystem access will remain restricted. Upgrade Codex if this profile expects filesystem permissions."
-            ),
+            missing_filesystem_entries_warning(profile_name),
         );
     }
 
@@ -228,16 +205,17 @@ fn compile_filesystem_permission(
     path: &str,
     permission: &FilesystemPermissionToml,
     entries: &mut Vec<FileSystemSandboxEntry>,
+    startup_warnings: &mut Vec<String>,
 ) -> io::Result<()> {
     match permission {
         FilesystemPermissionToml::Access(access) => entries.push(FileSystemSandboxEntry {
-            path: compile_filesystem_path(path)?,
+            path: compile_filesystem_path(path, startup_warnings)?,
             access: *access,
         }),
         FilesystemPermissionToml::Scoped(scoped_entries) => {
             for (subpath, access) in scoped_entries {
                 entries.push(FileSystemSandboxEntry {
-                    path: compile_scoped_filesystem_path(path, subpath)?,
+                    path: compile_scoped_filesystem_path(path, subpath, startup_warnings)?,
                     access: *access,
                 });
             }
@@ -246,8 +224,12 @@ fn compile_filesystem_permission(
     Ok(())
 }
 
-fn compile_filesystem_path(path: &str) -> io::Result<FileSystemPath> {
-    if let Some(special) = parse_special_path(path)? {
+fn compile_filesystem_path(
+    path: &str,
+    startup_warnings: &mut Vec<String>,
+) -> io::Result<FileSystemPath> {
+    if let Some(special) = parse_special_path(path) {
+        maybe_push_unknown_special_path_warning(&special, startup_warnings);
         return Ok(FileSystemPath::Special { value: special });
     }
 
@@ -255,28 +237,33 @@ fn compile_filesystem_path(path: &str) -> io::Result<FileSystemPath> {
     Ok(FileSystemPath::Path { path })
 }
 
-fn compile_scoped_filesystem_path(path: &str, subpath: &str) -> io::Result<FileSystemPath> {
+fn compile_scoped_filesystem_path(
+    path: &str,
+    subpath: &str,
+    startup_warnings: &mut Vec<String>,
+) -> io::Result<FileSystemPath> {
     if subpath == "." {
-        return compile_filesystem_path(path);
+        return compile_filesystem_path(path, startup_warnings);
     }
 
-    if let Some(special) = parse_special_path(path)? {
+    if let Some(special) = parse_special_path(path) {
         let subpath = parse_relative_subpath(subpath)?;
-        return match special {
+        let special = match special {
             FileSystemSpecialPath::ProjectRoots { .. } => Ok(FileSystemPath::Special {
                 value: FileSystemSpecialPath::project_roots(Some(subpath)),
             }),
             FileSystemSpecialPath::Unknown { path, .. } => Ok(FileSystemPath::Special {
-                value: FileSystemSpecialPath::Unknown {
-                    path,
-                    subpath: Some(subpath),
-                },
+                value: FileSystemSpecialPath::unknown(path, Some(subpath)),
             }),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("filesystem path `{path}` does not support nested entries"),
             )),
-        };
+        }?;
+        if let FileSystemPath::Special { value } = &special {
+            maybe_push_unknown_special_path_warning(value, startup_warnings);
+        }
+        return Ok(special);
     }
 
     let subpath = parse_relative_subpath(subpath)?;
@@ -285,20 +272,15 @@ fn compile_scoped_filesystem_path(path: &str, subpath: &str) -> io::Result<FileS
     Ok(FileSystemPath::Path { path })
 }
 
-fn parse_special_path(path: &str) -> io::Result<Option<FileSystemSpecialPath>> {
-    let special = match path {
+fn parse_special_path(path: &str) -> Option<FileSystemSpecialPath> {
+    match path {
         ":root" => Some(FileSystemSpecialPath::Root),
         ":minimal" => Some(FileSystemSpecialPath::Minimal),
         ":project_roots" => Some(FileSystemSpecialPath::project_roots(None)),
         ":tmpdir" => Some(FileSystemSpecialPath::Tmpdir),
-        _ if path.starts_with(':') => Some(FileSystemSpecialPath::Unknown {
-            path: path.to_string(),
-            subpath: None,
-        }),
+        _ if path.starts_with(':') => Some(FileSystemSpecialPath::unknown(path, None)),
         _ => None,
-    };
-
-    Ok(special)
+    }
 }
 
 fn parse_absolute_path(path: &str) -> io::Result<AbsolutePathBuf> {
@@ -307,7 +289,7 @@ fn parse_absolute_path(path: &str) -> io::Result<AbsolutePathBuf> {
 
 fn parse_absolute_path_for_platform(path: &str, is_windows: bool) -> io::Result<AbsolutePathBuf> {
     let path_ref = normalize_absolute_path_for_platform(path, is_windows);
-    if !is_absolute_path_for_platform(path, path_ref.as_path(), is_windows)
+    if !is_absolute_path_for_platform(path, path_ref.as_ref(), is_windows)
         && path != "~"
         && !path.starts_with("~/")
     {
@@ -316,7 +298,7 @@ fn parse_absolute_path_for_platform(path: &str, is_windows: bool) -> io::Result<
             format!("filesystem path `{path}` must be absolute, use `~/...`, or start with `:`"),
         ));
     }
-    AbsolutePathBuf::from_absolute_path(path_ref)
+    AbsolutePathBuf::from_absolute_path(path_ref.as_ref())
 }
 
 fn is_absolute_path_for_platform(path: &str, normalized_path: &Path, is_windows: bool) -> bool {
@@ -328,14 +310,14 @@ fn is_absolute_path_for_platform(path: &str, normalized_path: &Path, is_windows:
     }
 }
 
-fn normalize_absolute_path_for_platform(path: &str, is_windows: bool) -> PathBuf {
+fn normalize_absolute_path_for_platform(path: &str, is_windows: bool) -> Cow<'_, Path> {
     if !is_windows {
-        return PathBuf::from(path);
+        return Cow::Borrowed(Path::new(path));
     }
 
     match normalize_windows_device_path(path) {
-        Some(normalized) => PathBuf::from(normalized),
-        None => PathBuf::from(path),
+        Some(normalized) => Cow::Owned(PathBuf::from(normalized)),
+        None => Cow::Borrowed(Path::new(path)),
     }
 }
 
@@ -393,6 +375,33 @@ fn parse_relative_subpath(subpath: &str) -> io::Result<PathBuf> {
 fn push_warning(startup_warnings: &mut Vec<String>, message: String) {
     tracing::warn!("{message}");
     startup_warnings.push(message);
+}
+
+fn missing_filesystem_entries_warning(profile_name: &str) -> String {
+    format!(
+        "Permissions profile `{profile_name}` does not define any recognized filesystem entries for this version of Codex. Filesystem access will remain restricted. Upgrade Codex if this profile expects filesystem permissions."
+    )
+}
+
+fn maybe_push_unknown_special_path_warning(
+    special: &FileSystemSpecialPath,
+    startup_warnings: &mut Vec<String>,
+) {
+    let FileSystemSpecialPath::Unknown { path, subpath } = special else {
+        return;
+    };
+    push_warning(
+        startup_warnings,
+        match subpath.as_deref() {
+            Some(subpath) => format!(
+                "Configured filesystem path `{path}` with nested entry `{}` is not recognized by this version of Codex and will be ignored. Upgrade Codex if this path is required.",
+                subpath.display()
+            ),
+            None => format!(
+                "Configured filesystem path `{path}` is not recognized by this version of Codex and will be ignored. Upgrade Codex if this path is required."
+            ),
+        },
+    );
 }
 
 #[cfg(test)]

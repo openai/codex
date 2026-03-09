@@ -574,28 +574,16 @@ fn permissions_profiles_reject_nested_entries_for_non_project_roots() -> std::io
     Ok(())
 }
 
-#[test]
-fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
+fn load_workspace_permission_profile(profile: PermissionProfileToml) -> std::io::Result<Config> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
 
-    let config = Config::load_from_base_config_with_overrides(
+    Config::load_from_base_config_with_overrides(
         ConfigToml {
             default_permissions: Some("workspace".to_string()),
             permissions: Some(PermissionsToml {
-                entries: BTreeMap::from([(
-                    "workspace".to_string(),
-                    PermissionProfileToml {
-                        filesystem: Some(FilesystemPermissionsToml {
-                            entries: BTreeMap::from([(
-                                ":future_special_path".to_string(),
-                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
-                            )]),
-                        }),
-                        network: None,
-                    },
-                )]),
+                entries: BTreeMap::from([("workspace".to_string(), profile)]),
             }),
             ..Default::default()
         },
@@ -604,16 +592,26 @@ fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
             ..Default::default()
         },
         codex_home.path().to_path_buf(),
-    )?;
+    )
+}
+
+#[test]
+fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
+    let config = load_workspace_permission_profile(PermissionProfileToml {
+        filesystem: Some(FilesystemPermissionsToml {
+            entries: BTreeMap::from([(
+                ":future_special_path".to_string(),
+                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+            )]),
+        }),
+        network: None,
+    })?;
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy,
         FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::Unknown {
-                    path: ":future_special_path".to_string(),
-                    subpath: None,
-                },
+                value: FileSystemSpecialPath::unknown(":future_special_path", None),
             },
             access: FileSystemAccessMode::Read,
         }]),
@@ -640,47 +638,24 @@ fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
 
 #[test]
 fn permissions_profiles_allow_unknown_special_paths_with_nested_entries() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some("workspace".to_string()),
-            permissions: Some(PermissionsToml {
-                entries: BTreeMap::from([(
-                    "workspace".to_string(),
-                    PermissionProfileToml {
-                        filesystem: Some(FilesystemPermissionsToml {
-                            entries: BTreeMap::from([(
-                                ":future_special_path".to_string(),
-                                FilesystemPermissionToml::Scoped(BTreeMap::from([(
-                                    "docs".to_string(),
-                                    FileSystemAccessMode::Read,
-                                )])),
-                            )]),
-                        }),
-                        network: None,
-                    },
-                )]),
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().to_path_buf(),
-    )?;
+    let config = load_workspace_permission_profile(PermissionProfileToml {
+        filesystem: Some(FilesystemPermissionsToml {
+            entries: BTreeMap::from([(
+                ":future_special_path".to_string(),
+                FilesystemPermissionToml::Scoped(BTreeMap::from([(
+                    "docs".to_string(),
+                    FileSystemAccessMode::Read,
+                )])),
+            )]),
+        }),
+        network: None,
+    })?;
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy,
         FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::Unknown {
-                    path: ":future_special_path".to_string(),
-                    subpath: Some("docs".into()),
-                },
+                value: FileSystemSpecialPath::unknown(":future_special_path", Some("docs".into())),
             },
             access: FileSystemAccessMode::Read,
         }]),
@@ -697,30 +672,10 @@ fn permissions_profiles_allow_unknown_special_paths_with_nested_entries() -> std
 
 #[test]
 fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some("workspace".to_string()),
-            permissions: Some(PermissionsToml {
-                entries: BTreeMap::from([(
-                    "workspace".to_string(),
-                    PermissionProfileToml {
-                        filesystem: None,
-                        network: None,
-                    },
-                )]),
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().to_path_buf(),
-    )?;
+    let config = load_workspace_permission_profile(PermissionProfileToml {
+        filesystem: None,
+        network: None,
+    })?;
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy,
@@ -748,32 +703,12 @@ fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io::Resu
 
 #[test]
 fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some("workspace".to_string()),
-            permissions: Some(PermissionsToml {
-                entries: BTreeMap::from([(
-                    "workspace".to_string(),
-                    PermissionProfileToml {
-                        filesystem: Some(FilesystemPermissionsToml {
-                            entries: BTreeMap::new(),
-                        }),
-                        network: None,
-                    },
-                )]),
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().to_path_buf(),
-    )?;
+    let config = load_workspace_permission_profile(PermissionProfileToml {
+        filesystem: Some(FilesystemPermissionsToml {
+            entries: BTreeMap::new(),
+        }),
+        network: None,
+    })?;
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy,
