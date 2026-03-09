@@ -25,6 +25,8 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -402,7 +404,7 @@ stream_max_retries = 0
 }
 
 #[tokio::test]
-async fn thread_resume_interrupts_incomplete_rollout_turn_when_thread_is_idle() -> Result<()> {
+async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is_idle() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -469,6 +471,46 @@ async fn thread_resume_interrupts_incomplete_rollout_turn_when_thread_is_idle() 
     assert_eq!(thread.turns[0].status, TurnStatus::Completed);
     assert_eq!(thread.turns[1].id, turn_id);
     assert_eq!(thread.turns[1].status, TurnStatus::Interrupted);
+
+    let second_resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let second_resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(second_resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_again,
+        ..
+    } = to_response::<ThreadResumeResponse>(second_resume_resp)?;
+
+    assert_eq!(resumed_again.status, ThreadStatus::Idle);
+    assert_eq!(resumed_again.turns.len(), 2);
+    assert_eq!(resumed_again.turns[1].id, turn_id);
+    assert_eq!(resumed_again.turns[1].status, TurnStatus::Interrupted);
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: resumed_again.id,
+            include_turns: true,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse { thread: read_thread } =
+        to_response::<ThreadReadResponse>(read_resp)?;
+
+    assert_eq!(read_thread.status, ThreadStatus::Idle);
+    assert_eq!(read_thread.turns.len(), 2);
+    assert_eq!(read_thread.turns[1].id, turn_id);
+    assert_eq!(read_thread.turns[1].status, TurnStatus::Interrupted);
 
     Ok(())
 }
