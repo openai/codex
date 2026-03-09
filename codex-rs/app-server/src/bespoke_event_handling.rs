@@ -248,7 +248,11 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::Warning(_warning_event) => {}
         EventMsg::GuardianAssessment(assessment) => {
             if let ApiVersion::V2 = api_version {
-                let turn_id = assessment.turn_id.clone();
+                let turn_id = if assessment.turn_id.is_empty() {
+                    event_turn_id.clone()
+                } else {
+                    assessment.turn_id.clone()
+                };
                 let status = assessment.status;
                 let item = ThreadItem::GuardianAssessment {
                     id: assessment.id.clone(),
@@ -3152,6 +3156,75 @@ mod tests {
             other => bail!("unexpected message: {other:?}"),
         }
         assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn guardian_assessment_falls_back_to_event_turn_id_for_notifications() -> Result<()> {
+        let conversation_id = ThreadId::new();
+        let event_turn_id = "turn-guardian".to_string();
+        let thread_state = new_thread_state();
+        let thread_watch_manager = ThreadWatchManager::default();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            ThreadId::new(),
+        );
+        let thread_manager = Arc::new(ThreadManager::default());
+        let codex_home = tempfile::tempdir()?;
+        let conversation = Arc::new(CodexThread::new(conversation_id.clone(), None));
+
+        apply_bespoke_event_handling(
+            Event {
+                id: event_turn_id.clone(),
+                msg: EventMsg::GuardianAssessment(
+                    codex_protocol::protocol::GuardianAssessmentEvent {
+                        id: "guardian-1".to_string(),
+                        turn_id: String::new(),
+                        status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+                        risk_score: None,
+                        risk_level: None,
+                        rationale: None,
+                        action: None,
+                    },
+                ),
+            },
+            conversation_id.clone(),
+            conversation,
+            thread_manager,
+            outgoing,
+            thread_state,
+            thread_watch_manager,
+            ApiVersion::V2,
+            "test-provider".to_string(),
+            codex_home.path(),
+        )
+        .await;
+
+        let msg = recv_broadcast_message(&mut rx).await?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::ItemStarted(
+                notification,
+            )) => {
+                assert_eq!(notification.thread_id, conversation_id.to_string());
+                assert_eq!(notification.turn_id, event_turn_id);
+                assert_eq!(
+                    notification.item,
+                    ThreadItem::GuardianAssessment {
+                        id: "guardian-1".to_string(),
+                        status: GuardianAssessmentStatus::InProgress,
+                        risk_score: None,
+                        risk_level: None,
+                        rationale: None,
+                        action: None,
+                    }
+                );
+            }
+            other => bail!("unexpected notification: {other:?}"),
+        }
+
         Ok(())
     }
 
