@@ -21,6 +21,7 @@ mod plugin_install;
 mod plugin_list;
 mod rate_limits;
 mod realtime_conversation;
+mod request_permissions;
 mod request_user_input;
 mod review;
 mod safety_check_downgrade;

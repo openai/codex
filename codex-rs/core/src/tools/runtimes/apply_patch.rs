@@ -5,7 +5,7 @@
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
 use crate::exec::ExecToolCallOutput;
-use crate::guardian::GuardianReviewRequest;
+use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::CommandSpec;
@@ -28,7 +28,6 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
-use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -50,15 +49,12 @@ impl ApplyPatchRuntime {
         Self
     }
 
-    fn build_guardian_review_request(req: &ApplyPatchRequest) -> GuardianReviewRequest {
-        GuardianReviewRequest {
-            action: json!({
-                "tool": "apply_patch",
-                "cwd": req.action.cwd,
-                "files": req.file_paths,
-                "change_count": req.changes.len(),
-                "patch": req.action.patch,
-            }),
+    fn build_guardian_review_request(req: &ApplyPatchRequest) -> GuardianApprovalRequest {
+        GuardianApprovalRequest::ApplyPatch {
+            cwd: req.action.cwd.clone(),
+            files: req.file_paths.clone(),
+            change_count: req.changes.len(),
+            patch: req.action.patch.clone(),
         }
     }
 
@@ -135,8 +131,8 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let changes = req.changes.clone();
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
-                let request = ApplyPatchRuntime::build_guardian_review_request(req);
-                return review_approval_request(session, turn, request, retry_reason).await;
+                let action = ApplyPatchRuntime::build_guardian_review_request(req);
+                return review_approval_request(session, turn, action, retry_reason).await;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
@@ -256,14 +252,11 @@ mod tests {
 
         assert_eq!(
             guardian_request,
-            GuardianReviewRequest {
-                action: json!({
-                    "tool": "apply_patch",
-                    "cwd": expected_cwd,
-                    "files": request.file_paths,
-                    "change_count": 1usize,
-                    "patch": expected_patch,
-                }),
+            GuardianApprovalRequest::ApplyPatch {
+                cwd: expected_cwd,
+                files: request.file_paths,
+                change_count: 1usize,
+                patch: expected_patch,
             }
         );
     }

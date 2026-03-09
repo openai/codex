@@ -239,7 +239,6 @@ impl MessageProcessor {
         request: JSONRPCRequest,
         transport: AppServerTransport,
         session: &mut ConnectionSessionState,
-        outbound_initialized: &AtomicBool,
     ) {
         let request_span =
             crate::app_server_tracing::request_span(&request, transport, connection_id, session);
@@ -280,14 +279,12 @@ impl MessageProcessor {
                 }
             };
 
-            self.handle_client_request(
-                connection_id,
-                request_id,
-                codex_request,
-                session,
-                outbound_initialized,
-            )
-            .await;
+            // Websocket callers finalize outbound readiness in lib.rs after mirroring
+            // session state into outbound state and sending initialize notifications to
+            // this specific connection. Passing `None` avoids marking the connection
+            // ready too early from inside the shared request handler.
+            self.handle_client_request(connection_id, request_id, codex_request, session, None)
+                .await;
         }
         .instrument(request_span)
         .await;
@@ -316,12 +313,15 @@ impl MessageProcessor {
                 request_id = ?request_id.request_id,
                 "app-server typed request"
             );
+            // In-process clients do not have the websocket transport loop that performs
+            // post-initialize bookkeeping, so they still finalize outbound readiness in
+            // the shared request handler.
             self.handle_client_request(
                 connection_id,
                 request_id,
                 request,
                 session,
-                outbound_initialized,
+                Some(outbound_initialized),
             )
             .await;
         }
@@ -344,6 +344,26 @@ impl MessageProcessor {
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
         self.codex_message_processor.thread_created_receiver()
+    }
+
+    pub(crate) async fn send_initialize_notifications_to_connection(
+        &self,
+        connection_id: ConnectionId,
+    ) {
+        for notification in self.config_warnings.iter().cloned() {
+            self.outgoing
+                .send_server_notification_to_connections(
+                    &[connection_id],
+                    ServerNotification::ConfigWarning(notification),
+                )
+                .await;
+        }
+    }
+
+    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+        self.codex_message_processor
+            .connection_initialized(connection_id)
+            .await;
     }
 
     pub(crate) async fn send_initialize_notifications(&self) {
@@ -394,7 +414,10 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         codex_request: ClientRequest,
         session: &mut ConnectionSessionState,
-        outbound_initialized: &AtomicBool,
+        // `Some(...)` means the caller wants initialize to immediately mark the
+        // connection outbound-ready. Websocket JSON-RPC calls pass `None` so
+        // lib.rs can deliver connection-scoped initialize notifications first.
+        outbound_initialized: Option<&AtomicBool>,
     ) {
         match codex_request {
             // Handle Initialize internally so CodexMessageProcessor does not have to concern
@@ -472,10 +495,15 @@ impl MessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
 
                 session.initialized = true;
-                outbound_initialized.store(true, Ordering::Release);
-                self.codex_message_processor
-                    .connection_initialized(connection_id)
-                    .await;
+                if let Some(outbound_initialized) = outbound_initialized {
+                    // In-process clients can complete readiness immediately here. The
+                    // websocket path defers this until lib.rs finishes transport-layer
+                    // initialize handling for the specific connection.
+                    outbound_initialized.store(true, Ordering::Release);
+                    self.codex_message_processor
+                        .connection_initialized(connection_id)
+                        .await;
+                }
                 return;
             }
             _ => {

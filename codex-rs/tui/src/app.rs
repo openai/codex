@@ -1171,6 +1171,15 @@ impl App {
                     ))
                 }
             }
+            EventMsg::RequestPermissions(ev) => Some(ThreadInteractiveRequest::Approval(
+                ApprovalRequest::Permissions {
+                    thread_id,
+                    thread_label,
+                    call_id: ev.call_id.clone(),
+                    reason: ev.reason.clone(),
+                    permissions: ev.permissions.clone(),
+                },
+            )),
             _ => None,
         }
     }
@@ -3237,6 +3246,30 @@ impl App {
                         "E X E C".to_string(),
                     ));
                 }
+                ApprovalRequest::Permissions {
+                    permissions,
+                    reason,
+                    ..
+                } => {
+                    let _ = tui.enter_alt_screen();
+                    let mut lines = Vec::new();
+                    if let Some(reason) = reason {
+                        lines.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
+                        lines.push(Line::from(""));
+                    }
+                    if let Some(rule_line) =
+                        crate::bottom_pane::format_additional_permissions_rule(&permissions)
+                    {
+                        lines.push(Line::from(vec![
+                            "Permission rule: ".into(),
+                            rule_line.cyan(),
+                        ]));
+                    }
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(Paragraph::new(lines).wrap(Wrap { trim: false }))],
+                        "P E R M I S S I O N S".to_string(),
+                    ));
+                }
                 ApprovalRequest::McpElicitation {
                     server_name,
                     message,
@@ -3915,6 +3948,7 @@ mod tests {
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
                     additional_permissions: None,
+                    skill_metadata: None,
                     available_decisions: None,
                     parsed_cmd: Vec::new(),
                 },
@@ -5078,6 +5112,7 @@ mod tests {
                         proposed_execpolicy_amendment: None,
                         proposed_network_policy_amendments: None,
                         additional_permissions: None,
+                        skill_metadata: None,
                         available_decisions: None,
                         parsed_cmd: Vec::new(),
                     },
@@ -5169,6 +5204,7 @@ mod tests {
                         proposed_execpolicy_amendment: None,
                         proposed_network_policy_amendments: None,
                         additional_permissions: None,
+                        skill_metadata: None,
                         available_decisions: None,
                         parsed_cmd: Vec::new(),
                     },

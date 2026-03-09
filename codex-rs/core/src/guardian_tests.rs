@@ -6,6 +6,7 @@ use crate::config_loader::FeatureRequirementsToml;
 use crate::config_loader::NetworkConstraints;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::test_support;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::models::ContentItem;
 use core_test_support::context_snapshot;
@@ -22,6 +23,8 @@ use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 #[test]
 fn build_guardian_transcript_keeps_original_numbering() {
@@ -154,21 +157,18 @@ fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
 
 #[test]
 fn format_guardian_action_pretty_truncates_large_string_fields() {
-    let action = serde_json::json!({
-        "tool": "apply_patch",
-        "cwd": PathBuf::from("/tmp"),
-        "files": Vec::<String>::new(),
-        "change_count": 1usize,
-        "patch": "line\n".repeat(10_000),
-    });
+    let patch = "line\n".repeat(10_000);
+    let action = GuardianApprovalRequest::ApplyPatch {
+        cwd: PathBuf::from("/tmp"),
+        files: Vec::new(),
+        change_count: 1usize,
+        patch: patch.clone(),
+    };
 
     let rendered = format_guardian_action_pretty(&action);
-    let original_patch = action["patch"]
-        .as_str()
-        .expect("test patch should serialize as a string");
 
     assert!(rendered.contains("\"tool\": \"apply_patch\""));
-    assert!(rendered.len() < original_patch.len());
+    assert!(rendered.len() < patch.len());
 }
 
 #[test]
@@ -253,7 +253,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
-    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+    let models_manager = Arc::new(test_support::models_manager_with_provider(
         config.codex_home.clone(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
@@ -307,19 +307,19 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let prompt = build_guardian_prompt_items(
         session.as_ref(),
         Some("Sandbox denied outbound git push to github.com.".to_string()),
-        GuardianReviewRequest {
-            action: serde_json::json!({
-                "tool": "shell",
-                "command": [
-                    "git",
-                    "push",
-                    "origin",
-                    "guardian-approval-mvp"
-                ],
-                "cwd": "/repo/codex-rs/core",
-                "sandbox_permissions": crate::sandboxing::SandboxPermissions::UseDefault,
-                "justification": "Need to push the reviewed docs fix to the repo remote.",
-            }),
+        GuardianApprovalRequest::Shell {
+            command: vec![
+                "git".to_string(),
+                "push".to_string(),
+                "origin".to_string(),
+                "guardian-approval-mvp".to_string(),
+            ],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some(
+                "Need to push the reviewed docs fix to the repo remote.".to_string(),
+            ),
         },
     )
     .await;

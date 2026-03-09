@@ -142,6 +142,7 @@ use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
+use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -630,6 +631,9 @@ pub(crate) struct ChatWidget {
     // The bottom pane shows these above queued drafts until core records the
     // corresponding user message item.
     pending_steers: VecDeque<PendingSteer>,
+    // When set, the next interrupt should resubmit all pending steers as one
+    // fresh user turn instead of restoring them into the composer.
+    submit_pending_steers_after_interrupt: bool,
     /// Terminal-appropriate keybinding for popping the most-recently queued
     /// message back into the composer.  Determined once at construction time via
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
@@ -920,6 +924,45 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         text_elements: rebuilt_elements,
         mention_bindings,
     }
+}
+
+fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
+    let mut combined = UserMessage {
+        text: String::new(),
+        text_elements: Vec::new(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        mention_bindings: Vec::new(),
+    };
+    let total_remote_images = messages
+        .iter()
+        .map(|message| message.remote_image_urls.len())
+        .sum::<usize>();
+    let mut next_image_label = total_remote_images + 1;
+
+    for (idx, message) in messages.into_iter().enumerate() {
+        if idx > 0 {
+            combined.text.push('\n');
+        }
+        let UserMessage {
+            text,
+            text_elements,
+            local_images,
+            remote_image_urls,
+            mention_bindings,
+        } = remap_placeholders_for_message(message, &mut next_image_label);
+        append_text_with_rebased_elements(
+            &mut combined.text,
+            &mut combined.text_elements,
+            &text,
+            text_elements,
+        );
+        combined.local_images.extend(local_images);
+        combined.remote_image_urls.extend(remote_image_urls);
+        combined.mention_bindings.extend(mention_bindings);
+    }
+
+    combined
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1521,6 +1564,7 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+        self.submit_pending_steers_after_interrupt = false;
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
@@ -1874,6 +1918,7 @@ impl ChatWidget {
     }
 
     fn on_server_overloaded_error(&mut self, message: String) {
+        self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
 
         let message = if message.trim().is_empty() {
@@ -1888,6 +1933,7 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
+        self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
@@ -1978,15 +2024,35 @@ impl ChatWidget {
         if reason == TurnAbortReason::Interrupted {
             self.clear_unified_exec_processes();
         }
+        let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
+        self.submit_pending_steers_after_interrupt = false;
         if reason != TurnAbortReason::ReviewEnded {
-            self.add_to_history(history_cell::new_error_event(
-                "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
-            ));
+            if send_pending_steers_immediately {
+                self.add_to_history(history_cell::new_info_event(
+                    "Model interrupted to submit steer instructions.".to_owned(),
+                    None,
+                ));
+            } else {
+                self.add_to_history(history_cell::new_error_event(
+                    "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
+                ));
+            }
         }
 
         // Core clears pending_input before emitting TurnAborted, so any unacknowledged steers
         // still tracked here must be restored locally instead of waiting for a later commit.
-        if let Some(combined) = self.drain_pending_messages_for_restore() {
+        if send_pending_steers_immediately {
+            let pending_steers: Vec<UserMessage> = self
+                .pending_steers
+                .drain(..)
+                .map(|pending| pending.user_message)
+                .collect();
+            if !pending_steers.is_empty() {
+                self.submit_user_message(merge_user_messages(pending_steers));
+            } else if let Some(combined) = self.drain_pending_messages_for_restore() {
+                self.restore_user_message_to_composer(combined);
+            }
+        } else if let Some(combined) = self.drain_pending_messages_for_restore() {
             self.restore_user_message_to_composer(combined);
         }
         self.refresh_pending_input_preview();
@@ -2027,42 +2093,7 @@ impl ChatWidget {
             to_merge.push(existing_message);
         }
 
-        let mut combined = UserMessage {
-            text: String::new(),
-            text_elements: Vec::new(),
-            local_images: Vec::new(),
-            remote_image_urls: Vec::new(),
-            mention_bindings: Vec::new(),
-        };
-        let total_remote_images = to_merge
-            .iter()
-            .map(|message| message.remote_image_urls.len())
-            .sum::<usize>();
-        let mut next_image_label = total_remote_images + 1;
-
-        for (idx, message) in to_merge.into_iter().enumerate() {
-            if idx > 0 {
-                combined.text.push('\n');
-            }
-            let UserMessage {
-                text,
-                text_elements,
-                local_images,
-                remote_image_urls,
-                mention_bindings,
-            } = remap_placeholders_for_message(message, &mut next_image_label);
-            append_text_with_rebased_elements(
-                &mut combined.text,
-                &mut combined.text_elements,
-                &text,
-                text_elements,
-            );
-            combined.local_images.extend(local_images);
-            combined.remote_image_urls.extend(remote_image_urls);
-            combined.mention_bindings.extend(mention_bindings);
-        }
-
-        Some(combined)
+        Some(merge_user_messages(to_merge))
     }
 
     fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
@@ -2200,6 +2231,14 @@ impl ChatWidget {
         self.defer_or_handle(
             |q| q.push_user_input(ev),
             |s| s.handle_request_user_input_now(ev2),
+        );
+    }
+
+    fn on_request_permissions(&mut self, ev: RequestPermissionsEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_request_permissions(ev),
+            |s| s.handle_request_permissions_now(ev2),
         );
     }
 
@@ -2938,6 +2977,20 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn handle_request_permissions_now(&mut self, ev: RequestPermissionsEvent) {
+        self.flush_answer_stream_with_separator();
+        let request = ApprovalRequest::Permissions {
+            thread_id: self.thread_id.unwrap_or_default(),
+            thread_label: None,
+            call_id: ev.call_id,
+            reason: ev.reason,
+            permissions: ev.permissions,
+        };
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
         self.bottom_pane.ensure_status_indicator();
@@ -3161,6 +3214,7 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
+            submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3347,6 +3401,7 @@ impl ChatWidget {
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
+            submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3517,6 +3572,7 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
+            submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
             show_welcome_banner: false,
             startup_tooltip_override: None,
@@ -3652,6 +3708,19 @@ impl ChatWidget {
                 self.restore_user_message_to_composer(user_message);
                 self.refresh_pending_input_preview();
                 self.request_redraw();
+            }
+            return;
+        }
+
+        if matches!(key_event.code, KeyCode::Esc)
+            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && !self.pending_steers.is_empty()
+            && self.bottom_pane.is_task_running()
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            self.submit_pending_steers_after_interrupt = true;
+            if !self.submit_op(Op::Interrupt) {
+                self.submit_pending_steers_after_interrupt = false;
             }
             return;
         }
@@ -4798,6 +4867,7 @@ impl ChatWidget {
                     self.on_interrupted_turn(ev.reason);
                 }
                 TurnAbortReason::Replaced => {
+                    self.submit_pending_steers_after_interrupt = false;
                     self.pending_steers.clear();
                     self.refresh_pending_input_preview();
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
@@ -4819,6 +4889,9 @@ impl ChatWidget {
             }
             EventMsg::RequestUserInput(ev) => {
                 self.on_request_user_input(ev);
+            }
+            EventMsg::RequestPermissions(ev) => {
+                self.on_request_permissions(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
