@@ -8473,10 +8473,15 @@ async fn permissions_selection_can_disable_smart_approvals() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdateFeatureFlags { updates }
-                if *updates == vec![(Feature::GuardianApproval, false)]
+            AppEvent::UpdateApprovalReviewPolicy(ApprovalReviewPolicy::ManualOnly)
         )),
-        "expected selecting Default from Smart Approvals to disable the guardian approval feature: {events:?}"
+        "expected selecting Default from Smart Approvals to switch back to manual approval review: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateFeatureFlags { .. })),
+        "expected permissions selection to leave feature flags unchanged: {events:?}"
     );
 }
 

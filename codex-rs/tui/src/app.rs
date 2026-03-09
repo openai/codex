@@ -3182,6 +3182,36 @@ impl App {
                     }
                 }
             }
+            AppEvent::UpdateApprovalReviewPolicy(policy) => {
+                self.config.approval_review_policy = policy;
+                self.chat_widget.set_approval_review_policy(policy);
+                let profile = self.active_profile.as_deref();
+                let segments = if let Some(profile) = profile {
+                    vec![
+                        "profiles".to_string(),
+                        profile.to_string(),
+                        "approval_review_policy".to_string(),
+                    ]
+                } else {
+                    vec!["approval_review_policy".to_string()]
+                };
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments,
+                        value: policy.to_string().into(),
+                    }])
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist approval review policy update"
+                    );
+                    self.chat_widget
+                        .add_error_message(format!("Failed to save approval review policy: {err}"));
+                }
+            }
             AppEvent::UpdateFeatureFlags { updates } => {
                 self.update_feature_flags(updates).await;
             }
