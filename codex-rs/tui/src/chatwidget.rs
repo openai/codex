@@ -6898,25 +6898,30 @@ impl ChatWidget {
                     ..Default::default()
                 });
 
-                items.push(SelectionItem {
-                    name: "Smart Approvals".to_string(),
-                    description: Some(
-                        "Same workspace-write permissions as Default, but `on-request` approvals are dispatched to a carefully-prompted security reviewer subagent."
-                            .to_string(),
-                    ),
-                    is_current: guardian_approval_enabled
-                        && Self::preset_matches_current(current_approval, current_sandbox, &preset),
-                    actions: Self::approval_preset_actions(
-                        preset.approval,
-                        preset.sandbox.clone(),
-                        "Smart Approvals".to_string(),
-                        true,
-                    ),
-                    dismiss_on_select: true,
-                    disabled_reason: approval_disabled_reason
-                        .or_else(|| guardian_disabled_reason(true)),
-                    ..Default::default()
-                });
+                if guardian_approval_enabled {
+                    items.push(SelectionItem {
+                        name: "Smart Approvals".to_string(),
+                        description: Some(
+                            "Same workspace-write permissions as Default, but `on-request` approvals are dispatched to a carefully-prompted security reviewer subagent."
+                                .to_string(),
+                        ),
+                        is_current: Self::preset_matches_current(
+                            current_approval,
+                            current_sandbox,
+                            &preset,
+                        ),
+                        actions: Self::approval_preset_actions(
+                            preset.approval,
+                            preset.sandbox.clone(),
+                            "Smart Approvals".to_string(),
+                            true,
+                        ),
+                        dismiss_on_select: true,
+                        disabled_reason: approval_disabled_reason
+                            .or_else(|| guardian_disabled_reason(true)),
+                        ..Default::default()
+                    });
+                }
             } else {
                 items.push(SelectionItem {
                     name: base_name,

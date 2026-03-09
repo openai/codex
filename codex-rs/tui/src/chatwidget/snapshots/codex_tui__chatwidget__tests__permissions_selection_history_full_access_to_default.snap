@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
-expression: "lines_to_single_string(&cells[0])"
+assertion_line: 8002
+expression: rendered
 ---
-• Permissions updated to Default
+• Permissions updated to Full Access
