@@ -249,7 +249,7 @@ async fn run_guardian_review(
         )
         .await;
 
-    let denied_action = guardian_approval_request_to_json(&request);
+    let denied_action = guardian_assessment_action_value(&request);
     let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
@@ -913,6 +913,58 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             }
             action
         }
+    }
+}
+
+fn guardian_assessment_action_value(action: &GuardianApprovalRequest) -> Value {
+    match action {
+        GuardianApprovalRequest::Shell { command, .. } => serde_json::json!({
+            "tool": "shell",
+            "command": command,
+        }),
+        GuardianApprovalRequest::ExecCommand { command, .. } => serde_json::json!({
+            "tool": "exec_command",
+            "command": command,
+        }),
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve {
+            tool_name,
+            program,
+            argv,
+            ..
+        } => serde_json::json!({
+            "tool": tool_name,
+            "program": program,
+            "argv": argv,
+        }),
+        GuardianApprovalRequest::ApplyPatch {
+            files,
+            change_count,
+            ..
+        } => serde_json::json!({
+            "tool": "apply_patch",
+            "files": files,
+            "change_count": change_count,
+        }),
+        GuardianApprovalRequest::NetworkAccess {
+            target,
+            host,
+            protocol,
+            port,
+        } => serde_json::json!({
+            "tool": "network_access",
+            "target": target,
+            "host": host,
+            "protocol": protocol,
+            "port": port,
+        }),
+        GuardianApprovalRequest::McpToolCall {
+            server, tool_name, ..
+        } => serde_json::json!({
+            "tool": "mcp_tool_call",
+            "server": server,
+            "tool_name": tool_name,
+        }),
     }
 }
 
