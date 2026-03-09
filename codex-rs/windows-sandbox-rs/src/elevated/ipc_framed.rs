@@ -8,8 +8,8 @@
 //! through the elevated runner.
 
 use anyhow::Result;
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
