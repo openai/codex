@@ -337,7 +337,7 @@ struct PendingServerRequests {
     request_permissions: HashMap<String, RequestId>,
     request_user_input: HashMap<String, VecDeque<RequestId>>,
     dynamic_tool_calls: HashMap<String, RequestId>,
-    pending_file_changes: HashMap<String, HashMap<PathBuf, FileChange>>,
+    pending_file_changes: HashMap<(String, String), HashMap<PathBuf, FileChange>>,
 }
 
 impl PendingServerRequests {
@@ -357,6 +357,26 @@ impl PendingServerRequests {
             .entry(turn_id)
             .or_default()
             .push_back(request_id);
+    }
+
+    fn note_file_changes(
+        &mut self,
+        thread_id: String,
+        item_id: String,
+        changes: HashMap<PathBuf, FileChange>,
+    ) {
+        self.pending_file_changes
+            .insert((thread_id, item_id), changes);
+    }
+
+    fn take_file_changes(
+        &mut self,
+        thread_id: &str,
+        item_id: &str,
+    ) -> HashMap<PathBuf, FileChange> {
+        self.pending_file_changes
+            .remove(&(thread_id.to_string(), item_id.to_string()))
+            .unwrap_or_default()
     }
 
     fn pop_request_user_input_request_id(&mut self, turn_id: &str) -> Option<RequestId> {
@@ -2437,9 +2457,7 @@ async fn run_in_process_agent_loop(
                                 };
 
                                 let changes = pending_server_requests
-                                    .pending_file_changes
-                                    .remove(&params.item_id)
-                                    .unwrap_or_default();
+                                    .take_file_changes(&params.thread_id, &params.item_id);
                                 pending_server_requests.patch_approvals.insert(
                                     params.item_id.clone(),
                                     PendingPatchApprovalRequest::V2(request_id),
@@ -2673,14 +2691,15 @@ async fn run_in_process_agent_loop(
                     }
                     InProcessServerEvent::ServerNotification(notification) => {
                         match notification {
-                            ServerNotification::ItemStarted(notification)
-                                if notification.thread_id == thread_id =>
-                            {
+                            ServerNotification::ItemStarted(notification) => {
                                 if let ThreadItem::FileChange { id, changes, .. } = notification.item
                                 {
                                     pending_server_requests
-                                        .pending_file_changes
-                                        .insert(id, file_update_changes_to_core(changes));
+                                        .note_file_changes(
+                                            notification.thread_id,
+                                            id,
+                                            file_update_changes_to_core(changes),
+                                        );
                                 }
                             }
                             ServerNotification::ServerRequestResolved(notification)
