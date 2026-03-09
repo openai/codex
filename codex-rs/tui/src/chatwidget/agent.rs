@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
+use std::future::Future;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
@@ -479,6 +480,35 @@ fn note_primary_legacy_event(
     }
 
     matches!(event.msg, EventMsg::ShutdownComplete)
+}
+
+async fn finalize_in_process_shutdown<Shutdown>(
+    shutdown: Shutdown,
+    app_event_tx: AppEventSender,
+    pending_shutdown_complete: bool,
+) where
+    Shutdown: Future<Output = std::io::Result<()>> + Send + 'static,
+{
+    if pending_shutdown_complete {
+        let shutdown_app_event_tx = app_event_tx.clone();
+        tokio::spawn(async move {
+            if let Err(err) = shutdown.await {
+                send_warning_event(
+                    &shutdown_app_event_tx,
+                    format!("in-process app-server shutdown failed: {err}"),
+                );
+            }
+        });
+        send_codex_event(&app_event_tx, EventMsg::ShutdownComplete);
+        return;
+    }
+
+    if let Err(err) = shutdown.await {
+        send_warning_event(
+            &app_event_tx,
+            format!("in-process app-server shutdown failed: {err}"),
+        );
+    }
 }
 
 fn command_text_to_tokens(command: Option<String>) -> Vec<String> {
@@ -2822,23 +2852,7 @@ async fn run_in_process_agent_loop(
         }
     }
 
-    let shutdown_error = client.shutdown().await.err();
-    if let Some(err) = &shutdown_error {
-        send_warning_event(
-            &app_event_tx,
-            format!("in-process app-server shutdown failed: {err}"),
-        );
-    }
-    if pending_shutdown_complete {
-        if shutdown_error.is_some() {
-            send_warning_event(
-                &app_event_tx,
-                "emitting shutdown complete after shutdown error to preserve TUI shutdown flow"
-                    .to_string(),
-            );
-        }
-        send_codex_event(&app_event_tx, EventMsg::ShutdownComplete);
-    }
+    finalize_in_process_shutdown(client.shutdown(), app_event_tx, pending_shutdown_complete).await;
 }
 
 /// Spawn the agent bootstrapper and op forwarding loop, returning the
@@ -2956,6 +2970,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
+    use tokio::sync::oneshot;
     use tokio::time::Duration;
     use tokio::time::timeout;
 
@@ -3066,6 +3081,45 @@ mod tests {
         )
         .await;
         (should_shutdown, rx, client)
+    }
+
+    #[tokio::test]
+    async fn pending_shutdown_complete_emits_shutdown_complete_before_shutdown_finishes() {
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let (shutdown_started_tx, shutdown_started_rx) = oneshot::channel();
+        let (shutdown_release_tx, shutdown_release_rx) = oneshot::channel();
+
+        finalize_in_process_shutdown(
+            async move {
+                let _ = shutdown_started_tx.send(());
+                let _ = shutdown_release_rx.await;
+                Ok(())
+            },
+            app_event_tx,
+            true,
+        )
+        .await;
+
+        timeout(Duration::from_secs(2), shutdown_started_rx)
+            .await
+            .expect("timed out waiting for background shutdown to start")
+            .expect("expected background shutdown start signal");
+
+        let event = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out waiting for shutdown complete event")
+            .expect("expected app event");
+        let AppEvent::CodexEvent(event) = event else {
+            panic!("expected codex event");
+        };
+        assert!(
+            matches!(event.msg, EventMsg::ShutdownComplete),
+            "expected shutdown complete event"
+        );
+        assert!(rx.try_recv().is_err(), "expected no additional app events");
+
+        let _ = shutdown_release_tx.send(());
     }
 
     fn fake_external_access_token(plan_type: &str) -> String {
