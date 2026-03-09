@@ -79,13 +79,15 @@ fn write_permissions_for_paths(file_paths: &[AbsolutePathBuf]) -> Option<Permiss
         .collect::<Result<Vec<_>, _>>()
         .ok()?;
 
-    (!write_paths.is_empty()).then_some(PermissionProfile {
+    let permissions = (!write_paths.is_empty()).then_some(PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
             write: Some(write_paths),
         }),
         ..Default::default()
-    })
+    })?;
+
+    crate::sandboxing::normalize_additional_permissions(permissions).ok()
 }
 
 #[async_trait]
