@@ -155,7 +155,10 @@ fn parse_completed(
         }
         None => match run_result.exit_code {
             Some(0) => {
-                if let Some(parsed) = output_parser::parse_session_start(&run_result.stdout) {
+                let trimmed_stdout = run_result.stdout.trim();
+                if trimmed_stdout.is_empty() {
+                } else if let Some(parsed) = output_parser::parse_session_start(&run_result.stdout)
+                {
                     if let Some(system_message) = parsed.universal.system_message {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
@@ -183,7 +186,15 @@ fn parse_completed(
                             });
                         }
                     }
-                } else if let Some(additional_context) = trimmed_non_empty(&run_result.stdout) {
+                // Preserve plain-text context support without treating malformed JSON as context.
+                } else if trimmed_stdout.starts_with('{') || trimmed_stdout.starts_with('[') {
+                    status = HookRunStatus::Failed;
+                    entries.push(HookOutputEntry {
+                        kind: HookOutputEntryKind::Error,
+                        text: "hook returned invalid session start JSON output".to_string(),
+                    });
+                } else {
+                    let additional_context = trimmed_stdout.to_string();
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Context,
                         text: additional_context.clone(),
@@ -220,15 +231,6 @@ fn parse_completed(
             stop_reason,
             additional_context_for_model,
         },
-    }
-}
-
-fn trimmed_non_empty(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
     }
 }
 
@@ -333,6 +335,36 @@ mod tests {
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
+    }
+
+    #[test]
+    fn invalid_json_like_stdout_fails_instead_of_becoming_model_context() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"hookSpecificOutput":{"hookEventName":"SessionStart""#,
+                "",
+            ),
+            None,
+        );
+
+        assert_eq!(
+            parsed.data,
+            SessionStartHandlerData {
+                should_stop: false,
+                stop_reason: None,
+                additional_context_for_model: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "hook returned invalid session start JSON output".to_string(),
+            }]
+        );
     }
 
     fn handler() -> ConfiguredHandler {

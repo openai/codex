@@ -156,7 +156,9 @@ fn parse_completed(
         }
         None => match run_result.exit_code {
             Some(0) => {
-                if let Some(parsed) = output_parser::parse_stop(&run_result.stdout) {
+                let trimmed_stdout = run_result.stdout.trim();
+                if trimmed_stdout.is_empty() {
+                } else if let Some(parsed) = output_parser::parse_stop(&run_result.stdout) {
                     if let Some(system_message) = parsed.universal.system_message {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
@@ -193,6 +195,12 @@ fn parse_completed(
                             });
                         }
                     }
+                } else {
+                    status = HookRunStatus::Failed;
+                    entries.push(HookOutputEntry {
+                        kind: HookOutputEntryKind::Error,
+                        text: "hook returned invalid stop hook JSON output".to_string(),
+                    });
                 }
             }
             Some(2) => {
@@ -429,6 +437,34 @@ mod tests {
             vec![HookOutputEntry {
                 kind: HookOutputEntryKind::Error,
                 text: "hook exited with code 2 without stderr feedback".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn invalid_stdout_fails_instead_of_silently_nooping() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), "not json", ""),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            StopHandlerData {
+                should_stop: false,
+                stop_reason: None,
+                should_block: false,
+                block_reason: None,
+                block_message_for_model: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "hook returned invalid stop hook JSON output".to_string(),
             }]
         );
     }
