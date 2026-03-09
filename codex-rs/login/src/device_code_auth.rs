@@ -9,6 +9,7 @@ use std::time::Instant;
 use crate::build_login_http_client;
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
+use crate::server::build_login_http_client;
 use std::io;
 
 const ANSI_BLUE: &str = "\x1b[94m";
