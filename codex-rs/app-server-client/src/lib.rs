@@ -145,15 +145,6 @@ pub fn session_source_for_surface(surface: ClientSurface) -> SessionSource {
     }
 }
 
-impl ClientSurface {
-    fn default_client_name(self) -> &'static str {
-        match self {
-            ClientSurface::Exec => "codex-exec",
-            ClientSurface::Tui => "codex-tui",
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct InProcessClientStartArgs {
     /// Resolved argv0 dispatch paths used by command execution internals.

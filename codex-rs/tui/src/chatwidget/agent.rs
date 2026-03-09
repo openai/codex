@@ -16,6 +16,7 @@ use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::InProcessServerEvent;
+use codex_app_server_client::session_source_for_surface;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientRequest;
@@ -37,6 +38,10 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ReviewDelivery;
+use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::ReviewStartResponse;
+use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
@@ -93,6 +98,7 @@ use codex_protocol::protocol::ListRemoteSkillsResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RemoteSkillDownloadedEvent;
+use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -233,8 +239,9 @@ fn in_process_start_args(
         cloud_requirements,
         feedback: CodexFeedback::new(),
         config_warnings,
-        surface: ClientSurface::Tui,
-        client_name: Some(TUI_NOTIFY_CLIENT.to_string()),
+        session_source: session_source_for_surface(ClientSurface::Tui),
+        enable_codex_api_key_env: false,
+        client_name: TUI_NOTIFY_CLIENT.to_string(),
         client_version: CODEX_CLI_VERSION.to_string(),
         experimental_api: true,
         opt_out_notification_methods: in_process_typed_event_legacy_opt_outs(),
@@ -1273,6 +1280,32 @@ async fn process_in_process_command(
             .await
             {
                 send_error_event(app_event_tx, err);
+            }
+        }
+        Op::Review { review_request } => {
+            let target = match review_request.target {
+                CoreReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
+                CoreReviewTarget::BaseBranch { branch } => ApiReviewTarget::BaseBranch { branch },
+                CoreReviewTarget::Commit { sha, title } => ApiReviewTarget::Commit { sha, title },
+                CoreReviewTarget::Custom { instructions } => {
+                    ApiReviewTarget::Custom { instructions }
+                }
+            };
+            let request = ClientRequest::ReviewStart {
+                request_id: request_ids.next(),
+                params: ReviewStartParams {
+                    thread_id: thread_id.to_string(),
+                    target,
+                    delivery: Some(ReviewDelivery::Inline),
+                },
+            };
+            match send_request_with_response::<ReviewStartResponse>(client, request, "review/start")
+                .await
+            {
+                Ok(response) => {
+                    *current_turn_id = Some(response.turn.id);
+                }
+                Err(err) => send_error_event(app_event_tx, err),
             }
         }
         Op::UserInput {
@@ -3249,6 +3282,93 @@ mod tests {
         let event = next_codex_event(&mut rx).await;
         let warning = warning_from_event(event);
         assert_eq!(warning.message, expected_message.to_string());
+
+        client.shutdown().await.expect("shutdown in-process client");
+    }
+
+    #[tokio::test]
+    async fn review_op_sets_current_turn_id_for_follow_up_interrupts() {
+        let config = test_config().await;
+        let client = InProcessAppServerClient::start(in_process_start_args(
+            &config,
+            codex_arg0::Arg0DispatchPaths::default(),
+            Vec::new(),
+            CloudRequirementsLoader::default(),
+        ))
+        .await
+        .expect("in-process app-server client");
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let mut current_turn_id = None;
+        let mut request_ids = RequestIdSequencer::new();
+        let mut pending_server_requests = PendingServerRequests::default();
+
+        let thread_start = send_request_with_response::<ThreadStartResponse>(
+            &client,
+            ClientRequest::ThreadStart {
+                request_id: request_ids.next(),
+                params: ThreadStartParams::default(),
+            },
+            "thread/start",
+        )
+        .await
+        .expect("thread/start");
+        let thread_id = thread_start.thread.id;
+        let session_id = ThreadId::from_string(&thread_id).expect("valid thread id");
+
+        let should_shutdown = process_in_process_command(
+            Op::Review {
+                review_request: codex_protocol::protocol::ReviewRequest {
+                    target: CoreReviewTarget::Custom {
+                        instructions: "check current changes".to_string(),
+                    },
+                    user_facing_hint: None,
+                },
+            },
+            &thread_id,
+            &session_id,
+            &config,
+            &mut current_turn_id,
+            &mut request_ids,
+            &mut pending_server_requests,
+            &client,
+            &app_event_tx,
+        )
+        .await;
+        assert_eq!(should_shutdown, false);
+        let turn_id = current_turn_id
+            .clone()
+            .expect("review/start should set the active turn id");
+        assert_eq!(turn_id.is_empty(), false);
+
+        if let Ok(Some(event)) = timeout(Duration::from_millis(200), rx.recv()).await {
+            panic!("did not expect an app event after review/start: {event:?}");
+        }
+
+        let should_shutdown = process_in_process_command(
+            Op::Interrupt,
+            "missing-thread-id",
+            &session_id,
+            &config,
+            &mut current_turn_id,
+            &mut request_ids,
+            &mut pending_server_requests,
+            &client,
+            &app_event_tx,
+        )
+        .await;
+        assert_eq!(should_shutdown, false);
+
+        let event = next_codex_event(&mut rx).await;
+        let EventMsg::Error(error) = event.msg else {
+            panic!("expected error event");
+        };
+        assert!(
+            error.message.contains("turn/interrupt"),
+            "expected turn/interrupt error, got `{}`",
+            error.message
+        );
+        assert_eq!(error.message.contains("no active turn"), false);
 
         client.shutdown().await.expect("shutdown in-process client");
     }
