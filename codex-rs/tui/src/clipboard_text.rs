@@ -30,7 +30,6 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
         });
 
     native_result.or_else(|native_err| {
-        let native_err = native_err;
         #[cfg(target_os = "linux")]
         let native_err = if is_probably_wsl() {
             match copy_via_wsl_clipboard(text) {
