@@ -7,11 +7,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED_TARGETS = [
-    Path("src/codex_app_server/generated/schema_types.py"),
-    Path("src/codex_app_server/generated/protocol_types.py"),
     Path("src/codex_app_server/generated/codex_event_types.py"),
     Path("src/codex_app_server/generated/notification_registry.py"),
-    Path("src/codex_app_server/generated/v2_all"),
+    Path("src/codex_app_server/generated/v2_all.py"),
     Path("src/codex_app_server/public_api.py"),
 ]
 

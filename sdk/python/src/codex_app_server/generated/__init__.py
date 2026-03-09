@@ -1,1 +1,1 @@
-"""Auto-generated protocol/schema Python types."""
+"""Auto-generated Python types derived from the app-server schemas."""

@@ -5,48 +5,50 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .v2_all.AccountLoginCompletedNotification import AccountLoginCompletedNotification
-from .v2_all.AccountRateLimitsUpdatedNotification import AccountRateLimitsUpdatedNotification
-from .v2_all.AccountUpdatedNotification import AccountUpdatedNotification
-from .v2_all.AgentMessageDeltaNotification import AgentMessageDeltaNotification
-from .v2_all.AppListUpdatedNotification import AppListUpdatedNotification
-from .v2_all.CommandExecOutputDeltaNotification import CommandExecOutputDeltaNotification
-from .v2_all.CommandExecutionOutputDeltaNotification import CommandExecutionOutputDeltaNotification
-from .v2_all.ConfigWarningNotification import ConfigWarningNotification
-from .v2_all.ContextCompactedNotification import ContextCompactedNotification
-from .v2_all.DeprecationNoticeNotification import DeprecationNoticeNotification
-from .v2_all.ErrorNotification import ErrorNotification
-from .v2_all.FileChangeOutputDeltaNotification import FileChangeOutputDeltaNotification
-from .v2_all.ItemCompletedNotification import ItemCompletedNotification
-from .v2_all.ItemStartedNotification import ItemStartedNotification
-from .v2_all.McpServerOauthLoginCompletedNotification import McpServerOauthLoginCompletedNotification
-from .v2_all.McpToolCallProgressNotification import McpToolCallProgressNotification
-from .v2_all.ModelReroutedNotification import ModelReroutedNotification
-from .v2_all.PlanDeltaNotification import PlanDeltaNotification
-from .v2_all.ReasoningSummaryPartAddedNotification import ReasoningSummaryPartAddedNotification
-from .v2_all.ReasoningSummaryTextDeltaNotification import ReasoningSummaryTextDeltaNotification
-from .v2_all.ReasoningTextDeltaNotification import ReasoningTextDeltaNotification
-from .v2_all.ServerRequestResolvedNotification import ServerRequestResolvedNotification
-from .v2_all.SkillsChangedNotification import SkillsChangedNotification
-from .v2_all.TerminalInteractionNotification import TerminalInteractionNotification
-from .v2_all.ThreadArchivedNotification import ThreadArchivedNotification
-from .v2_all.ThreadClosedNotification import ThreadClosedNotification
-from .v2_all.ThreadNameUpdatedNotification import ThreadNameUpdatedNotification
-from .v2_all.ThreadRealtimeClosedNotification import ThreadRealtimeClosedNotification
-from .v2_all.ThreadRealtimeErrorNotification import ThreadRealtimeErrorNotification
-from .v2_all.ThreadRealtimeItemAddedNotification import ThreadRealtimeItemAddedNotification
-from .v2_all.ThreadRealtimeOutputAudioDeltaNotification import ThreadRealtimeOutputAudioDeltaNotification
-from .v2_all.ThreadRealtimeStartedNotification import ThreadRealtimeStartedNotification
-from .v2_all.ThreadStartedNotification import ThreadStartedNotification
-from .v2_all.ThreadStatusChangedNotification import ThreadStatusChangedNotification
-from .v2_all.ThreadTokenUsageUpdatedNotification import ThreadTokenUsageUpdatedNotification
-from .v2_all.ThreadUnarchivedNotification import ThreadUnarchivedNotification
-from .v2_all.TurnCompletedNotification import TurnCompletedNotification
-from .v2_all.TurnDiffUpdatedNotification import TurnDiffUpdatedNotification
-from .v2_all.TurnPlanUpdatedNotification import TurnPlanUpdatedNotification
-from .v2_all.TurnStartedNotification import TurnStartedNotification
-from .v2_all.WindowsSandboxSetupCompletedNotification import WindowsSandboxSetupCompletedNotification
-from .v2_all.WindowsWorldWritableWarningNotification import WindowsWorldWritableWarningNotification
+from .v2_all import AccountLoginCompletedNotification
+from .v2_all import AccountRateLimitsUpdatedNotification
+from .v2_all import AccountUpdatedNotification
+from .v2_all import AgentMessageDeltaNotification
+from .v2_all import AppListUpdatedNotification
+from .v2_all import CommandExecOutputDeltaNotification
+from .v2_all import CommandExecutionOutputDeltaNotification
+from .v2_all import ConfigWarningNotification
+from .v2_all import ContextCompactedNotification
+from .v2_all import DeprecationNoticeNotification
+from .v2_all import ErrorNotification
+from .v2_all import FileChangeOutputDeltaNotification
+from .v2_all import FuzzyFileSearchSessionCompletedNotification
+from .v2_all import FuzzyFileSearchSessionUpdatedNotification
+from .v2_all import ItemCompletedNotification
+from .v2_all import ItemStartedNotification
+from .v2_all import McpServerOauthLoginCompletedNotification
+from .v2_all import McpToolCallProgressNotification
+from .v2_all import ModelReroutedNotification
+from .v2_all import PlanDeltaNotification
+from .v2_all import ReasoningSummaryPartAddedNotification
+from .v2_all import ReasoningSummaryTextDeltaNotification
+from .v2_all import ReasoningTextDeltaNotification
+from .v2_all import ServerRequestResolvedNotification
+from .v2_all import SkillsChangedNotification
+from .v2_all import TerminalInteractionNotification
+from .v2_all import ThreadArchivedNotification
+from .v2_all import ThreadClosedNotification
+from .v2_all import ThreadNameUpdatedNotification
+from .v2_all import ThreadRealtimeClosedNotification
+from .v2_all import ThreadRealtimeErrorNotification
+from .v2_all import ThreadRealtimeItemAddedNotification
+from .v2_all import ThreadRealtimeOutputAudioDeltaNotification
+from .v2_all import ThreadRealtimeStartedNotification
+from .v2_all import ThreadStartedNotification
+from .v2_all import ThreadStatusChangedNotification
+from .v2_all import ThreadTokenUsageUpdatedNotification
+from .v2_all import ThreadUnarchivedNotification
+from .v2_all import TurnCompletedNotification
+from .v2_all import TurnDiffUpdatedNotification
+from .v2_all import TurnPlanUpdatedNotification
+from .v2_all import TurnStartedNotification
+from .v2_all import WindowsSandboxSetupCompletedNotification
+from .v2_all import WindowsWorldWritableWarningNotification
 
 NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "account/login/completed": AccountLoginCompletedNotification,
@@ -57,6 +59,8 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "configWarning": ConfigWarningNotification,
     "deprecationNotice": DeprecationNoticeNotification,
     "error": ErrorNotification,
+    "fuzzyFileSearch/sessionCompleted": FuzzyFileSearchSessionCompletedNotification,
+    "fuzzyFileSearch/sessionUpdated": FuzzyFileSearchSessionUpdatedNotification,
     "item/agentMessage/delta": AgentMessageDeltaNotification,
     "item/commandExecution/outputDelta": CommandExecutionOutputDeltaNotification,
     "item/commandExecution/terminalInteraction": TerminalInteractionNotification,

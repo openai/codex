@@ -8,104 +8,74 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from typing import Callable, Iterable, Iterator, TypeVar
 
-from .errors import AppServerError, JsonRpcError, TransportClosedError, map_jsonrpc_error
-from .models import AskResult, Notification
-from .typed import (
-    AgentMessageDeltaEvent,
-    EmptyResult,
-    ErrorEvent,
-    ItemLifecycleEvent,
-    ModelListResult,
-    ThreadForkResult,
-    ThreadListResult,
-    ThreadNameUpdatedEvent,
-    ThreadReadResult,
-    ThreadResumeResult,
-    ThreadStartResult,
-    ThreadStartedEvent,
-    ThreadTokenUsageUpdatedEvent,
-    TurnCompletedEvent,
-    TurnStartResult,
-    TurnSteerResult,
-    TurnStartedEvent,
-)
-from .retry import retry_on_overload
-from .conversation import ThreadSession
-from .generated.schema_types import (
-    AgentMessageDeltaNotificationPayload as SchemaAgentMessageDeltaNotificationPayload,
-    ErrorNotificationPayload as SchemaErrorNotificationPayload,
-    ModelListResponse as SchemaModelListResponse,
-    ItemCompletedNotificationPayload as SchemaItemCompletedNotificationPayload,
-    ItemStartedNotificationPayload as SchemaItemStartedNotificationPayload,
-    ThreadArchiveResponse as SchemaThreadArchiveResponse,
-    ThreadForkResponse as SchemaThreadForkResponse,
-    ThreadListResponse as SchemaThreadListResponse,
-    ThreadNameUpdatedNotificationPayload as SchemaThreadNameUpdatedNotificationPayload,
-    ThreadReadResponse as SchemaThreadReadResponse,
-    ThreadResumeResponse as SchemaThreadResumeResponse,
-    ThreadStartResponse as SchemaThreadStartResponse,
-    ThreadStartedNotificationPayload as SchemaThreadStartedNotificationPayload,
-    ThreadTokenUsageUpdatedNotificationPayload as SchemaThreadTokenUsageUpdatedNotificationPayload,
-    ThreadUnarchiveResponse as SchemaThreadUnarchiveResponse,
-    ThreadSetNameResponse as SchemaThreadSetNameResponse,
-    TurnCompletedNotificationPayload as SchemaTurnCompletedNotificationPayload,
-    TurnStartResponse as SchemaTurnStartResponse,
-    TurnSteerResponse as SchemaTurnSteerResponse,
-    TurnStartedNotificationPayload as SchemaTurnStartedNotificationPayload,
-)
-from .generated.v2_all.ThreadStartParams import ThreadStartParams as V2ThreadStartParams
-from .generated.v2_all.ThreadResumeParams import ThreadResumeParams as V2ThreadResumeParams
-from .generated.v2_all.ThreadListParams import ThreadListParams as V2ThreadListParams
-from .generated.v2_all.ThreadForkParams import ThreadForkParams as V2ThreadForkParams
-from .generated.v2_all.TurnStartParams import TurnStartParams as V2TurnStartParams
+from pydantic import BaseModel
 
-from .generated.protocol_types import (
+from .errors import AppServerError, TransportClosedError, map_jsonrpc_error
+from .generated.codex_event_types import CodexEventNotification
+from .generated.notification_registry import NOTIFICATION_MODELS
+from .generated.v2_all import (
+    AgentMessageDeltaNotification,
+    ModelListResponse,
+    ThreadArchiveResponse,
+    ThreadCompactStartResponse,
+    ThreadForkParams as V2ThreadForkParams,
+    ThreadForkResponse,
+    ThreadListParams as V2ThreadListParams,
     ThreadListResponse,
     ThreadReadResponse,
+    ThreadResumeParams as V2ThreadResumeParams,
     ThreadResumeResponse,
+    ThreadSetNameResponse,
+    ThreadStartParams as V2ThreadStartParams,
     ThreadStartResponse,
+    ThreadUnarchiveResponse,
+    TurnCompletedNotification,
+    TurnInterruptResponse,
+    TurnStartParams as V2TurnStartParams,
     TurnStartResponse,
+    TurnSteerResponse,
 )
+from .models import (
+    InitializeResponse,
+    JsonObject,
+    JsonValue,
+    Notification,
+    TextTurnResult,
+    UnknownNotification,
+)
+from .retry import retry_on_overload
 
-ApprovalHandler = Callable[[str, dict[str, Any] | None], dict[str, Any]]
+ModelT = TypeVar("ModelT", bound=BaseModel)
+ApprovalHandler = Callable[[str, JsonObject | None], JsonObject]
 
 
-def _params_dict(params: object | None) -> dict[str, Any]:
+def _params_dict(
+    params: (
+        V2ThreadStartParams
+        | V2ThreadResumeParams
+        | V2ThreadListParams
+        | V2ThreadForkParams
+        | V2TurnStartParams
+        | JsonObject
+        | None
+    ),
+) -> JsonObject:
     if params is None:
         return {}
     if hasattr(params, "model_dump"):
-        return params.model_dump(exclude_none=True)
+        dumped = params.model_dump(
+            by_alias=True,
+            exclude_none=True,
+            mode="json",
+        )
+        if not isinstance(dumped, dict):
+            raise TypeError("Expected model_dump() to return dict")
+        return dumped
     if isinstance(params, dict):
-        return dict(params)
+        return params
     raise TypeError(f"Expected generated params model or dict, got {type(params).__name__}")
-
-
-_TYPED_NOTIFICATION_PARSERS = {
-    "turn/completed": TurnCompletedEvent,
-    "turn/started": TurnStartedEvent,
-    "thread/started": ThreadStartedEvent,
-    "item/agentMessage/delta": AgentMessageDeltaEvent,
-    "item/started": ItemLifecycleEvent,
-    "item/completed": ItemLifecycleEvent,
-    "thread/nameUpdated": ThreadNameUpdatedEvent,
-    "thread/tokenUsageUpdated": ThreadTokenUsageUpdatedEvent,
-    "error": ErrorEvent,
-}
-
-_SCHEMA_NOTIFICATION_PARSERS = {
-    "turn/completed": SchemaTurnCompletedNotificationPayload,
-    "turn/started": SchemaTurnStartedNotificationPayload,
-    "thread/started": SchemaThreadStartedNotificationPayload,
-    "item/agentMessage/delta": SchemaAgentMessageDeltaNotificationPayload,
-    "item/started": SchemaItemStartedNotificationPayload,
-    "item/completed": SchemaItemCompletedNotificationPayload,
-    "thread/nameUpdated": SchemaThreadNameUpdatedNotificationPayload,
-    "thread/tokenUsageUpdated": SchemaThreadTokenUsageUpdatedNotificationPayload,
-    "error": SchemaErrorNotificationPayload,
-}
-
 
 
 def _bundled_codex_path() -> Path:
@@ -131,7 +101,6 @@ def _bundled_codex_path() -> Path:
 
 @dataclass(slots=True)
 class AppServerConfig:
-    # Out-of-the-box runtime binary source (bundled by platform/arch).
     codex_bin: str = str(_bundled_codex_path())
     launch_args_override: tuple[str, ...] | None = None
     config_overrides: tuple[str, ...] = ()
@@ -144,7 +113,7 @@ class AppServerConfig:
 
 
 class AppServerClient:
-    """Synchronous JSON-RPC client for `codex app-server` over stdio."""
+    """Synchronous typed JSON-RPC client for `codex app-server` over stdio."""
 
     def __init__(
         self,
@@ -155,6 +124,8 @@ class AppServerClient:
         self._approval_handler = approval_handler or self._default_approval_handler
         self._proc: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
+        self._turn_consumer_lock = threading.Lock()
+        self._active_turn_consumer: str | None = None
         self._pending_notifications: deque[Notification] = deque()
         self._stderr_lines: deque[str] = deque(maxlen=400)
         self._stderr_thread: threading.Thread | None = None
@@ -163,7 +134,7 @@ class AppServerClient:
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
         self.close()
 
     def start(self) -> None:
@@ -205,6 +176,7 @@ class AppServerClient:
             return
         proc = self._proc
         self._proc = None
+        self._active_turn_consumer = None
 
         if proc.stdin:
             proc.stdin.close()
@@ -217,9 +189,7 @@ class AppServerClient:
         if self._stderr_thread and self._stderr_thread.is_alive():
             self._stderr_thread.join(timeout=0.5)
 
-    # ---------- Core JSON-RPC ----------
-
-    def initialize(self) -> dict[str, Any]:
+    def initialize(self) -> InitializeResponse:
         result = self.request(
             "initialize",
             {
@@ -232,11 +202,24 @@ class AppServerClient:
                     "experimentalApi": self.config.experimental_api,
                 },
             },
+            response_model=InitializeResponse,
         )
         self.notify("initialized", None)
         return result
 
-    def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    def request(
+        self,
+        method: str,
+        params: JsonObject | None,
+        *,
+        response_model: type[ModelT],
+    ) -> ModelT:
+        result = self._request_raw(method, params)
+        if not isinstance(result, dict):
+            raise AppServerError(f"{method} response must be a JSON object")
+        return response_model.model_validate(result)
+
+    def _request_raw(self, method: str, params: JsonObject | None = None) -> JsonValue:
         request_id = str(uuid.uuid4())
         self._write_message({"id": request_id, "method": method, "params": params or {}})
 
@@ -250,7 +233,7 @@ class AppServerClient:
 
             if "method" in msg and "id" not in msg:
                 self._pending_notifications.append(
-                    Notification(method=msg["method"], params=msg.get("params"))
+                    self._coerce_notification(msg["method"], msg.get("params"))
                 )
                 continue
 
@@ -259,15 +242,17 @@ class AppServerClient:
 
             if "error" in msg:
                 err = msg["error"]
-                raise map_jsonrpc_error(
-                    int(err.get("code", -32000)),
-                    str(err.get("message", "unknown")),
-                    err.get("data"),
-                )
+                if isinstance(err, dict):
+                    raise map_jsonrpc_error(
+                        int(err.get("code", -32000)),
+                        str(err.get("message", "unknown")),
+                        err.get("data"),
+                    )
+                raise AppServerError("Malformed JSON-RPC error response")
 
             return msg.get("result")
 
-    def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
+    def notify(self, method: str, params: JsonObject | None = None) -> None:
         self._write_message({"method": method, "params": params or {}})
 
     def next_notification(self) -> Notification:
@@ -281,57 +266,106 @@ class AppServerClient:
                 self._write_message({"id": msg["id"], "result": response})
                 continue
             if "method" in msg and "id" not in msg:
-                return Notification(method=msg["method"], params=msg.get("params"))
+                return self._coerce_notification(msg["method"], msg.get("params"))
 
-    # ---------- High-level v2 API ----------
+    def acquire_turn_consumer(self, turn_id: str) -> None:
+        with self._turn_consumer_lock:
+            if self._active_turn_consumer is not None:
+                raise RuntimeError(
+                    "Concurrent turn consumers are not yet supported in the experimental SDK. "
+                    f"Client is already streaming turn {self._active_turn_consumer!r}; "
+                    f"cannot start turn {turn_id!r} until the active consumer finishes."
+                )
+            self._active_turn_consumer = turn_id
 
-    def thread_start(self, params: V2ThreadStartParams | dict[str, Any] | None = None) -> ThreadStartResponse:
-        return self.request("thread/start", _params_dict(params))
+    def release_turn_consumer(self, turn_id: str) -> None:
+        with self._turn_consumer_lock:
+            if self._active_turn_consumer == turn_id:
+                self._active_turn_consumer = None
 
-    def thread_resume(self, thread_id: str, params: V2ThreadResumeParams | dict[str, Any] | None = None) -> ThreadResumeResponse:
+    def thread_start(self, params: V2ThreadStartParams | JsonObject | None = None) -> ThreadStartResponse:
+        return self.request("thread/start", _params_dict(params), response_model=ThreadStartResponse)
+
+    def thread_resume(
+        self,
+        thread_id: str,
+        params: V2ThreadResumeParams | JsonObject | None = None,
+    ) -> ThreadResumeResponse:
         payload = {"threadId": thread_id, **_params_dict(params)}
-        return self.request("thread/resume", payload)
+        return self.request("thread/resume", payload, response_model=ThreadResumeResponse)
 
-    def thread_list(self, params: V2ThreadListParams | dict[str, Any] | None = None) -> ThreadListResponse:
-        return self.request("thread/list", _params_dict(params))
+    def thread_list(self, params: V2ThreadListParams | JsonObject | None = None) -> ThreadListResponse:
+        return self.request("thread/list", _params_dict(params), response_model=ThreadListResponse)
 
     def thread_read(self, thread_id: str, include_turns: bool = False) -> ThreadReadResponse:
-        return self.request("thread/read", {"threadId": thread_id, "includeTurns": include_turns})
+        return self.request(
+            "thread/read",
+            {"threadId": thread_id, "includeTurns": include_turns},
+            response_model=ThreadReadResponse,
+        )
 
-    def thread_fork(self, thread_id: str, params: V2ThreadForkParams | dict[str, Any] | None = None) -> dict[str, Any]:
-        return self.request("thread/fork", {"threadId": thread_id, **_params_dict(params)})
+    def thread_fork(
+        self,
+        thread_id: str,
+        params: V2ThreadForkParams | JsonObject | None = None,
+    ) -> ThreadForkResponse:
+        payload = {"threadId": thread_id, **_params_dict(params)}
+        return self.request("thread/fork", payload, response_model=ThreadForkResponse)
 
-    def thread_archive(self, thread_id: str) -> dict[str, Any]:
-        return self.request("thread/archive", {"threadId": thread_id})
+    def thread_archive(self, thread_id: str) -> ThreadArchiveResponse:
+        return self.request("thread/archive", {"threadId": thread_id}, response_model=ThreadArchiveResponse)
 
-    def thread_unarchive(self, thread_id: str) -> dict[str, Any]:
-        return self.request("thread/unarchive", {"threadId": thread_id})
+    def thread_unarchive(self, thread_id: str) -> ThreadUnarchiveResponse:
+        return self.request("thread/unarchive", {"threadId": thread_id}, response_model=ThreadUnarchiveResponse)
 
-    def thread_set_name(self, thread_id: str, name: str) -> dict[str, Any]:
-        return self.request("thread/setName", {"threadId": thread_id, "name": name})
+    def thread_set_name(self, thread_id: str, name: str) -> ThreadSetNameResponse:
+        return self.request(
+            "thread/name/set",
+            {"threadId": thread_id, "name": name},
+            response_model=ThreadSetNameResponse,
+        )
+
+    def thread_compact(self, thread_id: str) -> ThreadCompactStartResponse:
+        return self.request(
+            "thread/compact/start",
+            {"threadId": thread_id},
+            response_model=ThreadCompactStartResponse,
+        )
 
     def turn_start(
         self,
         thread_id: str,
-        input_items: list[dict[str, Any]] | dict[str, Any] | str,
-        params: V2TurnStartParams | dict[str, Any] | None = None,
+        input_items: list[JsonObject] | JsonObject | str,
+        params: V2TurnStartParams | JsonObject | None = None,
     ) -> TurnStartResponse:
-        payload = {**_params_dict(params), "threadId": thread_id, "input": self._normalize_input_items(input_items)}
-        return self.request("turn/start", payload)
+        payload = {
+            **_params_dict(params),
+            "threadId": thread_id,
+            "input": self._normalize_input_items(input_items),
+        }
+        return self.request("turn/start", payload, response_model=TurnStartResponse)
 
-    def turn_text(self, thread_id: str, text: str, params: V2TurnStartParams | dict[str, Any] | None = None) -> TurnStartResponse:
-        """Convenience helper for the common text-only turn case."""
+    def turn_text(
+        self,
+        thread_id: str,
+        text: str,
+        params: V2TurnStartParams | JsonObject | None = None,
+    ) -> TurnStartResponse:
         return self.turn_start(thread_id, text, params=params)
 
-    def turn_interrupt(self, thread_id: str, turn_id: str) -> dict[str, Any]:
-        return self.request("turn/interrupt", {"threadId": thread_id, "turnId": turn_id})
+    def turn_interrupt(self, thread_id: str, turn_id: str) -> TurnInterruptResponse:
+        return self.request(
+            "turn/interrupt",
+            {"threadId": thread_id, "turnId": turn_id},
+            response_model=TurnInterruptResponse,
+        )
 
     def turn_steer(
         self,
         thread_id: str,
         expected_turn_id: str,
-        input_items: list[dict[str, Any]] | dict[str, Any] | str,
-    ) -> dict[str, Any]:
+        input_items: list[JsonObject] | JsonObject | str,
+    ) -> TurnSteerResponse:
         return self.request(
             "turn/steer",
             {
@@ -339,255 +373,174 @@ class AppServerClient:
                 "expectedTurnId": expected_turn_id,
                 "input": self._normalize_input_items(input_items),
             },
+            response_model=TurnSteerResponse,
         )
 
-    def model_list(self, include_hidden: bool = False) -> dict[str, Any]:
-        return self.request("model/list", {"includeHidden": include_hidden})
-
-    def thread(self, thread_id: str) -> ThreadSession:
-        return ThreadSession(client=self, thread_id=thread_id)
-
-    def thread_start_session(self, *, model: str | None = None, params: V2ThreadStartParams | dict[str, Any] | None = None) -> ThreadSession:
-        payload = _params_dict(params)
-        if model is not None:
-            payload["model"] = model
-        started = self.thread_start(payload)
-        return ThreadSession(client=self, thread_id=started["thread"]["id"])
-
-    # ---------- Typed convenience wrappers ----------
-
-    def thread_start_typed(self, params: V2ThreadStartParams | dict[str, Any] | None = None) -> ThreadStartResult:
-        return ThreadStartResult.from_dict(self.thread_start(params))
-
-    def thread_resume_typed(self, thread_id: str, params: V2ThreadResumeParams | dict[str, Any] | None = None) -> ThreadResumeResult:
-        return ThreadResumeResult.from_dict(self.thread_resume(thread_id, params))
-
-    def thread_read_typed(self, thread_id: str, include_turns: bool = False) -> ThreadReadResult:
-        return ThreadReadResult.from_dict(self.thread_read(thread_id, include_turns=include_turns))
-
-    def thread_fork_typed(self, thread_id: str, params: V2ThreadForkParams | dict[str, Any] | None = None) -> ThreadForkResult:
-        return ThreadForkResult.from_dict(self.thread_fork(thread_id, params))
-
-    def thread_archive_typed(self, thread_id: str) -> EmptyResult:
-        return EmptyResult.from_dict(self.thread_archive(thread_id))
-
-    def thread_unarchive_typed(self, thread_id: str) -> EmptyResult:
-        return EmptyResult.from_dict(self.thread_unarchive(thread_id))
-
-    def thread_set_name_typed(self, thread_id: str, name: str) -> EmptyResult:
-        return EmptyResult.from_dict(self.thread_set_name(thread_id, name))
-
-    def thread_list_typed(self, params: V2ThreadListParams | dict[str, Any] | None = None) -> ThreadListResult:
-        return ThreadListResult.from_dict(self.thread_list(params))
-
-    def model_list_typed(self, include_hidden: bool = False) -> ModelListResult:
-        return ModelListResult.from_dict(self.model_list(include_hidden=include_hidden))
-
-    def turn_start_typed(
-        self,
-        thread_id: str,
-        input_items: list[dict[str, Any]] | dict[str, Any] | str,
-        params: V2TurnStartParams | dict[str, Any] | None = None,
-    ) -> TurnStartResult:
-        return TurnStartResult.from_dict(self.turn_start(thread_id, input_items, params=params))
-
-    def turn_text_typed(self, thread_id: str, text: str, params: V2TurnStartParams | dict[str, Any] | None = None) -> TurnStartResult:
-        return TurnStartResult.from_dict(self.turn_text(thread_id, text, params=params))
-
-    def turn_steer_typed(
-        self,
-        thread_id: str,
-        expected_turn_id: str,
-        input_items: list[dict[str, Any]] | dict[str, Any] | str,
-    ) -> TurnSteerResult:
-        return TurnSteerResult.from_dict(self.turn_steer(thread_id, expected_turn_id, input_items))
-
-    def thread_start_schema(self, params: V2ThreadStartParams | dict[str, Any] | None = None) -> SchemaThreadStartResponse:
-        return SchemaThreadStartResponse.from_dict(self.thread_start(params))
-
-    def thread_resume_schema(self, thread_id: str, params: V2ThreadResumeParams | dict[str, Any] | None = None) -> SchemaThreadResumeResponse:
-        return SchemaThreadResumeResponse.from_dict(self.thread_resume(thread_id, params))
-
-    def thread_read_schema(self, thread_id: str, include_turns: bool = False) -> SchemaThreadReadResponse:
-        return SchemaThreadReadResponse.from_dict(self.thread_read(thread_id, include_turns=include_turns))
-
-    def thread_list_schema(self, params: V2ThreadListParams | dict[str, Any] | None = None) -> SchemaThreadListResponse:
-        return SchemaThreadListResponse.from_dict(self.thread_list(params))
-
-    def thread_fork_schema(self, thread_id: str, params: V2ThreadForkParams | dict[str, Any] | None = None) -> SchemaThreadForkResponse:
-        return SchemaThreadForkResponse.from_dict(self.thread_fork(thread_id, params))
-
-    def thread_archive_schema(self, thread_id: str) -> SchemaThreadArchiveResponse:
-        return SchemaThreadArchiveResponse.from_dict(self.thread_archive(thread_id))
-
-    def thread_unarchive_schema(self, thread_id: str) -> SchemaThreadUnarchiveResponse:
-        return SchemaThreadUnarchiveResponse.from_dict(self.thread_unarchive(thread_id))
-
-    def thread_set_name_schema(self, thread_id: str, name: str) -> SchemaThreadSetNameResponse:
-        return SchemaThreadSetNameResponse.from_dict(self.thread_set_name(thread_id, name))
-
-    def model_list_schema(self, include_hidden: bool = False) -> SchemaModelListResponse:
-        return SchemaModelListResponse.from_dict(self.model_list(include_hidden=include_hidden))
-
-    def turn_start_schema(
-        self,
-        thread_id: str,
-        input_items: list[dict[str, Any]] | dict[str, Any] | str,
-        params: V2TurnStartParams | dict[str, Any] | None = None,
-    ) -> SchemaTurnStartResponse:
-        return SchemaTurnStartResponse.from_dict(self.turn_start(thread_id, input_items, params=params))
-
-    def turn_text_schema(self, thread_id: str, text: str, params: V2TurnStartParams | dict[str, Any] | None = None) -> SchemaTurnStartResponse:
-        return self.turn_start_schema(thread_id, text, params=params)
-
-    def turn_steer_schema(
-        self,
-        thread_id: str,
-        expected_turn_id: str,
-        input_items: list[dict[str, Any]] | dict[str, Any] | str,
-    ) -> SchemaTurnSteerResponse:
-        return SchemaTurnSteerResponse.from_dict(self.turn_steer(thread_id, expected_turn_id, input_items))
-
-    def parse_notification_typed(
-        self, notification: Notification
-    ) -> (
-        TurnCompletedEvent
-        | TurnStartedEvent
-        | ThreadStartedEvent
-        | AgentMessageDeltaEvent
-        | ItemLifecycleEvent
-        | ThreadNameUpdatedEvent
-        | ThreadTokenUsageUpdatedEvent
-        | ErrorEvent
-        | None
-    ):
-        return self._parse_notification_with(notification, _TYPED_NOTIFICATION_PARSERS)
-
-    def parse_notification_schema(
-        self, notification: Notification
-    ) -> (
-        SchemaTurnCompletedNotificationPayload
-        | SchemaTurnStartedNotificationPayload
-        | SchemaThreadStartedNotificationPayload
-        | SchemaAgentMessageDeltaNotificationPayload
-        | SchemaItemStartedNotificationPayload
-        | SchemaItemCompletedNotificationPayload
-        | SchemaThreadNameUpdatedNotificationPayload
-        | SchemaThreadTokenUsageUpdatedNotificationPayload
-        | SchemaErrorNotificationPayload
-        | None
-    ):
-        return self._parse_notification_with(notification, _SCHEMA_NOTIFICATION_PARSERS)
+    def model_list(self, include_hidden: bool = False) -> ModelListResponse:
+        return self.request(
+            "model/list",
+            {"includeHidden": include_hidden},
+            response_model=ModelListResponse,
+        )
 
     def request_with_retry_on_overload(
         self,
         method: str,
-        params: dict[str, Any] | None = None,
+        params: JsonObject | None,
         *,
+        response_model: type[ModelT],
         max_attempts: int = 3,
         initial_delay_s: float = 0.25,
         max_delay_s: float = 2.0,
-    ) -> Any:
+    ) -> ModelT:
         return retry_on_overload(
-            lambda: self.request(method, params),
+            lambda: self.request(method, params, response_model=response_model),
             max_attempts=max_attempts,
             initial_delay_s=initial_delay_s,
             max_delay_s=max_delay_s,
         )
 
-    # ---------- Helpers ----------
-
-    def wait_for_turn_completed(self, turn_id: str) -> Notification:
+    def wait_for_turn_completed(self, turn_id: str) -> TurnCompletedNotification:
         while True:
-            n = self.next_notification()
-            if n.method == "turn/completed" and (n.params or {}).get("turn", {}).get("id") == turn_id:
-                return n
+            notification = self.next_notification()
+            if (
+                notification.method == "turn/completed"
+                and isinstance(notification.payload, TurnCompletedNotification)
+                and notification.payload.turn.id == turn_id
+            ):
+                return notification.payload
 
     def stream_until_methods(self, methods: Iterable[str] | str) -> list[Notification]:
         target_methods = {methods} if isinstance(methods, str) else set(methods)
         out: list[Notification] = []
         while True:
-            n = self.next_notification()
-            out.append(n)
-            if n.method in target_methods:
+            notification = self.next_notification()
+            out.append(notification)
+            if notification.method in target_methods:
                 return out
 
     def run_text_turn(
         self,
         thread_id: str,
         text: str,
-        params: V2TurnStartParams | dict[str, Any] | None = None,
-    ) -> tuple[str, Notification]:
-        """Notebook-friendly helper: start a text turn and return (final_text, turn_completed_notification)."""
-        turn = self.turn_text(thread_id, text, params=params)
-        turn_id = turn["turn"]["id"]
+        params: V2TurnStartParams | JsonObject | None = None,
+    ) -> TextTurnResult:
+        started = self.turn_text(thread_id, text, params=params)
+        turn_id = started.turn.id
 
-        chunks: list[str] = []
-        completed: Notification | None = None
+        deltas: list[AgentMessageDeltaNotification] = []
+        completed: TurnCompletedNotification | None = None
+
         while True:
-            n = self.next_notification()
-            if n.method == "item/agentMessage/delta":
-                chunks.append((n.params or {}).get("delta", ""))
-            if n.method == "turn/completed" and (n.params or {}).get("turn", {}).get("id") == turn_id:
-                completed = n
+            notification = self.next_notification()
+            if (
+                notification.method == "item/agentMessage/delta"
+                and isinstance(notification.payload, AgentMessageDeltaNotification)
+                and notification.payload.turn_id == turn_id
+            ):
+                deltas.append(notification.payload)
+                continue
+            if (
+                notification.method == "turn/completed"
+                and isinstance(notification.payload, TurnCompletedNotification)
+                and notification.payload.turn.id == turn_id
+            ):
+                completed = notification.payload
                 break
 
-        assert completed is not None
-        return "".join(chunks), completed
+        if completed is None:
+            raise AppServerError("turn/completed notification not received")
 
-    def ask_result(self, text: str, *, model: str | None = None, thread_id: str | None = None) -> AskResult:
-        """High-level notebook helper returning thread id, text, and completion event."""
-        if thread_id is None:
+        return TextTurnResult(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            deltas=deltas,
+            completed=completed,
+        )
+
+    def ask_result(
+        self,
+        text: str,
+        *,
+        model: str | None = None,
+        thread_id: str | None = None,
+    ) -> TextTurnResult:
+        active_thread_id = thread_id
+        if active_thread_id is None:
             start_params = V2ThreadStartParams(model=model) if model else None
             started = self.thread_start(start_params)
-            thread_id = started["thread"]["id"]
-        assistant_text, completed = self.run_text_turn(thread_id, text)
-        return AskResult(thread_id=thread_id, text=assistant_text, completed=completed)
+            active_thread_id = started.thread.id
+        return self.run_text_turn(active_thread_id, text)
 
-    def ask(self, text: str, *, model: str | None = None, thread_id: str | None = None) -> tuple[str, str]:
-        """High-level helper for notebooks.
-
-        Returns `(thread_id, assistant_text)`.
-        - If `thread_id` is omitted, starts a fresh thread.
-        - If provided, appends a turn to existing thread.
-        """
-        result = self.ask_result(text, model=model, thread_id=thread_id)
-        return result.thread_id, result.text
+    def ask(
+        self,
+        text: str,
+        *,
+        model: str | None = None,
+        thread_id: str | None = None,
+    ) -> TextTurnResult:
+        return self.ask_result(text, model=model, thread_id=thread_id)
 
     def stream_text(
         self,
         thread_id: str,
         text: str,
-        params: V2TurnStartParams | dict[str, Any] | None = None,
-    ) -> Iterator[str]:
-        """Yield only assistant delta chunks for a text turn (not raw notifications)."""
-        turn = self.turn_text(thread_id, text, params=params)
-        turn_id = turn["turn"]["id"]
+        params: V2TurnStartParams | JsonObject | None = None,
+    ) -> Iterator[AgentMessageDeltaNotification]:
+        started = self.turn_text(thread_id, text, params=params)
+        turn_id = started.turn.id
         while True:
-            event = self.next_notification()
-            if event.method == "item/agentMessage/delta":
-                yield (event.params or {}).get("delta", "")
-            if event.method == "turn/completed" and (event.params or {}).get("turn", {}).get("id") == turn_id:
+            notification = self.next_notification()
+            if (
+                notification.method == "item/agentMessage/delta"
+                and isinstance(notification.payload, AgentMessageDeltaNotification)
+                and notification.payload.turn_id == turn_id
+            ):
+                yield notification.payload
+                continue
+            if (
+                notification.method == "turn/completed"
+                and isinstance(notification.payload, TurnCompletedNotification)
+                and notification.payload.turn.id == turn_id
+            ):
                 break
 
-    # ---------- Internals ----------
+    def _coerce_notification(self, method: str, params: object) -> Notification:
+        params_dict = params if isinstance(params, dict) else {}
 
-    def _parse_notification_with(self, notification: Notification, parsers: dict[str, Any]) -> Any | None:
-        parser = parsers.get(notification.method)
-        if parser is None:
-            return None
-        return parser.from_dict(notification.params or {})
+        if method.startswith("codex/event/"):
+            event_params = dict(params_dict)
+            for key in ("id", "conversationId"):
+                value = event_params.get(key)
+                if isinstance(value, str) and value.strip() == "":
+                    event_params[key] = None
+            try:
+                payload = CodexEventNotification.model_validate(event_params)
+            except Exception:  # noqa: BLE001
+                return Notification(method=method, payload=UnknownNotification(params=params_dict))
+            return Notification(method=method, payload=payload)
+
+        model = NOTIFICATION_MODELS.get(method)
+        if model is None:
+            return Notification(method=method, payload=UnknownNotification(params=params_dict))
+
+        try:
+            payload = model.model_validate(params_dict)
+        except Exception:  # noqa: BLE001
+            return Notification(method=method, payload=UnknownNotification(params=params_dict))
+        return Notification(method=method, payload=payload)
 
     def _normalize_input_items(
-        self, input_items: list[dict[str, Any]] | dict[str, Any] | str
-    ) -> list[dict[str, Any]]:
+        self,
+        input_items: list[JsonObject] | JsonObject | str,
+    ) -> list[JsonObject]:
         if isinstance(input_items, str):
             return [{"type": "text", "text": input_items}]
         if isinstance(input_items, dict):
             return [input_items]
         return input_items
 
-    def _default_approval_handler(self, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
+    def _default_approval_handler(self, method: str, params: JsonObject | None) -> JsonObject:
         if method == "item/commandExecution/requestApproval":
             return {"decision": "accept"}
         if method == "item/fileChange/requestApproval":
@@ -611,19 +564,24 @@ class AppServerClient:
     def _stderr_tail(self, limit: int = 40) -> str:
         return "\n".join(list(self._stderr_lines)[-limit:])
 
-    def _handle_server_request(self, msg: dict[str, Any]) -> dict[str, Any]:
+    def _handle_server_request(self, msg: dict[str, JsonValue]) -> JsonObject:
         method = msg["method"]
         params = msg.get("params")
-        return self._approval_handler(method, params)
+        if not isinstance(method, str):
+            return {}
+        return self._approval_handler(
+            method,
+            params if isinstance(params, dict) else None,
+        )
 
-    def _write_message(self, payload: dict[str, Any]) -> None:
+    def _write_message(self, payload: JsonObject) -> None:
         if self._proc is None or self._proc.stdin is None:
             raise TransportClosedError("app-server is not running")
         with self._lock:
             self._proc.stdin.write(json.dumps(payload) + "\n")
             self._proc.stdin.flush()
 
-    def _read_message(self) -> dict[str, Any]:
+    def _read_message(self) -> dict[str, JsonValue]:
         if self._proc is None or self._proc.stdout is None:
             raise TransportClosedError("app-server is not running")
 
@@ -634,9 +592,13 @@ class AppServerClient:
             )
 
         try:
-            return json.loads(line)
+            message = json.loads(line)
         except json.JSONDecodeError as exc:
             raise AppServerError(f"Invalid JSON-RPC line: {line!r}") from exc
+
+        if not isinstance(message, dict):
+            raise AppServerError(f"Invalid JSON-RPC payload: {message!r}")
+        return message
 
 
 def default_codex_home() -> str:
