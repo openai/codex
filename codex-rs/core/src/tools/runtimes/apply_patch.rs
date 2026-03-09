@@ -23,6 +23,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
@@ -38,6 +39,9 @@ pub struct ApplyPatchRequest {
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
     pub exec_approval_requirement: ExecApprovalRequirement,
+    pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
+    pub permissions_preapproved: bool,
     pub timeout_ms: Option<u64>,
     pub codex_exe: Option<PathBuf>,
 }
@@ -91,8 +95,8 @@ impl ApplyPatchRuntime {
             expiration: req.timeout_ms.into(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            additional_permissions: None,
+            sandbox_permissions: req.sandbox_permissions,
+            additional_permissions: req.additional_permissions.clone(),
             justification: None,
         })
     }
@@ -137,6 +141,9 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
             if routes_approval_to_guardian(turn) {
                 let request = ApplyPatchRuntime::build_guardian_review_request(req);
                 return review_approval_request(session, turn, request, retry_reason).await;
+            }
+            if req.permissions_preapproved && retry_reason.is_none() {
+                return ReviewDecision::Approved;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
@@ -248,6 +255,9 @@ mod tests {
                 reason: None,
                 proposed_execpolicy_amendment: None,
             },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            permissions_preapproved: false,
             timeout_ms: None,
             codex_exe: None,
         };
