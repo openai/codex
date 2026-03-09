@@ -306,6 +306,7 @@ use strum::IntoEnumIterator;
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const FAST_STATUS_MODEL: &str = "gpt-5.4";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
     ["model-with-reasoning", "context-remaining", "current-dir"];
 // Track information about an in-flight exec command.
@@ -1270,7 +1271,7 @@ impl ChatWidget {
         self.sync_personality_command_enabled();
         self.refresh_plugin_mentions();
         let startup_tooltip_override = self.startup_tooltip_override.take();
-        let show_fast_status = self.should_show_fast_status(event.service_tier);
+        let show_fast_status = self.should_show_fast_status(&model_for_header, event.service_tier);
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -5391,7 +5392,14 @@ impl ChatWidget {
             StatusLineItem::ModelWithReasoning => {
                 let label =
                     Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
-                Some(format!("{} {label}", self.model_display_name()))
+                let fast_label = if self
+                    .should_show_fast_status(self.current_model(), self.config.service_tier)
+                {
+                    " fast"
+                } else {
+                    ""
+                };
+                Some(format!("{} {label}{fast_label}", self.model_display_name()))
             }
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(self.status_line_cwd(), None))
@@ -7380,8 +7388,13 @@ impl ChatWidget {
         self.config.service_tier
     }
 
-    pub(crate) fn should_show_fast_status(&self, service_tier: Option<ServiceTier>) -> bool {
-        matches!(service_tier, Some(ServiceTier::Fast))
+    pub(crate) fn should_show_fast_status(
+        &self,
+        model: &str,
+        service_tier: Option<ServiceTier>,
+    ) -> bool {
+        model == FAST_STATUS_MODEL
+            && matches!(service_tier, Some(ServiceTier::Fast))
             && self
                 .auth_manager
                 .auth_cached()

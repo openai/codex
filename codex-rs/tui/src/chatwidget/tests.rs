@@ -1934,7 +1934,7 @@ fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
     }
 }
 
-fn set_chatgpt_auth(chat: &mut ChatWidget) {
+pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     );
@@ -7787,22 +7787,31 @@ async fn user_turn_carries_service_tier_after_fast_toggle() {
 
 #[tokio::test]
 async fn fast_status_indicator_requires_chatgpt_auth() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.set_service_tier(Some(ServiceTier::Fast));
 
-    assert!(!chat.should_show_fast_status(chat.current_service_tier()));
+    assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
 
     set_chatgpt_auth(&mut chat);
 
-    assert!(chat.should_show_fast_status(chat.current_service_tier()));
+    assert!(chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
+}
+
+#[tokio::test]
+async fn fast_status_indicator_is_hidden_for_non_gpt54_model() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_service_tier(Some(ServiceTier::Fast));
+    set_chatgpt_auth(&mut chat);
+
+    assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
 }
 
 #[tokio::test]
 async fn fast_status_indicator_is_hidden_when_fast_mode_is_off() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     set_chatgpt_auth(&mut chat);
 
-    assert!(!chat.should_show_fast_status(chat.current_service_tier()));
+    assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
 }
 
 #[tokio::test]
@@ -9550,6 +9559,64 @@ async fn status_line_fast_mode_footer_snapshot() {
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw fast-mode footer");
     assert_snapshot!("status_line_fast_mode_footer", terminal.backend());
+}
+
+#[tokio::test]
+async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.config.cwd = PathBuf::from("/tmp/project");
+    chat.config.tui_status_line = Some(vec![
+        "model-with-reasoning".to_string(),
+        "context-remaining".to_string(),
+        "current-dir".to_string(),
+    ]);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+    chat.set_service_tier(Some(ServiceTier::Fast));
+    set_chatgpt_auth(&mut chat);
+    chat.refresh_status_line();
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("gpt-5.4 xhigh fast · 100% left · /tmp/project".to_string())
+    );
+
+    chat.set_model("gpt-5.3-codex");
+    chat.refresh_status_line();
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("gpt-5.3-codex xhigh · 100% left · /tmp/project".to_string())
+    );
+}
+
+#[tokio::test]
+async fn status_line_model_with_reasoning_fast_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.show_welcome_banner = false;
+    chat.config.cwd = PathBuf::from("/tmp/project");
+    chat.config.tui_status_line = Some(vec![
+        "model-with-reasoning".to_string(),
+        "context-remaining".to_string(),
+        "current-dir".to_string(),
+    ]);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+    chat.set_service_tier(Some(ServiceTier::Fast));
+    set_chatgpt_auth(&mut chat);
+    chat.refresh_status_line();
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw model-with-reasoning footer");
+    assert_snapshot!(
+        "status_line_model_with_reasoning_fast_footer",
+        terminal.backend()
+    );
 }
 
 #[tokio::test]
