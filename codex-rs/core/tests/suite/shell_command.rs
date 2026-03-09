@@ -262,15 +262,16 @@ async fn unicode_output(login: bool) -> anyhow::Result<()> {
     })
     .await?;
 
+    // We use a child process on windows instead of a direct builtin like 'echo' to ensure that Powershell
+    // config is actually being set correctly.
     let call_id = "unicode_output";
-    mount_shell_responses_with_timeout(
-        &harness,
-        call_id,
-        "git -c alias.say='!printf \"%s\" \"naïve_café\"' say",
-        Some(login),
-        MEDIUM_TIMEOUT,
-    )
-    .await;
+    let command = if cfg!(windows) {
+        "cmd /c echo naïve_café"
+    } else {
+        "echo \"naïve_café\""
+    };
+    mount_shell_responses_with_timeout(&harness, call_id, command, Some(login), MEDIUM_TIMEOUT)
+        .await;
     harness.submit("run the command without login").await?;
 
     let output = harness.function_call_stdout(call_id).await;
