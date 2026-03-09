@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import platform
 import sys
 from pathlib import Path
@@ -48,6 +49,36 @@ def test_generate_types_wires_all_generation_steps() -> None:
         "generate_notification_registry",
         "generate_codex_event_types",
         "generate_public_api_flat_methods",
+    ]
+
+
+def test_schema_normalization_only_flattens_string_literal_oneofs() -> None:
+    script = _load_update_script_module()
+    schema = json.loads(
+        (
+            ROOT.parent.parent
+            / "codex-rs"
+            / "app-server-protocol"
+            / "schema"
+            / "json"
+            / "codex_app_server_protocol.v2.schemas.json"
+        ).read_text()
+    )
+
+    definitions = schema["definitions"]
+    flattened = [
+        name
+        for name, definition in definitions.items()
+        if isinstance(definition, dict)
+        and script._flatten_string_enum_one_of(definition.copy())
+    ]
+
+    assert flattened == [
+        "AuthMode",
+        "CommandExecOutputStream",
+        "ExperimentalFeatureStage",
+        "InputModality",
+        "MessagePhase",
     ]
 
 

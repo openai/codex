@@ -208,6 +208,50 @@ def bundle_all_platform_binaries(channel: str) -> None:
     print("Bundled all platform binaries.")
 
 
+def _flatten_string_enum_one_of(definition: dict[str, Any]) -> bool:
+    branches = definition.get("oneOf")
+    if not isinstance(branches, list) or not branches:
+        return False
+
+    enum_values: list[str] = []
+    for branch in branches:
+        if not isinstance(branch, dict):
+            return False
+        if branch.get("type") != "string":
+            return False
+
+        enum = branch.get("enum")
+        if not isinstance(enum, list) or len(enum) != 1 or not isinstance(enum[0], str):
+            return False
+
+        extra_keys = set(branch) - {"type", "enum", "description", "title"}
+        if extra_keys:
+            return False
+
+        enum_values.append(enum[0])
+
+    description = definition.get("description")
+    title = definition.get("title")
+    definition.clear()
+    definition["type"] = "string"
+    definition["enum"] = enum_values
+    if isinstance(description, str):
+        definition["description"] = description
+    if isinstance(title, str):
+        definition["title"] = title
+    return True
+
+
+def _normalized_schema_bundle_text() -> str:
+    schema = json.loads(schema_bundle_path().read_text())
+    definitions = schema.get("definitions", {})
+    if isinstance(definitions, dict):
+        for definition in definitions.values():
+            if isinstance(definition, dict):
+                _flatten_string_enum_one_of(definition)
+    return json.dumps(schema, indent=2, sort_keys=True) + "\n"
+
+
 def generate_v2_all() -> None:
     out_path = sdk_root() / "src" / "codex_app_server" / "generated" / "v2_all.py"
     out_dir = out_path.parent
@@ -215,28 +259,31 @@ def generate_v2_all() -> None:
     if old_package_dir.exists():
         shutil.rmtree(old_package_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    run_python_module(
-        "datamodel_code_generator",
-        [
-            "--input",
-            str(schema_bundle_path()),
-            "--input-file-type",
-            "jsonschema",
-            "--output",
-            str(out_path),
-            "--output-model-type",
-            "pydantic_v2.BaseModel",
-            "--target-python-version",
-            "3.10",
-            "--snake-case-field",
-            "--allow-population-by-field-name",
-            "--use-union-operator",
-            "--reuse-model",
-            "--disable-timestamp",
-            "--use-double-quotes",
-        ],
-        cwd=sdk_root(),
-    )
+    with tempfile.TemporaryDirectory() as td:
+        normalized_bundle = Path(td) / schema_bundle_path().name
+        normalized_bundle.write_text(_normalized_schema_bundle_text())
+        run_python_module(
+            "datamodel_code_generator",
+            [
+                "--input",
+                str(normalized_bundle),
+                "--input-file-type",
+                "jsonschema",
+                "--output",
+                str(out_path),
+                "--output-model-type",
+                "pydantic_v2.BaseModel",
+                "--target-python-version",
+                "3.10",
+                "--snake-case-field",
+                "--allow-population-by-field-name",
+                "--use-union-operator",
+                "--reuse-model",
+                "--disable-timestamp",
+                "--use-double-quotes",
+            ],
+            cwd=sdk_root(),
+        )
     _normalize_generated_timestamps(out_path)
 
 def _notification_specs() -> list[tuple[str, str]]:

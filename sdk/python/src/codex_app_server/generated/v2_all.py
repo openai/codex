@@ -260,21 +260,10 @@ class AskForApproval(RootModel[AskForApproval1 | AskForApproval2]):
     root: AskForApproval1 | AskForApproval2
 
 
-class AuthMode1(Enum):
+class AuthMode(Enum):
     apikey = "apikey"
-
-
-class AuthMode3(Enum):
+    chatgpt = "chatgpt"
     chatgpt_auth_tokens = "chatgptAuthTokens"
-
-
-class AuthMode(RootModel[AuthMode1 | Type1 | AuthMode3]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: AuthMode1 | Type1 | AuthMode3 = Field(
-        ..., description="Authentication mode for OpenAI-backed providers."
-    )
 
 
 class ByteRange(BaseModel):
@@ -685,23 +674,9 @@ class CommandAction(
     root: CommandAction1 | CommandAction2 | CommandAction3 | CommandAction4
 
 
-class CommandExecOutputStream1(Enum):
+class CommandExecOutputStream(Enum):
     stdout = "stdout"
-
-
-class CommandExecOutputStream2(Enum):
     stderr = "stderr"
-
-
-class CommandExecOutputStream(
-    RootModel[CommandExecOutputStream1 | CommandExecOutputStream2]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: CommandExecOutputStream1 | CommandExecOutputStream2 = Field(
-        ..., description="Stream label for `command/exec/outputDelta` notifications."
-    )
 
 
 CommandExecResizeResponse = CodexAppServerProtocolV2
@@ -1739,11 +1714,6 @@ class ExecCommandStatus(Enum):
     declined = "declined"
 
 
-class ExecOutputStream(Enum):
-    stdout = "stdout"
-    stderr = "stderr"
-
-
 class ExperimentalFeatureListParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -1757,45 +1727,12 @@ class ExperimentalFeatureListParams(BaseModel):
     )
 
 
-class ExperimentalFeatureStage1(Enum):
+class ExperimentalFeatureStage(Enum):
     beta = "beta"
-
-
-class ExperimentalFeatureStage2(Enum):
     under_development = "underDevelopment"
-
-
-class ExperimentalFeatureStage3(Enum):
     stable = "stable"
-
-
-class ExperimentalFeatureStage4(Enum):
     deprecated = "deprecated"
-
-
-class ExperimentalFeatureStage5(Enum):
     removed = "removed"
-
-
-class ExperimentalFeatureStage(
-    RootModel[
-        ExperimentalFeatureStage1
-        | ExperimentalFeatureStage2
-        | ExperimentalFeatureStage3
-        | ExperimentalFeatureStage4
-        | ExperimentalFeatureStage5
-    ]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: (
-        ExperimentalFeatureStage1
-        | ExperimentalFeatureStage2
-        | ExperimentalFeatureStage3
-        | ExperimentalFeatureStage4
-        | ExperimentalFeatureStage5
-    )
 
 
 class ExternalAgentConfigDetectParams(BaseModel):
@@ -2022,21 +1959,9 @@ class InitializeParams(BaseModel):
     client_info: ClientInfo = Field(..., alias="clientInfo")
 
 
-class InputModality1(Enum):
+class InputModality(Enum):
     text = "text"
-
-
-class InputModality2(Enum):
     image = "image"
-
-
-class InputModality(RootModel[InputModality1 | InputModality2]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: InputModality1 | InputModality2 = Field(
-        ..., description="Canonical user-input modality tags advertised by a model."
-    )
 
 
 class ListMcpServerStatusParams(BaseModel):
@@ -2095,6 +2020,10 @@ class LoginAccountParams2(BaseModel):
     type: Type1 = Field(..., title="Chatgptv2::LoginAccountParamsType")
 
 
+class Type105(Enum):
+    chatgpt_auth_tokens = "chatgptAuthTokens"
+
+
 class LoginAccountParams3(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -2114,7 +2043,7 @@ class LoginAccountParams3(BaseModel):
         alias="chatgptPlanType",
         description="Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
     )
-    type: AuthMode3 = Field(..., title="ChatgptAuthTokensv2::LoginAccountParamsType")
+    type: Type105 = Field(..., title="ChatgptAuthTokensv2::LoginAccountParamsType")
 
 
 class LoginAccountParams(
@@ -2152,7 +2081,7 @@ class LoginAccountResponse3(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: AuthMode3 = Field(..., title="ChatgptAuthTokensv2::LoginAccountResponseType")
+    type: Type105 = Field(..., title="ChatgptAuthTokensv2::LoginAccountResponseType")
 
 
 class LoginAccountResponse(
@@ -2349,22 +2278,9 @@ class MergeStrategy(Enum):
     upsert = "upsert"
 
 
-class MessagePhase1(Enum):
+class MessagePhase(Enum):
     commentary = "commentary"
-
-
-class MessagePhase2(Enum):
     final_answer = "final_answer"
-
-
-class MessagePhase(RootModel[MessagePhase1 | MessagePhase2]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: MessagePhase1 | MessagePhase2 = Field(
-        ...,
-        description='Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as "phase unknown" and keep compatibility behavior for legacy models.',
-    )
 
 
 class ModeKind(Enum):
@@ -2815,12 +2731,16 @@ class ReasoningItemContent1(BaseModel):
     type: Type119 = Field(..., title="ReasoningTextReasoningItemContentType")
 
 
+class Type120(Enum):
+    text = "text"
+
+
 class ReasoningItemContent2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     text: str
-    type: InputModality1 = Field(..., title="TextReasoningItemContentType")
+    type: Type120 = Field(..., title="TextReasoningItemContentType")
 
 
 class ReasoningItemContent(RootModel[ReasoningItemContent1 | ReasoningItemContent2]):
@@ -4614,14 +4534,18 @@ class UserInput1(BaseModel):
         [],
         description="UI-defined spans within `text` used to render or persist special elements.",
     )
-    type: InputModality1 = Field(..., title="TextUserInputType")
+    type: Type120 = Field(..., title="TextUserInputType")
+
+
+class Type173(Enum):
+    image = "image"
 
 
 class UserInput2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: InputModality2 = Field(..., title="ImageUserInputType")
+    type: Type173 = Field(..., title="ImageUserInputType")
     url: str
 
 
@@ -5623,7 +5547,7 @@ class EventMsg31(BaseModel):
     chunk: str = Field(
         ..., description="Raw bytes from the stream (may not be valid UTF-8)."
     )
-    stream: ExecOutputStream = Field(
+    stream: CommandExecOutputStream = Field(
         ..., description="Which stream produced this chunk."
     )
     type: Type49 = Field(..., title="ExecCommandOutputDeltaEventMsgType")
@@ -6128,10 +6052,7 @@ class Model(BaseModel):
     hidden: bool
     id: str
     input_modalities: List[InputModality] | None = Field(
-        default_factory=lambda: [
-            InputModality.model_validate(v) for v in ["text", "image"]
-        ],
-        alias="inputModalities",
+        ["text", "image"], alias="inputModalities"
     )
     is_default: bool = Field(..., alias="isDefault")
     model: str
