@@ -88,3 +88,6 @@ pretty_assertions = { workspace = true }
 
 [build-dependencies]
 winres = "0.1"
+
+[package.metadata.cargo-shear]
+ignored = ["codex-utils-pty", "tokio"]
