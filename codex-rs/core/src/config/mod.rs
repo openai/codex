@@ -124,6 +124,7 @@ pub use permissions::PermissionsToml;
 pub(crate) use permissions::resolve_permission_profile;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
+pub use types::ApprovalReviewPolicy;
 
 pub use codex_git::GhostSnapshotConfig;
 
@@ -233,6 +234,9 @@ pub struct Config {
 
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
+
+    /// Whether approvals remain manual or are automatically reviewed.
+    pub approval_review_policy: ApprovalReviewPolicy,
 
     /// enforce_residency means web traffic cannot be routed outside of a
     /// particular geography. HTTP clients should direct their requests
@@ -1058,6 +1062,9 @@ pub struct ConfigToml {
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
+
+    /// Whether approval requests remain manual or are automatically reviewed.
+    pub approval_review_policy: Option<ApprovalReviewPolicy>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
@@ -2125,6 +2132,16 @@ impl Config {
             );
             approval_policy = constrained_approval_policy.value();
         }
+        let approval_review_policy = config_profile
+            .approval_review_policy
+            .or(cfg.approval_review_policy)
+            .unwrap_or_else(|| {
+                if features.enabled(Feature::GuardianApproval) {
+                    ApprovalReviewPolicy::AutoOnly
+                } else {
+                    ApprovalReviewPolicy::ManualOnly
+                }
+            });
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
@@ -2427,6 +2444,7 @@ impl Config {
                 windows_sandbox_private_desktop,
                 macos_seatbelt_profile_extensions: None,
             },
+            approval_review_policy,
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             user_instructions,

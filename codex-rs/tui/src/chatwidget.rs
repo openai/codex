@@ -56,6 +56,7 @@ use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
+use codex_core::config::types::ApprovalReviewPolicy;
 use codex_core::config::types::Notifications;
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::ConfigLayerStackOrdering;
@@ -6761,6 +6762,7 @@ impl ChatWidget {
         let current_approval = self.config.permissions.approval_policy.value();
         let current_sandbox = self.config.permissions.sandbox_policy.get();
         let guardian_approval_enabled = self.config.features.enabled(Feature::GuardianApproval);
+        let current_review_policy = self.config.approval_review_policy;
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
@@ -6890,7 +6892,8 @@ impl ChatWidget {
                 items.push(SelectionItem {
                     name: base_name.clone(),
                     description: base_description.clone(),
-                    is_current: !guardian_approval_enabled
+                    is_current: (current_review_policy == ApprovalReviewPolicy::ManualOnly
+                        || !guardian_approval_enabled)
                         && Self::preset_matches_current(current_approval, current_sandbox, &preset),
                     actions: default_actions,
                     dismiss_on_select: true,
@@ -6905,11 +6908,12 @@ impl ChatWidget {
                             "Same workspace-write permissions as Default, but `on-request` approvals are dispatched to a carefully-prompted security reviewer subagent."
                                 .to_string(),
                         ),
-                        is_current: Self::preset_matches_current(
-                            current_approval,
-                            current_sandbox,
-                            &preset,
-                        ),
+                        is_current: current_review_policy == ApprovalReviewPolicy::AutoOnly
+                            && Self::preset_matches_current(
+                                current_approval,
+                                current_sandbox,
+                                &preset,
+                            ),
                         actions: Self::approval_preset_actions(
                             preset.approval,
                             preset.sandbox.clone(),
@@ -6926,8 +6930,11 @@ impl ChatWidget {
                 items.push(SelectionItem {
                     name: base_name,
                     description: base_description,
-                    is_current: !guardian_approval_enabled
-                        && Self::preset_matches_current(current_approval, current_sandbox, &preset),
+                    is_current: Self::preset_matches_current(
+                        current_approval,
+                        current_sandbox,
+                        &preset,
+                    ),
                     actions: default_actions,
                     dismiss_on_select: true,
                     disabled_reason: default_disabled_reason,
@@ -7560,6 +7567,10 @@ impl ChatWidget {
             );
         }
         enabled
+    }
+
+    pub(crate) fn set_approval_review_policy(&mut self, policy: ApprovalReviewPolicy) {
+        self.config.approval_review_policy = policy;
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {

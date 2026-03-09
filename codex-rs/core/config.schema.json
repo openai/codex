@@ -168,6 +168,13 @@
       "description": "Tool settings for a single app.",
       "type": "object"
     },
+    "ApprovalReviewPolicy": {
+      "enum": [
+        "manual-only",
+        "auto-only"
+      ],
+      "type": "string"
+    },
     "AppsConfigToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AppConfig"
@@ -303,6 +310,9 @@
         },
         "approval_policy": {
           "$ref": "#/definitions/AskForApproval"
+        },
+        "approval_review_policy": {
+          "$ref": "#/definitions/ApprovalReviewPolicy"
         },
         "chatgpt_base_url": {
           "type": "string"
@@ -1768,6 +1778,14 @@
         }
       ],
       "description": "Default approval policy for executing commands."
+    },
+    "approval_review_policy": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ApprovalReviewPolicy"
+        }
+      ],
+      "description": "Whether approval requests remain manual or are automatically reviewed."
     },
     "apps": {
       "allOf": [

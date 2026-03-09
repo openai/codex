@@ -859,8 +859,18 @@ impl ConfigEditsBuilder {
 
     /// Enable or disable a feature flag by key under the `[features]` table.
     pub fn set_feature_enabled(mut self, key: &str, enabled: bool) -> Self {
+        let segments = if let Some(profile) = self.profile.as_ref() {
+            vec![
+                "profiles".to_string(),
+                profile.clone(),
+                "features".to_string(),
+                key.to_string(),
+            ]
+        } else {
+            vec!["features".to_string(), key.to_string()]
+        };
         self.edits.push(ConfigEdit::SetPath {
-            segments: vec!["features".to_string(), key.to_string()],
+            segments,
             value: value(enabled),
         });
         self

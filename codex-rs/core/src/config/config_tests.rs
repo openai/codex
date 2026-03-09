@@ -2,6 +2,8 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use crate::config::types::BundledSkillsConfig;
+use crate::config::types::ApprovalReviewPolicy;
+use crate::config::types::BundledSkillsConfig;
 use crate::config::types::FeedbackConfigToml;
 use crate::config::types::HistoryPersistence;
 use crate::config::types::McpServerTransportConfig;
@@ -2800,6 +2802,41 @@ model = "gpt-5.1-codex"
     Ok(())
 }
 
+#[tokio::test]
+async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("guardian_approval", true)
+        .apply()
+        .await?;
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    let parsed: ConfigToml = toml::from_str(&serialized)?;
+    let profile = parsed
+        .profiles
+        .get("dev")
+        .expect("profile should be created");
+
+    assert_eq!(
+        profile
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        Some(&true),
+    );
+    assert_eq!(
+        parsed
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        None,
+    );
+
+    Ok(())
+}
+
 struct PrecedenceTestFixture {
     cwd: TempDir,
     codex_home: TempDir,
@@ -4085,6 +4122,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 windows_sandbox_private_desktop: true,
                 macos_seatbelt_profile_extensions: None,
             },
+            approval_review_policy: ApprovalReviewPolicy::ManualOnly,
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
             notify: None,
@@ -4223,6 +4261,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -4359,6 +4398,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -4481,6 +4521,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -5371,6 +5412,48 @@ shell_tool = true
         config.startup_warnings
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn approval_review_policy_defaults_to_manual_only_without_guardian_feature()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.approval_review_policy,
+        ApprovalReviewPolicy::ManualOnly
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn approval_review_policy_backfills_to_auto_only_from_guardian_feature() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+guardian_approval = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.approval_review_policy,
+        ApprovalReviewPolicy::AutoOnly
+    );
     Ok(())
 }
 

@@ -37,6 +37,24 @@ pub enum WindowsSandboxModeToml {
     Unelevated,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovalReviewPolicy {
+    #[default]
+    ManualOnly,
+    AutoOnly,
+}
+
+impl fmt::Display for ApprovalReviewPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::ManualOnly => "manual-only",
+            Self::AutoOnly => "auto-only",
+        };
+        write!(f, "{value}")
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct WindowsToml {
