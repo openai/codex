@@ -107,15 +107,6 @@ pub(crate) fn is_guardian_subagent_source(
     )
 }
 
-/// Coarse risk label paired with the numeric `risk_score`.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum GuardianRiskLevel {
-    Low,
-    Medium,
-    High,
-}
-
 /// Evidence item returned by the guardian subagent.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct GuardianEvidence {
@@ -258,7 +249,7 @@ async fn run_guardian_review(
         )
         .await;
 
-    let denied_action = request.action.clone();
+    let denied_action = guardian_approval_request_to_json(&request);
     let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
@@ -303,7 +294,7 @@ async fn run_guardian_review(
     // guardian decision without needing the full subagent transcript.
     let warning = format!(
         "Automatic approval review {verdict} (risk: {}): {}",
-        assessment.risk_level.as_str(),
+        guardian_risk_level_str(assessment.risk_level),
         assessment.rationale
     );
     session
