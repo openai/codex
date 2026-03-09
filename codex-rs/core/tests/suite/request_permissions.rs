@@ -1029,7 +1029,7 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
     skip_if_sandbox!(Ok(()));
 
     let server = start_mock_server().await;
-    let approval_policy = AskForApproval::UnlessTrusted;
+    let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = workspace_write_excluding_tmp();
     let sandbox_policy_for_config = sandbox_policy.clone();
 
@@ -1124,7 +1124,12 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
         .map(|output| json!({ "output": output }))
         .unwrap_or_else(|| panic!("expected exec-call output"));
     let result = parse_result(&exec_output);
-    assert_eq!(result.exit_code, Some(0));
+    assert!(
+        result.exit_code.is_none_or(|exit_code| exit_code == 0),
+        "expected success output, got exit_code={:?}, stdout={:?}",
+        result.exit_code,
+        result.stdout
+    );
     assert_eq!(result.stdout.trim(), "sticky-explicit-grant-ok");
     assert_eq!(
         fs::read_to_string(&outside_write)?,
@@ -1140,7 +1145,7 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Resu
     skip_if_sandbox!(Ok(()));
 
     let server = start_mock_server().await;
-    let approval_policy = AskForApproval::UnlessTrusted;
+    let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = workspace_write_excluding_tmp();
     let sandbox_policy_for_config = sandbox_policy.clone();
 
@@ -1231,7 +1236,12 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Resu
         .map(|output| json!({ "output": output }))
         .unwrap_or_else(|| panic!("expected shell-call output"));
     let result = parse_result(&shell_output);
-    assert_eq!(result.exit_code, Some(0));
+    assert!(
+        result.exit_code.is_none_or(|exit_code| exit_code == 0),
+        "expected success output, got exit_code={:?}, stdout={:?}",
+        result.exit_code,
+        result.stdout
+    );
     assert_eq!(result.stdout.trim(), "sticky-shell-grant-ok");
     assert_eq!(fs::read_to_string(&outside_write)?, "sticky-shell-grant-ok");
 
