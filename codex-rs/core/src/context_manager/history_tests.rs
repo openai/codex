@@ -421,9 +421,23 @@ fn for_prompt_rewrites_image_generation_calls_when_images_are_supported() {
             ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
-                content: vec![ContentItem::InputImage {
-                    image_url: "data:image/png;base64,Zm9v".to_string(),
-                }],
+                content: vec![
+                    ContentItem::InputText {
+                        text: "Image Generation Call".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "Image ID: ig_123".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "Prompt: lobster".to_string(),
+                    },
+                    ContentItem::InputImage {
+                        image_url: "data:image/png;base64,Zm9v".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "Saved to: CWD".to_string(),
+                    },
+                ],
                 end_turn: None,
                 phase: None,
             },
@@ -475,10 +489,24 @@ fn for_prompt_rewrites_image_generation_calls_when_images_are_unsupported() {
             ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "image content omitted because you do not support image input"
-                        .to_string(),
-                }],
+                content: vec![
+                    ContentItem::InputText {
+                        text: "Image Generation Call".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "Image ID: ig_123".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "Prompt: lobster".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "image content omitted because you do not support image input"
+                            .to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "Saved to: CWD".to_string(),
+                    },
+                ],
                 end_turn: None,
                 phase: None,
             },

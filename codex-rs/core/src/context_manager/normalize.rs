@@ -215,17 +215,37 @@ pub(crate) fn rewrite_image_generation_calls_for_stateless_input(items: &mut Vec
     *items = original_items
         .into_iter()
         .map(|item| match item {
-            ResponseItem::ImageGenerationCall { result, .. } => {
+            ResponseItem::ImageGenerationCall {
+                id,
+                revised_prompt,
+                result,
+                ..
+            } => {
                 let image_url = if result.starts_with("data:") {
                     result
                 } else {
                     format!("data:image/png;base64,{result}")
                 };
+                let revised_prompt = revised_prompt.unwrap_or_default();
 
                 ResponseItem::Message {
                     id: None,
                     role: "user".to_string(),
-                    content: vec![ContentItem::InputImage { image_url }],
+                    content: vec![
+                        ContentItem::InputText {
+                            text: "Image Generation Call".to_string(),
+                        },
+                        ContentItem::InputText {
+                            text: format!("Image ID: {id}"),
+                        },
+                        ContentItem::InputText {
+                            text: format!("Prompt: {revised_prompt}"),
+                        },
+                        ContentItem::InputImage { image_url },
+                        ContentItem::InputText {
+                            text: "Saved to: CWD".to_string(),
+                        },
+                    ],
                     end_turn: None,
                     phase: None,
                 }

@@ -93,6 +93,8 @@ pub enum Feature {
     ApplyPatchFreeform,
     /// Allow requesting additional filesystem permissions while staying sandboxed.
     RequestPermissions,
+    /// Expose the built-in request_permissions tool.
+    RequestPermissionsTool,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -147,7 +149,7 @@ pub enum Feature {
     Steer,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
-    /// Enable guardian subagent approvals.
+    /// Enable automatic review for approval prompts.
     GuardianApproval,
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
@@ -582,6 +584,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::RequestPermissionsTool,
+        key: "request_permissions_tool",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
         key: "use_linux_sandbox_bwrap",
         #[cfg(target_os = "linux")]
@@ -702,8 +710,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GuardianApproval,
         key: "guardian_approval",
         stage: Stage::Experimental {
-            name: "Guardian approvals",
-            menu_description: "Let a guardian subagent review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access.",
+            name: "Automatic approval review",
+            menu_description: "Dispatch `on-request` approval prompts (for e.g. sandbox escapes or blocked network access) to a carefully-prompted security reviewer subagent rather than blocking the agent on your input.",
             announcement: "",
         },
         default_enabled: false,
@@ -909,15 +917,33 @@ mod tests {
         let stage = spec.stage;
 
         assert!(matches!(stage, Stage::Experimental { .. }));
-        assert_eq!(stage.experimental_menu_name(), Some("Guardian approvals"));
+        assert_eq!(
+            stage.experimental_menu_name(),
+            Some("Automatic approval review")
+        );
         assert_eq!(
             stage.experimental_menu_description().map(str::to_owned),
             Some(
-                "Let a guardian subagent review `on-request` approval prompts instead of showing them to you, including sandbox escapes and blocked network access.".to_string()
+                "Dispatch `on-request` approval prompts (for e.g. sandbox escapes or blocked network access) to a carefully-prompted security reviewer subagent rather than blocking the agent on your input.".to_string()
             )
         );
         assert_eq!(stage.experimental_announcement(), None);
         assert_eq!(Feature::GuardianApproval.default_enabled(), false);
+    }
+
+    #[test]
+    fn request_permissions_is_under_development() {
+        assert_eq!(Feature::RequestPermissions.stage(), Stage::UnderDevelopment);
+        assert_eq!(Feature::RequestPermissions.default_enabled(), false);
+    }
+
+    #[test]
+    fn request_permissions_tool_is_under_development() {
+        assert_eq!(
+            Feature::RequestPermissionsTool.stage(),
+            Stage::UnderDevelopment
+        );
+        assert_eq!(Feature::RequestPermissionsTool.default_enabled(), false);
     }
 
     #[test]

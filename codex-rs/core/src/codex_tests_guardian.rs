@@ -16,8 +16,16 @@ use codex_execpolicy::RuleMatch;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::codex_linux_sandbox_exe_or_skip;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -27,6 +35,29 @@ use tempfile::tempdir;
 
 #[tokio::test]
 async fn guardian_allows_shell_additional_permissions_requests_past_policy_validation() {
+    let server = start_mock_server().await;
+    let _request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message(
+                "msg-guardian",
+                &serde_json::json!({
+                    "risk_level": "low",
+                    "risk_score": 5,
+                    "rationale": "The request only widens permissions for a benign local echo command.",
+                    "evidence": [{
+                        "message": "The planned command is an `echo hi` smoke test.",
+                        "why": "This is low-risk and does not attempt destructive or exfiltrating behavior.",
+                    }],
+                })
+                .to_string(),
+            ),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+
     let (mut session, mut turn_context_raw) = make_session_and_context().await;
     turn_context_raw.codex_linux_sandbox_exe = codex_linux_sandbox_exe_or_skip!();
     turn_context_raw
@@ -45,13 +76,34 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         .sandbox_policy
         .set(SandboxPolicy::DangerFullAccess)
         .expect("test setup should allow updating sandbox policy");
+    // This test is about request-permissions validation, not managed sandbox
+    // policy enforcement. Widen the derived sandbox policies directly so the
+    // command runs without depending on a platform sandbox binary.
+    turn_context_raw.file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from(turn_context_raw.sandbox_policy.get());
+    turn_context_raw.network_sandbox_policy =
+        NetworkSandboxPolicy::from(turn_context_raw.sandbox_policy.get());
+    let mut config = (*turn_context_raw.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    let config = Arc::new(config);
+    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+        config.codex_home.clone(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    ));
+    session.services.models_manager = models_manager;
+    turn_context_raw.config = Arc::clone(&config);
+    turn_context_raw.provider = config.model_provider.clone();
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
+    let expiration_ms: u64 = if cfg!(windows) { 2_500 } else { 1_000 };
 
     let params = ExecParams {
         command: if cfg!(windows) {
             vec![
                 "cmd.exe".to_string(),
+                "/Q".to_string(),
+                "/D".to_string(),
                 "/C".to_string(),
                 "echo hi".to_string(),
             ]
@@ -63,7 +115,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             ]
         },
         cwd: turn_context.cwd.clone(),
-        expiration: 1000.into(),
+        expiration: expiration_ms.into(),
         env: HashMap::new(),
         network: None,
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,

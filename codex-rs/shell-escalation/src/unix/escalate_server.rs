@@ -398,6 +398,7 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+    use std::os::fd::AsRawFd;
     use std::os::fd::FromRawFd;
     use std::path::PathBuf;
     use std::sync::LazyLock;
@@ -558,8 +559,19 @@ mod tests {
                 .expect("session should export shell escalation socket")
                 .parse::<i32>()?;
             assert_ne!(unsafe { libc::fcntl(socket_fd, libc::F_GETFD) }, -1);
+            let preserved_socket_fd = unsafe { libc::dup(socket_fd) };
+            assert!(
+                preserved_socket_fd >= 0,
+                "expected dup() of client socket to succeed",
+            );
+            let preserved_socket =
+                unsafe { std::os::fd::OwnedFd::from_raw_fd(preserved_socket_fd) };
             after_spawn.expect("one-shot exec should install an after-spawn hook")();
-            assert_eq!(unsafe { libc::fcntl(socket_fd, libc::F_GETFD) }, -1);
+            let replacement_fd =
+                unsafe { libc::fcntl(preserved_socket.as_raw_fd(), libc::F_DUPFD, socket_fd) };
+            assert_eq!(replacement_fd, socket_fd);
+            let replacement_socket = unsafe { std::os::fd::OwnedFd::from_raw_fd(replacement_fd) };
+            drop(replacement_socket);
             Ok(ExecResult {
                 exit_code: 0,
                 stdout: String::new(),

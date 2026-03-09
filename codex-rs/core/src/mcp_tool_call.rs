@@ -18,7 +18,8 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppToolApproval;
 use crate::connectors;
 use crate::features::Feature;
-use crate::guardian::GuardianReviewRequest;
+use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -574,88 +575,23 @@ fn persistent_mcp_tool_approval_key(
 fn build_guardian_mcp_tool_review_request(
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
-) -> GuardianReviewRequest {
-    let mut action = serde_json::Map::from_iter([
-        (
-            "tool".to_string(),
-            serde_json::Value::String("mcp_tool_call".to_string()),
-        ),
-        (
-            "server".to_string(),
-            serde_json::Value::String(invocation.server.clone()),
-        ),
-        (
-            "tool_name".to_string(),
-            serde_json::Value::String(invocation.tool.clone()),
-        ),
-    ]);
-
-    if let Some(arguments) = invocation.arguments.clone() {
-        action.insert("arguments".to_string(), arguments);
-    }
-
-    if let Some(metadata) = metadata {
-        if let Some(connector_id) = metadata.connector_id.as_ref() {
-            action.insert(
-                "connector_id".to_string(),
-                serde_json::Value::String(connector_id.clone()),
-            );
-        }
-        if let Some(connector_name) = metadata.connector_name.as_ref() {
-            action.insert(
-                "connector_name".to_string(),
-                serde_json::Value::String(connector_name.clone()),
-            );
-        }
-        if let Some(connector_description) = metadata.connector_description.as_ref() {
-            action.insert(
-                "connector_description".to_string(),
-                serde_json::Value::String(connector_description.clone()),
-            );
-        }
-        if let Some(tool_title) = metadata.tool_title.as_ref() {
-            action.insert(
-                "tool_title".to_string(),
-                serde_json::Value::String(tool_title.clone()),
-            );
-        }
-        if let Some(tool_description) = metadata.tool_description.as_ref() {
-            action.insert(
-                "tool_description".to_string(),
-                serde_json::Value::String(tool_description.clone()),
-            );
-        }
-        if let Some(annotations) = metadata.annotations.as_ref() {
-            let mut annotation_map = serde_json::Map::new();
-            if let Some(destructive_hint) = annotations.destructive_hint {
-                annotation_map.insert(
-                    "destructive_hint".to_string(),
-                    serde_json::Value::Bool(destructive_hint),
-                );
-            }
-            if let Some(open_world_hint) = annotations.open_world_hint {
-                annotation_map.insert(
-                    "open_world_hint".to_string(),
-                    serde_json::Value::Bool(open_world_hint),
-                );
-            }
-            if let Some(read_only_hint) = annotations.read_only_hint {
-                annotation_map.insert(
-                    "read_only_hint".to_string(),
-                    serde_json::Value::Bool(read_only_hint),
-                );
-            }
-            if !annotation_map.is_empty() {
-                action.insert(
-                    "annotations".to_string(),
-                    serde_json::Value::Object(annotation_map),
-                );
-            }
-        }
-    }
-
-    GuardianReviewRequest {
-        action: serde_json::Value::Object(action),
+) -> GuardianApprovalRequest {
+    GuardianApprovalRequest::McpToolCall {
+        server: invocation.server.clone(),
+        tool_name: invocation.tool.clone(),
+        arguments: invocation.arguments.clone(),
+        connector_id: metadata.and_then(|metadata| metadata.connector_id.clone()),
+        connector_name: metadata.and_then(|metadata| metadata.connector_name.clone()),
+        connector_description: metadata.and_then(|metadata| metadata.connector_description.clone()),
+        tool_title: metadata.and_then(|metadata| metadata.tool_title.clone()),
+        tool_description: metadata.and_then(|metadata| metadata.tool_description.clone()),
+        annotations: metadata
+            .and_then(|metadata| metadata.annotations.as_ref())
+            .map(|annotations| GuardianMcpAnnotations {
+                destructive_hint: annotations.destructive_hint,
+                open_world_hint: annotations.open_world_hint,
+                read_only_hint: annotations.read_only_hint,
+            }),
     }
 }
 
@@ -1599,20 +1535,18 @@ mod tests {
 
         assert_eq!(
             request,
-            GuardianReviewRequest {
-                action: serde_json::json!({
-                    "tool": "mcp_tool_call",
-                    "server": CODEX_APPS_MCP_SERVER_NAME,
-                    "tool_name": "browser_navigate",
-                    "arguments": {
-                        "url": "https://example.com",
-                    },
-                    "connector_id": "playwright",
-                    "connector_name": "Playwright",
-                    "connector_description": "Browser automation",
-                    "tool_title": "Navigate",
-                    "tool_description": "Open a page",
-                }),
+            GuardianApprovalRequest::McpToolCall {
+                server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                tool_name: "browser_navigate".to_string(),
+                arguments: Some(serde_json::json!({
+                    "url": "https://example.com",
+                })),
+                connector_id: Some("playwright".to_string()),
+                connector_name: Some("Playwright".to_string()),
+                connector_description: Some("Browser automation".to_string()),
+                tool_title: Some("Navigate".to_string()),
+                tool_description: Some("Open a page".to_string()),
+                annotations: None,
             }
         );
     }
@@ -1637,16 +1571,19 @@ mod tests {
 
         assert_eq!(
             request,
-            GuardianReviewRequest {
-                action: serde_json::json!({
-                    "tool": "mcp_tool_call",
-                    "server": "custom_server",
-                    "tool_name": "dangerous_tool",
-                    "annotations": {
-                        "destructive_hint": true,
-                        "open_world_hint": true,
-                        "read_only_hint": false,
-                    },
+            GuardianApprovalRequest::McpToolCall {
+                server: "custom_server".to_string(),
+                tool_name: "dangerous_tool".to_string(),
+                arguments: None,
+                connector_id: None,
+                connector_name: None,
+                connector_description: None,
+                tool_title: None,
+                tool_description: None,
+                annotations: Some(GuardianMcpAnnotations {
+                    destructive_hint: Some(true),
+                    open_world_hint: Some(true),
+                    read_only_hint: Some(false),
                 }),
             }
         );
