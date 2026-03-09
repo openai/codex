@@ -5,7 +5,6 @@ use std::sync::Mutex as StdMutex;
 
 use codex_core::AuthManager;
 use codex_core::config::Config;
-use codex_core::features::Feature;
 use codex_core::token_data::TokenData;
 use serde::Deserialize;
 use std::time::Duration;
@@ -77,17 +76,12 @@ static ALL_CONNECTORS_CACHE: LazyLock<StdMutex<Option<CachedAllConnectors>>> =
     LazyLock::new(|| StdMutex::new(None));
 
 async fn apps_enabled(config: &Config) -> bool {
-    if !config.features.enabled(Feature::Apps) {
-        return false;
-    }
-
     let auth_manager = AuthManager::shared(
         config.codex_home.clone(),
         false,
         config.cli_auth_credentials_store_mode,
     );
-    let auth = auth_manager.auth().await;
-    config.features.apps_enabled(auth.as_ref())
+    config.features.apps_enabled(Some(&auth_manager)).await
 }
 
 pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {

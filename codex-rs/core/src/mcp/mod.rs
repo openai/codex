@@ -266,7 +266,7 @@ fn effective_mcp_servers(
     plugins_manager: &PluginsManager,
 ) -> HashMap<String, McpServerConfig> {
     let servers = configured_mcp_servers(config, plugins_manager);
-    with_codex_apps_mcp(servers, config.features.apps_enabled(auth), auth, config)
+    with_codex_apps_mcp(servers, config.features.apps_enabled_for_auth(auth), auth, config)
 }
 
 pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent {

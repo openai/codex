@@ -721,11 +721,7 @@ impl TurnContext {
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {
-        let auth = self
-            .auth_manager
-            .as_ref()
-            .and_then(|manager| manager.auth_cached());
-        self.features.apps_enabled(auth.as_ref())
+        self.features.apps_enabled_cached(self.auth_manager.as_deref())
     }
 
     pub(crate) async fn with_model(&self, model: String, models_manager: &ModelsManager) -> Self {
@@ -3722,7 +3718,7 @@ impl Session {
             .tool_plugin_provenance(config.as_ref());
         let mcp_servers = with_codex_apps_mcp(
             mcp_servers,
-            self.features.apps_enabled(auth.as_ref()),
+            self.features.apps_enabled_for_auth(auth.as_ref()),
             auth.as_ref(),
             config.as_ref(),
         );

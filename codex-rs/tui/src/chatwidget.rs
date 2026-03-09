@@ -7624,8 +7624,9 @@ impl ChatWidget {
     }
 
     fn connectors_enabled(&self) -> bool {
-        let auth = self.auth_manager.auth_cached();
-        self.config.features.apps_enabled(auth.as_ref())
+        self.config
+            .features
+            .apps_enabled_cached(Some(self.auth_manager.as_ref()))
     }
 
     fn connectors_for_mentions(&self) -> Option<&[connectors::AppInfo]> {

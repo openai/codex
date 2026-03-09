@@ -95,7 +95,7 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
 ) -> Option<Vec<AppInfo>> {
     let auth_manager = auth_manager_from_config(config);
     let auth = auth_manager.auth().await;
-    if !config.features.apps_enabled(auth.as_ref()) {
+    if !config.features.apps_enabled_for_auth(auth.as_ref()) {
         return Some(Vec::new());
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
@@ -119,7 +119,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager = auth_manager_from_config(config);
     let auth = auth_manager.auth().await;
-    if !config.features.apps_enabled(auth.as_ref()) {
+    if !config.features.apps_enabled_for_auth(auth.as_ref()) {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
             codex_apps_ready: true,
