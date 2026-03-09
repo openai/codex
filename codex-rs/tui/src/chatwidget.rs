@@ -236,6 +236,7 @@ use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::ThreadUserInputRequest;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
@@ -2283,10 +2284,19 @@ impl ChatWidget {
     }
 
     fn on_request_user_input(&mut self, ev: RequestUserInputEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping request_user_input event before session configured");
+            return;
+        };
         let ev2 = ev.clone();
         self.defer_or_handle(
             |q| q.push_user_input(ev),
-            |s| s.handle_request_user_input_now(ev2),
+            |s| {
+                s.handle_request_user_input_now(ThreadUserInputRequest {
+                    thread_id,
+                    request: ev2,
+                })
+            },
         );
     }
 
@@ -3081,16 +3091,16 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn push_user_input_request(&mut self, request: RequestUserInputEvent) {
+    pub(crate) fn push_user_input_request(&mut self, request: ThreadUserInputRequest) {
         self.bottom_pane.push_user_input_request(request);
         self.request_redraw();
     }
 
-    pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
+    pub(crate) fn handle_request_user_input_now(&mut self, ev: ThreadUserInputRequest) {
         self.flush_answer_stream_with_separator();
         self.notify(Notification::UserInputRequested {
-            question_count: ev.questions.len(),
-            summary: Notification::user_input_request_summary(&ev.questions),
+            question_count: ev.request.questions.len(),
+            summary: Notification::user_input_request_summary(&ev.request.questions),
         });
         self.bottom_pane.push_user_input_request(ev);
         self.request_redraw();
@@ -8418,6 +8428,10 @@ impl ChatWidget {
             return false;
         }
         true
+    }
+
+    pub(crate) fn op_sender(&self) -> tokio::sync::mpsc::UnboundedSender<Op> {
+        self.codex_op_tx.clone()
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {

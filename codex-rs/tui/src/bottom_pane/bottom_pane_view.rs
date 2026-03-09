@@ -1,7 +1,7 @@
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
+use crate::bottom_pane::ThreadUserInputRequest;
 use crate::render::renderable::Renderable;
-use codex_protocol::request_user_input::RequestUserInputEvent;
 use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
@@ -74,8 +74,8 @@ pub(crate) trait BottomPaneView: Renderable {
     /// consumed.
     fn try_consume_user_input_request(
         &mut self,
-        request: RequestUserInputEvent,
-    ) -> Option<RequestUserInputEvent> {
+        request: ThreadUserInputRequest,
+    ) -> Option<ThreadUserInputRequest> {
         Some(request)
     }
 

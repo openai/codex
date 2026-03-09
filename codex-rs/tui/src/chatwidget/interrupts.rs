@@ -12,6 +12,7 @@ use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 
 use super::ChatWidget;
+use crate::bottom_pane::ThreadUserInputRequest;
 
 #[derive(Debug)]
 pub(crate) enum QueuedInterrupt {
@@ -93,7 +94,18 @@ impl InterruptManager {
                 QueuedInterrupt::ApplyPatchApproval(ev) => chat.handle_apply_patch_approval_now(ev),
                 QueuedInterrupt::Elicitation(ev) => chat.handle_elicitation_request_now(ev),
                 QueuedInterrupt::RequestPermissions(ev) => chat.handle_request_permissions_now(ev),
-                QueuedInterrupt::RequestUserInput(ev) => chat.handle_request_user_input_now(ev),
+                QueuedInterrupt::RequestUserInput(ev) => {
+                    let Some(thread_id) = chat.thread_id() else {
+                        tracing::warn!(
+                            "dropping queued request_user_input before session configured"
+                        );
+                        continue;
+                    };
+                    chat.handle_request_user_input_now(ThreadUserInputRequest {
+                        thread_id,
+                        request: ev,
+                    });
+                }
                 QueuedInterrupt::ExecBegin(ev) => chat.handle_exec_begin_now(ev),
                 QueuedInterrupt::ExecEnd(ev) => chat.handle_exec_end_now(ev),
                 QueuedInterrupt::McpBegin(ev) => chat.handle_mcp_begin_now(ev),

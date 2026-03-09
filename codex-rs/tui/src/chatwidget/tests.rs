@@ -2822,20 +2822,23 @@ async fn user_input_notification_overrides_pending_agent_turn_complete_notificat
     chat.notify(Notification::AgentTurnComplete {
         response: "done".to_string(),
     });
-    chat.handle_request_user_input_now(RequestUserInputEvent {
-        call_id: "call-1".to_string(),
-        turn_id: "turn-1".to_string(),
-        questions: vec![RequestUserInputQuestion {
-            id: "reasoning_scope".to_string(),
-            header: "Reasoning scope".to_string(),
-            question: "Which reasoning scope should I use?".to_string(),
-            is_other: false,
-            is_secret: false,
-            options: Some(vec![RequestUserInputQuestionOption {
-                label: "Plan only".to_string(),
-                description: "Update only Plan mode.".to_string(),
-            }]),
-        }],
+    chat.handle_request_user_input_now(crate::bottom_pane::ThreadUserInputRequest {
+        thread_id: ThreadId::new(),
+        request: RequestUserInputEvent {
+            call_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: vec![RequestUserInputQuestion {
+                id: "reasoning_scope".to_string(),
+                header: "Reasoning scope".to_string(),
+                question: "Which reasoning scope should I use?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: Some(vec![RequestUserInputQuestionOption {
+                    label: "Plan only".to_string(),
+                    description: "Update only Plan mode.".to_string(),
+                }]),
+            }],
+        },
     });
 
     assert_matches!(
@@ -2852,20 +2855,23 @@ async fn handle_request_user_input_sets_pending_notification() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.config.tui_notifications = Notifications::Custom(vec!["user-input-requested".to_string()]);
 
-    chat.handle_request_user_input_now(RequestUserInputEvent {
-        call_id: "call-1".to_string(),
-        turn_id: "turn-1".to_string(),
-        questions: vec![RequestUserInputQuestion {
-            id: "reasoning_scope".to_string(),
-            header: "Reasoning scope".to_string(),
-            question: "Which reasoning scope should I use?".to_string(),
-            is_other: false,
-            is_secret: false,
-            options: Some(vec![RequestUserInputQuestionOption {
-                label: "Plan only".to_string(),
-                description: "Update only Plan mode.".to_string(),
-            }]),
-        }],
+    chat.handle_request_user_input_now(crate::bottom_pane::ThreadUserInputRequest {
+        thread_id: ThreadId::new(),
+        request: RequestUserInputEvent {
+            call_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: vec![RequestUserInputQuestion {
+                id: "reasoning_scope".to_string(),
+                header: "Reasoning scope".to_string(),
+                question: "Which reasoning scope should I use?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: Some(vec![RequestUserInputQuestionOption {
+                    label: "Plan only".to_string(),
+                    description: "Update only Plan mode.".to_string(),
+                }]),
+            }],
+        },
     });
 
     assert_matches!(

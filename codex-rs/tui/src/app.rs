@@ -82,7 +82,6 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
-use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -121,6 +120,7 @@ mod pending_interactive_replay;
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use crate::bottom_pane::ThreadUserInputRequest;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -128,7 +128,7 @@ const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
-    UserInput(RequestUserInputEvent),
+    UserInput(ThreadUserInputRequest),
 }
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
@@ -715,6 +715,7 @@ pub(crate) struct App {
     /// app-server event stream, so `register_live_thread` must *not* spawn a
     /// competing `next_event()` listener for the primary thread.
     active_session_events_via_app_server: bool,
+    primary_app_server_op_tx: Option<mpsc::UnboundedSender<Op>>,
     agent_navigation: AgentNavigationState,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
@@ -1228,7 +1229,12 @@ impl App {
                     permissions: ev.permissions.clone(),
                 },
             )),
-            EventMsg::RequestUserInput(ev) => Some(ThreadInteractiveRequest::UserInput(ev.clone())),
+            EventMsg::RequestUserInput(ev) => Some(ThreadInteractiveRequest::UserInput(
+                ThreadUserInputRequest {
+                    thread_id,
+                    request: ev.clone(),
+                },
+            )),
             _ => None,
         }
     }
@@ -1236,7 +1242,27 @@ impl App {
     async fn submit_op_to_thread(&mut self, thread_id: ThreadId, op: Op) {
         let replay_state_op =
             ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
-        let submitted = if self.active_thread_id == Some(thread_id) {
+        let submitted = if self.should_submit_thread_op_via_app_server(&op) {
+            crate::session_log::log_outbound_op(&op);
+            match self.primary_app_server_op_tx.as_ref() {
+                Some(tx) => {
+                    if let Err(err) = tx.send(op) {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to submit op through app-server session for thread {thread_id}: {err}"
+                        ));
+                        false
+                    } else {
+                        true
+                    }
+                }
+                None => {
+                    self.chat_widget.add_error_message(format!(
+                        "No app-server session is available to resolve thread {thread_id} prompt"
+                    ));
+                    false
+                }
+            }
+        } else if self.active_thread_id == Some(thread_id) {
             self.chat_widget.submit_op(op)
         } else {
             crate::session_log::log_outbound_op(&op);
@@ -1262,6 +1288,19 @@ impl App {
             self.note_thread_outbound_op(thread_id, op).await;
             self.refresh_pending_thread_approvals().await;
         }
+    }
+
+    fn should_submit_thread_op_via_app_server(&self, op: &Op) -> bool {
+        self.active_session_events_via_app_server
+            && self.primary_app_server_op_tx.is_some()
+            && matches!(
+                op,
+                Op::ExecApproval { .. }
+                    | Op::PatchApproval { .. }
+                    | Op::ResolveElicitation { .. }
+                    | Op::RequestPermissionsResponse { .. }
+                    | Op::UserInputAnswer { .. }
+            )
     }
 
     async fn refresh_pending_thread_approvals(&mut self) {
@@ -1582,6 +1621,7 @@ impl App {
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.pending_primary_events.clear();
+        self.primary_app_server_op_tx = None;
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -1635,6 +1675,7 @@ impl App {
         self.chat_widget = ChatWidget::new(init, self.server.clone());
         self.active_session_events_via_app_server = true;
         self.reset_thread_event_state();
+        self.primary_app_server_op_tx = Some(self.chat_widget.op_sender());
         if let Some(summary) = summary {
             let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
             if let Some(command) = summary.resume_command {
@@ -2015,6 +2056,7 @@ impl App {
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             active_session_events_via_app_server: true,
+            primary_app_server_op_tx: None,
             agent_navigation: AgentNavigationState::default(),
             active_thread_id: None,
             active_thread_rx: None,
@@ -2022,6 +2064,7 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         };
+        app.primary_app_server_op_tx = Some(app.chat_widget.op_sender());
         if let Some((thread, session_configured)) = existing_primary_thread.take() {
             app.attach_existing_primary_thread(thread, session_configured)
                 .await;
@@ -3727,6 +3770,7 @@ impl App {
         session_configured: SessionConfiguredEvent,
     ) {
         self.active_session_events_via_app_server = false;
+        self.primary_app_server_op_tx = None;
         let event = Event {
             id: String::new(),
             msg: EventMsg::SessionConfigured(session_configured.clone()),
@@ -5728,7 +5772,7 @@ mod tests {
 
     #[tokio::test]
     async fn inactive_thread_request_user_input_bubbles_into_active_view() -> Result<()> {
-        let mut app = make_test_app().await;
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let main_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000051").expect("valid thread");
         let agent_thread_id =
@@ -5804,8 +5848,51 @@ mod tests {
 
         assert_eq!(app.chat_widget.has_active_view(), true);
         assert!(app.chat_widget.pending_thread_approvals().is_empty());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        Ok(())
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                thread_id,
+                op: Op::UserInputAnswer { id, .. },
+            } = event
+            {
+                assert_eq!(thread_id, agent_thread_id);
+                assert_eq!(id, "turn-user-input");
+                return Ok(());
+            }
+        }
+
+        panic!("expected user input answer to submit to the source thread");
+    }
+
+    #[tokio::test]
+    async fn submit_op_to_thread_routes_interactive_responses_via_app_server() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.active_session_events_via_app_server = true;
+        app.primary_app_server_op_tx = Some(app.chat_widget.op_sender());
+
+        app.submit_op_to_thread(
+            thread_id,
+            Op::UserInputAnswer {
+                id: "turn-user-input".to_string(),
+                response: codex_protocol::request_user_input::RequestUserInputResponse {
+                    answers: HashMap::new(),
+                },
+            },
+        )
+        .await;
+
+        assert_eq!(
+            op_rx.try_recv(),
+            Ok(Op::UserInputAnswer {
+                id: "turn-user-input".to_string(),
+                response: codex_protocol::request_user_input::RequestUserInputResponse {
+                    answers: HashMap::new(),
+                },
+            })
+        );
     }
 
     #[tokio::test]
@@ -6197,6 +6284,7 @@ mod tests {
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             active_session_events_via_app_server: false,
+            primary_app_server_op_tx: None,
             agent_navigation: AgentNavigationState::default(),
             active_thread_id: None,
             active_thread_rx: None,
@@ -6260,6 +6348,7 @@ mod tests {
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 active_session_events_via_app_server: false,
+                primary_app_server_op_tx: None,
                 agent_navigation: AgentNavigationState::default(),
                 active_thread_id: None,
                 active_thread_rx: None,
