@@ -1356,7 +1356,12 @@ impl App {
         event: Event,
     ) -> Result<()> {
         if !self.thread_event_channels.contains_key(&thread_id) {
-            self.handle_thread_created(thread_id).await?;
+            if let EventMsg::SessionConfigured(session_configured) = &event.msg {
+                self.register_replay_only_thread(session_configured.clone(), false)
+                    .await;
+            } else {
+                self.handle_thread_created(thread_id).await?;
+            }
             if !self.thread_event_channels.contains_key(&thread_id) {
                 tracing::debug!("dropping stale event for untracked thread {thread_id}");
                 return Ok(());
@@ -3686,6 +3691,30 @@ impl App {
         }
     }
 
+    async fn register_replay_only_thread(
+        &mut self,
+        session_configured: SessionConfiguredEvent,
+        primary: bool,
+    ) {
+        let thread_id = session_configured.session_id;
+        if self.thread_event_channels.contains_key(&thread_id) {
+            return;
+        }
+        let event = Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(session_configured.clone()),
+        };
+        self.upsert_agent_picker_thread(thread_id, None, None, false);
+        let channel =
+            ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
+        self.thread_event_channels.insert(thread_id, channel);
+        if primary {
+            self.primary_thread_id = Some(thread_id);
+            self.primary_session_configured = Some(session_configured);
+            self.activate_thread_channel(thread_id).await;
+        }
+    }
+
     /// Adopt a `CodexThread` obtained from `ThreadManager` (resume or fork) as
     /// the primary session. Unlike a fresh `spawn_agent` session the thread
     /// already exists, so this method registers it with a `next_event()`
@@ -4323,6 +4352,85 @@ mod tests {
                 .contains_key(&created.thread_id),
             "app-server-managed threads should not start a competing next_event listener"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn routed_child_session_configured_bootstraps_replay_thread_in_fresh_session()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000011").expect("valid thread");
+        let child_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000022").expect("valid thread");
+
+        app.active_session_events_via_app_server = true;
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels
+            .insert(main_thread_id, ThreadEventChannel::new(1));
+
+        app.handle_routed_thread_event(
+            child_thread_id,
+            Event {
+                id: "child-session".to_string(),
+                msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                    session_id: child_thread_id,
+                    forked_from_id: Some(main_thread_id),
+                    thread_name: Some("child".to_string()),
+                    model: "gpt-5".to_string(),
+                    model_provider_id: "test-provider".to_string(),
+                    service_tier: None,
+                    approval_policy: AskForApproval::OnRequest,
+                    sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    cwd: PathBuf::from("/tmp/child"),
+                    reasoning_effort: None,
+                    history_log_id: 0,
+                    history_entry_count: 0,
+                    initial_messages: None,
+                    network_proxy: None,
+                    rollout_path: Some(PathBuf::from("/tmp/child-rollout.jsonl")),
+                }),
+            },
+        )
+        .await?;
+
+        assert!(
+            app.thread_event_channels.contains_key(&child_thread_id),
+            "child session configured should register a replay thread channel"
+        );
+        assert!(
+            !app.thread_event_listener_tasks
+                .contains_key(&child_thread_id),
+            "fresh in-process child threads should not spawn a competing listener"
+        );
+
+        app.handle_routed_thread_event(
+            child_thread_id,
+            Event {
+                id: "child-approval".to_string(),
+                msg: EventMsg::ExecApprovalRequest(
+                    codex_protocol::protocol::ExecApprovalRequestEvent {
+                        call_id: "call-approval".to_string(),
+                        approval_id: None,
+                        turn_id: "turn-approval".to_string(),
+                        command: vec!["echo".to_string(), "hi".to_string()],
+                        cwd: PathBuf::from("/tmp/child"),
+                        reason: Some("need approval".to_string()),
+                        network_approval_context: None,
+                        proposed_execpolicy_amendment: None,
+                        proposed_network_policy_amendments: None,
+                        additional_permissions: None,
+                        skill_metadata: None,
+                        available_decisions: None,
+                        parsed_cmd: Vec::new(),
+                    },
+                ),
+            },
+        )
+        .await?;
+
+        assert_eq!(app.chat_widget.pending_thread_approvals().len(), 1);
         Ok(())
     }
 

@@ -2676,14 +2676,27 @@ async fn run_in_process_agent_loop(
                         };
                         let event = decoded.event;
                         if let EventMsg::SessionConfigured(update) = event.msg {
-                            if let Some(merged) =
-                                merge_session_configured_update(&session_configured, update)
-                            {
-                                session_configured = merged.clone();
-                                app_event_tx.send(AppEvent::CodexEvent(Event {
-                                    id: event.id,
-                                    msg: EventMsg::SessionConfigured(merged),
-                                }));
+                            match decoded.conversation_id {
+                                Some(thread_id) if thread_id != session_id => {
+                                    app_event_tx.send(AppEvent::ThreadEvent {
+                                        thread_id,
+                                        event: Event {
+                                            id: event.id,
+                                            msg: EventMsg::SessionConfigured(update),
+                                        },
+                                    });
+                                }
+                                _ => {
+                                    if let Some(merged) =
+                                        merge_session_configured_update(&session_configured, update)
+                                    {
+                                        session_configured = merged.clone();
+                                        app_event_tx.send(AppEvent::CodexEvent(Event {
+                                            id: event.id,
+                                            msg: EventMsg::SessionConfigured(merged),
+                                        }));
+                                    }
+                                }
                             }
                             continue;
                         }
