@@ -852,11 +852,13 @@ impl App {
                 Feature::WindowsSandbox | Feature::WindowsSandboxElevated
             )
         });
+        let mut permissions_history_label: Option<&'static str> = None;
         let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
             .with_profile(self.active_profile.as_deref());
 
         for (feature, enabled) in updates {
             let feature_key = feature.key();
+            let previous_enabled = self.config.features.enabled(feature);
             if feature == Feature::GuardianApproval && enabled {
                 if let Err(err) = self
                     .config
@@ -914,6 +916,13 @@ impl App {
                     segments: scoped_segments("approval_review_policy"),
                     value: approval_review_policy.to_string().into(),
                 }]);
+                if previous_enabled != effective_enabled {
+                    permissions_history_label = Some(if effective_enabled {
+                        "Smart Approvals"
+                    } else {
+                        "Default"
+                    });
+                }
             }
             if feature == Feature::GuardianApproval && effective_enabled {
                 if let Err(err) = self
@@ -1001,6 +1010,11 @@ impl App {
                         personality: None,
                     }));
             }
+        }
+
+        if let Some(label) = permissions_history_label {
+            self.chat_widget
+                .add_info_message(format!("Permissions updated to {label}"), None);
         }
 
         if let Err(err) = builder.apply().await {
