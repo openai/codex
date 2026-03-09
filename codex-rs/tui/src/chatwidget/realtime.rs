@@ -45,6 +45,10 @@ impl RealtimeConversationUiState {
     pub(super) fn is_active(&self) -> bool {
         matches!(self.phase, RealtimeConversationPhase::Active)
     }
+
+    pub(super) fn close_requested(&self) -> bool {
+        self.requested_close
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -227,6 +231,46 @@ impl ChatWidget {
             self.add_info_message(message, None);
         } else {
             self.request_redraw();
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_realtime_conversation_state(
+        &mut self,
+        phase: RealtimeConversationPhase,
+        requested_close: bool,
+        meter_placeholder_id: Option<String>,
+    ) {
+        self.realtime_conversation.phase = phase;
+        self.realtime_conversation.requested_close = requested_close;
+        self.realtime_conversation.meter_placeholder_id = meter_placeholder_id;
+    }
+
+    #[cfg(test)]
+    pub(super) fn realtime_conversation_phase(&self) -> RealtimeConversationPhase {
+        self.realtime_conversation.phase
+    }
+
+    #[cfg(test)]
+    pub(super) fn realtime_close_requested(&self) -> bool {
+        self.realtime_conversation.requested_close
+    }
+
+    pub(super) fn maybe_request_realtime_close_after_composer_mutation(&mut self) {
+        if !self.realtime_conversation.is_live() || self.realtime_conversation.requested_close {
+            return;
+        }
+
+        let Some(meter_placeholder_id) = self.realtime_conversation.meter_placeholder_id.as_deref()
+        else {
+            return;
+        };
+
+        if !self
+            .bottom_pane
+            .transcription_placeholder_exists(meter_placeholder_id)
+        {
+            self.request_realtime_conversation_close(None);
         }
     }
 

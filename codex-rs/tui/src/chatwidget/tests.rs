@@ -4,6 +4,7 @@
 //! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
 //! changes show up as stable, reviewable diffs.
 
+use super::realtime::RealtimeConversationPhase;
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -1932,6 +1933,14 @@ fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
             "unexpected submit op: {op:?}"
         );
     }
+}
+
+fn drain_ops(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Vec<Op> {
+    let mut ops = Vec::new();
+    while let Ok(op) = op_rx.try_recv() {
+        ops.push(op);
+    }
+    ops
 }
 
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
@@ -4661,6 +4670,110 @@ async fn ctrl_c_shutdown_works_with_caps_lock() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn ctrl_c_in_live_realtime_requests_close_before_interrupting() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::RealtimeConversation, true);
+    chat.bottom_pane
+        .set_composer_text("draft message".to_string(), Vec::new(), Vec::new());
+    chat.set_realtime_conversation_state(RealtimeConversationPhase::Active, false, None);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "draft message");
+    assert_eq!(
+        chat.realtime_conversation_phase(),
+        RealtimeConversationPhase::Stopping
+    );
+    assert!(chat.realtime_close_requested());
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert_eq!(drain_ops(&mut op_rx), vec![Op::RealtimeConversationClose]);
+}
+
+#[tokio::test]
+async fn second_ctrl_c_while_realtime_is_stopping_interrupts_cancellable_work() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::RealtimeConversation, true);
+    chat.bottom_pane
+        .set_composer_text("draft message".to_string(), Vec::new(), Vec::new());
+    chat.bottom_pane.set_task_running(true);
+    chat.set_realtime_conversation_state(RealtimeConversationPhase::Stopping, true, None);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "draft message");
+    assert_eq!(
+        chat.realtime_conversation_phase(),
+        RealtimeConversationPhase::Stopping
+    );
+    assert!(chat.realtime_close_requested());
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert_eq!(drain_ops(&mut op_rx), vec![Op::Interrupt]);
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tokio::test]
+async fn deleting_realtime_meter_placeholder_requests_close() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::RealtimeConversation, true);
+    let meter_placeholder_id = chat.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
+    chat.set_realtime_conversation_state(
+        RealtimeConversationPhase::Active,
+        false,
+        Some(meter_placeholder_id.clone()),
+    );
+    assert!(
+        chat.bottom_pane
+            .transcription_placeholder_exists(&meter_placeholder_id)
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+    assert!(
+        !chat
+            .bottom_pane
+            .transcription_placeholder_exists(&meter_placeholder_id)
+    );
+    assert_eq!(
+        chat.realtime_conversation_phase(),
+        RealtimeConversationPhase::Stopping
+    );
+    assert!(chat.realtime_close_requested());
+    assert_eq!(drain_ops(&mut op_rx), vec![Op::RealtimeConversationClose]);
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tokio::test]
+async fn external_edit_removing_realtime_meter_requests_close() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::RealtimeConversation, true);
+    let meter_placeholder_id = chat.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
+    chat.set_realtime_conversation_state(
+        RealtimeConversationPhase::Active,
+        false,
+        Some(meter_placeholder_id.clone()),
+    );
+    assert!(
+        chat.bottom_pane
+            .transcription_placeholder_exists(&meter_placeholder_id)
+    );
+
+    chat.apply_external_edit("rewritten draft".to_string());
+
+    assert_eq!(chat.bottom_pane.composer_text(), "rewritten draft");
+    assert!(
+        !chat
+            .bottom_pane
+            .transcription_placeholder_exists(&meter_placeholder_id)
+    );
+    assert_eq!(
+        chat.realtime_conversation_phase(),
+        RealtimeConversationPhase::Stopping
+    );
+    assert!(chat.realtime_close_requested());
+    assert_eq!(drain_ops(&mut op_rx), vec![Op::RealtimeConversationClose]);
 }
 
 #[tokio::test]

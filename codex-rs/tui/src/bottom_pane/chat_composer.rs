@@ -3769,6 +3769,10 @@ impl ChatComposer {
         self.status_line_enabled = enabled;
         true
     }
+
+    pub(crate) fn transcription_placeholder_exists(&self, id: &str) -> bool {
+        self.textarea.named_element_range(id).is_some()
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
