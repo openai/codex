@@ -1,0 +1,5 @@
+---
+source: tui/src/terminal_hyperlinks.rs
+expression: normalized
+---
+Open ]8;;https://example.com/docshttps://example.com/docs]8;; and ]8;;vscode://file/workspace/src/lib.rs:1src/lib.rs:1]8;;.

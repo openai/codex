@@ -263,6 +263,7 @@ use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
+use crate::terminal_hyperlinks::TerminalHyperlinkSettings;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
@@ -8606,6 +8607,11 @@ impl Drop for ChatWidget {
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_renderable().render(area, buf);
+        crate::terminal_hyperlinks::linkify_buffer_area(
+            buf,
+            area,
+            &TerminalHyperlinkSettings::from_config(&self.config),
+        );
         self.last_rendered_width.set(Some(area.width as usize));
     }
 

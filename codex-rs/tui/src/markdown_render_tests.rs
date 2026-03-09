@@ -1,11 +1,10 @@
+use crate::file_references::extract_local_path_location_suffix;
 use pretty_assertions::assert_eq;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
 
-use crate::markdown_render::COLON_LOCATION_SUFFIX_RE;
-use crate::markdown_render::HASH_LOCATION_SUFFIX_RE;
 use crate::markdown_render::render_markdown_text;
 use insta::assert_snapshot;
 
@@ -654,9 +653,9 @@ fn link() {
 }
 
 #[test]
-fn load_location_suffix_regexes() {
-    let _colon = &*COLON_LOCATION_SUFFIX_RE;
-    let _hash = &*HASH_LOCATION_SUFFIX_RE;
+fn local_path_location_suffixes_are_normalized() {
+    let suffix = extract_local_path_location_suffix("file:///tmp/src/lib.rs#L74C3");
+    assert_eq!(suffix.as_deref(), Some(":74:3"));
 }
 
 #[test]
