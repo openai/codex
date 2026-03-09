@@ -14,7 +14,9 @@ use codex_protocol::protocol::CollabWaitingBeginEvent;
 use codex_protocol::protocol::CollabWaitingEndEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+#[cfg(target_os = "macos")]
 use crossterm::event::KeyEventKind;
+#[cfg(target_os = "macos")]
 use crossterm::event::KeyModifiers;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
