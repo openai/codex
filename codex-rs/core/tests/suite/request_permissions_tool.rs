@@ -2,7 +2,9 @@
 #![cfg(target_os = "macos")]
 
 use anyhow::Result;
+#[cfg(target_os = "macos")]
 use codex_core::config::Constrained;
+#[cfg(target_os = "macos")]
 use codex_core::features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
