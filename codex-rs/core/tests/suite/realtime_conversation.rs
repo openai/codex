@@ -889,13 +889,13 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
     skip_if_no_network!(Ok(()));
 
     let startup_server = start_websocket_server(vec![vec![]]).await;
-    let realtime_server = start_websocket_server(vec![vec![vec![
+    let realtime_server = start_websocket_server(vec![vec![
         vec![json!({
             "type": "session.updated",
             "session": { "id": "sess_truncated", "instructions": "backend prompt" }
         })],
         vec![],
-    ]]])
+    ]])
     .await;
 
     let oversized_summary = "recent work ".repeat(3_500);
