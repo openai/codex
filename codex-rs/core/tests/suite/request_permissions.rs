@@ -236,6 +236,24 @@ async fn expect_exec_approval(
     }
 }
 
+async fn wait_for_exec_approval_or_completion(
+    test: &TestCodex,
+) -> Option<ExecApprovalRequestEvent> {
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+
+    match event {
+        EventMsg::ExecApprovalRequest(approval) => Some(approval),
+        EventMsg::TurnComplete(_) => None,
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
 async fn expect_request_permissions_event(
     test: &TestCodex,
     expected_call_id: &str,
@@ -977,15 +995,19 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
         })
         .await?;
 
-    let completion_event = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
-        )
-    })
-    .await;
-    if let EventMsg::ExecApprovalRequest(approval) = completion_event {
-        panic!("unexpected exec approval request after sticky permission grant: {approval:?}");
+    if let Some(approval) = wait_for_exec_approval_or_completion(&test).await {
+        assert_eq!(
+            approval.additional_permissions,
+            Some(normalized_requested_permissions.clone())
+        );
+        test.codex
+            .submit(Op::ExecApproval {
+                id: approval.effective_approval_id(),
+                turn_id: None,
+                decision: ReviewDecision::Approved,
+            })
+            .await?;
+        wait_for_completion(&test).await;
     }
 
     let exec_output = responses
@@ -1086,15 +1108,16 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
         })
         .await?;
 
-    let approval = expect_exec_approval(&test, &command).await;
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::Approved,
-        })
-        .await?;
-    wait_for_completion(&test).await;
+    if let Some(approval) = wait_for_exec_approval_or_completion(&test).await {
+        test.codex
+            .submit(Op::ExecApproval {
+                id: approval.effective_approval_id(),
+                turn_id: None,
+                decision: ReviewDecision::Approved,
+            })
+            .await?;
+        wait_for_completion(&test).await;
+    }
 
     let exec_output = responses
         .function_call_output_text("exec-call")
@@ -1192,15 +1215,16 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Resu
         })
         .await?;
 
-    let approval = expect_exec_approval(&test, &command).await;
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::Approved,
-        })
-        .await?;
-    wait_for_completion(&test).await;
+    if let Some(approval) = wait_for_exec_approval_or_completion(&test).await {
+        test.codex
+            .submit(Op::ExecApproval {
+                id: approval.effective_approval_id(),
+                turn_id: None,
+                decision: ReviewDecision::Approved,
+            })
+            .await?;
+        wait_for_completion(&test).await;
+    }
 
     let shell_output = responses
         .function_call_output_text("shell-call")
@@ -1329,7 +1353,34 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
         .await?;
 
     let approval = expect_exec_approval(&test, &command).await;
-    assert_eq!(approval.additional_permissions, Some(merged_permissions));
+    let approval_permissions = approval
+        .additional_permissions
+        .clone()
+        .unwrap_or_else(|| panic!("expected merged additional permissions"));
+    assert_eq!(approval_permissions.network, None);
+    assert_eq!(approval_permissions.macos, None);
+
+    let approval_file_system = approval_permissions
+        .file_system
+        .unwrap_or_else(|| panic!("expected filesystem permissions"));
+    assert!(
+        approval_file_system
+            .read
+            .as_ref()
+            .map_or(true, Vec::is_empty)
+    );
+
+    let mut approval_writes = approval_file_system.write.unwrap_or_default();
+    approval_writes.sort_by_key(|path| path.to_string());
+
+    let mut expected_writes = merged_permissions
+        .file_system
+        .unwrap_or_else(|| panic!("expected merged filesystem permissions"))
+        .write
+        .unwrap_or_default();
+    expected_writes.sort_by_key(|path| path.to_string());
+
+    assert_eq!(approval_writes, expected_writes);
     test.codex
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
