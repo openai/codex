@@ -407,6 +407,32 @@ impl PendingServerRequests {
     }
 }
 
+fn note_primary_legacy_event(
+    session_id: ThreadId,
+    conversation_id: Option<ThreadId>,
+    event: &Event,
+    current_turn_id: &mut Option<String>,
+    pending_server_requests: &mut PendingServerRequests,
+) -> bool {
+    let event_thread_id = conversation_id.unwrap_or(session_id);
+    if event_thread_id != session_id {
+        return false;
+    }
+
+    match &event.msg {
+        EventMsg::TurnStarted(payload) => {
+            *current_turn_id = Some(payload.turn_id.clone());
+        }
+        EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {
+            *current_turn_id = None;
+            pending_server_requests.clear_turn_scoped();
+        }
+        _ => {}
+    }
+
+    matches!(event.msg, EventMsg::ShutdownComplete)
+}
+
 fn command_text_to_tokens(command: Option<String>) -> Vec<String> {
     command
         .as_deref()
@@ -2701,18 +2727,13 @@ async fn run_in_process_agent_loop(
                             continue;
                         }
 
-                        match &event.msg {
-                            EventMsg::TurnStarted(payload) => {
-                                current_turn_id = Some(payload.turn_id.clone());
-                            }
-                            EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {
-                                current_turn_id = None;
-                                pending_server_requests.clear_turn_scoped();
-                            }
-                            _ => {}
-                        }
-
-                        let shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
+                        let shutdown_complete = note_primary_legacy_event(
+                            session_id,
+                            decoded.conversation_id,
+                            &event,
+                            &mut current_turn_id,
+                            &mut pending_server_requests,
+                        );
                         if shutdown_complete {
                             pending_shutdown_complete = true;
                             break;
@@ -2863,6 +2884,8 @@ mod tests {
     use codex_protocol::protocol::ConversationStartParams;
     use codex_protocol::protocol::ConversationTextParams;
     use codex_protocol::protocol::RealtimeAudioFrame;
+    use codex_protocol::protocol::TurnCompleteEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
@@ -3131,6 +3154,145 @@ mod tests {
         assert_eq!(
             pending.pop_mcp_elicitation_request_id(&server_name, &elicitation_id),
             Some(pending_request_id)
+        );
+    }
+
+    #[test]
+    fn child_legacy_turn_events_do_not_mutate_primary_turn_state() {
+        let session_id = ThreadId::new();
+        let child_thread_id = ThreadId::new();
+        let mut current_turn_id = Some("primary-turn".to_string());
+        let mut pending_server_requests = PendingServerRequests::default();
+        pending_server_requests.exec_approvals.insert(
+            "exec-1".to_string(),
+            PendingExecApprovalRequest::V2(RequestId::Integer(1)),
+        );
+        pending_server_requests
+            .request_permissions
+            .insert("perm-1".to_string(), RequestId::Integer(2));
+        pending_server_requests
+            .register_request_user_input("primary-turn".to_string(), RequestId::Integer(3));
+        pending_server_requests
+            .dynamic_tool_calls
+            .insert("tool-1".to_string(), RequestId::Integer(4));
+
+        let child_turn_started = Event {
+            id: "child-turn-started".to_string(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "child-turn".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        };
+        assert_eq!(
+            note_primary_legacy_event(
+                session_id,
+                Some(child_thread_id),
+                &child_turn_started,
+                &mut current_turn_id,
+                &mut pending_server_requests,
+            ),
+            false
+        );
+        assert_eq!(current_turn_id, Some("primary-turn".to_string()));
+        assert_eq!(
+            pending_server_requests.exec_approvals.len(),
+            1,
+            "child turn start should not clear primary exec approvals"
+        );
+        assert_eq!(
+            pending_server_requests.request_permissions.get("perm-1"),
+            Some(&RequestId::Integer(2))
+        );
+        assert_eq!(
+            pending_server_requests
+                .request_user_input
+                .get("primary-turn")
+                .map(VecDeque::len),
+            Some(1)
+        );
+        assert_eq!(
+            pending_server_requests.dynamic_tool_calls.get("tool-1"),
+            Some(&RequestId::Integer(4))
+        );
+
+        let child_turn_complete = Event {
+            id: "child-turn-complete".to_string(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "child-turn".to_string(),
+                last_agent_message: None,
+            }),
+        };
+        assert_eq!(
+            note_primary_legacy_event(
+                session_id,
+                Some(child_thread_id),
+                &child_turn_complete,
+                &mut current_turn_id,
+                &mut pending_server_requests,
+            ),
+            false
+        );
+        assert_eq!(current_turn_id, Some("primary-turn".to_string()));
+        assert_eq!(
+            pending_server_requests.exec_approvals.len(),
+            1,
+            "child turn completion should not clear primary exec approvals"
+        );
+        assert_eq!(
+            pending_server_requests.request_permissions.get("perm-1"),
+            Some(&RequestId::Integer(2))
+        );
+        assert_eq!(
+            pending_server_requests
+                .request_user_input
+                .get("primary-turn")
+                .map(VecDeque::len),
+            Some(1)
+        );
+        assert_eq!(
+            pending_server_requests.dynamic_tool_calls.get("tool-1"),
+            Some(&RequestId::Integer(4))
+        );
+    }
+
+    #[test]
+    fn pending_file_changes_are_scoped_by_thread() {
+        let mut pending_server_requests = PendingServerRequests::default();
+        let item_id = "patch-1";
+        let main_thread_id = "thread-main";
+        let child_thread_id = "thread-child";
+        let main_changes = HashMap::from([(
+            PathBuf::from("main.txt"),
+            FileChange::Add {
+                content: "main".to_string(),
+            },
+        )]);
+        let child_changes = HashMap::from([(
+            PathBuf::from("child.txt"),
+            FileChange::Add {
+                content: "child".to_string(),
+            },
+        )]);
+
+        pending_server_requests.note_file_changes(
+            main_thread_id.to_string(),
+            item_id.to_string(),
+            main_changes.clone(),
+        );
+        pending_server_requests.note_file_changes(
+            child_thread_id.to_string(),
+            item_id.to_string(),
+            child_changes.clone(),
+        );
+
+        assert_eq!(
+            pending_server_requests.take_file_changes(child_thread_id, item_id),
+            child_changes
+        );
+        assert_eq!(
+            pending_server_requests.take_file_changes(main_thread_id, item_id),
+            main_changes
         );
     }
 
