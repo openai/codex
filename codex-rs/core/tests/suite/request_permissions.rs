@@ -1371,14 +1371,14 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
     );
 
     let mut approval_writes = approval_file_system.write.unwrap_or_default();
-    approval_writes.sort_by_key(|path| path.to_string());
+    approval_writes.sort_by_key(|path| path.display().to_string());
 
     let mut expected_writes = merged_permissions
         .file_system
         .unwrap_or_else(|| panic!("expected merged filesystem permissions"))
         .write
         .unwrap_or_default();
-    expected_writes.sort_by_key(|path| path.to_string());
+    expected_writes.sort_by_key(|path| path.display().to_string());
 
     assert_eq!(approval_writes, expected_writes);
     test.codex
