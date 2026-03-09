@@ -901,12 +901,13 @@ The built-in `request_permissions` tool sends an `item/permissions/requestApprov
 }
 ```
 
-The client responds with `result.permissions`, which should be the granted subset of the requested permission profile:
+The client responds with `result.permissions`, which should be the granted subset of the requested permission profile. It may also set `result.scope` to `"session"` to make the grant persist for later turns in the same session; omitted or `"turn"` keeps the existing turn-scoped behavior:
 
 ```json
 {
   "id": 61,
   "result": {
+    "scope": "session",
     "permissions": {
       "fileSystem": {
         "write": [

@@ -120,6 +120,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
@@ -718,6 +719,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 );
                 let empty = CoreRequestPermissionsResponse {
                     permissions: Default::default(),
+                    scope: CorePermissionGrantScope::Turn,
                 };
                 if let Err(err) = conversation
                     .submit(Op::RequestPermissionsResponse {
@@ -2219,12 +2221,14 @@ fn request_permissions_response_from_client_result(
             error!("request failed with client error: {err:?}");
             return Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
+                scope: CorePermissionGrantScope::Turn,
             });
         }
         Err(err) => {
             error!("request failed: {err:?}");
             return Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
+                scope: CorePermissionGrantScope::Turn,
             });
         }
     };
@@ -2234,6 +2238,7 @@ fn request_permissions_response_from_client_result(
             error!("failed to deserialize PermissionsRequestApprovalResponse: {err}");
             PermissionsRequestApprovalResponse {
                 permissions: V2GrantedPermissionProfile::default(),
+                scope: codex_app_server_protocol::PermissionGrantScope::Turn,
             }
         });
     Some(CoreRequestPermissionsResponse {
@@ -2241,6 +2246,7 @@ fn request_permissions_response_from_client_result(
             requested_permissions,
             response.permissions.into(),
         ),
+        scope: response.scope.to_core(),
     })
 }
 
@@ -2766,9 +2772,30 @@ mod tests {
                 response,
                 CoreRequestPermissionsResponse {
                     permissions: expected_permissions,
+                    scope: CorePermissionGrantScope::Turn,
                 }
             );
         }
+    }
+
+    #[test]
+    fn request_permissions_response_preserves_session_scope() {
+        let response = request_permissions_response_from_client_result(
+            CorePermissionProfile::default(),
+            Ok(Ok(serde_json::json!({
+                "scope": "session",
+                "permissions": {},
+            }))),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(
+            response,
+            CoreRequestPermissionsResponse {
+                permissions: CorePermissionProfile::default(),
+                scope: CorePermissionGrantScope::Session,
+            }
+        );
     }
 
     #[test]
