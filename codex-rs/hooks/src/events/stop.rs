@@ -175,29 +175,41 @@ fn parse_completed(
                             });
                         }
                     } else if parsed.should_block {
-                        status = HookRunStatus::Blocked;
-                        should_block = true;
-                        block_reason = parsed.reason.clone();
-                        block_message_for_model = parsed.reason.clone();
-                        if let Some(reason) = parsed.reason {
+                        if let Some(reason) = parsed.reason.as_deref().and_then(trimmed_non_empty) {
+                            status = HookRunStatus::Blocked;
+                            should_block = true;
+                            block_reason = Some(reason.clone());
+                            block_message_for_model = Some(reason.clone());
                             entries.push(HookOutputEntry {
                                 kind: HookOutputEntryKind::Feedback,
                                 text: reason,
+                            });
+                        } else {
+                            status = HookRunStatus::Failed;
+                            entries.push(HookOutputEntry {
+                                kind: HookOutputEntryKind::Error,
+                                text: "hook returned decision \"block\" without a non-empty reason"
+                                    .to_string(),
                             });
                         }
                     }
                 }
             }
             Some(2) => {
-                status = HookRunStatus::Blocked;
-                should_block = true;
-                let fallback_reason = trimmed_non_empty(&run_result.stderr);
-                block_reason = fallback_reason.clone();
-                block_message_for_model = fallback_reason.clone();
-                if let Some(reason) = fallback_reason {
+                if let Some(reason) = trimmed_non_empty(&run_result.stderr) {
+                    status = HookRunStatus::Blocked;
+                    should_block = true;
+                    block_reason = Some(reason.clone());
+                    block_message_for_model = Some(reason.clone());
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Feedback,
                         text: reason,
+                    });
+                } else {
+                    status = HookRunStatus::Failed;
+                    entries.push(HookOutputEntry {
+                        kind: HookOutputEntryKind::Error,
+                        text: "hook exited with code 2 without stderr feedback".to_string(),
                     });
                 }
             }
@@ -281,6 +293,8 @@ mod tests {
     use std::path::PathBuf;
 
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookOutputEntry;
+    use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
     use pretty_assertions::assert_eq;
 
@@ -333,6 +347,90 @@ mod tests {
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
+    }
+
+    #[test]
+    fn block_decision_without_reason_fails_instead_of_blocking() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), r#"{"decision":"block"}"#, ""),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            StopHandlerData {
+                should_stop: false,
+                stop_reason: None,
+                should_block: false,
+                block_reason: None,
+                block_message_for_model: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "hook returned decision \"block\" without a non-empty reason".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn block_decision_with_blank_reason_fails_instead_of_blocking() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), "{\"decision\":\"block\",\"reason\":\"   \"}", ""),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            StopHandlerData {
+                should_stop: false,
+                stop_reason: None,
+                should_block: false,
+                block_reason: None,
+                block_message_for_model: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "hook returned decision \"block\" without a non-empty reason".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn exit_code_two_without_stderr_feedback_fails_instead_of_blocking() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(2), "ignored stdout", "  "),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            StopHandlerData {
+                should_stop: false,
+                stop_reason: None,
+                should_block: false,
+                block_reason: None,
+                block_message_for_model: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "hook exited with code 2 without stderr feedback".to_string(),
+            }]
+        );
     }
 
     fn handler() -> ConfiguredHandler {
