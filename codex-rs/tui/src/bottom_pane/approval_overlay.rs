@@ -837,12 +837,6 @@ fn permissions_options() -> Vec<ApprovalOption> {
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
-        ApprovalOption {
-            label: "Cancel this request".to_string(),
-            decision: ApprovalDecision::Review(ReviewDecision::Abort),
-            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('c'))],
-        },
     ]
 }
 
@@ -1251,7 +1245,6 @@ mod tests {
             vec![
                 "Yes, grant these permissions".to_string(),
                 "No, continue without permissions".to_string(),
-                "Cancel this request".to_string(),
             ]
         );
     }
