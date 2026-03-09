@@ -7145,16 +7145,28 @@ async fn experimental_popup_shows_js_repl_node_requirement() {
 #[tokio::test]
 async fn experimental_popup_includes_guardian_approval() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let guardian_stage = FEATURES
+        .iter()
+        .find(|spec| spec.id == Feature::GuardianApproval)
+        .map(|spec| spec.stage)
+        .expect("expected guardian approval feature metadata");
+    let guardian_name = guardian_stage
+        .experimental_menu_name()
+        .expect("expected guardian approval experimental menu name");
+    let guardian_description = guardian_stage
+        .experimental_menu_description()
+        .expect("expected guardian approval experimental description");
 
     chat.open_experimental_popup();
 
     let popup = render_bottom_popup(&chat, 120);
+    let normalized_popup = popup.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        popup.contains("Guardian approvals"),
+        popup.contains(guardian_name),
         "expected guardian approvals entry in experimental popup, got:\n{popup}"
     );
     assert!(
-        popup.contains("blocked network access"),
+        normalized_popup.contains(guardian_description),
         "expected guardian approvals description in experimental popup, got:\n{popup}"
     );
 }
