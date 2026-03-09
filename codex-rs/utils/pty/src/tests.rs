@@ -288,21 +288,40 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_process_round_trips_stdin() -> anyhow::Result<()> {
-    let Some(python) = find_python() else {
-        eprintln!("python not found; skipping pipe_process_round_trips_stdin");
-        return Ok(());
+    let (program, args) = if cfg!(windows) {
+        let cmd = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        (
+            cmd,
+            vec![
+                "/Q".to_string(),
+                "/V:ON".to_string(),
+                "/D".to_string(),
+                "/C".to_string(),
+                "set /p line= & echo(!line!".to_string(),
+            ],
+        )
+    } else {
+        let Some(python) = find_python() else {
+            eprintln!("python not found; skipping pipe_process_round_trips_stdin");
+            return Ok(());
+        };
+        (
+            python,
+            vec![
+                "-u".to_string(),
+                "-c".to_string(),
+                "import sys; print(sys.stdin.readline().strip());".to_string(),
+            ],
+        )
     };
-
-    let args = vec![
-        "-u".to_string(),
-        "-c".to_string(),
-        "import sys; print(sys.stdin.readline().strip());".to_string(),
-    ];
     let env_map: HashMap<String, String> = std::env::vars().collect();
-    let spawned = spawn_pipe_process(&python, &args, Path::new("."), &env_map, &None).await?;
+    let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
     let (session, output_rx, exit_rx) = combine_spawned_output(spawned);
     let writer = session.writer_sender();
-    writer.send(b"roundtrip\n".to_vec()).await?;
+    let newline = if cfg!(windows) { "\r\n" } else { "\n" };
+    writer
+        .send(format!("roundtrip{newline}").into_bytes())
+        .await?;
     drop(writer);
     session.close_stdin();
 
