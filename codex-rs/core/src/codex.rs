@@ -305,6 +305,7 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::metrics::names::THREAD_STARTED_METRIC;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -1412,7 +1413,7 @@ impl Session {
         };
         config.features.emit_metrics(&session_telemetry);
         session_telemetry.counter(
-            "codex.thread.started",
+            THREAD_STARTED_METRIC,
             1,
             &[(
                 "is_git",

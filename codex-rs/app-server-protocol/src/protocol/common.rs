@@ -292,6 +292,10 @@ client_request_definitions! {
         params: v2::PluginInstallParams,
         response: v2::PluginInstallResponse,
     },
+    PluginUninstall => "plugin/uninstall" {
+        params: v2::PluginUninstallParams,
+        response: v2::PluginUninstallResponse,
+    },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
         inspect_params: true,

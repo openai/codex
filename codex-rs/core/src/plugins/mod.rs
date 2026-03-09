@@ -17,6 +17,7 @@ pub use manager::PluginCapabilitySummary;
 pub use manager::PluginInstallError;
 pub use manager::PluginInstallRequest;
 pub use manager::PluginLoadOutcome;
+pub use manager::PluginUninstallError;
 pub use manager::PluginsManager;
 pub use manager::load_plugin_apps;
 pub(crate) use manager::plugin_namespace_for_skill_path;

@@ -135,6 +135,15 @@ impl PluginStore {
             installed_path,
         })
     }
+
+    pub fn uninstall(&self, plugin_id: &PluginId) -> Result<(), PluginStoreError> {
+        let plugin_path = self
+            .root
+            .as_path()
+            .join(&plugin_id.marketplace_name)
+            .join(&plugin_id.plugin_name);
+        remove_existing_target(&plugin_path)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
