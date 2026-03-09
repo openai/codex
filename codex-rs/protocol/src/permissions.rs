@@ -67,6 +67,14 @@ pub enum FileSystemSpecialPath {
     },
     Tmpdir,
     SlashTmp,
+    /// Preserves future special-path tokens so older runtimes can ignore them
+    /// without rejecting config authored by a newer release.
+    Unknown {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        subpath: Option<PathBuf>,
+    },
 }
 
 impl FileSystemSpecialPath {
@@ -399,6 +407,7 @@ impl FileSystemSandboxPolicy {
                                     readable_roots.push(path);
                                 }
                             }
+                            FileSystemSpecialPath::Unknown { .. } => {}
                         },
                     }
                 }
@@ -596,7 +605,9 @@ fn resolve_file_system_special_path(
     cwd: Option<&AbsolutePathBuf>,
 ) -> Option<AbsolutePathBuf> {
     match value {
-        FileSystemSpecialPath::Root | FileSystemSpecialPath::Minimal => None,
+        FileSystemSpecialPath::Root
+        | FileSystemSpecialPath::Minimal
+        | FileSystemSpecialPath::Unknown { .. } => None,
         FileSystemSpecialPath::CurrentWorkingDirectory => {
             let cwd = cwd?;
             Some(cwd.clone())
@@ -740,4 +751,40 @@ fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf
         return None;
     }
     Some(gitdir_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn unknown_special_paths_are_ignored_by_legacy_bridge() -> std::io::Result<()> {
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Unknown {
+                    path: ":future_special_path".to_string(),
+                    subpath: None,
+                },
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let sandbox_policy = policy.to_legacy_sandbox_policy(
+            NetworkSandboxPolicy::Restricted,
+            Path::new("/tmp/workspace"),
+        )?;
+
+        assert_eq!(
+            sandbox_policy,
+            SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: false,
+                    readable_roots: Vec::new(),
+                },
+                network_access: false,
+            }
+        );
+        Ok(())
+    }
 }

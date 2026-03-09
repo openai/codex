@@ -158,30 +158,51 @@ pub(crate) fn resolve_permission_profile<'a>(
 pub(crate) fn compile_permission_profile(
     permissions: &PermissionsToml,
     profile_name: &str,
+    startup_warnings: &mut Vec<String>,
 ) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
     let profile = resolve_permission_profile(permissions, profile_name)?;
 
-    let filesystem = profile.filesystem.as_ref().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "permissions profile `{profile_name}` must define a `[permissions.{profile_name}.filesystem]` table"
-            ),
-        )
-    })?;
-
-    if filesystem.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "permissions profile `{profile_name}` must define at least one filesystem entry"
-            ),
-        ));
-    }
-
     let mut entries = Vec::new();
-    for (path, permission) in &filesystem.entries {
-        compile_filesystem_permission(path, permission, &mut entries)?;
+    if let Some(filesystem) = profile.filesystem.as_ref() {
+        if filesystem.is_empty() {
+            push_warning(
+                startup_warnings,
+                format!(
+                    "Permissions profile `{profile_name}` does not define any recognized filesystem entries for this version of Codex. Filesystem access will remain restricted. Upgrade Codex if this profile expects filesystem permissions."
+                ),
+            );
+        } else {
+            for (path, permission) in &filesystem.entries {
+                let starting_entry_count = entries.len();
+                compile_filesystem_permission(path, permission, &mut entries)?;
+                for entry in &entries[starting_entry_count..] {
+                    if let FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Unknown { path, subpath },
+                    } = &entry.path
+                    {
+                        push_warning(
+                            startup_warnings,
+                            match subpath.as_deref() {
+                                Some(subpath) => format!(
+                                    "Configured filesystem path `{path}` with nested entry `{}` is not recognized by this version of Codex and will be ignored. Upgrade Codex if this path is required.",
+                                    subpath.display()
+                                ),
+                                None => format!(
+                                    "Configured filesystem path `{path}` is not recognized by this version of Codex and will be ignored. Upgrade Codex if this path is required."
+                                ),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    } else {
+        push_warning(
+            startup_warnings,
+            format!(
+                "Permissions profile `{profile_name}` does not define any recognized filesystem entries for this version of Codex. Filesystem access will remain restricted. Upgrade Codex if this profile expects filesystem permissions."
+            ),
+        );
     }
 
     let network_sandbox_policy = compile_network_sandbox_policy(profile.network.as_ref());
@@ -240,15 +261,22 @@ fn compile_scoped_filesystem_path(path: &str, subpath: &str) -> io::Result<FileS
     }
 
     if let Some(special) = parse_special_path(path)? {
-        if !matches!(special, FileSystemSpecialPath::ProjectRoots { .. }) {
-            return Err(io::Error::new(
+        let subpath = parse_relative_subpath(subpath)?;
+        return match special {
+            FileSystemSpecialPath::ProjectRoots { .. } => Ok(FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(Some(subpath)),
+            }),
+            FileSystemSpecialPath::Unknown { path, .. } => Ok(FileSystemPath::Special {
+                value: FileSystemSpecialPath::Unknown {
+                    path,
+                    subpath: Some(subpath),
+                },
+            }),
+            _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("filesystem path `{path}` does not support nested entries"),
-            ));
-        }
-        return Ok(FileSystemPath::Special {
-            value: FileSystemSpecialPath::project_roots(Some(parse_relative_subpath(subpath)?)),
-        });
+            )),
+        };
     }
 
     let subpath = parse_relative_subpath(subpath)?;
@@ -263,12 +291,10 @@ fn parse_special_path(path: &str) -> io::Result<Option<FileSystemSpecialPath>> {
         ":minimal" => Some(FileSystemSpecialPath::Minimal),
         ":project_roots" => Some(FileSystemSpecialPath::project_roots(None)),
         ":tmpdir" => Some(FileSystemSpecialPath::Tmpdir),
-        _ if path.starts_with(':') => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("unknown filesystem special path `{path}`"),
-            ));
-        }
+        _ if path.starts_with(':') => Some(FileSystemSpecialPath::Unknown {
+            path: path.to_string(),
+            subpath: None,
+        }),
         _ => None,
     };
 
@@ -276,14 +302,73 @@ fn parse_special_path(path: &str) -> io::Result<Option<FileSystemSpecialPath>> {
 }
 
 fn parse_absolute_path(path: &str) -> io::Result<AbsolutePathBuf> {
-    let path_ref = Path::new(path);
-    if !path_ref.is_absolute() && path != "~" && !path.starts_with("~/") {
+    parse_absolute_path_for_platform(path, cfg!(windows))
+}
+
+fn parse_absolute_path_for_platform(path: &str, is_windows: bool) -> io::Result<AbsolutePathBuf> {
+    let path_ref = normalize_absolute_path_for_platform(path, is_windows);
+    if !is_absolute_path_for_platform(path, path_ref.as_path(), is_windows)
+        && path != "~"
+        && !path.starts_with("~/")
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("filesystem path `{path}` must be absolute, use `~/...`, or start with `:`"),
         ));
     }
     AbsolutePathBuf::from_absolute_path(path_ref)
+}
+
+fn is_absolute_path_for_platform(path: &str, normalized_path: &Path, is_windows: bool) -> bool {
+    if is_windows {
+        is_windows_absolute_path(path)
+            || is_windows_absolute_path(&normalized_path.to_string_lossy())
+    } else {
+        normalized_path.is_absolute()
+    }
+}
+
+fn normalize_absolute_path_for_platform(path: &str, is_windows: bool) -> PathBuf {
+    if !is_windows {
+        return PathBuf::from(path);
+    }
+
+    match normalize_windows_device_path(path) {
+        Some(normalized) => PathBuf::from(normalized),
+        None => PathBuf::from(path),
+    }
+}
+
+fn normalize_windows_device_path(path: &str) -> Option<String> {
+    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        return Some(format!(r"\\{unc}"));
+    }
+    if let Some(unc) = path.strip_prefix(r"\\.\UNC\") {
+        return Some(format!(r"\\{unc}"));
+    }
+    if let Some(path) = path.strip_prefix(r"\\?\")
+        && is_windows_drive_absolute_path(path)
+    {
+        return Some(path.to_string());
+    }
+    if let Some(path) = path.strip_prefix(r"\\.\")
+        && is_windows_drive_absolute_path(path)
+    {
+        return Some(path.to_string());
+    }
+    None
+}
+
+fn is_windows_absolute_path(path: &str) -> bool {
+    is_windows_drive_absolute_path(path) || path.starts_with(r"\\")
+}
+
+fn is_windows_drive_absolute_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
 }
 
 fn parse_relative_subpath(subpath: &str) -> io::Result<PathBuf> {
@@ -303,4 +388,22 @@ fn parse_relative_subpath(subpath: &str) -> io::Result<PathBuf> {
             path.display()
         ),
     ))
+}
+
+fn push_warning(startup_warnings: &mut Vec<String>, message: String) {
+    tracing::warn!("{message}");
+    startup_warnings.push(message);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn normalize_absolute_path_for_platform_simplifies_windows_verbatim_paths() {
+        let parsed =
+            normalize_absolute_path_for_platform(r"\\?\D:\c\x\worktrees\2508\swift-base", true);
+        assert_eq!(parsed, PathBuf::from(r"D:\c\x\worktrees\2508\swift-base"));
+    }
 }
