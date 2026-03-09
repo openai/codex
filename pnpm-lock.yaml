@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  '@react-router/node': ^7.9.4
   braces: ^3.0.3
   micromatch: ^4.0.8
   semver: ^7.7.1

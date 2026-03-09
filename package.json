@@ -10,11 +10,13 @@
     "prettier": "^3.5.3"
   },
   "resolutions": {
+    "@react-router/node": "^7.9.4",
     "braces": "^3.0.3",
     "micromatch": "^4.0.8",
     "semver": "^7.7.1"
   },
   "overrides": {
+    "@react-router/node": "^7.9.4",
     "punycode": "^2.3.1"
   },
   "engines": {
