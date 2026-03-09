@@ -66,24 +66,3 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "turn/started": TurnStartedNotification,
     "windows/worldWritableWarning": WindowsWorldWritableWarningNotification,
 }
-
-NOTIFICATION_METHOD_ALIASES: dict[str, str] = {
-    "account/loginCompleted": "account/login/completed",
-    "account/rateLimitsUpdated": "account/rateLimits/updated",
-    "app/listUpdated": "app/list/updated",
-    "commandExecution/outputDelta": "item/commandExecution/outputDelta",
-    "config/warning": "configWarning",
-    "context/compacted": "thread/compacted",
-    "fileChange/outputDelta": "item/fileChange/outputDelta",
-    "mcp/serverOauthLoginCompleted": "mcpServer/oauthLogin/completed",
-    "mcp/toolCallProgress": "item/mcpToolCall/progress",
-    "plan/delta": "item/plan/delta",
-    "reasoning/summaryPartAdded": "item/reasoning/summaryPartAdded",
-    "reasoning/summaryTextDelta": "item/reasoning/summaryTextDelta",
-    "reasoning/textDelta": "item/reasoning/textDelta",
-    "terminal/interaction": "item/commandExecution/terminalInteraction",
-    "thread/nameUpdated": "thread/name/updated",
-    "thread/tokenUsageUpdated": "thread/tokenUsage/updated",
-    "turn/diffUpdated": "turn/diff/updated",
-    "turn/planUpdated": "turn/plan/updated",
-}

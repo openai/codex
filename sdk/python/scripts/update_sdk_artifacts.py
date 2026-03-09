@@ -226,30 +226,6 @@ def generate_v2_all() -> None:
     _normalize_generated_timestamps(out_dir)
     (out_dir / "__init__.py").touch()
 
-
-NOTIFICATION_METHOD_ALIASES: dict[str, str] = {
-    # Backward compatibility for older SDK method keys.
-    "account/loginCompleted": "account/login/completed",
-    "account/rateLimitsUpdated": "account/rateLimits/updated",
-    "app/listUpdated": "app/list/updated",
-    "commandExecution/outputDelta": "item/commandExecution/outputDelta",
-    "config/warning": "configWarning",
-    "context/compacted": "thread/compacted",
-    "fileChange/outputDelta": "item/fileChange/outputDelta",
-    "mcp/serverOauthLoginCompleted": "mcpServer/oauthLogin/completed",
-    "mcp/toolCallProgress": "item/mcpToolCall/progress",
-    "plan/delta": "item/plan/delta",
-    "reasoning/summaryPartAdded": "item/reasoning/summaryPartAdded",
-    "reasoning/summaryTextDelta": "item/reasoning/summaryTextDelta",
-    "reasoning/textDelta": "item/reasoning/textDelta",
-    "terminal/interaction": "item/commandExecution/terminalInteraction",
-    "thread/nameUpdated": "thread/name/updated",
-    "thread/tokenUsageUpdated": "thread/tokenUsage/updated",
-    "turn/diffUpdated": "turn/diff/updated",
-    "turn/planUpdated": "turn/plan/updated",
-}
-
-
 def _notification_specs() -> list[tuple[str, str]]:
     server_notifications = json.loads((schema_root_dir() / "ServerNotification.json").read_text())
     one_of = server_notifications.get("oneOf", [])
@@ -274,7 +250,7 @@ def _notification_specs() -> list[tuple[str, str]]:
             continue
         class_name = ref.split("/")[-1]
         if not (v2_dir / f"{class_name}.py").exists():
-            # Some legacy notifications are outside v2.
+            # Skip schema variants that are not emitted into the generated v2 surface.
             continue
         specs.append((method, class_name))
 
@@ -307,17 +283,6 @@ def generate_notification_registry() -> None:
     )
     for method, class_name in specs:
         lines.append(f'    "{method}": {class_name},')
-    lines.append("}")
-    lines.extend(
-        [
-            "",
-            "NOTIFICATION_METHOD_ALIASES: dict[str, str] = {",
-        ]
-    )
-    for legacy_method in sorted(NOTIFICATION_METHOD_ALIASES):
-        lines.append(
-            f'    "{legacy_method}": "{NOTIFICATION_METHOD_ALIASES[legacy_method]}",'
-        )
     lines.extend(["}", ""])
 
     out.write_text("\n".join(lines))
