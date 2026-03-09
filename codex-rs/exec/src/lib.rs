@@ -1308,6 +1308,18 @@ async fn handle_server_request(
             )
             .await
         }
+        ServerRequest::PermissionsRequestApproval { request_id, params } => {
+            reject_server_request(
+                client,
+                request_id,
+                &method,
+                format!(
+                    "permissions approval is not supported in exec mode for thread `{}`",
+                    params.thread_id
+                ),
+            )
+            .await
+        }
     };
 
     if let Err(err) = handle_result {
