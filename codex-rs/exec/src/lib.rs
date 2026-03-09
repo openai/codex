@@ -976,24 +976,6 @@ fn session_configured_from_thread_start_response(
     )
 }
 
-fn should_suppress_agent_job_event(msg: &EventMsg) -> bool {
-    !matches!(
-        msg,
-        EventMsg::ExecApprovalRequest(_)
-            | EventMsg::ApplyPatchApprovalRequest(_)
-            | EventMsg::RequestUserInput(_)
-            | EventMsg::DynamicToolCallRequest(_)
-            | EventMsg::DynamicToolCallResponse(_)
-            | EventMsg::ElicitationRequest(_)
-            | EventMsg::Error(_)
-            | EventMsg::Warning(_)
-            | EventMsg::GuardianAssessment(_)
-            | EventMsg::DeprecationNotice(_)
-            | EventMsg::StreamError(_)
-            | EventMsg::ShutdownComplete
-    )
-}
-
 fn session_configured_from_thread_resume_response(
     response: &ThreadResumeResponse,
 ) -> Result<SessionConfiguredEvent, String> {
