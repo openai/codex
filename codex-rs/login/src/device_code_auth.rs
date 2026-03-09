@@ -6,9 +6,9 @@ use serde::de::{self};
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::build_login_http_client;
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
-use crate::server::build_login_http_client;
 use std::io;
 
 const ANSI_BLUE: &str = "\x1b[94m";
@@ -48,9 +48,7 @@ where
     D: Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    s.trim()
-        .parse::<u64>()
-        .map_err(|e| de::Error::custom(format!("invalid u64 string: {e}")))
+    s.trim().parse::<u64>().map_err(de::Error::custom)
 }
 
 #[derive(Deserialize)]
@@ -223,7 +221,6 @@ pub async fn complete_device_code_login(
     .await
 }
 
-/// Full device code login flow.
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let device_code = request_device_code(&opts).await?;
     print_device_code_prompt(&device_code.verification_url, &device_code.user_code);

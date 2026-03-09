@@ -1,7 +1,10 @@
+mod custom_ca;
 mod device_code_auth;
 mod pkce;
 mod server;
 
+pub use custom_ca::BuildLoginHttpClientError;
+pub use custom_ca::build_login_http_client;
 pub use device_code_auth::DeviceCode;
 pub use device_code_auth::complete_device_code_login;
 pub use device_code_auth::request_device_code;
@@ -9,7 +12,6 @@ pub use device_code_auth::run_device_code_login;
 pub use server::LoginServer;
 pub use server::ServerOptions;
 pub use server::ShutdownHandle;
-pub use server::build_login_http_client;
 pub use server::run_login_server;
 
 // Re-export commonly used auth types and helpers from codex-core for compatibility

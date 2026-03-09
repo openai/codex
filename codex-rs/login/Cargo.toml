@@ -19,6 +19,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tiny_http = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
