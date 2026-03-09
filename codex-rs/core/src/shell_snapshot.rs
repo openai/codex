@@ -742,6 +742,8 @@ mod tests {
         let home = dir.path();
         let read_status_path = home.join("stdin-read-status");
         let read_status_display = read_status_path.display();
+        // Persist the startup `read` exit status so the test can assert whether
+        // bash saw EOF on stdin after the snapshot process exits.
         let bashrc =
             format!("read -t 1 -r ignored\nprintf '%s' \"$?\" > \"{read_status_display}\"\n");
         fs::write(home.join(".bashrc"), bashrc).await?;
