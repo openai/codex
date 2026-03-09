@@ -24,7 +24,6 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-#[cfg(target_os = "macos")]
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
@@ -158,7 +157,6 @@ fn exec_command_event_with_missing_additional_permissions(
     Ok(ev_function_call(call_id, "exec_command", &args_str))
 }
 
-#[cfg(target_os = "macos")]
 fn shell_event_with_raw_request_permissions(
     call_id: &str,
     command: &str,
@@ -291,7 +289,6 @@ fn normalized_directory_write_permissions(path: &Path) -> Result<PermissionProfi
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(target_os = "macos")]
 async fn with_additional_permissions_requires_approval_under_on_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -380,7 +377,6 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(target_os = "macos")]
 async fn relative_additional_permissions_resolve_against_tool_workdir() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -480,7 +476,6 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(target_os = "macos")]
 async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_cwd_write()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -580,7 +575,6 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_cwd
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(target_os = "macos")]
 async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_tmp_write()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -681,7 +675,6 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_tmp
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(target_os = "macos")]
 async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -788,7 +781,6 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(unix)]
 async fn with_additional_permissions_denied_approval_blocks_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
@@ -892,7 +884,6 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(target_os = "macos")]
 async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -1010,7 +1001,6 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(target_os = "macos")]
 async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_request() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
@@ -1122,7 +1112,6 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(target_os = "macos")]
 async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -1226,7 +1215,6 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Resu
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(target_os = "macos")]
 async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -1364,7 +1352,6 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(target_os = "macos")]
 async fn request_permissions_grants_do_not_carry_across_turns() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
