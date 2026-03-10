@@ -34,13 +34,13 @@ Use `thread(...)` for simple continuation. Use `thread_resume(...)` when you nee
 Common causes:
 
 - published runtime package (`codex-cli-bin`) is not installed
-- local `codex` is not available on `PATH`
 - local `codex_bin` override points to a missing file
 - local auth/session is missing
 - incompatible/old app-server
 
 Maintainers stage releases by building the SDK once and the runtime once per
-platform with the same pinned runtime version:
+platform with the same pinned runtime version. Publish `codex-cli-bin` as
+platform wheels only; do not publish an sdist:
 
 ```bash
 cd sdk/python

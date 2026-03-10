@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import threading
 import uuid
@@ -94,14 +93,12 @@ def _installed_codex_path() -> Path:
 @dataclass(frozen=True)
 class CodexBinResolverOps:
     installed_codex_path: Callable[[], Path]
-    which: Callable[[str], str | None]
     path_exists: Callable[[Path], bool]
 
 
 def _default_codex_bin_resolver_ops() -> CodexBinResolverOps:
     return CodexBinResolverOps(
         installed_codex_path=_installed_codex_path,
-        which=shutil.which,
         path_exists=lambda path: path.exists(),
     )
 
@@ -116,18 +113,7 @@ def resolve_codex_bin(config: "AppServerConfig", ops: CodexBinResolverOps) -> Pa
             )
         return codex_bin
 
-    try:
-        return ops.installed_codex_path()
-    except FileNotFoundError:
-        path_codex = ops.which("codex")
-        if path_codex is not None:
-            return Path(path_codex)
-
-    raise FileNotFoundError(
-        "Unable to locate Codex. Install the published SDK build with its "
-        f"{RUNTIME_PKG_NAME} dependency, make `codex` available on PATH for local "
-        "development, or set AppServerConfig.codex_bin explicitly."
-    )
+    return ops.installed_codex_path()
 
 
 def _resolve_codex_bin(config: "AppServerConfig") -> Path:

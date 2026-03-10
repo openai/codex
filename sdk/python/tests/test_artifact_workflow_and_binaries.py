@@ -92,7 +92,7 @@ def test_runtime_package_template_has_no_checked_in_binaries() -> None:
     ) == ["__init__.py"]
 
 
-def test_runtime_package_builds_platform_specific_wheels() -> None:
+def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> None:
     pyproject = tomllib.loads((ROOT.parent / "python-runtime" / "pyproject.toml").read_text())
     hook_source = (ROOT.parent / "python-runtime" / "hatch_build.py").read_text()
     hook_tree = ast.parse(hook_source)
@@ -100,6 +100,25 @@ def test_runtime_package_builds_platform_specific_wheels() -> None:
         node
         for node in ast.walk(hook_tree)
         if isinstance(node, ast.FunctionDef) and node.name == "initialize"
+    )
+
+    sdist_guard = next(
+        (
+            node
+            for node in initialize_fn.body
+            if isinstance(node, ast.If)
+            and isinstance(node.test, ast.Compare)
+            and isinstance(node.test.left, ast.Attribute)
+            and isinstance(node.test.left.value, ast.Name)
+            and node.test.left.value.id == "self"
+            and node.test.left.attr == "target_name"
+            and len(node.test.ops) == 1
+            and isinstance(node.test.ops[0], ast.Eq)
+            and len(node.test.comparators) == 1
+            and isinstance(node.test.comparators[0], ast.Constant)
+            and node.test.comparators[0].value == "sdist"
+        ),
+        None,
     )
     build_data_assignments = {
         node.targets[0].slice.value: node.value.value
@@ -119,6 +138,10 @@ def test_runtime_package_builds_platform_specific_wheels() -> None:
         "include": ["src/codex_cli_bin/bin/**"],
         "hooks": {"custom": {}},
     }
+    assert pyproject["tool"]["hatch"]["build"]["targets"]["sdist"] == {
+        "hooks": {"custom": {}},
+    }
+    assert sdist_guard is not None
     assert build_data_assignments == {"pure_python": False, "infer_tag": True}
 
 
@@ -232,7 +255,6 @@ def test_default_runtime_is_resolved_from_installed_runtime_package(tmp_path: Pa
     fake_binary.write_text("")
     ops = client_module.CodexBinResolverOps(
         installed_codex_path=lambda: fake_binary,
-        which=lambda _: None,
         path_exists=lambda path: path == fake_binary,
     )
 
@@ -250,7 +272,6 @@ def test_explicit_codex_bin_override_takes_priority(tmp_path: Path) -> None:
         installed_codex_path=lambda: (_ for _ in ()).throw(
             AssertionError("packaged runtime should not be used")
         ),
-        which=lambda _: None,
         path_exists=lambda path: path == explicit_binary,
     )
 
@@ -258,31 +279,27 @@ def test_explicit_codex_bin_override_takes_priority(tmp_path: Path) -> None:
     assert client_module.resolve_codex_bin(config, ops) == explicit_binary
 
 
-def test_default_runtime_falls_back_to_codex_on_path(tmp_path: Path) -> None:
+def test_missing_runtime_package_requires_explicit_codex_bin() -> None:
     from codex_app_server import client as client_module
 
-    path_binary = tmp_path / ("codex.exe" if client_module.os.name == "nt" else "codex")
-    path_binary.write_text("")
     ops = client_module.CodexBinResolverOps(
         installed_codex_path=lambda: (_ for _ in ()).throw(
             FileNotFoundError("missing packaged runtime")
         ),
-        which=lambda _: str(path_binary),
-        path_exists=lambda path: path == path_binary,
+        path_exists=lambda _path: False,
     )
 
-    config = client_module.AppServerConfig()
-    assert client_module.resolve_codex_bin(config, ops) == path_binary
+    with pytest.raises(FileNotFoundError, match="missing packaged runtime"):
+        client_module.resolve_codex_bin(client_module.AppServerConfig(), ops)
 
 
-def test_default_runtime_error_mentions_supported_resolution_paths() -> None:
+def test_broken_runtime_package_does_not_fall_back() -> None:
     from codex_app_server import client as client_module
 
     ops = client_module.CodexBinResolverOps(
         installed_codex_path=lambda: (_ for _ in ()).throw(
-            FileNotFoundError("missing packaged runtime")
+            FileNotFoundError("missing packaged binary")
         ),
-        which=lambda _: None,
         path_exists=lambda _path: False,
     )
 
@@ -290,7 +307,5 @@ def test_default_runtime_error_mentions_supported_resolution_paths() -> None:
         client_module.resolve_codex_bin(client_module.AppServerConfig(), ops)
 
     assert str(exc_info.value) == (
-        "Unable to locate Codex. Install the published SDK build with its "
-        "codex-cli-bin dependency, make `codex` available on PATH for local "
-        "development, or set AppServerConfig.codex_bin explicitly."
+        "missing packaged binary"
     )

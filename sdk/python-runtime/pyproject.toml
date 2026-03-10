@@ -41,9 +41,5 @@ include = ["src/codex_cli_bin/bin/**"]
 [tool.hatch.build.targets.wheel.hooks.custom]
 
 [tool.hatch.build.targets.sdist]
-include = [
-  "src/codex_cli_bin/**",
-  "README.md",
-  "hatch_build.py",
-  "pyproject.toml",
-]
+
+[tool.hatch.build.targets.sdist.hooks.custom]

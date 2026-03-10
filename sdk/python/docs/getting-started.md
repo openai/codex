@@ -14,7 +14,7 @@ python -m pip install -e .
 Requirements:
 
 - Python `>=3.10`
-- local `codex` on `PATH`, or an explicit `codex_bin` override
+- installed `codex-cli-bin` runtime package, or an explicit `codex_bin` override
 - Local Codex auth/session configured
 
 ## 2) Run your first turn

@@ -12,8 +12,8 @@ python -m pip install -e .
 ```
 
 Published SDK builds pin an exact `codex-cli-bin` runtime dependency. For local
-repo development, make `codex` available on `PATH` or pass
-`AppServerConfig(codex_bin=...)` to point at a local build explicitly.
+repo development, pass `AppServerConfig(codex_bin=...)` to point at a local
+build explicitly.
 
 ## Quickstart
 
@@ -53,8 +53,8 @@ and that runtime package carries the platform-specific binary for the target
 wheel.
 
 For local repo development, the checked-in `sdk/python-runtime` package is only
-a template for staged release artifacts. Editable installs should use a local
-`codex` on `PATH` or an explicit `codex_bin` override instead.
+a template for staged release artifacts. Editable installs should use an
+explicit `codex_bin` override instead.
 
 ## Maintainer workflow
 
@@ -77,6 +77,7 @@ This supports the CI release flow:
 - run `generate-types` before packaging
 - stage `codex-app-server-sdk` once with an exact `codex-cli-bin==...` dependency
 - stage `codex-cli-bin` on each supported platform runner with the same pinned runtime version
+- build and publish `codex-cli-bin` as platform wheels only; do not publish an sdist
 
 ## Compatibility and versioning
 
