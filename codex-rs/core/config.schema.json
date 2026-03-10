@@ -362,6 +362,9 @@
             "fast_mode": {
               "type": "boolean"
             },
+            "guardian_approval": {
+              "type": "boolean"
+            },
             "image_detail_original": {
               "type": "boolean"
             },
@@ -405,6 +408,9 @@
               "type": "boolean"
             },
             "request_permissions": {
+              "type": "boolean"
+            },
+            "request_permissions_tool": {
               "type": "boolean"
             },
             "request_rule": {
@@ -1831,6 +1837,9 @@
         "fast_mode": {
           "type": "boolean"
         },
+        "guardian_approval": {
+          "type": "boolean"
+        },
         "image_detail_original": {
           "type": "boolean"
         },
@@ -1874,6 +1883,9 @@
           "type": "boolean"
         },
         "request_permissions": {
+          "type": "boolean"
+        },
+        "request_permissions_tool": {
           "type": "boolean"
         },
         "request_rule": {

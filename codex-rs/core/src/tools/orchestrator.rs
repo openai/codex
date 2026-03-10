@@ -10,6 +10,8 @@ use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
+use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
+use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::sandboxing::SandboxManager;
 use crate::tools::network_approval::DeferredNetworkApproval;
@@ -130,7 +132,7 @@ impl ToolOrchestrator {
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
-                    turn: turn_ctx,
+                    turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
                     retry_reason: reason,
                     network_approval_context: None,
@@ -141,7 +143,12 @@ impl ToolOrchestrator {
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
-                        return Err(ToolError::Rejected("rejected by user".to_string()));
+                        let reason = if routes_approval_to_guardian(turn_ctx) {
+                            GUARDIAN_REJECTION_MESSAGE.to_string()
+                        } else {
+                            "rejected by user".to_string()
+                        };
+                        return Err(ToolError::Rejected(reason));
                     }
                     ReviewDecision::Approved
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
@@ -169,7 +176,8 @@ impl ToolOrchestrator {
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
             SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
             SandboxOverride::NoOverride => self.sandbox.select_initial(
-                &turn_ctx.sandbox_policy,
+                &turn_ctx.file_system_sandbox_policy,
+                turn_ctx.network_sandbox_policy,
                 tool.sandbox_preference(),
                 turn_ctx.windows_sandbox_level,
                 has_managed_network_requirements,
@@ -182,6 +190,8 @@ impl ToolOrchestrator {
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             policy: &turn_ctx.sandbox_policy,
+            file_system_policy: &turn_ctx.file_system_sandbox_policy,
+            network_policy: turn_ctx.network_sandbox_policy,
             enforce_managed_network: has_managed_network_requirements,
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
@@ -229,8 +239,9 @@ impl ToolOrchestrator {
                         network_policy_decision,
                     })));
                 }
-                // Under `Never` or `OnRequest`, do not retry without sandbox; surface a concise
-                // sandbox denial that preserves the original output.
+                // Under `Never` or `OnRequest`, do not retry without sandbox;
+                // surface a concise sandbox denial that preserves the
+                // original output.
                 if !tool.wants_no_sandbox_approval(approval_policy) {
                     let allow_on_request_network_prompt =
                         matches!(approval_policy, AskForApproval::OnRequest)
@@ -266,7 +277,7 @@ impl ToolOrchestrator {
                 if !bypass_retry_approval {
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
-                        turn: turn_ctx,
+                        turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
@@ -277,7 +288,12 @@ impl ToolOrchestrator {
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
-                            return Err(ToolError::Rejected("rejected by user".to_string()));
+                            let reason = if routes_approval_to_guardian(turn_ctx) {
+                                GUARDIAN_REJECTION_MESSAGE.to_string()
+                            } else {
+                                "rejected by user".to_string()
+                            };
+                            return Err(ToolError::Rejected(reason));
                         }
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
@@ -296,6 +312,8 @@ impl ToolOrchestrator {
                 let escalated_attempt = SandboxAttempt {
                     sandbox: crate::exec::SandboxType::None,
                     policy: &turn_ctx.sandbox_policy,
+                    file_system_policy: &turn_ctx.file_system_sandbox_policy,
+                    network_policy: turn_ctx.network_sandbox_policy,
                     enforce_managed_network: has_managed_network_requirements,
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,

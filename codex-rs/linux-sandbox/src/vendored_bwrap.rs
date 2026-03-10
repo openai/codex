@@ -6,6 +6,7 @@
 #[cfg(vendored_bwrap_available)]
 mod imp {
     use std::ffi::CString;
+    use std::fs::File;
     use std::os::raw::c_char;
 
     unsafe extern "C" {
@@ -27,7 +28,10 @@ mod imp {
     ///
     /// On success, bubblewrap will `execve` into the target program and this
     /// function will never return. A return value therefore implies failure.
-    pub(crate) fn run_vendored_bwrap_main(argv: &[String]) -> libc::c_int {
+    pub(crate) fn run_vendored_bwrap_main(
+        argv: &[String],
+        _preserved_files: &[File],
+    ) -> libc::c_int {
         let cstrings = argv_to_cstrings(argv);
 
         let mut argv_ptrs: Vec<*const c_char> = cstrings.iter().map(|arg| arg.as_ptr()).collect();
@@ -39,16 +43,21 @@ mod imp {
     }
 
     /// Execute the build-time bubblewrap `main` function with the given argv.
-    pub(crate) fn exec_vendored_bwrap(argv: Vec<String>) -> ! {
-        let exit_code = run_vendored_bwrap_main(&argv);
+    pub(crate) fn exec_vendored_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
+        let exit_code = run_vendored_bwrap_main(&argv, &preserved_files);
         std::process::exit(exit_code);
     }
 }
 
 #[cfg(not(vendored_bwrap_available))]
 mod imp {
+    use std::fs::File;
+
     /// Panics with a clear error when the build-time bwrap path is not enabled.
-    pub(crate) fn run_vendored_bwrap_main(_argv: &[String]) -> libc::c_int {
+    pub(crate) fn run_vendored_bwrap_main(
+        _argv: &[String],
+        _preserved_files: &[File],
+    ) -> libc::c_int {
         panic!(
             r#"build-time bubblewrap is not available in this build.
 codex-linux-sandbox should always compile vendored bubblewrap on Linux targets.
@@ -60,8 +69,8 @@ Notes:
     }
 
     /// Panics with a clear error when the build-time bwrap path is not enabled.
-    pub(crate) fn exec_vendored_bwrap(_argv: Vec<String>) -> ! {
-        let _ = run_vendored_bwrap_main(&[]);
+    pub(crate) fn exec_vendored_bwrap(_argv: Vec<String>, _preserved_files: Vec<File>) -> ! {
+        let _ = run_vendored_bwrap_main(&[], &[]);
         unreachable!("run_vendored_bwrap_main should always panic in this configuration")
     }
 }

@@ -54,6 +54,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     std::fs::create_dir(&codex_home)?;
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
+    let release_marker = workspace.join("interrupt-release");
 
     let Some(zsh_path) = find_test_zsh_path()? else {
         eprintln!("skipping zsh fork test: no zsh executable found");
@@ -61,8 +62,15 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     };
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
 
+    // Keep the shell command in flight until we interrupt it. A fast command
+    // like `echo hi` can finish before the interrupt arrives on faster runners,
+    // which turns this into a test for post-command follow-up behavior instead
+    // of interrupting an active zsh-fork command.
+    let release_marker_escaped = release_marker.to_string_lossy().replace('\'', r#"'\''"#);
+    let wait_for_interrupt =
+        format!("while [ ! -f '{release_marker_escaped}' ]; do sleep 0.01; done");
     let response = create_shell_command_sse_response(
-        vec!["echo".to_string(), "hi".to_string()],
+        vec!["/bin/sh".to_string(), "-c".to_string(), wait_for_interrupt],
         None,
         Some(5000),
         "call-zsh-fork",
@@ -155,7 +163,9 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     assert_eq!(id, "call-zsh-fork");
     assert_eq!(status, CommandExecutionStatus::InProgress);
     assert!(command.starts_with(&zsh_path.display().to_string()));
-    assert!(command.contains(" -lc 'echo hi'"));
+    assert!(command.contains("/bin/sh -c"));
+    assert!(command.contains("sleep 0.01"));
+    assert!(command.contains(&release_marker.display().to_string()));
     assert_eq!(cwd, workspace);
 
     mcp.interrupt_turn_and_wait_for_aborted(thread.id, turn.id, DEFAULT_READ_TIMEOUT)
@@ -663,22 +673,50 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             };
             assert_eq!(id, "call-zsh-fork-subcommand-decline");
             assert_eq!(status, CommandExecutionStatus::Declined);
-            assert!(
-                aggregated_output.is_none()
-                    || aggregated_output == Some("exec command rejected by user".to_string())
-            );
+            if let Some(output) = aggregated_output.as_deref() {
+                assert!(
+                    output == "exec command rejected by user"
+                        || output.contains("sandbox denied exec error"),
+                    "unexpected aggregated output: {output}"
+                );
+            }
 
-            mcp.interrupt_turn_and_wait_for_aborted(
-                thread.id.clone(),
-                turn.id.clone(),
+            match timeout(
                 DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_notification_message("turn/completed"),
             )
-            .await?;
+            .await
+            {
+                Ok(Ok(completed_notif)) => {
+                    let completed: TurnCompletedNotification = serde_json::from_value(
+                        completed_notif
+                            .params
+                            .expect("turn/completed params must be present"),
+                    )?;
+                    assert_eq!(completed.thread_id, thread.id);
+                    assert_eq!(completed.turn.id, turn.id);
+                    assert!(matches!(
+                        completed.turn.status,
+                        TurnStatus::Interrupted | TurnStatus::Completed
+                    ));
+                }
+                Ok(Err(error)) => return Err(error),
+                Err(_) => {
+                    mcp.interrupt_turn_and_wait_for_aborted(
+                        thread.id.clone(),
+                        turn.id.clone(),
+                        DEFAULT_READ_TIMEOUT,
+                    )
+                    .await?;
+                }
+            }
         }
         Ok(Err(error)) => return Err(error),
         Err(_) => {
             // Some zsh builds abort the turn immediately after the rejected
-            // subcommand without emitting a parent `item/completed`.
+            // subcommand without emitting a parent `item/completed`, and Linux
+            // sandbox failures can also complete the turn before the parent
+            // completion item is observed.
             let completed_notif = timeout(
                 DEFAULT_READ_TIMEOUT,
                 mcp.read_stream_until_notification_message("turn/completed"),
@@ -691,7 +729,10 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             )?;
             assert_eq!(completed.thread_id, thread.id);
             assert_eq!(completed.turn.id, turn.id);
-            assert_eq!(completed.turn.status, TurnStatus::Interrupted);
+            assert!(matches!(
+                completed.turn.status,
+                TurnStatus::Interrupted | TurnStatus::Completed
+            ));
         }
     }
 

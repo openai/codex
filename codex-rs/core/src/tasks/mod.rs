@@ -33,6 +33,9 @@ use crate::protocol::TurnCompleteEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_otel::metrics::names::TURN_E2E_DURATION_METRIC;
+use codex_otel::metrics::names::TURN_TOKEN_USAGE_METRIC;
+use codex_otel::metrics::names::TURN_TOOL_CALL_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -145,7 +148,7 @@ impl Session {
 
         let timer = turn_context
             .session_telemetry
-            .start_timer("codex.turn.e2e_duration_ms", &[])
+            .start_timer(TURN_E2E_DURATION_METRIC, &[])
             .ok();
 
         let done_clone = Arc::clone(&done);
@@ -201,8 +204,13 @@ impl Session {
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
-        for task in self.take_all_running_tasks().await {
-            self.handle_task_abort(task, reason.clone()).await;
+        if let Some(mut active_turn) = self.take_active_turn().await {
+            for task in active_turn.drain_tasks() {
+                self.handle_task_abort(task, reason.clone()).await;
+            }
+            // Let interrupted tasks observe cancellation before dropping pending approvals, or an
+            // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
+            active_turn.clear_pending().await;
         }
         if reason == TurnAbortReason::Interrupted {
             self.close_unified_exec_processes().await;
@@ -273,7 +281,7 @@ impl Session {
                 },
             );
             self.services.session_telemetry.histogram(
-                "codex.turn.tool.call",
+                TURN_TOOL_CALL_METRIC,
                 i64::try_from(turn_tool_calls).unwrap_or(i64::MAX),
                 &[tmp_mem],
             );
@@ -296,27 +304,27 @@ impl Session {
                     .max(0),
             };
             self.services.session_telemetry.histogram(
-                "codex.turn.token_usage",
+                TURN_TOKEN_USAGE_METRIC,
                 turn_token_usage.total_tokens,
                 &[("token_type", "total"), tmp_mem],
             );
             self.services.session_telemetry.histogram(
-                "codex.turn.token_usage",
+                TURN_TOKEN_USAGE_METRIC,
                 turn_token_usage.input_tokens,
                 &[("token_type", "input"), tmp_mem],
             );
             self.services.session_telemetry.histogram(
-                "codex.turn.token_usage",
+                TURN_TOKEN_USAGE_METRIC,
                 turn_token_usage.cached_input(),
                 &[("token_type", "cached_input"), tmp_mem],
             );
             self.services.session_telemetry.histogram(
-                "codex.turn.token_usage",
+                TURN_TOKEN_USAGE_METRIC,
                 turn_token_usage.output_tokens,
                 &[("token_type", "output"), tmp_mem],
             );
             self.services.session_telemetry.histogram(
-                "codex.turn.token_usage",
+                TURN_TOKEN_USAGE_METRIC,
                 turn_token_usage.reasoning_output_tokens,
                 &[("token_type", "reasoning_output"), tmp_mem],
             );
@@ -342,16 +350,9 @@ impl Session {
         *active = Some(turn);
     }
 
-    async fn take_all_running_tasks(&self) -> Vec<RunningTask> {
+    async fn take_active_turn(&self) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
-        match active.take() {
-            Some(mut at) => {
-                at.clear_pending().await;
-
-                at.drain_tasks()
-            }
-            None => Vec::new(),
-        }
+        active.take()
     }
 
     pub(crate) async fn close_unified_exec_processes(&self) {

@@ -110,6 +110,26 @@ macro_rules! client_request_definitions {
             )*
         }
 
+        impl ClientRequest {
+            pub fn id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+
+            pub fn method(&self) -> String {
+                serde_json::to_value(self)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("method")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| "<unknown>".to_string())
+            }
+        }
+
         impl crate::experimental_api::ExperimentalApi for ClientRequest {
             fn experimental_reason(&self) -> Option<&'static str> {
                 match self {
@@ -149,6 +169,12 @@ macro_rules! client_request_definitions {
                 <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
             )*
             Ok(())
+        }
+
+        pub(crate) fn visit_client_response_types(v: &mut impl ::ts_rs::TypeVisitor) {
+            $(
+                v.visit::<$response>();
+            )*
         }
 
         #[allow(clippy::vec_init_then_push)]
@@ -272,6 +298,10 @@ client_request_definitions! {
         params: v2::PluginInstallParams,
         response: v2::PluginInstallResponse,
     },
+    PluginUninstall => "plugin/uninstall" {
+        params: v2::PluginUninstallParams,
+        response: v2::PluginUninstallResponse,
+    },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
         inspect_params: true,
@@ -377,10 +407,25 @@ client_request_definitions! {
         response: v2::FeedbackUploadResponse,
     },
 
-    /// Execute a command (argv vector) under the server's sandbox.
+    /// Execute a standalone command (argv vector) under the server's sandbox.
     OneOffCommandExec => "command/exec" {
         params: v2::CommandExecParams,
         response: v2::CommandExecResponse,
+    },
+    /// Write stdin bytes to a running `command/exec` session or close stdin.
+    CommandExecWrite => "command/exec/write" {
+        params: v2::CommandExecWriteParams,
+        response: v2::CommandExecWriteResponse,
+    },
+    /// Terminate a running `command/exec` session by client-supplied `processId`.
+    CommandExecTerminate => "command/exec/terminate" {
+        params: v2::CommandExecTerminateParams,
+        response: v2::CommandExecTerminateResponse,
+    },
+    /// Resize a running PTY-backed `command/exec` session by client-supplied `processId`.
+    CommandExecResize => "command/exec/resize" {
+        params: v2::CommandExecResizeParams,
+        response: v2::CommandExecResizeResponse,
     },
 
     ConfigRead => "config/read" {
@@ -508,6 +553,12 @@ macro_rules! server_request_definitions {
                 <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
             )*
             Ok(())
+        }
+
+        pub(crate) fn visit_server_response_types(v: &mut impl ::ts_rs::TypeVisitor) {
+            $(
+                v.visit::<$response>();
+            )*
         }
 
         #[allow(clippy::vec_init_then_push)]
@@ -660,6 +711,12 @@ server_request_definitions! {
         response: v2::McpServerElicitationRequestResponse,
     },
 
+    /// Request approval for additional permissions from the user.
+    PermissionsRequestApproval => "item/permissions/requestApproval" {
+        params: v2::PermissionsRequestApprovalParams,
+        response: v2::PermissionsRequestApprovalResponse,
+    },
+
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,
@@ -781,6 +838,8 @@ server_notification_definitions! {
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
     /// EXPERIMENTAL - proposed plan streaming deltas for plan items.
     PlanDelta => "item/plan/delta" (v2::PlanDeltaNotification),
+    /// Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.
+    CommandExecOutputDelta => "command/exec/outputDelta" (v2::CommandExecOutputDeltaNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
     FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
@@ -1119,6 +1178,8 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: None,
         };
+        assert_eq!(request.id(), &RequestId::Integer(1));
+        assert_eq!(request.method(), "account/rateLimits/read");
         assert_eq!(
             json!({
                 "method": "account/rateLimits/read",
@@ -1523,6 +1584,7 @@ mod tests {
                 }),
                 macos: None,
             }),
+            skill_metadata: None,
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             available_decisions: None,
@@ -1531,6 +1593,33 @@ mod tests {
         assert_eq!(
             reason,
             Some("item/commandExecution/requestApproval.additionalPermissions")
+        );
+    }
+
+    #[test]
+    fn command_execution_request_approval_skill_metadata_is_marked_experimental() {
+        let params = v2::CommandExecutionRequestApprovalParams {
+            thread_id: "thr_123".to_string(),
+            turn_id: "turn_123".to_string(),
+            item_id: "call_123".to_string(),
+            approval_id: None,
+            reason: None,
+            network_approval_context: None,
+            command: Some("cat file".to_string()),
+            cwd: None,
+            command_actions: None,
+            additional_permissions: None,
+            skill_metadata: Some(v2::CommandExecutionRequestApprovalSkillMetadata {
+                path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
+            }),
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            available_decisions: None,
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&params);
+        assert_eq!(
+            reason,
+            Some("item/commandExecution/requestApproval.skillMetadata")
         );
     }
 }

@@ -16,6 +16,10 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::CollaborationModeListParams;
+use codex_app_server_protocol::CommandExecParams;
+use codex_app_server_protocol::CommandExecResizeParams;
+use codex_app_server_protocol::CommandExecTerminateParams;
+use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
@@ -37,6 +41,7 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginListParams;
+use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ServerRequest;
@@ -450,6 +455,15 @@ impl McpProcess {
         self.send_request("plugin/install", params).await
     }
 
+    /// Send a `plugin/uninstall` JSON-RPC request.
+    pub async fn send_plugin_uninstall_request(
+        &mut self,
+        params: PluginUninstallParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("plugin/uninstall", params).await
+    }
+
     /// Send a `plugin/list` JSON-RPC request.
     pub async fn send_plugin_list_request(
         &mut self,
@@ -492,6 +506,42 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/start", params).await
+    }
+
+    /// Send a `command/exec` JSON-RPC request (v2).
+    pub async fn send_command_exec_request(
+        &mut self,
+        params: CommandExecParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("command/exec", params).await
+    }
+
+    /// Send a `command/exec/write` JSON-RPC request (v2).
+    pub async fn send_command_exec_write_request(
+        &mut self,
+        params: CommandExecWriteParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("command/exec/write", params).await
+    }
+
+    /// Send a `command/exec/resize` JSON-RPC request (v2).
+    pub async fn send_command_exec_resize_request(
+        &mut self,
+        params: CommandExecResizeParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("command/exec/resize", params).await
+    }
+
+    /// Send a `command/exec/terminate` JSON-RPC request (v2).
+    pub async fn send_command_exec_terminate_request(
+        &mut self,
+        params: CommandExecTerminateParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("command/exec/terminate", params).await
     }
 
     /// Send a `turn/interrupt` JSON-RPC request (v2).

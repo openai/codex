@@ -18,6 +18,7 @@ use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
@@ -157,6 +158,8 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
+    pub(crate) session_source: SessionSource,
+    pub(crate) enable_codex_api_key_env: bool,
 }
 
 impl MessageProcessor {
@@ -173,10 +176,12 @@ impl MessageProcessor {
             feedback,
             log_db,
             config_warnings,
+            session_source,
+            enable_codex_api_key_env,
         } = args;
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
-            false,
+            enable_codex_api_key_env,
             config.cli_auth_credentials_store_mode,
         );
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
@@ -186,7 +191,7 @@ impl MessageProcessor {
         let thread_manager = Arc::new(ThreadManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
-            SessionSource::VSCode,
+            session_source,
             config.model_catalog.clone(),
             CollaborationModesConfig {
                 default_mode_request_user_input: config
@@ -194,13 +199,14 @@ impl MessageProcessor {
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
         ));
+        // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()
             .maybe_start_curated_repo_sync_for_config(&config);
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager,
-            thread_manager,
+            thread_manager: Arc::clone(&thread_manager),
             outgoing: outgoing.clone(),
             arg0_paths,
             config: Arc::clone(&config),
@@ -214,6 +220,7 @@ impl MessageProcessor {
             cli_overrides,
             loader_overrides,
             cloud_requirements,
+            thread_manager,
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
 
@@ -233,7 +240,6 @@ impl MessageProcessor {
         request: JSONRPCRequest,
         transport: AppServerTransport,
         session: &mut ConnectionSessionState,
-        outbound_initialized: &AtomicBool,
     ) {
         let request_span =
             crate::app_server_tracing::request_span(&request, transport, connection_id, session);
@@ -274,187 +280,51 @@ impl MessageProcessor {
                 }
             };
 
-            match codex_request {
-            // Handle Initialize internally so CodexMessageProcessor does not have to concern
-            // itself with the `initialized` bool.
-            ClientRequest::Initialize { request_id, params } => {
-                let request_id = ConnectionRequestId {
-                    connection_id,
-                    request_id,
-                };
-                if session.initialized {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: "Already initialized".to_string(),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                } else {
-                    // TODO(maxj): Revisit capability scoping for `experimental_api_enabled`.
-                    // Current behavior is per-connection. Reviewer feedback notes this can
-                    // create odd cross-client behavior (for example dynamic tool calls on a
-                    // shared thread when another connected client did not opt into
-                    // experimental API). Proposed direction is instance-global first-write-wins
-                    // with initialize-time mismatch rejection.
-                    let (experimental_api_enabled, opt_out_notification_methods) =
-                        match params.capabilities {
-                            Some(capabilities) => (
-                                capabilities.experimental_api,
-                                capabilities
-                                    .opt_out_notification_methods
-                                    .unwrap_or_default(),
-                            ),
-                            None => (false, Vec::new()),
-                        };
-                    session.experimental_api_enabled = experimental_api_enabled;
-                    session.opted_out_notification_methods =
-                        opt_out_notification_methods.into_iter().collect();
-                    let ClientInfo {
-                        name,
-                        title: _title,
-                        version,
-                    } = params.client_info;
-                    session.app_server_client_name = Some(name.clone());
-                    session.client_version = Some(version.clone());
-                    if let Err(error) = set_default_originator(name.clone()) {
-                        match error {
-                            SetOriginatorError::InvalidHeaderValue => {
-                                let error = JSONRPCErrorError {
-                                    code: INVALID_REQUEST_ERROR_CODE,
-                                    message: format!(
-                                        "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
-                                    ),
-                                    data: None,
-                                };
-                                self.outgoing.send_error(request_id.clone(), error).await;
-                                return;
-                            }
-                            SetOriginatorError::AlreadyInitialized => {
-                                // No-op. This is expected to happen if the originator is already set via env var.
-                                // TODO(owen): Once we remove support for CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
-                                // this will be an unexpected state and we can return a JSON-RPC error indicating
-                                // internal server error.
-                            }
-                        }
-                    }
-                    set_default_client_residency_requirement(self.config.enforce_residency.value());
-                    let user_agent_suffix = format!("{name}; {version}");
-                    if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
-                        *suffix = Some(user_agent_suffix);
-                    }
+            // Websocket callers finalize outbound readiness in lib.rs after mirroring
+            // session state into outbound state and sending initialize notifications to
+            // this specific connection. Passing `None` avoids marking the connection
+            // ready too early from inside the shared request handler.
+            self.handle_client_request(connection_id, request_id, codex_request, session, None)
+                .await;
+        }
+        .instrument(request_span)
+        .await;
+    }
 
-                    let user_agent = get_codex_user_agent();
-                    let response = InitializeResponse { user_agent };
-                    self.outgoing.send_response(request_id, response).await;
-
-                    session.initialized = true;
-                    outbound_initialized.store(true, Ordering::Release);
-                    self.codex_message_processor
-                        .connection_initialized(connection_id)
-                        .await;
-                    return;
-                }
-            }
-            _ => {
-                if !session.initialized {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: "Not initialized".to_string(),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            }
-            }
-            if let Some(reason) = codex_request.experimental_reason()
-                && !session.experimental_api_enabled
-            {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: experimental_required_message(reason),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-
-            match codex_request {
-                ClientRequest::ConfigRead { request_id, params } => {
-                    self.handle_config_read(
-                        ConnectionRequestId {
-                            connection_id,
-                            request_id,
-                        },
-                        params,
-                    )
-                    .await;
-                }
-                ClientRequest::ExternalAgentConfigDetect { request_id, params } => {
-                    self.handle_external_agent_config_detect(
-                        ConnectionRequestId {
-                            connection_id,
-                            request_id,
-                        },
-                        params,
-                    )
-                    .await;
-                }
-                ClientRequest::ExternalAgentConfigImport { request_id, params } => {
-                    self.handle_external_agent_config_import(
-                        ConnectionRequestId {
-                            connection_id,
-                            request_id,
-                        },
-                        params,
-                    )
-                    .await;
-                }
-                ClientRequest::ConfigValueWrite { request_id, params } => {
-                    self.handle_config_value_write(
-                        ConnectionRequestId {
-                            connection_id,
-                            request_id,
-                        },
-                        params,
-                    )
-                    .await;
-                }
-                ClientRequest::ConfigBatchWrite { request_id, params } => {
-                    self.handle_config_batch_write(
-                        ConnectionRequestId {
-                            connection_id,
-                            request_id,
-                        },
-                        params,
-                    )
-                    .await;
-                }
-                ClientRequest::ConfigRequirementsRead {
-                    request_id,
-                    params: _,
-                } => {
-                    self.handle_config_requirements_read(ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    })
-                    .await;
-                }
-                other => {
-                    // Box the delegated future so this wrapper's async state machine does not
-                    // inline the full `CodexMessageProcessor::process_request` future, which
-                    // can otherwise push worker-thread stack usage over the edge.
-                    self.codex_message_processor
-                        .process_request(
-                            connection_id,
-                            other,
-                            session.app_server_client_name.clone(),
-                        )
-                        .boxed()
-                        .await;
-                }
-            }
+    /// Handles a typed request path used by in-process embedders.
+    ///
+    /// This bypasses JSON request deserialization but keeps identical request
+    /// semantics by delegating to `handle_client_request`.
+    pub(crate) async fn process_client_request(
+        &mut self,
+        connection_id: ConnectionId,
+        request: ClientRequest,
+        session: &mut ConnectionSessionState,
+        outbound_initialized: &AtomicBool,
+    ) {
+        let request_span =
+            crate::app_server_tracing::typed_request_span(&request, connection_id, session);
+        async {
+            let request_id = ConnectionRequestId {
+                connection_id,
+                request_id: request.id().clone(),
+            };
+            tracing::trace!(
+                ?connection_id,
+                request_id = ?request_id.request_id,
+                "app-server typed request"
+            );
+            // In-process clients do not have the websocket transport loop that performs
+            // post-initialize bookkeeping, so they still finalize outbound readiness in
+            // the shared request handler.
+            self.handle_client_request(
+                connection_id,
+                request_id,
+                request,
+                session,
+                Some(outbound_initialized),
+            )
+            .await;
         }
         .instrument(request_span)
         .await;
@@ -466,8 +336,35 @@ impl MessageProcessor {
         tracing::info!("<- notification: {:?}", notification);
     }
 
+    /// Handles typed notifications from in-process clients.
+    pub(crate) async fn process_client_notification(&self, notification: ClientNotification) {
+        // Currently, we do not expect to receive any typed notifications from
+        // in-process clients, so we just log them.
+        tracing::info!("<- typed notification: {:?}", notification);
+    }
+
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
         self.codex_message_processor.thread_created_receiver()
+    }
+
+    pub(crate) async fn send_initialize_notifications_to_connection(
+        &self,
+        connection_id: ConnectionId,
+    ) {
+        for notification in self.config_warnings.iter().cloned() {
+            self.outgoing
+                .send_server_notification_to_connections(
+                    &[connection_id],
+                    ServerNotification::ConfigWarning(notification),
+                )
+                .await;
+        }
+    }
+
+    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+        self.codex_message_processor
+            .connection_initialized(connection_id)
+            .await;
     }
 
     pub(crate) async fn send_initialize_notifications(&self) {
@@ -510,6 +407,201 @@ impl MessageProcessor {
     pub(crate) async fn process_error(&mut self, err: JSONRPCError) {
         tracing::error!("<- error: {:?}", err);
         self.outgoing.notify_client_error(err.id, err.error).await;
+    }
+
+    async fn handle_client_request(
+        &mut self,
+        connection_id: ConnectionId,
+        request_id: ConnectionRequestId,
+        codex_request: ClientRequest,
+        session: &mut ConnectionSessionState,
+        // `Some(...)` means the caller wants initialize to immediately mark the
+        // connection outbound-ready. Websocket JSON-RPC calls pass `None` so
+        // lib.rs can deliver connection-scoped initialize notifications first.
+        outbound_initialized: Option<&AtomicBool>,
+    ) {
+        match codex_request {
+            // Handle Initialize internally so CodexMessageProcessor does not have to concern
+            // itself with the `initialized` bool.
+            ClientRequest::Initialize { request_id, params } => {
+                let request_id = ConnectionRequestId {
+                    connection_id,
+                    request_id,
+                };
+                if session.initialized {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: "Already initialized".to_string(),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+
+                // TODO(maxj): Revisit capability scoping for `experimental_api_enabled`.
+                // Current behavior is per-connection. Reviewer feedback notes this can
+                // create odd cross-client behavior (for example dynamic tool calls on a
+                // shared thread when another connected client did not opt into
+                // experimental API). Proposed direction is instance-global first-write-wins
+                // with initialize-time mismatch rejection.
+                let (experimental_api_enabled, opt_out_notification_methods) =
+                    match params.capabilities {
+                        Some(capabilities) => (
+                            capabilities.experimental_api,
+                            capabilities
+                                .opt_out_notification_methods
+                                .unwrap_or_default(),
+                        ),
+                        None => (false, Vec::new()),
+                    };
+                session.experimental_api_enabled = experimental_api_enabled;
+                session.opted_out_notification_methods =
+                    opt_out_notification_methods.into_iter().collect();
+                let ClientInfo {
+                    name,
+                    title: _title,
+                    version,
+                } = params.client_info;
+                session.app_server_client_name = Some(name.clone());
+                session.client_version = Some(version.clone());
+                if let Err(error) = set_default_originator(name.clone()) {
+                    match error {
+                        SetOriginatorError::InvalidHeaderValue => {
+                            let error = JSONRPCErrorError {
+                                code: INVALID_REQUEST_ERROR_CODE,
+                                message: format!(
+                                    "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
+                                ),
+                                data: None,
+                            };
+                            self.outgoing.send_error(request_id.clone(), error).await;
+                            return;
+                        }
+                        SetOriginatorError::AlreadyInitialized => {
+                            // No-op. This is expected to happen if the originator is already set via env var.
+                            // TODO(owen): Once we remove support for CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
+                            // this will be an unexpected state and we can return a JSON-RPC error indicating
+                            // internal server error.
+                        }
+                    }
+                }
+                set_default_client_residency_requirement(self.config.enforce_residency.value());
+                let user_agent_suffix = format!("{name}; {version}");
+                if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
+                    *suffix = Some(user_agent_suffix);
+                }
+
+                let user_agent = get_codex_user_agent();
+                let response = InitializeResponse { user_agent };
+                self.outgoing.send_response(request_id, response).await;
+
+                session.initialized = true;
+                if let Some(outbound_initialized) = outbound_initialized {
+                    // In-process clients can complete readiness immediately here. The
+                    // websocket path defers this until lib.rs finishes transport-layer
+                    // initialize handling for the specific connection.
+                    outbound_initialized.store(true, Ordering::Release);
+                    self.codex_message_processor
+                        .connection_initialized(connection_id)
+                        .await;
+                }
+                return;
+            }
+            _ => {
+                if !session.initialized {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: "Not initialized".to_string(),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            }
+        }
+        if let Some(reason) = codex_request.experimental_reason()
+            && !session.experimental_api_enabled
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: experimental_required_message(reason),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        match codex_request {
+            ClientRequest::ConfigRead { request_id, params } => {
+                self.handle_config_read(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::ExternalAgentConfigDetect { request_id, params } => {
+                self.handle_external_agent_config_detect(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::ExternalAgentConfigImport { request_id, params } => {
+                self.handle_external_agent_config_import(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::ConfigValueWrite { request_id, params } => {
+                self.handle_config_value_write(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::ConfigBatchWrite { request_id, params } => {
+                self.handle_config_batch_write(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::ConfigRequirementsRead {
+                request_id,
+                params: _,
+            } => {
+                self.handle_config_requirements_read(ConnectionRequestId {
+                    connection_id,
+                    request_id,
+                })
+                .await;
+            }
+            other => {
+                // Box the delegated future so this wrapper's async state machine does not
+                // inline the full `CodexMessageProcessor::process_request` future, which
+                // can otherwise push worker-thread stack usage over the edge.
+                self.codex_message_processor
+                    .process_request(connection_id, other, session.app_server_client_name.clone())
+                    .boxed()
+                    .await;
+            }
+        }
     }
 
     async fn handle_config_read(&self, request_id: ConnectionRequestId, params: ConfigReadParams) {

@@ -605,6 +605,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
                 },
             ],
             expected_version: None,
+            reload_user_config: false,
         })
         .await?;
     let batch_resp: JSONRPCResponse = timeout(

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -8,11 +9,13 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
+use tracing::error;
 use ts_rs::TS;
 
 use crate::protocol::NetworkAccess;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
+use crate::protocol::WritableRoot;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, Default, JsonSchema, TS,
@@ -120,6 +123,25 @@ impl Default for FileSystemSandboxPolicy {
 }
 
 impl FileSystemSandboxPolicy {
+    fn has_root_access(&self, predicate: impl Fn(FileSystemAccessMode) -> bool) -> bool {
+        matches!(self.kind, FileSystemSandboxKind::Restricted)
+            && self.entries.iter().any(|entry| {
+                matches!(
+                    &entry.path,
+                    FileSystemPath::Special { value }
+                        if matches!(value, FileSystemSpecialPath::Root) && predicate(entry.access)
+                )
+            })
+    }
+
+    fn has_explicit_deny_entries(&self) -> bool {
+        matches!(self.kind, FileSystemSandboxKind::Restricted)
+            && self
+                .entries
+                .iter()
+                .any(|entry| entry.access == FileSystemAccessMode::None)
+    }
+
     pub fn unrestricted() -> Self {
         Self {
             kind: FileSystemSandboxKind::Unrestricted,
@@ -139,6 +161,133 @@ impl FileSystemSandboxPolicy {
             kind: FileSystemSandboxKind::Restricted,
             entries,
         }
+    }
+
+    /// Returns true when filesystem reads are unrestricted.
+    pub fn has_full_disk_read_access(&self) -> bool {
+        match self.kind {
+            FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => true,
+            FileSystemSandboxKind::Restricted => {
+                self.has_root_access(FileSystemAccessMode::can_read)
+                    && !self.has_explicit_deny_entries()
+            }
+        }
+    }
+
+    /// Returns true when filesystem writes are unrestricted.
+    pub fn has_full_disk_write_access(&self) -> bool {
+        match self.kind {
+            FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => true,
+            FileSystemSandboxKind::Restricted => {
+                self.has_root_access(FileSystemAccessMode::can_write)
+                    && !self.has_explicit_deny_entries()
+            }
+        }
+    }
+
+    /// Returns true when platform-default readable roots should be included.
+    pub fn include_platform_defaults(&self) -> bool {
+        !self.has_full_disk_read_access()
+            && matches!(self.kind, FileSystemSandboxKind::Restricted)
+            && self.entries.iter().any(|entry| {
+                matches!(
+                    &entry.path,
+                    FileSystemPath::Special { value }
+                        if matches!(value, FileSystemSpecialPath::Minimal)
+                            && entry.access.can_read()
+                )
+            })
+    }
+
+    /// Returns the explicit readable roots resolved against the provided cwd.
+    pub fn get_readable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
+        if self.has_full_disk_read_access() {
+            return Vec::new();
+        }
+
+        let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        let mut readable_roots = Vec::new();
+        if self.has_root_access(FileSystemAccessMode::can_read)
+            && let Some(cwd_absolute) = cwd_absolute.as_ref()
+        {
+            readable_roots.push(absolute_root_path_for_cwd(cwd_absolute));
+        }
+
+        dedup_absolute_paths(
+            readable_roots
+                .into_iter()
+                .chain(
+                    self.entries
+                        .iter()
+                        .filter(|entry| entry.access.can_read())
+                        .filter_map(|entry| {
+                            resolve_file_system_path(&entry.path, cwd_absolute.as_ref())
+                        }),
+                )
+                .collect(),
+        )
+    }
+
+    /// Returns the writable roots together with read-only carveouts resolved
+    /// against the provided cwd.
+    pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<WritableRoot> {
+        if self.has_full_disk_write_access() {
+            return Vec::new();
+        }
+
+        let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        let unreadable_roots = self.get_unreadable_roots_with_cwd(cwd);
+        let mut writable_roots = Vec::new();
+        if self.has_root_access(FileSystemAccessMode::can_write)
+            && let Some(cwd_absolute) = cwd_absolute.as_ref()
+        {
+            writable_roots.push(absolute_root_path_for_cwd(cwd_absolute));
+        }
+
+        dedup_absolute_paths(
+            writable_roots
+                .into_iter()
+                .chain(
+                    self.entries
+                        .iter()
+                        .filter(|entry| entry.access.can_write())
+                        .filter_map(|entry| {
+                            resolve_file_system_path(&entry.path, cwd_absolute.as_ref())
+                        }),
+                )
+                .collect(),
+        )
+        .into_iter()
+        .map(|root| {
+            let mut read_only_subpaths = default_read_only_subpaths_for_writable_root(&root);
+            read_only_subpaths.extend(
+                unreadable_roots
+                    .iter()
+                    .filter(|path| path.as_path().starts_with(root.as_path()))
+                    .cloned(),
+            );
+            WritableRoot {
+                root,
+                read_only_subpaths: dedup_absolute_paths(read_only_subpaths),
+            }
+        })
+        .collect()
+    }
+
+    /// Returns explicit unreadable roots resolved against the provided cwd.
+    pub fn get_unreadable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
+        if !matches!(self.kind, FileSystemSandboxKind::Restricted) {
+            return Vec::new();
+        }
+
+        let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        dedup_absolute_paths(
+            self.entries
+                .iter()
+                .filter(|entry| entry.access == FileSystemAccessMode::None)
+                .filter_map(|entry| resolve_file_system_path(&entry.path, cwd_absolute.as_ref()))
+                .collect(),
+        )
     }
 
     pub fn to_legacy_sandbox_policy(
@@ -422,6 +571,26 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
     }
 }
 
+fn resolve_file_system_path(
+    path: &FileSystemPath,
+    cwd: Option<&AbsolutePathBuf>,
+) -> Option<AbsolutePathBuf> {
+    match path {
+        FileSystemPath::Path { path } => Some(path.clone()),
+        FileSystemPath::Special { value } => resolve_file_system_special_path(value, cwd),
+    }
+}
+
+fn absolute_root_path_for_cwd(cwd: &AbsolutePathBuf) -> AbsolutePathBuf {
+    let root = cwd
+        .as_path()
+        .ancestors()
+        .last()
+        .unwrap_or_else(|| panic!("cwd must have a filesystem root"));
+    AbsolutePathBuf::from_absolute_path(root)
+        .unwrap_or_else(|err| panic!("cwd root must be an absolute path: {err}"))
+}
+
 fn resolve_file_system_special_path(
     value: &FileSystemSpecialPath,
     cwd: Option<&AbsolutePathBuf>,
@@ -470,4 +639,105 @@ fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
         }
     }
     deduped
+}
+
+fn default_read_only_subpaths_for_writable_root(
+    writable_root: &AbsolutePathBuf,
+) -> Vec<AbsolutePathBuf> {
+    let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
+    #[allow(clippy::expect_used)]
+    let top_level_git = writable_root
+        .join(".git")
+        .expect(".git is a valid relative path");
+    // This applies to typical repos (directory .git), worktrees/submodules
+    // (file .git with gitdir pointer), and bare repos when the gitdir is the
+    // writable root itself.
+    let top_level_git_is_file = top_level_git.as_path().is_file();
+    let top_level_git_is_dir = top_level_git.as_path().is_dir();
+    if top_level_git_is_dir || top_level_git_is_file {
+        if top_level_git_is_file
+            && is_git_pointer_file(&top_level_git)
+            && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
+        {
+            subpaths.push(gitdir);
+        }
+        subpaths.push(top_level_git);
+    }
+
+    // Make .agents/skills and .codex/config.toml and related files read-only
+    // to the agent, by default.
+    for subdir in &[".agents", ".codex"] {
+        #[allow(clippy::expect_used)]
+        let top_level_codex = writable_root.join(subdir).expect("valid relative path");
+        if top_level_codex.as_path().is_dir() {
+            subpaths.push(top_level_codex);
+        }
+    }
+
+    dedup_absolute_paths(subpaths)
+}
+
+fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
+    path.as_path().is_file() && path.as_path().file_name() == Some(OsStr::new(".git"))
+}
+
+fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
+    let contents = match std::fs::read_to_string(dot_git.as_path()) {
+        Ok(contents) => contents,
+        Err(err) => {
+            error!(
+                "Failed to read {path} for gitdir pointer: {err}",
+                path = dot_git.as_path().display()
+            );
+            return None;
+        }
+    };
+
+    let trimmed = contents.trim();
+    let (_, gitdir_raw) = match trimmed.split_once(':') {
+        Some(parts) => parts,
+        None => {
+            error!(
+                "Expected {path} to contain a gitdir pointer, but it did not match `gitdir: <path>`.",
+                path = dot_git.as_path().display()
+            );
+            return None;
+        }
+    };
+    let gitdir_raw = gitdir_raw.trim();
+    if gitdir_raw.is_empty() {
+        error!(
+            "Expected {path} to contain a gitdir pointer, but it was empty.",
+            path = dot_git.as_path().display()
+        );
+        return None;
+    }
+    let base = match dot_git.as_path().parent() {
+        Some(base) => base,
+        None => {
+            error!(
+                "Unable to resolve parent directory for {path}.",
+                path = dot_git.as_path().display()
+            );
+            return None;
+        }
+    };
+    let gitdir_path = match AbsolutePathBuf::resolve_path_against_base(gitdir_raw, base) {
+        Ok(path) => path,
+        Err(err) => {
+            error!(
+                "Failed to resolve gitdir path {gitdir_raw} from {path}: {err}",
+                path = dot_git.as_path().display()
+            );
+            return None;
+        }
+    };
+    if !gitdir_path.as_path().exists() {
+        error!(
+            "Resolved gitdir path {path} does not exist.",
+            path = gitdir_path.as_path().display()
+        );
+        return None;
+    }
+    Some(gitdir_path)
 }

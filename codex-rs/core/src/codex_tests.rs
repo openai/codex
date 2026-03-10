@@ -17,6 +17,7 @@ use crate::tools::format_exec_output_str;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::request_permissions::PermissionGrantScope;
 use tracing::Span;
 
 use crate::protocol::CompactedItem;
@@ -77,6 +78,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Once;
 use std::time::Duration as StdDuration;
+
+#[path = "codex_tests_guardian.rs"]
+mod guardian_tests;
 
 struct InstructionsTestCase {
     slug: &'static str,
@@ -1416,6 +1420,8 @@ async fn set_rate_limits_retains_previous_credits() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -1510,6 +1516,8 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -1862,6 +1870,8 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -1919,6 +1929,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -2009,6 +2021,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -2126,6 +2140,29 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     };
 
     (session, turn_context)
+}
+
+#[tokio::test]
+async fn notify_request_permissions_response_ignores_unmatched_call_id() {
+    let (session, _turn_context) = make_session_and_context().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+
+    session
+        .notify_request_permissions_response(
+            "missing",
+            codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: codex_protocol::models::PermissionProfile {
+                    network: Some(codex_protocol::models::NetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    ..Default::default()
+                },
+                scope: PermissionGrantScope::Turn,
+            },
+        )
+        .await;
+
+    assert_eq!(session.granted_turn_permissions().await, None);
 }
 
 #[tokio::test]
@@ -2414,6 +2451,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -3841,11 +3880,15 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
 
     // Now retry the same command WITHOUT escalated permissions; should succeed.
     // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
-    Arc::get_mut(&mut turn_context)
-        .expect("unique turn context Arc")
+    let turn_context_mut = Arc::get_mut(&mut turn_context).expect("unique turn context Arc");
+    turn_context_mut
         .sandbox_policy
         .set(SandboxPolicy::DangerFullAccess)
         .expect("test setup should allow updating sandbox policy");
+    turn_context_mut.file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from(turn_context_mut.sandbox_policy.get());
+    turn_context_mut.network_sandbox_policy =
+        NetworkSandboxPolicy::from(turn_context_mut.sandbox_policy.get());
 
     let resp2 = handler
         .handle(ToolInvocation {

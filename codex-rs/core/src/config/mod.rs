@@ -2308,6 +2308,7 @@ impl Config {
         let network = NetworkProxySpec::from_config_and_constraints(
             configured_network_proxy_config,
             network_requirements,
+            constrained_sandbox_policy.get(),
         )
         .map_err(|err| {
             if let Some(source) = network_requirements_source.as_ref() {

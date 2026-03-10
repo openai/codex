@@ -390,6 +390,10 @@ impl NetworkProxy {
         self.socks_addr
     }
 
+    pub async fn current_cfg(&self) -> Result<config::NetworkProxyConfig> {
+        self.state.current_cfg().await
+    }
+
     pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
         self.state.add_allowed_domain(host).await
     }

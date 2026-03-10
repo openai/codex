@@ -1659,6 +1659,53 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
     );
 }
 
+#[tokio::test]
+async fn turn_started_uses_runtime_context_window_before_first_token_count() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.config.model_context_window = Some(1_000_000);
+
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: Some(950_000),
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    assert_eq!(
+        chat.status_line_value_for_item(&crate::bottom_pane::StatusLineItem::ContextWindowSize),
+        Some("950K window".to_string())
+    );
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(100));
+
+    chat.add_status_output();
+
+    let cells = drain_insert_history(&mut rx);
+    let context_line = cells
+        .last()
+        .expect("status output inserted")
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .find(|line| line.contains("Context window"))
+        .expect("context window line");
+
+    assert!(
+        context_line.contains("950K"),
+        "expected /status to use TurnStarted context window, got: {context_line}"
+    );
+    assert!(
+        !context_line.contains("1M"),
+        "expected /status to avoid raw config context window, got: {context_line}"
+    );
+}
+
 #[cfg_attr(
     target_os = "macos",
     ignore = "system configuration APIs are blocked under macOS seatbelt"
@@ -1819,6 +1866,7 @@ async fn make_chatwidget_manual(
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
         pending_steers: VecDeque::new(),
+        submit_pending_steers_after_interrupt: false,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
         pending_notification: None,
@@ -1862,6 +1910,17 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
+        }
+    }
+}
+
+fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::Interrupt) => return,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected interrupt op but queue was empty"),
+            Err(TryRecvError::Disconnected) => panic!("expected interrupt op but channel closed"),
         }
     }
 }
@@ -1949,6 +2008,10 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+fn status_line_text(chat: &ChatWidget) -> Option<String> {
+    chat.status_line_text()
 }
 
 fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
@@ -3137,6 +3200,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -3187,6 +3251,7 @@ async fn exec_approval_uses_approval_id_when_present() {
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             additional_permissions: None,
+            skill_metadata: None,
             available_decisions: None,
             parsed_cmd: vec![],
         }),
@@ -3228,6 +3293,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -3283,6 +3349,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -4321,6 +4388,107 @@ async fn manual_interrupt_restores_pending_steers_to_composer() {
             .iter()
             .all(|cell| !lines_to_single_string(cell).contains("queued while streaming"))
     );
+}
+
+#[tokio::test]
+async fn esc_interrupt_sends_all_pending_steers_immediately_and_keeps_existing_draft() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+
+    chat.bottom_pane
+        .set_composer_text("first pending steer".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "first pending steer".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    chat.bottom_pane
+        .set_composer_text("second pending steer".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "second pending steer".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    chat.queued_user_messages
+        .push_back(UserMessage::from("queued draft".to_string()));
+    chat.refresh_pending_input_preview();
+    chat.bottom_pane
+        .set_composer_text("still editing".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    next_interrupt_op(&mut op_rx);
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "first pending steer\nsecond pending steer".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected merged pending steers to submit, got {other:?}"),
+    }
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(chat.bottom_pane.composer_text(), "still editing");
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "queued draft"
+    );
+
+    let inserted = drain_insert_history(&mut rx);
+    assert!(
+        inserted
+            .iter()
+            .any(|cell| lines_to_single_string(cell).contains("first pending steer"))
+    );
+    assert!(
+        inserted
+            .iter()
+            .any(|cell| lines_to_single_string(cell).contains("second pending steer"))
+    );
+}
+
+#[tokio::test]
+async fn esc_with_pending_steers_overrides_agent_command_interrupt_behavior() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+
+    chat.bottom_pane
+        .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    chat.bottom_pane
+        .set_composer_text("/agent ".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    next_interrupt_op(&mut op_rx);
+    assert_eq!(chat.bottom_pane.composer_text(), "/agent ");
 }
 
 #[tokio::test]
@@ -6120,7 +6288,7 @@ async fn image_generation_call_adds_history_cell() {
             status: "completed".into(),
             revised_prompt: Some("A tiny blue square".into()),
             result: "Zm9v".into(),
-            saved_path: None,
+            saved_path: Some("/tmp/project/ig-1.png".into()),
         }),
     });
 
@@ -6192,6 +6360,42 @@ async fn interrupted_turn_error_message_snapshot() {
     );
     let last = lines_to_single_string(cells.last().unwrap());
     assert_snapshot!("interrupted_turn_error_message", last);
+}
+
+// Snapshot test: interrupting specifically to submit pending steers shows an
+// informational banner instead of the generic "tell the model what to do
+// differently" error prompt.
+#[tokio::test]
+async fn interrupted_turn_pending_steers_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.pending_steers.push_back(pending_steer("steer 1"));
+    chat.submit_pending_steers_after_interrupt = true;
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let info = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .find(|line| line.contains("Model interrupted to submit steer instructions."))
+        .expect("expected steer interrupt info message to be inserted");
+    assert_snapshot!("interrupted_turn_pending_steers_message", info);
 }
 
 /// Opening custom prompt from the review popup, pressing Esc returns to the
@@ -6935,6 +7139,35 @@ async fn experimental_popup_shows_js_repl_node_requirement() {
     assert!(
         popup.contains(node_requirement),
         "expected js_repl feature description to mention the required Node version, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn experimental_popup_includes_guardian_approval() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let guardian_stage = FEATURES
+        .iter()
+        .find(|spec| spec.id == Feature::GuardianApproval)
+        .map(|spec| spec.stage)
+        .expect("expected guardian approval feature metadata");
+    let guardian_name = guardian_stage
+        .experimental_menu_name()
+        .expect("expected guardian approval experimental menu name");
+    let guardian_description = guardian_stage
+        .experimental_menu_description()
+        .expect("expected guardian approval experimental description");
+
+    chat.open_experimental_popup();
+
+    let popup = render_bottom_popup(&chat, 120);
+    let normalized_popup = popup.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        popup.contains(guardian_name),
+        "expected guardian approvals entry in experimental popup, got:\n{popup}"
+    );
+    assert!(
+        normalized_popup.contains(guardian_description),
+        "expected guardian approvals description in experimental popup, got:\n{popup}"
     );
 }
 
@@ -7901,6 +8134,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -7962,6 +8196,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -8010,6 +8245,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -8377,6 +8613,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        skill_metadata: None,
         available_decisions: None,
         parsed_cmd: vec![],
     };
@@ -9280,6 +9517,39 @@ async fn status_line_branch_refreshes_after_interrupt() {
     });
 
     assert!(chat.status_line_branch_pending);
+}
+
+#[tokio::test]
+async fn status_line_fast_mode_renders_on_and_off() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
+
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
+
+    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), Some("Fast on".to_string()));
+}
+
+#[tokio::test]
+async fn status_line_fast_mode_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+    chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
+    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.refresh_status_line();
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw fast-mode footer");
+    assert_snapshot!("status_line_fast_mode_footer", terminal.backend());
 }
 
 #[tokio::test]

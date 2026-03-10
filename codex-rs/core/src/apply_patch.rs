@@ -40,6 +40,7 @@ pub(crate) async fn apply_patch(
         &action,
         turn_context.approval_policy.value(),
         turn_context.sandbox_policy.get(),
+        &turn_context.file_system_sandbox_policy,
         &turn_context.cwd,
         turn_context.windows_sandbox_level,
     ) {
