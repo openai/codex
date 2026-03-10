@@ -15,6 +15,8 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_utils_string::take_bytes_at_char_boundary;
+use serde::Serialize;
+use serde_json::Value as JsonValue;
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
@@ -73,7 +75,11 @@ pub trait ToolOutput: Send {
 
     fn success_for_logging(&self) -> bool;
 
-    fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
+    fn into_response(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
+
+    fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
+        response_input_to_code_mode_result(self.into_response("", payload))
+    }
 }
 
 pub struct McpToolOutput {
@@ -89,11 +95,10 @@ impl ToolOutput for McpToolOutput {
         self.result.is_ok()
     }
 
-    fn into_response(self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
-        let Self { result } = self;
+    fn into_response(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
         ResponseInputItem::McpToolCallOutput {
             call_id: call_id.to_string(),
-            result,
+            result: self.result.clone(),
         }
     }
 }
@@ -137,9 +142,8 @@ impl ToolOutput for FunctionToolOutput {
         self.success.unwrap_or(true)
     }
 
-    fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        let Self { body, success } = self;
-        function_tool_response(call_id, payload, body, success)
+    fn into_response(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        function_tool_response(call_id, payload, self.body.clone(), self.success)
     }
 }
 
@@ -166,7 +170,7 @@ impl ToolOutput for ExecCommandToolOutput {
         true
     }
 
-    fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+    fn into_response(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         function_tool_response(
             call_id,
             payload,
@@ -175,6 +179,35 @@ impl ToolOutput for ExecCommandToolOutput {
             }],
             Some(true),
         )
+    }
+
+    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+        #[derive(Serialize)]
+        struct UnifiedExecCodeModeResult {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            chunk_id: Option<String>,
+            wall_time_seconds: f64,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            exit_code: Option<i32>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            session_id: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            original_token_count: Option<usize>,
+            output: String,
+        }
+
+        let result = UnifiedExecCodeModeResult {
+            chunk_id: (!self.chunk_id.is_empty()).then(|| self.chunk_id.clone()),
+            wall_time_seconds: self.wall_time.as_secs_f64(),
+            exit_code: self.exit_code,
+            session_id: self.process_id.clone(),
+            original_token_count: self.original_token_count,
+            output: self.truncated_output(),
+        };
+
+        serde_json::to_value(result).unwrap_or_else(|err| {
+            JsonValue::String(format!("failed to serialize exec result: {err}"))
+        })
     }
 }
 
@@ -212,6 +245,65 @@ impl ExecCommandToolOutput {
 
         sections.join("\n")
     }
+}
+
+fn response_input_to_code_mode_result(response: ResponseInputItem) -> JsonValue {
+    match response {
+        ResponseInputItem::Message { content, .. } => content_items_to_code_mode_result(
+            &content
+                .into_iter()
+                .map(|item| match item {
+                    codex_protocol::models::ContentItem::InputText { text }
+                    | codex_protocol::models::ContentItem::OutputText { text } => {
+                        FunctionCallOutputContentItem::InputText { text }
+                    }
+                    codex_protocol::models::ContentItem::InputImage { image_url } => {
+                        FunctionCallOutputContentItem::InputImage {
+                            image_url,
+                            detail: None,
+                        }
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ),
+        ResponseInputItem::FunctionCallOutput { output, .. }
+        | ResponseInputItem::CustomToolCallOutput { output, .. } => match output.body {
+            FunctionCallOutputBody::Text(text) => JsonValue::String(text),
+            FunctionCallOutputBody::ContentItems(items) => {
+                content_items_to_code_mode_result(&items)
+            }
+        },
+        ResponseInputItem::McpToolCallOutput { result, .. } => match result {
+            Ok(result) => match FunctionCallOutputPayload::from(&result).body {
+                FunctionCallOutputBody::Text(text) => JsonValue::String(text),
+                FunctionCallOutputBody::ContentItems(items) => {
+                    content_items_to_code_mode_result(&items)
+                }
+            },
+            Err(error) => JsonValue::String(error),
+        },
+    }
+}
+
+fn content_items_to_code_mode_result(items: &[FunctionCallOutputContentItem]) -> JsonValue {
+    JsonValue::String(
+        items
+            .iter()
+            .filter_map(|item| match item {
+                FunctionCallOutputContentItem::InputText { text } if !text.trim().is_empty() => {
+                    Some(text.clone())
+                }
+                FunctionCallOutputContentItem::InputImage { image_url, .. }
+                    if !image_url.trim().is_empty() =>
+                {
+                    Some(image_url.clone())
+                }
+                FunctionCallOutputContentItem::InputText { .. }
+                | FunctionCallOutputContentItem::InputImage { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 fn function_tool_response(
