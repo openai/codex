@@ -1338,20 +1338,25 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn refresh_token_if_requested(&self, do_refresh: bool) {
+    async fn refresh_token_if_requested(&self, do_refresh: bool) -> bool {
         if self.auth_manager.is_external_auth_active() {
-            return;
+            return false;
         }
         if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
-            tracing::warn!("failed to refresh token while getting account: {err}");
+            let failed_reason = err.failed_reason();
+            if failed_reason.is_none() {
+                tracing::warn!("failed to refresh token while getting account: {err}");
+            }
+            return failed_reason.is_some();
         }
+        false
     }
 
     async fn get_auth_status(&self, request_id: ConnectionRequestId, params: GetAuthStatusParams) {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
-        self.refresh_token_if_requested(do_refresh).await;
+        let refresh_failed_permanently = self.refresh_token_if_requested(do_refresh).await;
 
         // Determine whether auth is required based on the active model provider.
         // If a custom provider is configured with `requires_openai_auth == false`,
@@ -1365,18 +1370,25 @@ impl CodexMessageProcessor {
                 requires_openai_auth: Some(false),
             }
         } else {
+            let refresh_failure = self.auth_manager.refresh_failure();
             match self.auth_manager.auth().await {
                 Some(auth) => {
                     let auth_mode = auth.api_auth_mode();
-                    let (reported_auth_method, token_opt) = match auth.get_token() {
-                        Ok(token) if !token.is_empty() => {
-                            let tok = if include_token { Some(token) } else { None };
-                            (Some(auth_mode), tok)
-                        }
-                        Ok(_) => (None, None),
-                        Err(err) => {
-                            tracing::warn!("failed to get token for auth status: {err}");
-                            (None, None)
+                    let (reported_auth_method, token_opt) = if include_token
+                        && (refresh_failure.is_some() || refresh_failed_permanently)
+                    {
+                        (Some(auth_mode), None)
+                    } else {
+                        match auth.get_token() {
+                            Ok(token) if !token.is_empty() => {
+                                let tok = if include_token { Some(token) } else { None };
+                                (Some(auth_mode), tok)
+                            }
+                            Ok(_) => (None, None),
+                            Err(err) => {
+                                tracing::warn!("failed to get token for auth status: {err}");
+                                (None, None)
+                            }
                         }
                     };
                     GetAuthStatusResponse {

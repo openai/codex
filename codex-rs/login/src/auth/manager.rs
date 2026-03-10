@@ -796,6 +796,13 @@ struct CachedAuth {
     auth: Option<CodexAuth>,
     /// Callback used to refresh external auth by asking the parent app for new tokens.
     external_refresher: Option<Arc<dyn ExternalAuthRefresher>>,
+    poisoned_managed_auth: Option<PoisonedManagedAuth>,
+}
+
+#[derive(Clone, Debug)]
+struct PoisonedManagedAuth {
+    auth_dot_json: AuthDotJson,
+    error: RefreshTokenFailedError,
 }
 
 impl Debug for CachedAuth {
@@ -808,6 +815,13 @@ impl Debug for CachedAuth {
             .field(
                 "external_refresher",
                 &self.external_refresher.as_ref().map(|_| "present"),
+            )
+            .field(
+                "poisoned_managed_auth",
+                &self
+                    .poisoned_managed_auth
+                    .as_ref()
+                    .map(|poisoned| poisoned.error.reason),
             )
             .finish()
     }
@@ -1046,6 +1060,7 @@ impl AuthManager {
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,
                 external_refresher: None,
+                poisoned_managed_auth: None,
             }),
             enable_codex_api_key_env,
             auth_credentials_store_mode,
@@ -1058,6 +1073,7 @@ impl AuthManager {
         let cached = CachedAuth {
             auth: Some(auth),
             external_refresher: None,
+            poisoned_managed_auth: None,
         };
 
         Arc::new(Self {
@@ -1074,6 +1090,7 @@ impl AuthManager {
         let cached = CachedAuth {
             auth: Some(auth),
             external_refresher: None,
+            poisoned_managed_auth: None,
         };
         Arc::new(Self {
             codex_home,
@@ -1087,6 +1104,11 @@ impl AuthManager {
     /// Current cached auth (clone) without attempting a refresh.
     pub fn auth_cached(&self) -> Option<CodexAuth> {
         self.inner.read().ok().and_then(|c| c.auth.clone())
+    }
+
+    pub fn refresh_failure(&self) -> Option<RefreshTokenFailedError> {
+        let auth = self.auth_cached()?;
+        self.refresh_failure_for_auth(&auth)
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
@@ -1166,6 +1188,40 @@ impl AuthManager {
         }
     }
 
+    fn refresh_failure_for_auth(&self, auth: &CodexAuth) -> Option<RefreshTokenFailedError> {
+        let auth_dot_json = auth.get_current_auth_json()?;
+        self.inner
+            .read()
+            .ok()
+            .and_then(|cached| cached.poisoned_managed_auth.clone())
+            .filter(|poisoned| poisoned.auth_dot_json == auth_dot_json)
+            .map(|poisoned| poisoned.error)
+    }
+
+    fn poison_managed_auth_if_unchanged(
+        &self,
+        attempted_auth: &CodexAuth,
+        error: &RefreshTokenFailedError,
+    ) {
+        let Some(attempted_auth_dot_json) = attempted_auth.get_current_auth_json() else {
+            return;
+        };
+
+        if let Ok(mut guard) = self.inner.write() {
+            let current_auth_matches = guard
+                .auth
+                .as_ref()
+                .and_then(CodexAuth::get_current_auth_json)
+                .is_some_and(|current| current == attempted_auth_dot_json);
+            if current_auth_matches {
+                guard.poisoned_managed_auth = Some(PoisonedManagedAuth {
+                    auth_dot_json: attempted_auth_dot_json,
+                    error: error.clone(),
+                });
+            }
+        }
+    }
+
     fn load_auth_from_storage(&self) -> Option<CodexAuth> {
         load_auth(
             &self.codex_home,
@@ -1180,6 +1236,19 @@ impl AuthManager {
         if let Ok(mut guard) = self.inner.write() {
             let previous = guard.auth.as_ref();
             let changed = !AuthManager::auths_equal(previous, new_auth.as_ref());
+            let poisoned_auth_still_matches = guard
+                .poisoned_managed_auth
+                .as_ref()
+                .and_then(|poisoned| {
+                    new_auth
+                        .as_ref()
+                        .and_then(CodexAuth::get_current_auth_json)
+                        .map(|current| current == poisoned.auth_dot_json)
+                })
+                .unwrap_or(false);
+            if !poisoned_auth_still_matches {
+                guard.poisoned_managed_auth = None;
+            }
             tracing::info!("Reloaded auth, changed: {changed}");
             guard.auth = new_auth;
             changed
@@ -1255,6 +1324,11 @@ impl AuthManager {
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
         let auth_before_reload = self.auth_cached();
+        if let Some(auth_before_reload) = auth_before_reload.as_ref()
+            && let Some(error) = self.refresh_failure_for_auth(auth_before_reload)
+        {
+            return Err(RefreshTokenError::Permanent(error));
+        }
         let expected_account_id = auth_before_reload
             .as_ref()
             .and_then(CodexAuth::get_account_id);
@@ -1285,7 +1359,12 @@ impl AuthManager {
             Some(auth) => auth,
             None => return Ok(()),
         };
-        match auth {
+        if let Some(error) = self.refresh_failure_for_auth(&auth) {
+            return Err(RefreshTokenError::Permanent(error));
+        }
+
+        let attempted_auth = auth.clone();
+        let result = match auth {
             CodexAuth::ChatgptAuthTokens(_) => {
                 self.refresh_external_auth(ExternalAuthRefreshReason::Unauthorized)
                     .await
@@ -1297,11 +1376,14 @@ impl AuthManager {
                     ))
                 })?;
                 self.refresh_and_persist_chatgpt_token(&chatgpt_auth, token_data.refresh_token)
-                    .await?;
-                Ok(())
+                    .await
             }
             CodexAuth::ApiKey(_) => Ok(()),
+        };
+        if let Err(RefreshTokenError::Permanent(error)) = &result {
+            self.poison_managed_auth_if_unchanged(&attempted_auth, error);
         }
+        result
     }
 
     /// Log out by deleting the on‑disk auth.json (if present). Returns Ok(true)
