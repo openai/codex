@@ -146,14 +146,87 @@ function createToolsModule(context, protocol, enabledTools) {
   );
 }
 
+function ensureContentItems(context) {
+  if (!Array.isArray(context.__codexContentItems)) {
+    context.__codexContentItems = [];
+  }
+  return context.__codexContentItems;
+}
+
+function serializeOutputText(value) {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (
+    typeof value === 'undefined' ||
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'number' ||
+    typeof value === 'bigint'
+  ) {
+    return String(value);
+  }
+
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === 'string') {
+      return serialized;
+    }
+  } catch {}
+
+  return String(value);
+}
+
+function normalizeOutputImageUrl(value) {
+  if (typeof value !== 'string' || !value) {
+    throw new TypeError('output_image expects a non-empty image URL string');
+  }
+  if (/^(?:https?:\/\/|data:)/i.test(value)) {
+    return value;
+  }
+  throw new TypeError('output_image expects an http(s) or data URL');
+}
+
+function createCodeModeModule(context) {
+  const outputText = (value) => {
+    const item = {
+      type: 'input_text',
+      text: serializeOutputText(value),
+    };
+    ensureContentItems(context).push(item);
+    return item;
+  };
+  const outputImage = (value) => {
+    const item = {
+      type: 'input_image',
+      image_url: normalizeOutputImageUrl(value),
+    };
+    ensureContentItems(context).push(item);
+    return item;
+  };
+
+  return new SyntheticModule(
+    ['output_text', 'output_image'],
+    function initCodeModeModule() {
+      this.setExport('output_text', outputText);
+      this.setExport('output_image', outputImage);
+    },
+    { context }
+  );
+}
+
 async function runModule(context, protocol, request) {
   const toolsModule = createToolsModule(context, protocol, request.enabled_tools ?? []);
+  const codeModeModule = createCodeModeModule(context);
   const mainModule = new SourceTextModule(request.source, {
     context,
     identifier: 'code_mode_main.mjs',
     importModuleDynamically(specifier) {
       if (specifier === 'tools.js') {
         return toolsModule;
+      }
+      if (specifier === '@openai/code_mode') {
+        return codeModeModule;
       }
       throw new Error(`Unsupported import in code_mode: ${specifier}`);
     },
@@ -162,6 +235,9 @@ async function runModule(context, protocol, request) {
   await mainModule.link(async (specifier) => {
     if (specifier === 'tools.js') {
       return toolsModule;
+    }
+    if (specifier === '@openai/code_mode') {
+      return codeModeModule;
     }
     throw new Error(`Unsupported import in code_mode: ${specifier}`);
   });
@@ -172,6 +248,7 @@ async function main() {
   const protocol = createProtocol();
   const request = await protocol.init;
   const context = vm.createContext({
+    __codexContentItems: [],
     __codex_tool_call: async (name, input) =>
       protocol.request('tool_call', {
         name: String(name),

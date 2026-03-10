@@ -86,12 +86,13 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     section.push_str("- Direct tool calls remain available while `code_mode` is enabled.\n");
     section.push_str("- `code_mode` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.\n");
     section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
+    section.push_str("- Import `{ output_text, output_image }` from `@openai/code_mode` to surface results back to the model. `output_text(value)` stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item and accepts `http(s)` or `data:` URLs.\n");
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
     );
-    section.push_str("- `add_content(value)` is synchronous. It accepts a content item, an array of content items, or a string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`.\n");
+    section.push_str("- `add_content(value)` remains available for compatibility. It is synchronous and accepts a content item, an array of content items, or a string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`.\n");
     section
-        .push_str("- Only content passed to `add_content(value)` is surfaced back to the model.");
+        .push_str("- Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model.");
     Some(section)
 }
 
