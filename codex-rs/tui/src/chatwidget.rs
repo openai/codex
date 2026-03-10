@@ -2353,10 +2353,15 @@ impl ChatWidget {
 
     fn on_image_generation_end(&mut self, event: ImageGenerationEndEvent) {
         self.flush_answer_stream_with_separator();
+        let saved_to = event.saved_path.as_deref().and_then(|saved_path| {
+            std::path::Path::new(saved_path)
+                .parent()
+                .map(|parent| parent.display().to_string())
+        });
         self.add_to_history(history_cell::new_image_generation_call(
             event.call_id,
-            event.status,
             event.revised_prompt,
+            saved_to,
         ));
         self.request_redraw();
     }

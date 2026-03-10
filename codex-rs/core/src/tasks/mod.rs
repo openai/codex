@@ -33,6 +33,9 @@ use crate::protocol::TurnCompleteEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_otel::metrics::names::TURN_E2E_DURATION_METRIC;
+use codex_otel::metrics::names::TURN_TOKEN_USAGE_METRIC;
+use codex_otel::metrics::names::TURN_TOOL_CALL_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -145,7 +148,7 @@ impl Session {
 
         let timer = turn_context
             .session_telemetry
-            .start_timer("codex.turn.e2e_duration_ms", &[])
+            .start_timer(TURN_E2E_DURATION_METRIC, &[])
             .ok();
 
         let done_clone = Arc::clone(&done);
@@ -278,7 +281,7 @@ impl Session {
                 },
             );
             self.services.session_telemetry.histogram(
-                "codex.turn.tool.call",
+                TURN_TOOL_CALL_METRIC,
                 i64::try_from(turn_tool_calls).unwrap_or(i64::MAX),
                 &[tmp_mem],
             );
@@ -301,27 +304,27 @@ impl Session {
                     .max(0),
             };
             self.services.session_telemetry.histogram(
-                "codex.turn.token_usage",
+                TURN_TOKEN_USAGE_METRIC,
                 turn_token_usage.total_tokens,
                 &[("token_type", "total"), tmp_mem],
             );
             self.services.session_telemetry.histogram(
-                "codex.turn.token_usage",
+                TURN_TOKEN_USAGE_METRIC,
                 turn_token_usage.input_tokens,
                 &[("token_type", "input"), tmp_mem],
             );
             self.services.session_telemetry.histogram(
-                "codex.turn.token_usage",
+                TURN_TOKEN_USAGE_METRIC,
                 turn_token_usage.cached_input(),
                 &[("token_type", "cached_input"), tmp_mem],
             );
             self.services.session_telemetry.histogram(
-                "codex.turn.token_usage",
+                TURN_TOKEN_USAGE_METRIC,
                 turn_token_usage.output_tokens,
                 &[("token_type", "output"), tmp_mem],
             );
             self.services.session_telemetry.histogram(
-                "codex.turn.token_usage",
+                TURN_TOKEN_USAGE_METRIC,
                 turn_token_usage.reasoning_output_tokens,
                 &[("token_type", "reasoning_output"), tmp_mem],
             );

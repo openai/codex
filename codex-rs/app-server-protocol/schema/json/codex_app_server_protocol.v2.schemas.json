@@ -1390,6 +1390,30 @@
             },
             "method": {
               "enum": [
+                "plugin/uninstall"
+              ],
+              "title": "Plugin/uninstallRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PluginUninstallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/uninstallRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "turn/start"
               ],
               "title": "Turn/startRequestMethod",
@@ -9281,6 +9305,24 @@
         "name",
         "source"
       ],
+      "type": "object"
+    },
+    "PluginUninstallParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "pluginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId"
+      ],
+      "title": "PluginUninstallParams",
+      "type": "object"
+    },
+    "PluginUninstallResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "PluginUninstallResponse",
       "type": "object"
     },
     "ProductSurface": {

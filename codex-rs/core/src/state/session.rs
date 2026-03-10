@@ -1,5 +1,6 @@
 //! Session-wide mutable state.
 
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -33,6 +34,7 @@ pub(crate) struct SessionState {
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
+    granted_permissions: Option<PermissionProfile>,
 }
 
 impl SessionState {
@@ -51,6 +53,7 @@ impl SessionState {
             active_mcp_tool_selection: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
+            granted_permissions: None,
         }
     }
 
@@ -218,6 +221,17 @@ impl SessionState {
 
     pub(crate) fn clear_mcp_tool_selection(&mut self) {
         self.active_mcp_tool_selection = None;
+    }
+
+    pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {
+        self.granted_permissions = crate::sandboxing::merge_permission_profiles(
+            self.granted_permissions.as_ref(),
+            Some(&permissions),
+        );
+    }
+
+    pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
+        self.granted_permissions.clone()
     }
 
     // Adds connector IDs to the active set and returns the merged selection.

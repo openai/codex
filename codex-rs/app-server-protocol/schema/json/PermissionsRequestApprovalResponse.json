@@ -145,11 +145,26 @@
         "read_write"
       ],
       "type": "string"
+    },
+    "PermissionGrantScope": {
+      "enum": [
+        "turn",
+        "session"
+      ],
+      "type": "string"
     }
   },
   "properties": {
     "permissions": {
       "$ref": "#/definitions/GrantedPermissionProfile"
+    },
+    "scope": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PermissionGrantScope"
+        }
+      ],
+      "default": "turn"
     }
   },
   "required": [

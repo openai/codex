@@ -17,6 +17,7 @@ use crate::tools::format_exec_output_str;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::request_permissions::PermissionGrantScope;
 use tracing::Span;
 
 use crate::protocol::CompactedItem;
@@ -2157,6 +2158,7 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
                     }),
                     ..Default::default()
                 },
+                scope: PermissionGrantScope::Turn,
             },
         )
         .await;
