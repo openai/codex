@@ -39,14 +39,21 @@ Common causes:
 - local auth/session is missing
 - incompatible/old app-server
 
-Maintainers can stage a pinned SDK/runtime release with:
+Maintainers stage releases by building the SDK once and the runtime once per
+platform with the same pinned runtime version:
 
 ```bash
 cd sdk/python
+python scripts/update_sdk_artifacts.py generate-types
 python scripts/update_sdk_artifacts.py \
-  --stage-release \
-  --output-dir /tmp/codex-python-release \
-  --channel stable
+  stage-sdk \
+  /tmp/codex-python-release/codex-app-server-sdk \
+  --runtime-version 1.2.3
+python scripts/update_sdk_artifacts.py \
+  stage-runtime \
+  /tmp/codex-python-release/codex-cli-bin \
+  /path/to/codex \
+  --runtime-version 1.2.3
 ```
 
 ## Why does a turn "hang"?

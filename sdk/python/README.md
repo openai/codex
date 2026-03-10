@@ -56,21 +56,27 @@ For local repo development, the checked-in `sdk/python-runtime` package is only
 a template for staged release artifacts. Editable installs should use a local
 `codex` on `PATH` or an explicit `codex_bin` override instead.
 
-## Maintainer workflow (refresh binaries/types)
+## Maintainer workflow
 
 ```bash
 cd sdk/python
-python scripts/update_sdk_artifacts.py --types-only
+python scripts/update_sdk_artifacts.py generate-types
 python scripts/update_sdk_artifacts.py \
-  --stage-release \
-  --output-dir /tmp/codex-python-release \
-  --channel stable
+  stage-sdk \
+  /tmp/codex-python-release/codex-app-server-sdk \
+  --runtime-version 1.2.3
+python scripts/update_sdk_artifacts.py \
+  stage-runtime \
+  /tmp/codex-python-release/codex-cli-bin \
+  /path/to/codex \
+  --runtime-version 1.2.3
 ```
 
-This regenerates protocol-derived Python types, then stages:
+This supports the CI release flow:
 
-- `codex-app-server-sdk` with an exact `codex-cli-bin==...` dependency
-- `codex-cli-bin` for the current platform with the matching `codex` binary
+- run `generate-types` before packaging
+- stage `codex-app-server-sdk` once with an exact `codex-cli-bin==...` dependency
+- stage `codex-cli-bin` on each supported platform runner with the same pinned runtime version
 
 ## Compatibility and versioning
 

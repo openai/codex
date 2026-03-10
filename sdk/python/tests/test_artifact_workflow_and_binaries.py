@@ -148,6 +148,59 @@ def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
     assert not any((staged / "src" / "codex_app_server").glob("bin/**"))
 
 
+def test_stage_sdk_runs_type_generation_before_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _load_update_script_module()
+    calls: list[str] = []
+
+    monkeypatch.setattr(script, "generate_types", lambda: calls.append("generate_types"))
+    monkeypatch.setattr(script, "stage_python_sdk_package", lambda *args: calls.append("stage_sdk"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "update_sdk_artifacts.py",
+            "stage-sdk",
+            str(tmp_path / "sdk-stage"),
+            "--runtime-version",
+            "1.2.3",
+        ],
+    )
+
+    script.main()
+
+    assert calls == ["generate_types", "stage_sdk"]
+
+
+def test_stage_runtime_stages_binary_without_type_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _load_update_script_module()
+    fake_binary = tmp_path / script.runtime_binary_name()
+    fake_binary.write_text("fake codex\n")
+    calls: list[str] = []
+
+    monkeypatch.setattr(script, "generate_types", lambda: calls.append("generate_types"))
+    monkeypatch.setattr(script, "stage_python_runtime_package", lambda *args: calls.append("stage_runtime"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "update_sdk_artifacts.py",
+            "stage-runtime",
+            str(tmp_path / "runtime-stage"),
+            str(fake_binary),
+            "--runtime-version",
+            "1.2.3",
+        ],
+    )
+
+    script.main()
+
+    assert calls == ["stage_runtime"]
+
+
 def test_default_runtime_is_resolved_from_installed_runtime_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from codex_app_server import client as client_module
 

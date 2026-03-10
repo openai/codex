@@ -10,12 +10,9 @@ import shutil
 import stat
 import subprocess
 import sys
-import tarfile
 import tempfile
 import types
 import typing
-import urllib.request
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, get_args, get_origin
@@ -52,23 +49,12 @@ def _is_windows() -> bool:
     return platform.system().lower().startswith("win")
 
 
-def runtime_binary_name(platform_key: str | None = None) -> str:
-    key = platform_key or current_platform_key()
-    return "codex.exe" if key.startswith("windows") else "codex"
+def runtime_binary_name() -> str:
+    return "codex.exe" if _is_windows() else "codex"
 
 
-def staged_runtime_bin_path(root: Path, platform_key: str | None = None) -> Path:
-    return root / "src" / "codex_cli_bin" / "bin" / runtime_binary_name(platform_key)
-
-
-PLATFORMS: dict[str, tuple[list[str], list[str]]] = {
-    "darwin-arm64": (["darwin", "apple-darwin", "macos"], ["aarch64", "arm64"]),
-    "darwin-x64": (["darwin", "apple-darwin", "macos"], ["x86_64", "amd64", "x64"]),
-    "linux-arm64": (["linux", "unknown-linux", "musl", "gnu"], ["aarch64", "arm64"]),
-    "linux-x64": (["linux", "unknown-linux", "musl", "gnu"], ["x86_64", "amd64", "x64"]),
-    "windows-arm64": (["windows", "pc-windows", "win", "msvc", "gnu"], ["aarch64", "arm64"]),
-    "windows-x64": (["windows", "pc-windows", "win", "msvc", "gnu"], ["x86_64", "amd64", "x64"]),
-}
+def staged_runtime_bin_path(root: Path) -> Path:
+    return root / "src" / "codex_cli_bin" / "bin" / runtime_binary_name()
 
 
 def run(cmd: list[str], cwd: Path) -> None:
@@ -77,137 +63,6 @@ def run(cmd: list[str], cwd: Path) -> None:
 
 def run_python_module(module: str, args: list[str], cwd: Path) -> None:
     run([sys.executable, "-m", module, *args], cwd)
-
-
-def platform_tokens() -> tuple[list[str], list[str]]:
-    sys_name = platform.system().lower()
-    machine = platform.machine().lower()
-
-    if sys_name == "darwin":
-        os_tokens = ["darwin", "apple-darwin", "macos"]
-    elif sys_name == "linux":
-        os_tokens = ["linux", "unknown-linux", "musl", "gnu"]
-    elif sys_name.startswith("win"):
-        os_tokens = ["windows", "pc-windows", "win", "msvc", "gnu"]
-    else:
-        raise RuntimeError(f"Unsupported OS: {sys_name}")
-
-    if machine in {"arm64", "aarch64"}:
-        arch_tokens = ["aarch64", "arm64"]
-    elif machine in {"x86_64", "amd64"}:
-        arch_tokens = ["x86_64", "amd64", "x64"]
-    else:
-        raise RuntimeError(f"Unsupported architecture: {machine}")
-
-    return os_tokens, arch_tokens
-
-
-def current_platform_key() -> str:
-    os_tokens, arch_tokens = platform_tokens()
-    for platform_key, tokens in PLATFORMS.items():
-        if tokens == (os_tokens, arch_tokens):
-            return platform_key
-    raise RuntimeError(f"Unsupported platform tokens: {os_tokens}/{arch_tokens}")
-
-
-def normalize_release_version(tag_name: str) -> str:
-    return tag_name.removeprefix("rust-v")
-
-
-def pick_release(channel: str) -> dict[str, Any]:
-    releases = json.loads(
-        subprocess.check_output(["gh", "api", "repos/openai/codex/releases?per_page=50"], text=True)
-    )
-    if channel == "stable":
-        candidates = [r for r in releases if not r.get("prerelease") and not r.get("draft")]
-    else:
-        candidates = [r for r in releases if r.get("prerelease") and not r.get("draft")]
-    if not candidates:
-        raise RuntimeError(f"No {channel} release found")
-    return candidates[0]
-
-
-def pick_asset(release: dict[str, Any], os_tokens: list[str], arch_tokens: list[str]) -> dict[str, Any]:
-    scored: list[tuple[int, dict[str, Any]]] = []
-    for asset in release.get("assets", []):
-        name = (asset.get("name") or "").lower()
-
-        # Accept only primary codex cli artifacts.
-        if not (name.startswith("codex-") or name == "codex"):
-            continue
-        if name.startswith("codex-responses") or name.startswith("codex-command-runner") or name.startswith("codex-windows-sandbox") or name.startswith("codex-npm"):
-            continue
-        if not (name.endswith(".tar.gz") or name.endswith(".zip")):
-            continue
-
-        os_score = sum(1 for t in os_tokens if t in name)
-        arch_score = sum(1 for t in arch_tokens if t in name)
-        if os_score == 0 or arch_score == 0:
-            continue
-
-        score = os_score * 10 + arch_score
-        scored.append((score, asset))
-
-    if not scored:
-        raise RuntimeError("Could not find matching codex CLI asset for this platform")
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[0][1]
-
-
-def download(url: str, out: Path) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "codex-python-sdk-updater"})
-    with urllib.request.urlopen(req) as resp, out.open("wb") as f:
-        shutil.copyfileobj(resp, f)
-
-
-def extract_codex_binary(archive: Path, out_bin: Path) -> None:
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        if archive.name.endswith(".tar.gz"):
-            with tarfile.open(archive, "r:gz") as tar:
-                tar.extractall(tmp)
-        elif archive.name.endswith(".zip"):
-            with zipfile.ZipFile(archive) as zf:
-                zf.extractall(tmp)
-        else:
-            raise RuntimeError(f"Unsupported archive format: {archive}")
-
-        preferred_names = {"codex.exe", "codex"}
-        candidates = [
-            p for p in tmp.rglob("*") if p.is_file() and (p.name.lower() in preferred_names or p.name.lower().startswith("codex-"))
-        ]
-        if not candidates:
-            raise RuntimeError("No codex binary found in release archive")
-
-        candidates.sort(key=lambda p: (p.name.lower() not in preferred_names, p.name.lower()))
-
-        out_bin.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(candidates[0], out_bin)
-        if not _is_windows():
-            out_bin.chmod(out_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _download_asset_to_binary(release: dict[str, Any], os_tokens: list[str], arch_tokens: list[str], out_bin: Path) -> None:
-    asset = pick_asset(release, os_tokens, arch_tokens)
-    print(f"Asset: {asset.get('name')} -> {out_bin}")
-    with tempfile.TemporaryDirectory() as td:
-        archive = Path(td) / (asset.get("name") or "codex-release.tar.gz")
-        download(asset["browser_download_url"], archive)
-        extract_codex_binary(archive, out_bin)
-
-
-def download_runtime_binary(channel: str, out_bin: Path, platform_key: str | None = None) -> str:
-    if shutil.which("gh") is None:
-        raise RuntimeError("GitHub CLI (`gh`) is required to download release binaries")
-
-    release = pick_release(channel)
-    selected_platform_key = platform_key or current_platform_key()
-    os_tokens, arch_tokens = PLATFORMS[selected_platform_key]
-    version = normalize_release_version(str(release.get("tag_name", "")))
-    print(f"Release: {release.get('tag_name')} ({channel})")
-    _download_asset_to_binary(release, os_tokens, arch_tokens, out_bin)
-    return version
 
 
 def current_sdk_version() -> str:
@@ -801,74 +656,65 @@ def generate_types() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Single SDK maintenance entrypoint")
-    parser.add_argument("--channel", choices=["stable", "alpha"], default="stable")
-    parser.add_argument("--types-only", action="store_true", help="Regenerate Python types only")
-    parser.add_argument(
-        "--stage-sdk-release",
-        type=Path,
-        help="Stage a releasable SDK package and pin it to --runtime-version",
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("generate-types", help="Regenerate Python protocol-derived types")
+
+    stage_sdk_parser = subparsers.add_parser(
+        "stage-sdk",
+        help="Stage a releasable SDK package pinned to a runtime version",
     )
-    parser.add_argument(
-        "--stage-runtime-release",
+    stage_sdk_parser.add_argument(
+        "staging_dir",
         type=Path,
-        help="Stage a releasable runtime package for the current platform",
+        help="Output directory for the staged SDK package",
     )
-    parser.add_argument(
+    stage_sdk_parser.add_argument(
+        "--runtime-version",
+        required=True,
+        help="Pinned codex-cli-bin version for the staged SDK package",
+    )
+    stage_sdk_parser.add_argument(
         "--sdk-version",
         help="Version to write into the staged SDK package (defaults to sdk/python current version)",
     )
-    parser.add_argument(
+
+    stage_runtime_parser = subparsers.add_parser(
+        "stage-runtime",
+        help="Stage a releasable runtime package for the current platform",
+    )
+    stage_runtime_parser.add_argument(
+        "staging_dir",
+        type=Path,
+        help="Output directory for the staged runtime package",
+    )
+    stage_runtime_parser.add_argument(
+        "runtime_binary",
+        type=Path,
+        help="Path to the codex binary to package for this platform",
+    )
+    stage_runtime_parser.add_argument(
         "--runtime-version",
-        help="Version to write into the staged runtime package and pinned SDK dependency",
-    )
-    parser.add_argument(
-        "--runtime-binary",
-        type=Path,
-        help="Local codex binary to stage instead of downloading a release asset",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        help="Base output directory for staged packages",
-    )
-    parser.add_argument(
-        "--stage-release",
-        action="store_true",
-        help="Stage both runtime and SDK packages under --output-dir",
+        required=True,
+        help="Version to write into the staged runtime package",
     )
     args = parser.parse_args()
 
-    if args.types_only or not (
-        args.stage_release or args.stage_sdk_release or args.stage_runtime_release
-    ):
+    if args.command == "generate-types":
         generate_types()
-
-    sdk_stage_dir = args.stage_sdk_release
-    runtime_stage_dir = args.stage_runtime_release
-    if args.stage_release:
-        if args.output_dir is None:
-            raise RuntimeError("--stage-release requires --output-dir")
-        sdk_stage_dir = args.output_dir / "codex-app-server-sdk"
-        runtime_stage_dir = args.output_dir / f"{current_platform_key()}-codex-cli-bin"
-
-    runtime_version = args.runtime_version
-    if runtime_stage_dir is not None:
-        binary_path = args.runtime_binary
-        if binary_path is None:
-            with tempfile.TemporaryDirectory(prefix="codex-python-runtime-") as td:
-                downloaded_bin = Path(td) / runtime_binary_name()
-                inferred_runtime_version = download_runtime_binary(args.channel, downloaded_bin)
-                runtime_version = runtime_version or inferred_runtime_version
-                stage_python_runtime_package(runtime_stage_dir, runtime_version, downloaded_bin)
-        else:
-            if runtime_version is None:
-                raise RuntimeError("--runtime-version is required when --runtime-binary is provided")
-            stage_python_runtime_package(runtime_stage_dir, runtime_version, binary_path.resolve())
-
-    if sdk_stage_dir is not None:
-        if runtime_version is None:
-            raise RuntimeError("--stage-sdk-release requires --runtime-version or --stage-runtime-release")
-        stage_python_sdk_package(sdk_stage_dir, args.sdk_version or current_sdk_version(), runtime_version)
+    elif args.command == "stage-sdk":
+        generate_types()
+        stage_python_sdk_package(
+            args.staging_dir,
+            args.sdk_version or current_sdk_version(),
+            args.runtime_version,
+        )
+    elif args.command == "stage-runtime":
+        stage_python_runtime_package(
+            args.staging_dir,
+            args.runtime_version,
+            args.runtime_binary.resolve(),
+        )
 
     print("Done.")
 
