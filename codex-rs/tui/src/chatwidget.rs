@@ -2239,6 +2239,7 @@ impl ChatWidget {
         }
         let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
         self.submit_pending_steers_after_interrupt = false;
+        let mut started_turn_after_interrupt = false;
         if reason != TurnAbortReason::ReviewEnded {
             if send_pending_steers_immediately {
                 self.add_to_history(history_cell::new_info_event(
@@ -2262,29 +2263,31 @@ impl ChatWidget {
                 .collect();
             if !pending_steers.is_empty() {
                 self.submit_user_message(merge_user_messages(pending_steers));
-            } else if let Some(combined) = self.drain_pending_messages_for_restore() {
+                started_turn_after_interrupt = true;
+            } else if let Some(combined) = self.drain_restorable_messages_for_restore() {
                 self.restore_user_message_to_composer(combined);
             }
-        } else if let Some(combined) = self.drain_pending_messages_for_restore() {
+        } else if let Some(combined) = self.drain_restorable_messages_for_restore() {
             self.restore_user_message_to_composer(combined);
         }
         self.refresh_pending_input_preview();
+        if !started_turn_after_interrupt {
+            self.maybe_send_next_queued_input();
+        }
 
         self.request_redraw();
     }
 
-    /// Merge pending steers, queued drafts, and the current composer state into a single message.
+    /// Merge pending steers, queued user-message drafts, and the current composer state into a
+    /// single message.
     ///
     /// Each pending message numbers attachments from `[Image #1]` relative to its own remote
     /// images. When we concatenate multiple messages after interrupt, we must renumber local-image
     /// placeholders in a stable order and rebase text element byte ranges so the restored composer
-    /// state stays aligned with the merged attachment list. Returns `None` when there is nothing to
-    /// restore.
-    fn drain_pending_messages_for_restore(&mut self) -> Option<UserMessage> {
-        if self.pending_steers.is_empty() && self.queued_user_messages.is_empty() {
-            return None;
-        }
-
+    /// state stays aligned with the merged attachment list. Queued slash-command actions stay in
+    /// the queue so they can still replay after the interrupt instead of being collapsed into plain
+    /// draft text.
+    fn drain_restorable_messages_for_restore(&mut self) -> Option<UserMessage> {
         let existing_message = UserMessage {
             text: self.bottom_pane.composer_text(),
             text_elements: self.bottom_pane.composer_text_elements(),
@@ -2293,20 +2296,34 @@ impl ChatWidget {
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
         };
 
+        let has_existing_message = !existing_message.text.is_empty()
+            || !existing_message.local_images.is_empty()
+            || !existing_message.remote_image_urls.is_empty();
+        let has_pending_user_messages = !self.pending_steers.is_empty()
+            || self
+                .queued_user_messages
+                .iter()
+                .any(|queued| matches!(queued, QueuedInput::UserMessage(_)));
+        if !has_existing_message && !has_pending_user_messages {
+            return None;
+        }
+
         let mut to_merge: Vec<UserMessage> = self
             .pending_steers
             .drain(..)
             .map(|steer| steer.user_message)
             .collect();
-        to_merge.extend(
-            self.queued_user_messages
-                .drain(..)
-                .map(QueuedInput::into_restorable_user_message),
-        );
-        if !existing_message.text.is_empty()
-            || !existing_message.local_images.is_empty()
-            || !existing_message.remote_image_urls.is_empty()
-        {
+        let mut retained_queue = VecDeque::new();
+        for queued_input in self.queued_user_messages.drain(..) {
+            match queued_input {
+                QueuedInput::UserMessage(message) => to_merge.push(message),
+                QueuedInput::SlashCommand(command) => {
+                    retained_queue.push_back(QueuedInput::SlashCommand(command));
+                }
+            }
+        }
+        self.queued_user_messages = retained_queue;
+        if has_existing_message {
             to_merge.push(existing_message);
         }
 

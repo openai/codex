@@ -9040,6 +9040,79 @@ async fn interrupt_restores_queued_messages_into_composer() {
 }
 
 #[tokio::test]
+async fn interrupt_replays_queued_slash_commands_and_restores_drafts() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_task_running(true);
+    chat.queued_user_messages
+        .push_back(UserMessage::from("queued draft".to_string()).into());
+    chat.queued_user_messages
+        .push_back(QueuedInput::SlashCommand(QueuedSlashCommand {
+            draft: UserMessage::from("/review".to_string()),
+            action: QueuedSlashCommandAction::Command(SlashCommand::Review),
+        }));
+    chat.refresh_pending_input_preview();
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert_eq!(chat.bottom_pane.composer_text(), "queued draft");
+    assert!(chat.has_active_view(), "expected /review popup to open");
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(
+        op_rx.try_recv().is_err(),
+        "unexpected outbound op after bare /review interrupt replay"
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
+async fn interrupt_replays_multiple_queued_slash_commands_in_order() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_task_running(true);
+    chat.queued_user_messages
+        .push_back(QueuedInput::SlashCommand(QueuedSlashCommand {
+            draft: UserMessage::from("/fast status".to_string()),
+            action: QueuedSlashCommandAction::Fast(QueuedFastCommandAction::Status),
+        }));
+    chat.queued_user_messages
+        .push_back(QueuedInput::SlashCommand(QueuedSlashCommand {
+            draft: UserMessage::from("/review".to_string()),
+            action: QueuedSlashCommandAction::Command(SlashCommand::Review),
+        }));
+    chat.refresh_pending_input_preview();
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let inserted = drain_insert_history(&mut rx);
+    assert!(
+        inserted
+            .iter()
+            .any(|cell| lines_to_single_string(cell).contains("Fast mode is off.")),
+        "expected /fast status to run before /review popup"
+    );
+    assert!(chat.has_active_view(), "expected /review popup to open");
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(
+        op_rx.try_recv().is_err(),
+        "unexpected outbound op after slash-only interrupt replay"
+    );
+}
+
+#[tokio::test]
 async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
