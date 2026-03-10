@@ -280,6 +280,7 @@ fn load_full_json_from_keyring<K: KeyringStore + ?Sized>(
     }
 }
 
+#[cfg(not(windows))]
 fn save_full_json_to_keyring<K: KeyringStore + ?Sized>(
     keyring_store: &K,
     service: &str,
