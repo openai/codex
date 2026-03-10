@@ -46,7 +46,7 @@ use crate::plugins::PluginsManager;
 use crate::protocol::SessionSource;
 use crate::skills::manager::SkillsManager;
 use crate::thread_manager;
-use crate::tools::context::TextToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::MultiAgentHandler;
@@ -162,6 +162,7 @@ async fn make_session_and_context_for_test_support(
     let skills_manager = Arc::new(SkillsManager::new(
         config.codex_home.clone(),
         Arc::clone(&plugins_manager),
+        config.bundled_skills_enabled(),
     ));
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let session = Session::new(
@@ -327,10 +328,10 @@ pub async fn spawn_agent_snapshot_for_tests(
             _ => err.to_string(),
         })?;
 
-    let Some(output) = (&*output as &dyn std::any::Any).downcast_ref::<TextToolOutput>() else {
-        panic!("spawn_agent should return text output");
-    };
-    let result: SpawnAgentResult = serde_json::from_str(&output.text)
+    let FunctionToolOutput { body, .. } = output;
+    let output_text = codex_protocol::models::function_call_output_content_items_to_text(&body)
+        .unwrap_or_default();
+    let result: SpawnAgentResult = serde_json::from_str(&output_text)
         .unwrap_or_else(|err| panic!("spawn_agent result should be json: {err}"));
     let agent_id = ThreadId::from_string(&result.agent_id)
         .unwrap_or_else(|err| panic!("agent_id should be valid: {err}"));
