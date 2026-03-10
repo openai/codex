@@ -2991,6 +2991,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, ev: ExecApprovalRequestEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping exec approval event before session configured");
+            return;
+        };
         self.flush_answer_stream_with_separator();
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
@@ -2998,7 +3002,7 @@ impl ChatWidget {
 
         let available_decisions = ev.effective_available_decisions();
         let request = ApprovalRequest::Exec {
-            thread_id: self.thread_id.unwrap_or_default(),
+            thread_id,
             thread_label: None,
             id: ev.effective_approval_id(),
             command: ev.command,
@@ -3013,10 +3017,14 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_apply_patch_approval_now(&mut self, ev: ApplyPatchApprovalRequestEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping apply_patch approval event before session configured");
+            return;
+        };
         self.flush_answer_stream_with_separator();
 
         let request = ApprovalRequest::ApplyPatch {
-            thread_id: self.thread_id.unwrap_or_default(),
+            thread_id,
             thread_label: None,
             id: ev.call_id,
             reason: ev.reason,
@@ -3033,13 +3041,16 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_elicitation_request_now(&mut self, ev: ElicitationRequestEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping elicitation request before session configured");
+            return;
+        };
         self.flush_answer_stream_with_separator();
 
         self.notify(Notification::ElicitationRequested {
             server_name: ev.server_name.clone(),
         });
 
-        let thread_id = self.thread_id.unwrap_or_default();
         if let Some(request) = McpServerElicitationFormRequest::from_event(thread_id, ev.clone()) {
             self.bottom_pane
                 .push_mcp_server_elicitation_request(request);
@@ -3058,6 +3069,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_request_permissions_now(&mut self, ev: RequestPermissionsEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping request_permissions event before session configured");
+            return;
+        };
         self.flush_answer_stream_with_separator();
         self.notify(Notification::PermissionsRequested {
             summary: ev
@@ -3067,7 +3082,7 @@ impl ChatWidget {
         });
         self.bottom_pane.push_approval_request(
             ApprovalRequest::Permissions {
-                thread_id: self.thread_id.unwrap_or_default(),
+                thread_id,
                 thread_label: None,
                 id: ev.call_id,
                 reason: ev.reason,
