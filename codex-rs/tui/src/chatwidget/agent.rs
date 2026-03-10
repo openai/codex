@@ -363,15 +363,21 @@ pub(crate) struct ThreadScopedOp {
 }
 
 impl PendingServerRequests {
-    fn clear_turn_scoped(&mut self) {
-        self.exec_approvals.clear();
-        self.patch_approvals.clear();
+    fn clear_turn_scoped(&mut self, thread_id: &str) {
+        self.exec_approvals
+            .retain(|(pending_thread_id, _), _| pending_thread_id != thread_id);
+        self.patch_approvals
+            .retain(|(pending_thread_id, _), _| pending_thread_id != thread_id);
         // MCP elicitation requests can outlive turn boundaries (turn_id is best-effort),
         // so clear them only via resolve path or serverRequest/resolved notifications.
-        self.request_permissions.clear();
-        self.request_user_input.clear();
-        self.dynamic_tool_calls.clear();
-        self.pending_file_changes.clear();
+        self.request_permissions
+            .retain(|(pending_thread_id, _), _| pending_thread_id != thread_id);
+        self.request_user_input
+            .retain(|(pending_thread_id, _), _| pending_thread_id != thread_id);
+        self.dynamic_tool_calls
+            .retain(|(pending_thread_id, _), _| pending_thread_id != thread_id);
+        self.pending_file_changes
+            .retain(|(pending_thread_id, _), _| pending_thread_id != thread_id);
     }
 
     fn register_request_user_input(
@@ -521,7 +527,7 @@ fn note_primary_legacy_event(
     session_id: ThreadId,
     conversation_id: Option<ThreadId>,
     event: &Event,
-    current_turn_id: &mut Option<String>,
+    current_turn_ids: &mut HashMap<String, String>,
     pending_server_requests: &mut PendingServerRequests,
 ) -> bool {
     let event_thread_id = conversation_id.unwrap_or(session_id);
@@ -529,13 +535,15 @@ fn note_primary_legacy_event(
         return false;
     }
 
+    let session_id = session_id.to_string();
+
     match &event.msg {
         EventMsg::TurnStarted(payload) => {
-            *current_turn_id = Some(payload.turn_id.clone());
+            current_turn_ids.insert(session_id.clone(), payload.turn_id.clone());
         }
         EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {
-            *current_turn_id = None;
-            pending_server_requests.clear_turn_scoped();
+            current_turn_ids.remove(&session_id);
+            pending_server_requests.clear_turn_scoped(&session_id);
         }
         _ => {}
     }
@@ -1672,10 +1680,11 @@ fn legacy_notification_to_event(notification: JSONRPCNotification) -> Result<Eve
 async fn process_in_process_command(
     op: Op,
     thread_id: &str,
+    primary_thread_id: &str,
     interrupt_turn_id: Option<&str>,
     session_id: &ThreadId,
     config: &Config,
-    current_turn_id: &mut Option<String>,
+    current_turn_ids: &mut HashMap<String, String>,
     request_ids: &mut RequestIdSequencer,
     pending_server_requests: &mut PendingServerRequests,
     client: &InProcessAppServerClient,
@@ -1686,7 +1695,7 @@ async fn process_in_process_command(
         Op::Interrupt => {
             let Some(turn_id) = interrupt_turn_id
                 .map(str::to_owned)
-                .or_else(|| current_turn_id.clone())
+                .or_else(|| current_turn_ids.get(thread_id).cloned())
             else {
                 send_warning_event(
                     app_event_tx,
@@ -1732,7 +1741,7 @@ async fn process_in_process_command(
                 .await
             {
                 Ok(response) => {
-                    *current_turn_id = Some(response.turn.id);
+                    current_turn_ids.insert(thread_id.to_string(), response.turn.id);
                 }
                 Err(err) => send_error_event(app_event_tx, err),
             }
@@ -1754,7 +1763,7 @@ async fn process_in_process_command(
                 .await
             {
                 Ok(response) => {
-                    *current_turn_id = Some(response.turn.id);
+                    current_turn_ids.insert(thread_id.to_string(), response.turn.id);
                 }
                 Err(err) => send_error_event(app_event_tx, err),
             }
@@ -1793,7 +1802,7 @@ async fn process_in_process_command(
                 .await
             {
                 Ok(response) => {
-                    *current_turn_id = Some(response.turn.id);
+                    current_turn_ids.insert(thread_id.to_string(), response.turn.id);
                 }
                 Err(err) => send_error_event(app_event_tx, err),
             }
@@ -2034,7 +2043,12 @@ async fn process_in_process_command(
             .await
             {
                 Ok(response) => {
-                    *current_turn_id = active_turn_id_from_turns(&response.thread.turns);
+                    if let Some(current_turn_id) = active_turn_id_from_turns(&response.thread.turns)
+                    {
+                        current_turn_ids.insert(thread_id.to_string(), current_turn_id);
+                    } else {
+                        current_turn_ids.remove(thread_id);
+                    }
                 }
                 Err(err) => {
                     send_codex_event(
@@ -2471,7 +2485,9 @@ async fn process_in_process_command(
                     format!("thread/unsubscribe failed during shutdown: {err}"),
                 );
             }
-            return true;
+            current_turn_ids.remove(thread_id);
+            pending_server_requests.clear_turn_scoped(thread_id);
+            return thread_id == primary_thread_id;
         }
         unsupported => {
             send_warning_event(
@@ -2517,7 +2533,7 @@ async fn run_in_process_agent_loop(
     mut session_configured: SessionConfiguredEvent,
     app_event_tx: AppEventSender,
     mut request_ids: RequestIdSequencer,
-    mut current_turn_id: Option<String>,
+    mut current_turn_ids: HashMap<String, String>,
 ) {
     let mut pending_shutdown_complete = false;
     let mut pending_server_requests = PendingServerRequests::default();
@@ -2530,10 +2546,11 @@ async fn run_in_process_agent_loop(
                         let should_shutdown = process_in_process_command(
                             op,
                             &thread_id,
+                            &thread_id,
                             None,
                             &session_id,
                             &config,
-                            &mut current_turn_id,
+                            &mut current_turn_ids,
                             &mut request_ids,
                             &mut pending_server_requests,
                             &client,
@@ -2555,10 +2572,11 @@ async fn run_in_process_agent_loop(
                         let should_shutdown = process_in_process_command(
                             op,
                             &scoped_thread_id,
+                            &thread_id,
                             interrupt_turn_id.as_deref(),
                             &session_id,
                             &config,
-                            &mut current_turn_id,
+                            &mut current_turn_ids,
                             &mut request_ids,
                             &mut pending_server_requests,
                             &client,
@@ -2992,7 +3010,7 @@ async fn run_in_process_agent_loop(
                             session_id,
                             decoded.conversation_id,
                             &event,
-                            &mut current_turn_id,
+                            &mut current_turn_ids,
                             &mut pending_server_requests,
                         );
                         if shutdown_complete {
@@ -3099,7 +3117,7 @@ pub(crate) fn spawn_agent(
             session_configured,
             app_event_tx_clone,
             request_ids,
-            None,
+            HashMap::new(),
         )
         .await;
     });
@@ -3175,17 +3193,18 @@ mod tests {
         .expect("in-process app-server client");
         let (tx, mut rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(tx);
-        let mut current_turn_id = None;
+        let mut current_turn_ids = HashMap::new();
         let mut request_ids = RequestIdSequencer::new();
         let mut pending_server_requests = PendingServerRequests::default();
 
         let should_shutdown = process_in_process_command(
             op,
             "missing-thread-id",
+            "missing-thread-id",
             None,
             &session_id,
             &config,
-            &mut current_turn_id,
+            &mut current_turn_ids,
             &mut request_ids,
             &mut pending_server_requests,
             &client,
@@ -3237,7 +3256,7 @@ mod tests {
         .expect("in-process app-server client");
         let (tx, rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(tx);
-        let mut current_turn_id = None;
+        let mut current_turn_ids = HashMap::new();
         let mut request_ids = RequestIdSequencer::new();
         let mut pending_server_requests = PendingServerRequests::default();
         let thread_start = send_request_with_response::<ThreadStartResponse>(
@@ -3255,10 +3274,11 @@ mod tests {
         let should_shutdown = process_in_process_command(
             op,
             &thread_id,
+            &thread_id,
             None,
             &session_id,
             config,
-            &mut current_turn_id,
+            &mut current_turn_ids,
             &mut request_ids,
             &mut pending_server_requests,
             &client,
@@ -3458,7 +3478,7 @@ mod tests {
             elicitation_id.clone(),
         );
 
-        pending.clear_turn_scoped();
+        pending.clear_turn_scoped(&thread_id);
 
         assert_eq!(
             pending.pop_mcp_elicitation_request_id(&thread_id, &server_name, &elicitation_id),
@@ -3467,10 +3487,81 @@ mod tests {
     }
 
     #[test]
+    fn clear_turn_scoped_only_clears_requests_for_target_thread() {
+        let mut pending = PendingServerRequests::default();
+        pending.exec_approvals.insert(
+            ("thread-a".to_string(), "exec-a".to_string()),
+            PendingExecApprovalRequest::V2(RequestId::Integer(1)),
+        );
+        pending.exec_approvals.insert(
+            ("thread-b".to_string(), "exec-b".to_string()),
+            PendingExecApprovalRequest::V2(RequestId::Integer(2)),
+        );
+        pending.request_permissions.insert(
+            ("thread-a".to_string(), "perm-a".to_string()),
+            RequestId::Integer(3),
+        );
+        pending.request_permissions.insert(
+            ("thread-b".to_string(), "perm-b".to_string()),
+            RequestId::Integer(4),
+        );
+        pending.register_request_user_input(
+            "thread-a".to_string(),
+            "turn-a".to_string(),
+            RequestId::Integer(5),
+        );
+        pending.register_request_user_input(
+            "thread-b".to_string(),
+            "turn-b".to_string(),
+            RequestId::Integer(6),
+        );
+        pending.dynamic_tool_calls.insert(
+            ("thread-a".to_string(), "tool-a".to_string()),
+            RequestId::Integer(7),
+        );
+        pending.dynamic_tool_calls.insert(
+            ("thread-b".to_string(), "tool-b".to_string()),
+            RequestId::Integer(8),
+        );
+
+        pending.clear_turn_scoped("thread-a");
+
+        assert_eq!(
+            pending.exec_approvals,
+            HashMap::from([(
+                ("thread-b".to_string(), "exec-b".to_string()),
+                PendingExecApprovalRequest::V2(RequestId::Integer(2)),
+            )])
+        );
+        assert_eq!(
+            pending.request_permissions,
+            HashMap::from([(
+                ("thread-b".to_string(), "perm-b".to_string()),
+                RequestId::Integer(4),
+            )])
+        );
+        assert_eq!(
+            pending.request_user_input,
+            HashMap::from([(
+                ("thread-b".to_string(), "turn-b".to_string()),
+                VecDeque::from([RequestId::Integer(6)]),
+            )])
+        );
+        assert_eq!(
+            pending.dynamic_tool_calls,
+            HashMap::from([(
+                ("thread-b".to_string(), "tool-b".to_string()),
+                RequestId::Integer(8),
+            )])
+        );
+    }
+
+    #[test]
     fn child_legacy_turn_events_do_not_mutate_primary_turn_state() {
         let session_id = ThreadId::new();
         let child_thread_id = ThreadId::new();
-        let mut current_turn_id = Some("primary-turn".to_string());
+        let mut current_turn_ids =
+            HashMap::from([(session_id.to_string(), "primary-turn".to_string())]);
         let mut pending_server_requests = PendingServerRequests::default();
         pending_server_requests.exec_approvals.insert(
             (session_id.to_string(), "exec-1".to_string()),
@@ -3503,12 +3594,15 @@ mod tests {
                 session_id,
                 Some(child_thread_id),
                 &child_turn_started,
-                &mut current_turn_id,
+                &mut current_turn_ids,
                 &mut pending_server_requests,
             ),
             false
         );
-        assert_eq!(current_turn_id, Some("primary-turn".to_string()));
+        assert_eq!(
+            current_turn_ids.get(&session_id.to_string()),
+            Some(&"primary-turn".to_string())
+        );
         assert_eq!(
             pending_server_requests.exec_approvals.len(),
             1,
@@ -3546,12 +3640,15 @@ mod tests {
                 session_id,
                 Some(child_thread_id),
                 &child_turn_complete,
-                &mut current_turn_id,
+                &mut current_turn_ids,
                 &mut pending_server_requests,
             ),
             false
         );
-        assert_eq!(current_turn_id, Some("primary-turn".to_string()));
+        assert_eq!(
+            current_turn_ids.get(&session_id.to_string()),
+            Some(&"primary-turn".to_string())
+        );
         assert_eq!(
             pending_server_requests.exec_approvals.len(),
             1,
@@ -3575,6 +3672,87 @@ mod tests {
                 .dynamic_tool_calls
                 .get(&(session_id.to_string(), "tool-1".to_string())),
             Some(&RequestId::Integer(4))
+        );
+    }
+
+    #[test]
+    fn primary_turn_completion_preserves_child_pending_requests() {
+        let session_id = ThreadId::new();
+        let child_thread_id = ThreadId::new();
+        let mut current_turn_ids = HashMap::from([
+            (session_id.to_string(), "primary-turn".to_string()),
+            (child_thread_id.to_string(), "child-turn".to_string()),
+        ]);
+        let mut pending_server_requests = PendingServerRequests::default();
+        pending_server_requests.exec_approvals.insert(
+            (session_id.to_string(), "exec-primary".to_string()),
+            PendingExecApprovalRequest::V2(RequestId::Integer(1)),
+        );
+        pending_server_requests.exec_approvals.insert(
+            (child_thread_id.to_string(), "exec-child".to_string()),
+            PendingExecApprovalRequest::V2(RequestId::Integer(2)),
+        );
+        pending_server_requests.request_permissions.insert(
+            (session_id.to_string(), "perm-primary".to_string()),
+            RequestId::Integer(3),
+        );
+        pending_server_requests.request_permissions.insert(
+            (child_thread_id.to_string(), "perm-child".to_string()),
+            RequestId::Integer(4),
+        );
+        pending_server_requests.register_request_user_input(
+            session_id.to_string(),
+            "primary-turn".to_string(),
+            RequestId::Integer(5),
+        );
+        pending_server_requests.register_request_user_input(
+            child_thread_id.to_string(),
+            "child-turn".to_string(),
+            RequestId::Integer(6),
+        );
+
+        assert_eq!(
+            note_primary_legacy_event(
+                session_id,
+                None,
+                &Event {
+                    id: "primary-turn-complete".to_string(),
+                    msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                        turn_id: "primary-turn".to_string(),
+                        last_agent_message: None,
+                    }),
+                },
+                &mut current_turn_ids,
+                &mut pending_server_requests,
+            ),
+            false
+        );
+
+        assert_eq!(current_turn_ids.get(&session_id.to_string()), None);
+        assert_eq!(
+            current_turn_ids.get(&child_thread_id.to_string()),
+            Some(&"child-turn".to_string())
+        );
+        assert_eq!(
+            pending_server_requests.exec_approvals,
+            HashMap::from([(
+                (child_thread_id.to_string(), "exec-child".to_string()),
+                PendingExecApprovalRequest::V2(RequestId::Integer(2)),
+            )])
+        );
+        assert_eq!(
+            pending_server_requests.request_permissions,
+            HashMap::from([(
+                (child_thread_id.to_string(), "perm-child".to_string()),
+                RequestId::Integer(4),
+            )])
+        );
+        assert_eq!(
+            pending_server_requests.request_user_input,
+            HashMap::from([(
+                (child_thread_id.to_string(), "child-turn".to_string()),
+                VecDeque::from([RequestId::Integer(6)]),
+            )])
         );
     }
 
@@ -4277,7 +4455,7 @@ mod tests {
         .expect("in-process app-server client");
         let (tx, mut rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(tx);
-        let mut current_turn_id = None;
+        let mut current_turn_ids = HashMap::new();
         let mut request_ids = RequestIdSequencer::new();
         let mut pending_server_requests = PendingServerRequests::default();
 
@@ -4286,10 +4464,11 @@ mod tests {
                 text: "hello history".to_string(),
             },
             &thread_id,
+            &thread_id,
             None,
             &session_id,
             &config,
-            &mut current_turn_id,
+            &mut current_turn_ids,
             &mut request_ids,
             &mut pending_server_requests,
             &client,
@@ -4305,10 +4484,11 @@ mod tests {
                 log_id: 0,
             },
             &thread_id,
+            &thread_id,
             None,
             &session_id,
             &config,
-            &mut current_turn_id,
+            &mut current_turn_ids,
             &mut request_ids,
             &mut pending_server_requests,
             &client,
@@ -4376,7 +4556,7 @@ mod tests {
         .expect("in-process app-server client");
         let (tx, mut rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(tx);
-        let mut current_turn_id = None;
+        let mut current_turn_ids = HashMap::new();
         let mut request_ids = RequestIdSequencer::new();
         let mut pending_server_requests = PendingServerRequests::default();
 
@@ -4403,10 +4583,11 @@ mod tests {
                 },
             },
             &thread_id,
+            &thread_id,
             None,
             &session_id,
             &config,
-            &mut current_turn_id,
+            &mut current_turn_ids,
             &mut request_ids,
             &mut pending_server_requests,
             &client,
@@ -4415,8 +4596,8 @@ mod tests {
         )
         .await;
         assert_eq!(should_shutdown, false);
-        let turn_id = current_turn_id
-            .clone()
+        let turn_id = current_turn_ids
+            .get(&thread_id)
             .expect("review/start should set the active turn id");
         assert_eq!(turn_id.is_empty(), false);
 
@@ -4426,11 +4607,12 @@ mod tests {
 
         let should_shutdown = process_in_process_command(
             Op::Interrupt,
-            "missing-thread-id",
+            &thread_id,
+            &thread_id,
             None,
             &session_id,
             &config,
-            &mut current_turn_id,
+            &mut current_turn_ids,
             &mut request_ids,
             &mut pending_server_requests,
             &client,
@@ -4439,17 +4621,111 @@ mod tests {
         )
         .await;
         assert_eq!(should_shutdown, false);
+        if let Ok(Some(event)) = timeout(Duration::from_millis(200), rx.recv()).await {
+            panic!("did not expect an app event after successful turn/interrupt: {event:?}");
+        }
 
-        let event = next_codex_event(&mut rx).await;
-        let EventMsg::Error(error) = event.msg else {
-            panic!("expected error event");
-        };
-        assert!(
-            error.message.contains("turn/interrupt"),
-            "expected turn/interrupt error, got `{}`",
-            error.message
+        client.shutdown().await.expect("shutdown in-process client");
+    }
+
+    #[tokio::test]
+    async fn child_shutdown_does_not_request_in_process_loop_exit() {
+        let config = test_config().await;
+        let thread_manager = test_thread_manager(&config);
+        let client = InProcessAppServerClient::start(in_process_start_args(
+            &config,
+            Arc::clone(&thread_manager),
+            codex_arg0::Arg0DispatchPaths::default(),
+            Vec::new(),
+            CloudRequirementsLoader::default(),
+        ))
+        .await
+        .expect("in-process app-server client");
+        let (tx, _rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let mut current_turn_ids = HashMap::from([
+            ("primary-thread".to_string(), "primary-turn".to_string()),
+            ("child-thread".to_string(), "child-turn".to_string()),
+        ]);
+        let mut request_ids = RequestIdSequencer::new();
+        let mut pending_server_requests = PendingServerRequests::default();
+        pending_server_requests.register_request_user_input(
+            "child-thread".to_string(),
+            "child-turn".to_string(),
+            RequestId::Integer(5),
         );
-        assert_eq!(error.message.contains("no active turn"), false);
+        let session_id = ThreadId::new();
+
+        let should_shutdown = process_in_process_command(
+            Op::Shutdown,
+            "child-thread",
+            "primary-thread",
+            None,
+            &session_id,
+            &config,
+            &mut current_turn_ids,
+            &mut request_ids,
+            &mut pending_server_requests,
+            &client,
+            thread_manager.as_ref(),
+            &app_event_tx,
+        )
+        .await;
+
+        assert_eq!(should_shutdown, false);
+        assert_eq!(
+            current_turn_ids,
+            HashMap::from([("primary-thread".to_string(), "primary-turn".to_string())])
+        );
+        assert!(pending_server_requests.request_user_input.is_empty());
+
+        client.shutdown().await.expect("shutdown in-process client");
+    }
+
+    #[tokio::test]
+    async fn interrupt_uses_active_turn_for_target_thread_only() {
+        let config = test_config().await;
+        let session_id = ThreadId::new();
+        let thread_manager = test_thread_manager(&config);
+        let client = InProcessAppServerClient::start(in_process_start_args(
+            &config,
+            Arc::clone(&thread_manager),
+            codex_arg0::Arg0DispatchPaths::default(),
+            Vec::new(),
+            CloudRequirementsLoader::default(),
+        ))
+        .await
+        .expect("in-process app-server client");
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let mut current_turn_ids =
+            HashMap::from([("child-thread".to_string(), "child-turn".to_string())]);
+        let mut request_ids = RequestIdSequencer::new();
+        let mut pending_server_requests = PendingServerRequests::default();
+
+        let should_shutdown = process_in_process_command(
+            Op::Interrupt,
+            "primary-thread",
+            "primary-thread",
+            None,
+            &session_id,
+            &config,
+            &mut current_turn_ids,
+            &mut request_ids,
+            &mut pending_server_requests,
+            &client,
+            thread_manager.as_ref(),
+            &app_event_tx,
+        )
+        .await;
+
+        assert_eq!(should_shutdown, false);
+        let event = next_codex_event(&mut rx).await;
+        let warning = warning_from_event(event);
+        assert_eq!(
+            warning.message,
+            "turn/interrupt skipped because there is no active turn".to_string()
+        );
 
         client.shutdown().await.expect("shutdown in-process client");
     }
