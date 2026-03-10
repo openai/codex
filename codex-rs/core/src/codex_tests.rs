@@ -1904,7 +1904,7 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
     let docs_dir =
         codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs_dir).expect("docs");
 
-    session_configuration.cwd = original_cwd.clone();
+    session_configuration.cwd = original_cwd;
     session_configuration.sandbox_policy =
         codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
@@ -1953,7 +1953,7 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
     let docs_dir =
         codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs_dir).expect("docs");
 
-    session_configuration.cwd = original_cwd.clone();
+    session_configuration.cwd = original_cwd;
     session_configuration.sandbox_policy =
         codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
