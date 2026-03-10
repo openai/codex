@@ -19,14 +19,19 @@ use serde_json::Value;
 use std::fs;
 use wiremock::MockServer;
 
-fn custom_tool_output_text_and_success(
-    req: &ResponsesRequest,
-    call_id: &str,
-) -> (String, Option<bool>) {
-    let (output, success) = req
-        .custom_tool_call_output_content_and_success(call_id)
-        .expect("custom tool output should be present");
-    (output.unwrap_or_default(), success)
+fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
+    req.custom_tool_call_output(call_id)
+        .get("output")
+        .and_then(Value::as_array)
+        .expect("custom tool output should be serialized as content items")
+        .clone()
+}
+
+fn text_item(items: &[Value], index: usize) -> &str {
+    items[index]
+        .get("text")
+        .and_then(Value::as_str)
+        .expect("content item should be input_text")
 }
 
 async fn run_code_mode_turn(
@@ -83,13 +88,13 @@ add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_mark
     .await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
-    assert_ne!(
-        success,
-        Some(false),
-        "code_mode call failed unexpectedly: {output}"
+    let items = custom_tool_output_items(&req, "call-1");
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        r"(?s)\AScript completed\nWall time \d+\.\d seconds\nOutput:\n\z",
+        text_item(&items, 0),
     );
-    let parsed: Value = serde_json::from_str(&output)?;
+    let parsed: Value = serde_json::from_str(text_item(&items, 1))?;
     assert!(
         parsed
             .get("chunk_id")
@@ -132,22 +137,60 @@ add_content(JSON.stringify(await exec_command({
     .await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
-    assert_ne!(
-        success,
-        Some(false),
-        "code_mode call failed unexpectedly: {output}"
+    let items = custom_tool_output_items(&req, "call-1");
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        r"(?s)\AScript completed\nWall time \d+\.\d seconds\nOutput:\n\z",
+        text_item(&items, 0),
     );
     let expected_pattern = r#"(?sx)
 \A
-Original\ token\ count:\ \d+\n
-Output:\n
 Total\ output\ lines:\ 1\n
 \n
-\{"chunk_id".*…\d+\ tokens\ truncated….*
+.*…\d+\ tokens\ truncated….*
 \z
 "#;
-    assert_regex_match(expected_pattern, &output);
+    assert_regex_match(expected_pattern, text_item(&items, 1));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_returns_accumulated_output_when_script_fails() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use code_mode to surface script failures",
+        r#"
+add_content("before crash");
+add_content("still before crash");
+throw new Error("boom");
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    assert_eq!(items.len(), 4);
+    assert_regex_match(
+        r"(?s)\AScript failed\nWall time \d+\.\d seconds\nOutput:\n\z",
+        text_item(&items, 0),
+    );
+    assert_eq!(text_item(&items, 1), "before crash");
+    assert_eq!(text_item(&items, 2), "still before crash");
+    assert_regex_match(
+        r#"(?sx)
+\A
+Script\ error:\n
+Error:\ boom\n
+(?:\s+at\ .+\n?)+
+\z
+"#,
+        text_item(&items, 3),
+    );
 
     Ok(())
 }
@@ -169,11 +212,11 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
         run_code_mode_turn(&server, "use code_mode to run apply_patch", &code, true).await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
-    assert_ne!(
-        success,
-        Some(false),
-        "code_mode apply_patch call failed unexpectedly: {output}"
+    let items = custom_tool_output_items(&req, "call-1");
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        r"(?s)\AScript completed\nWall time \d+\.\d seconds\nOutput:\n\z",
+        text_item(&items, 0),
     );
 
     let file_path = test.cwd_path().join(file_name);
