@@ -1377,7 +1377,6 @@ async fn start_server_task(
         .as_ref()
         .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
         .is_some();
-
     let managed = ManagedClient {
         client: Arc::clone(&client),
         tools,
@@ -1739,6 +1738,7 @@ mod tests {
             RejectConfig {
                 sandbox_approval: false,
                 rules: false,
+                request_permissions: false,
                 mcp_elicitations: false,
             }
         )));
@@ -1751,6 +1751,7 @@ mod tests {
             RejectConfig {
                 sandbox_approval: false,
                 rules: false,
+                request_permissions: false,
                 mcp_elicitations: true,
             }
         )));

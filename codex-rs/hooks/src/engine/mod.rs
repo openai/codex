@@ -1,0 +1,109 @@
+pub(crate) mod command_runner;
+pub(crate) mod config;
+pub(crate) mod discovery;
+pub(crate) mod dispatcher;
+pub(crate) mod output_parser;
+pub(crate) mod schema_loader;
+
+use std::path::PathBuf;
+
+use codex_config::ConfigLayerStack;
+use codex_protocol::protocol::HookRunSummary;
+
+use crate::events::session_start::SessionStartOutcome;
+use crate::events::session_start::SessionStartRequest;
+use crate::events::stop::StopOutcome;
+use crate::events::stop::StopRequest;
+
+#[derive(Debug, Clone)]
+pub(crate) struct CommandShell {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConfiguredHandler {
+    pub event_name: codex_protocol::protocol::HookEventName,
+    pub matcher: Option<String>,
+    pub command: String,
+    pub timeout_sec: u64,
+    pub status_message: Option<String>,
+    pub source_path: PathBuf,
+    pub display_order: i64,
+}
+
+impl ConfiguredHandler {
+    pub fn run_id(&self) -> String {
+        format!(
+            "{}:{}:{}",
+            self.event_name_label(),
+            self.display_order,
+            self.source_path.display()
+        )
+    }
+
+    fn event_name_label(&self) -> &'static str {
+        match self.event_name {
+            codex_protocol::protocol::HookEventName::SessionStart => "session-start",
+            codex_protocol::protocol::HookEventName::Stop => "stop",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ClaudeHooksEngine {
+    handlers: Vec<ConfiguredHandler>,
+    warnings: Vec<String>,
+    shell: CommandShell,
+}
+
+impl ClaudeHooksEngine {
+    pub(crate) fn new(
+        enabled: bool,
+        config_layer_stack: Option<&ConfigLayerStack>,
+        shell: CommandShell,
+    ) -> Self {
+        if !enabled {
+            return Self {
+                handlers: Vec::new(),
+                warnings: Vec::new(),
+                shell,
+            };
+        }
+
+        let _ = schema_loader::generated_hook_schemas();
+        let discovered = discovery::discover_handlers(config_layer_stack);
+        Self {
+            handlers: discovered.handlers,
+            warnings: discovered.warnings,
+            shell,
+        }
+    }
+
+    pub(crate) fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    pub(crate) fn preview_session_start(
+        &self,
+        request: &SessionStartRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::session_start::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_session_start(
+        &self,
+        request: SessionStartRequest,
+        turn_id: Option<String>,
+    ) -> SessionStartOutcome {
+        crate::events::session_start::run(&self.handlers, &self.shell, request, turn_id).await
+    }
+
+    pub(crate) fn preview_stop(&self, request: &StopRequest) -> Vec<HookRunSummary> {
+        crate::events::stop::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {
+        crate::events::stop::run(&self.handlers, &self.shell, request).await
+    }
+}

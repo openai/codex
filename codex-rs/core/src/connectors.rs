@@ -93,12 +93,11 @@ pub async fn list_accessible_connectors_from_mcp_tools(
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> Option<Vec<AppInfo>> {
-    if !config.features.enabled(Feature::Apps) {
-        return Some(Vec::new());
-    }
-
     let auth_manager = auth_manager_from_config(config);
     let auth = auth_manager.auth().await;
+    if !config.features.apps_enabled_for_auth(auth.as_ref()) {
+        return Some(Vec::new());
+    }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     read_cached_accessible_connectors(&cache_key).map(filter_disallowed_connectors)
 }
@@ -118,15 +117,14 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
-    if !config.features.enabled(Feature::Apps) {
+    let auth_manager = auth_manager_from_config(config);
+    let auth = auth_manager.auth().await;
+    if !config.features.apps_enabled_for_auth(auth.as_ref()) {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
             codex_apps_ready: true,
         });
     }
-
-    let auth_manager = auth_manager_from_config(config);
-    let auth = auth_manager.auth().await;
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
     let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);

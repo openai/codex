@@ -4,6 +4,16 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
+use axum::Router;
+use axum::extract::ConnectInfo;
+use axum::extract::State;
+use axum::extract::ws::Message as WebSocketMessage;
+use axum::extract::ws::WebSocket;
+use axum::extract::ws::WebSocketUpgrade;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::any;
+use axum::routing::get;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerRequest;
@@ -28,12 +38,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::io::{self};
 use tokio::net::TcpListener;
-use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio_tungstenite::accept_async_with_config;
-use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
@@ -55,9 +61,15 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
     let title = colorize("codex app-server (WebSockets)", Style::new().bold().cyan());
     let listening_label = colorize("listening on:", Style::new().dimmed());
     let listen_url = colorize(&format!("ws://{addr}"), Style::new().green());
+    let ready_label = colorize("readyz:", Style::new().dimmed());
+    let ready_url = colorize(&format!("http://{addr}/readyz"), Style::new().green());
+    let health_label = colorize("healthz:", Style::new().dimmed());
+    let health_url = colorize(&format!("http://{addr}/healthz"), Style::new().green());
     let note_label = colorize("note:", Style::new().dimmed());
     eprintln!("{title}");
     eprintln!("  {listening_label} {listen_url}");
+    eprintln!("  {ready_label} {ready_url}");
+    eprintln!("  {health_label} {health_url}");
     if addr.ip().is_loopback() {
         eprintln!(
             "  {note_label} binds localhost only (use SSH port-forwarding for remote access)"
@@ -67,6 +79,28 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
             "  {note_label} this is a raw WS server; consider running behind TLS/auth for real remote use"
         );
     }
+}
+
+#[derive(Clone)]
+struct WebSocketListenerState {
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+    connection_counter: Arc<AtomicU64>,
+}
+
+async fn health_check_handler() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn websocket_upgrade_handler(
+    websocket: WebSocketUpgrade,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    State(state): State<WebSocketListenerState>,
+) -> impl IntoResponse {
+    let connection_id = ConnectionId(state.connection_counter.fetch_add(1, Ordering::Relaxed));
+    info!(%peer_addr, "websocket client connected");
+    websocket.on_upgrade(move |stream| async move {
+        run_websocket_connection(connection_id, stream, state.transport_event_tx).await;
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -279,54 +313,34 @@ pub(crate) async fn start_websocket_acceptor(
     print_websocket_startup_banner(local_addr);
     info!("app-server websocket listening on ws://{local_addr}");
 
-    let connection_counter = Arc::new(AtomicU64::new(1));
+    let router = Router::new()
+        .route("/readyz", get(health_check_handler))
+        .route("/healthz", get(health_check_handler))
+        .fallback(any(websocket_upgrade_handler))
+        .with_state(WebSocketListenerState {
+            transport_event_tx,
+            connection_counter: Arc::new(AtomicU64::new(1)),
+        });
+    let server = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown_token.cancelled().await;
+    });
     Ok(tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = shutdown_token.cancelled() => {
-                    info!("websocket acceptor shutting down");
-                    break;
-                }
-                accept_result = listener.accept() => {
-                    match accept_result {
-                        Ok((stream, peer_addr)) => {
-                            info!(%peer_addr, "websocket client connected");
-                            let connection_id =
-                                ConnectionId(connection_counter.fetch_add(1, Ordering::Relaxed));
-                            let transport_event_tx_for_connection = transport_event_tx.clone();
-                            tokio::spawn(async move {
-                                run_websocket_connection(
-                                    connection_id,
-                                    stream,
-                                    transport_event_tx_for_connection,
-                                )
-                                .await;
-                            });
-                        }
-                        Err(err) => {
-                            error!("failed to accept websocket connection: {err}");
-                        }
-                    }
-                }
-            }
+        if let Err(err) = server.await {
+            error!("websocket acceptor failed: {err}");
         }
+        info!("websocket acceptor shutting down");
     }))
 }
 
 async fn run_websocket_connection(
     connection_id: ConnectionId,
-    stream: TcpStream,
+    websocket_stream: WebSocket,
     transport_event_tx: mpsc::Sender<TransportEvent>,
 ) {
-    let websocket_stream =
-        match accept_async_with_config(stream, Some(WebSocketConfig::default())).await {
-            Ok(stream) => stream,
-            Err(err) => {
-                warn!("failed to complete websocket handshake: {err}");
-                return;
-            }
-        };
-
     let (writer_tx, writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
     let writer_tx_for_reader = writer_tx.clone();
     let disconnect_token = CancellationToken::new();
@@ -377,10 +391,7 @@ async fn run_websocket_connection(
 }
 
 async fn run_websocket_outbound_loop(
-    mut websocket_writer: futures::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<TcpStream>,
-        WebSocketMessage,
-    >,
+    mut websocket_writer: futures::stream::SplitSink<WebSocket, WebSocketMessage>,
     mut writer_rx: mpsc::Receiver<OutgoingMessage>,
     mut writer_control_rx: mpsc::Receiver<WebSocketMessage>,
     disconnect_token: CancellationToken,
@@ -414,9 +425,7 @@ async fn run_websocket_outbound_loop(
 }
 
 async fn run_websocket_inbound_loop(
-    mut websocket_reader: futures::stream::SplitStream<
-        tokio_tungstenite::WebSocketStream<TcpStream>,
-    >,
+    mut websocket_reader: futures::stream::SplitStream<WebSocket>,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     writer_tx_for_reader: mpsc::Sender<OutgoingMessage>,
     writer_control_tx: mpsc::Sender<WebSocketMessage>,
@@ -435,7 +444,7 @@ async fn run_websocket_inbound_loop(
                             &transport_event_tx,
                             &writer_tx_for_reader,
                             connection_id,
-                            &text,
+                            text.as_ref(),
                         )
                         .await
                         {
@@ -457,7 +466,6 @@ async fn run_websocket_inbound_loop(
                     Some(Ok(WebSocketMessage::Binary(_))) => {
                         warn!("dropping unsupported binary websocket message");
                     }
-                    Some(Ok(WebSocketMessage::Frame(_))) => {}
                     Some(Err(err)) => {
                         warn!("websocket receive error: {err}");
                         break;

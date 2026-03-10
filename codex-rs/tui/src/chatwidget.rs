@@ -306,6 +306,7 @@ use strum::IntoEnumIterator;
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const FAST_STATUS_MODEL: &str = "gpt-5.4";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
     ["model-with-reasoning", "context-remaining", "current-dir"];
 // Track information about an in-flight exec command.
@@ -598,6 +599,7 @@ pub(crate) struct ChatWidget {
     /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     connectors_cache: ConnectorsCacheState,
+    connectors_partial_snapshot: Option<ConnectorsSnapshot>,
     connectors_prefetch_in_flight: bool,
     connectors_force_refetch_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
@@ -1270,7 +1272,7 @@ impl ChatWidget {
         self.sync_personality_command_enabled();
         self.refresh_plugin_mentions();
         let startup_tooltip_override = self.startup_tooltip_override.take();
-        let show_fast_status = self.should_show_fast_status(event.service_tier);
+        let show_fast_status = self.should_show_fast_status(&model_for_header, event.service_tier);
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -2561,6 +2563,37 @@ impl ChatWidget {
         self.set_status_header(message);
     }
 
+    fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
+        let label = hook_event_label(event.run.event_name);
+        let mut message = format!("Running {label} hook");
+        if let Some(status_message) = event.run.status_message
+            && !status_message.is_empty()
+        {
+            message.push_str(": ");
+            message.push_str(&status_message);
+        }
+        self.add_to_history(history_cell::new_info_event(message, None));
+        self.request_redraw();
+    }
+
+    fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
+        let status = format!("{:?}", event.run.status).to_lowercase();
+        let header = format!("{} hook ({status})", hook_event_label(event.run.event_name));
+        let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
+        for entry in event.run.entries {
+            let prefix = match entry.kind {
+                codex_protocol::protocol::HookOutputEntryKind::Warning => "warning: ",
+                codex_protocol::protocol::HookOutputEntryKind::Stop => "stop: ",
+                codex_protocol::protocol::HookOutputEntryKind::Feedback => "feedback: ",
+                codex_protocol::protocol::HookOutputEntryKind::Context => "hook context: ",
+                codex_protocol::protocol::HookOutputEntryKind::Error => "error: ",
+            };
+            lines.push(format!("  {prefix}{}", entry.text).into());
+        }
+        self.add_to_history(PlainHistoryCell::new(lines));
+        self.request_redraw();
+    }
+
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(false);
@@ -3205,6 +3238,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
+            connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
             connectors_force_refetch_pending: false,
             interrupts: InterruptManager::new(),
@@ -3284,7 +3318,7 @@ impl ChatWidget {
 
         widget
             .bottom_pane
-            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+            .set_connectors_enabled(widget.connectors_enabled());
 
         widget
     }
@@ -3388,6 +3422,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
+            connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
             connectors_force_refetch_pending: false,
             interrupts: InterruptManager::new(),
@@ -3457,7 +3492,7 @@ impl ChatWidget {
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
         widget
             .bottom_pane
-            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+            .set_connectors_enabled(widget.connectors_enabled());
 
         widget
     }
@@ -3563,6 +3598,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
+            connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
             connectors_force_refetch_pending: false,
             interrupts: InterruptManager::new(),
@@ -3641,7 +3677,7 @@ impl ChatWidget {
         widget.update_collaboration_mode_indicator();
         widget
             .bottom_pane
-            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+            .set_connectors_enabled(widget.connectors_enabled());
 
         widget
     }
@@ -4981,6 +5017,8 @@ impl ChatWidget {
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::DynamicToolCallResponse(_) => {}
+            EventMsg::HookStarted(event) => self.on_hook_started(event),
+            EventMsg::HookCompleted(event) => self.on_hook_completed(event),
             EventMsg::RealtimeConversationStarted(ev) => {
                 if !from_replay {
                     self.on_realtime_conversation_started(ev);
@@ -5391,7 +5429,14 @@ impl ChatWidget {
             StatusLineItem::ModelWithReasoning => {
                 let label =
                     Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
-                Some(format!("{} {label}", self.model_display_name()))
+                let fast_label = if self
+                    .should_show_fast_status(self.current_model(), self.config.service_tier)
+                {
+                    " fast"
+                } else {
+                    ""
+                };
+                Some(format!("{} {label}{fast_label}", self.model_display_name()))
             }
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(self.status_line_cwd(), None))
@@ -7380,8 +7425,13 @@ impl ChatWidget {
         self.config.service_tier
     }
 
-    pub(crate) fn should_show_fast_status(&self, service_tier: Option<ServiceTier>) -> bool {
-        matches!(service_tier, Some(ServiceTier::Fast))
+    pub(crate) fn should_show_fast_status(
+        &self,
+        model: &str,
+        service_tier: Option<ServiceTier>,
+    ) -> bool {
+        model == FAST_STATUS_MODEL
+            && matches!(service_tier, Some(ServiceTier::Fast))
             && self
                 .auth_manager
                 .auth_cached()
@@ -7702,12 +7752,18 @@ impl ChatWidget {
     }
 
     fn connectors_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::Apps)
+        self.config
+            .features
+            .apps_enabled_cached(Some(self.auth_manager.as_ref()))
     }
 
     fn connectors_for_mentions(&self) -> Option<&[connectors::AppInfo]> {
         if !self.connectors_enabled() {
             return None;
+        }
+
+        if let Some(snapshot) = &self.connectors_partial_snapshot {
+            return Some(snapshot.connectors.as_slice());
         }
 
         match &self.connectors_cache {
@@ -7815,7 +7871,9 @@ impl ChatWidget {
         }
 
         let connectors_cache = self.connectors_cache.clone();
-        self.prefetch_connectors_with_options(true);
+        let should_force_refetch = !self.connectors_prefetch_in_flight
+            || matches!(connectors_cache, ConnectorsCacheState::Ready(_));
+        self.prefetch_connectors_with_options(should_force_refetch);
 
         match connectors_cache {
             ConnectorsCacheState::Ready(snapshot) => {
@@ -7828,28 +7886,51 @@ impl ChatWidget {
             ConnectorsCacheState::Failed(err) => {
                 self.add_to_history(history_cell::new_error_event(err));
             }
-            ConnectorsCacheState::Loading => {
-                self.add_to_history(history_cell::new_info_event(
-                    "Apps are still loading.".to_string(),
-                    Some("Try again in a moment.".to_string()),
-                ));
-            }
-            ConnectorsCacheState::Uninitialized => {
-                self.add_to_history(history_cell::new_info_event(
-                    "Apps are still loading.".to_string(),
-                    Some("Try again in a moment.".to_string()),
-                ));
+            ConnectorsCacheState::Loading | ConnectorsCacheState::Uninitialized => {
+                self.open_connectors_loading_popup();
             }
         }
         self.request_redraw();
     }
 
-    fn open_connectors_popup(&mut self, connectors: &[connectors::AppInfo]) {
-        self.bottom_pane
-            .show_selection_view(self.connectors_popup_params(connectors));
+    fn open_connectors_loading_popup(&mut self) {
+        if !self.bottom_pane.replace_selection_view_if_active(
+            CONNECTORS_SELECTION_VIEW_ID,
+            self.connectors_loading_popup_params(),
+        ) {
+            self.bottom_pane
+                .show_selection_view(self.connectors_loading_popup_params());
+        }
     }
 
-    fn connectors_popup_params(&self, connectors: &[connectors::AppInfo]) -> SelectionViewParams {
+    fn open_connectors_popup(&mut self, connectors: &[connectors::AppInfo]) {
+        self.bottom_pane
+            .show_selection_view(self.connectors_popup_params(connectors, None));
+    }
+
+    fn connectors_loading_popup_params(&self) -> SelectionViewParams {
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from("Apps".bold()));
+        header.push(Line::from("Loading installed and available apps...".dim()));
+
+        SelectionViewParams {
+            view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
+            header: Box::new(header),
+            items: vec![SelectionItem {
+                name: "Loading apps...".to_string(),
+                description: Some("This updates when the full list is ready.".to_string()),
+                is_disabled: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn connectors_popup_params(
+        &self,
+        connectors: &[connectors::AppInfo],
+        selected_connector_id: Option<&str>,
+    ) -> SelectionViewParams {
         let total = connectors.len();
         let installed = connectors
             .iter()
@@ -7863,6 +7944,11 @@ impl ChatWidget {
         header.push(Line::from(
             format!("Installed {installed} of {total} available apps.").dim(),
         ));
+        let initial_selected_idx = selected_connector_id.and_then(|selected_connector_id| {
+            connectors
+                .iter()
+                .position(|connector| connector.id == selected_connector_id)
+        });
         let mut items: Vec<SelectionItem> = Vec::with_capacity(connectors.len());
         for connector in connectors {
             let connector_label = connectors::connector_display_label(connector);
@@ -7931,14 +8017,28 @@ impl ChatWidget {
             is_searchable: true,
             search_placeholder: Some("Type to search apps".to_string()),
             col_width_mode: ColumnWidthMode::AutoAllRows,
+            initial_selected_idx,
             ..Default::default()
         }
     }
 
     fn refresh_connectors_popup_if_open(&mut self, connectors: &[connectors::AppInfo]) {
+        let selected_connector_id =
+            if let (Some(selected_index), ConnectorsCacheState::Ready(snapshot)) = (
+                self.bottom_pane
+                    .selected_index_for_active_view(CONNECTORS_SELECTION_VIEW_ID),
+                &self.connectors_cache,
+            ) {
+                snapshot
+                    .connectors
+                    .get(selected_index)
+                    .map(|connector| connector.id.as_str())
+            } else {
+                None
+            };
         let _ = self.bottom_pane.replace_selection_view_if_active(
             CONNECTORS_SELECTION_VIEW_ID,
-            self.connectors_popup_params(connectors),
+            self.connectors_popup_params(connectors, selected_connector_id),
         );
     }
 
@@ -8263,15 +8363,28 @@ impl ChatWidget {
                         }
                     }
                 }
-                self.refresh_connectors_popup_if_open(&snapshot.connectors);
-                if is_final || !matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
+                if is_final {
+                    self.connectors_partial_snapshot = None;
+                    self.refresh_connectors_popup_if_open(&snapshot.connectors);
                     self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
+                } else {
+                    self.connectors_partial_snapshot = Some(snapshot.clone());
                 }
                 self.bottom_pane.set_connectors_snapshot(Some(snapshot));
             }
             Err(err) => {
-                if matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
+                let partial_snapshot = self.connectors_partial_snapshot.take();
+                if let ConnectorsCacheState::Ready(snapshot) = &self.connectors_cache {
                     warn!("failed to refresh apps list; retaining current apps snapshot: {err}");
+                    self.bottom_pane
+                        .set_connectors_snapshot(Some(snapshot.clone()));
+                } else if let Some(snapshot) = partial_snapshot {
+                    warn!(
+                        "failed to load full apps list; falling back to installed apps snapshot: {err}"
+                    );
+                    self.refresh_connectors_popup_if_open(&snapshot.connectors);
+                    self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
+                    self.bottom_pane.set_connectors_snapshot(Some(snapshot));
                 } else {
                     self.connectors_cache = ConnectorsCacheState::Failed(err);
                     self.bottom_pane.set_connectors_snapshot(None);
@@ -8783,6 +8896,13 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
+    match event_name {
+        codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
+        codex_protocol::protocol::HookEventName::Stop => "Stop",
+    }
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {

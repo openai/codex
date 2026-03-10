@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::NewThread;
 use codex_core::config::Config;
@@ -163,9 +164,11 @@ fn configure_apps_with_optional_rmcp(
 }
 
 fn configured_builder(apps_base_url: String, rmcp_server_bin: Option<String>) -> TestCodexBuilder {
-    test_codex().with_config(move |config| {
-        configure_apps_with_optional_rmcp(config, apps_base_url.as_str(), rmcp_server_bin);
-    })
+    test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            configure_apps_with_optional_rmcp(config, apps_base_url.as_str(), rmcp_server_bin);
+        })
 }
 
 async fn submit_user_input(thread: &Arc<CodexThread>, text: &str) -> Result<()> {
@@ -213,6 +216,46 @@ async fn search_tool_flag_adds_tool() -> Result<()> {
     assert!(
         tools.iter().any(|name| name == SEARCH_TOOL_BM25_TOOL_NAME),
         "tools list should include {SEARCH_TOOL_BM25_TOOL_NAME} when enabled: {tools:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn search_tool_flag_adds_tool_for_api_key_auth() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(move |config| {
+            configure_apps_with_optional_rmcp(config, apps_server.chatgpt_base_url.as_str(), None);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policies(
+        "list tools",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let body = mock.single_request().body_json();
+    let tools = tool_names(&body);
+    assert!(
+        tools.iter().any(|name| name == SEARCH_TOOL_BM25_TOOL_NAME),
+        "tools list should include {SEARCH_TOOL_BM25_TOOL_NAME} for API key auth when Apps is enabled: {tools:?}"
     );
 
     Ok(())

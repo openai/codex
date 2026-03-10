@@ -179,12 +179,11 @@ impl TestCodexBuilder {
         resume_from: Option<PathBuf>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let thread_manager = if let Some(model_catalog) = config.model_catalog.clone() {
+        let thread_manager = if config.model_catalog.is_some() {
             ThreadManager::new(
-                config.codex_home.clone(),
+                &config,
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
                 SessionSource::Exec,
-                Some(model_catalog),
                 CollaborationModesConfig::default(),
             )
         } else {

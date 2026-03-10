@@ -12,6 +12,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use futures::SinkExt;
 use futures::StreamExt;
+use reqwest::StatusCode;
 use serde_json::json;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -79,6 +80,34 @@ async fn websocket_transport_routes_per_connection_handshake_and_responses() -> 
     Ok(())
 }
 
+#[tokio::test]
+async fn websocket_transport_serves_health_endpoints_on_same_listener() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let bind_addr = reserve_local_addr()?;
+    let mut process = spawn_websocket_server(codex_home.path(), bind_addr).await?;
+    let client = reqwest::Client::new();
+
+    let readyz = http_get(&client, bind_addr, "/readyz").await?;
+    assert_eq!(readyz.status(), StatusCode::OK);
+
+    let healthz = http_get(&client, bind_addr, "/healthz").await?;
+    assert_eq!(healthz.status(), StatusCode::OK);
+
+    let mut ws = connect_websocket(bind_addr).await?;
+    send_initialize_request(&mut ws, 1, "ws_health_client").await?;
+    let init = read_response_for_id(&mut ws, 1).await?;
+    assert_eq!(init.id, RequestId::Integer(1));
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
 pub(super) async fn spawn_websocket_server(
     codex_home: &Path,
     bind_addr: SocketAddr,
@@ -126,6 +155,30 @@ pub(super) async fn connect_websocket(bind_addr: SocketAddr) -> Result<WsClient>
             Err(err) => {
                 if Instant::now() >= deadline {
                     bail!("failed to connect websocket to {url}: {err}");
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+}
+
+async fn http_get(
+    client: &reqwest::Client,
+    bind_addr: SocketAddr,
+    path: &str,
+) -> Result<reqwest::Response> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match client
+            .get(format!("http://{bind_addr}{path}"))
+            .send()
+            .await
+            .with_context(|| format!("failed to GET http://{bind_addr}{path}"))
+        {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    bail!("failed to GET http://{bind_addr}{path}: {err}");
                 }
                 sleep(Duration::from_millis(50)).await;
             }

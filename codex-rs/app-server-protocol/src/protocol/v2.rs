@@ -49,6 +49,14 @@ use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
+use codex_protocol::protocol::HookEventName as CoreHookEventName;
+use codex_protocol::protocol::HookExecutionMode as CoreHookExecutionMode;
+use codex_protocol::protocol::HookHandlerType as CoreHookHandlerType;
+use codex_protocol::protocol::HookOutputEntry as CoreHookOutputEntry;
+use codex_protocol::protocol::HookOutputEntryKind as CoreHookOutputEntryKind;
+use codex_protocol::protocol::HookRunStatus as CoreHookRunStatus;
+use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
+use codex_protocol::protocol::HookScope as CoreHookScope;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
@@ -193,6 +201,8 @@ pub enum AskForApproval {
     Reject {
         sandbox_approval: bool,
         rules: bool,
+        #[serde(default)]
+        request_permissions: bool,
         mcp_elicitations: bool,
     },
     Never,
@@ -207,10 +217,12 @@ impl AskForApproval {
             AskForApproval::Reject {
                 sandbox_approval,
                 rules,
+                request_permissions,
                 mcp_elicitations,
             } => CoreAskForApproval::Reject(CoreRejectConfig {
                 sandbox_approval,
                 rules,
+                request_permissions,
                 mcp_elicitations,
             }),
             AskForApproval::Never => CoreAskForApproval::Never,
@@ -227,6 +239,7 @@ impl From<CoreAskForApproval> for AskForApproval {
             CoreAskForApproval::Reject(reject_config) => AskForApproval::Reject {
                 sandbox_approval: reject_config.sandbox_approval,
                 rules: reject_config.rules,
+                request_permissions: reject_config.request_permissions,
                 mcp_elicitations: reject_config.mcp_elicitations,
             },
             CoreAskForApproval::Never => AskForApproval::Never,
@@ -283,6 +296,98 @@ v2_enum_from_core!(
         HighRiskCyberActivity
     }
 );
+
+v2_enum_from_core!(
+    pub enum HookEventName from CoreHookEventName {
+        SessionStart, Stop
+    }
+);
+
+v2_enum_from_core!(
+    pub enum HookHandlerType from CoreHookHandlerType {
+        Command, Prompt, Agent
+    }
+);
+
+v2_enum_from_core!(
+    pub enum HookExecutionMode from CoreHookExecutionMode {
+        Sync, Async
+    }
+);
+
+v2_enum_from_core!(
+    pub enum HookScope from CoreHookScope {
+        Thread, Turn
+    }
+);
+
+v2_enum_from_core!(
+    pub enum HookRunStatus from CoreHookRunStatus {
+        Running, Completed, Failed, Blocked, Stopped
+    }
+);
+
+v2_enum_from_core!(
+    pub enum HookOutputEntryKind from CoreHookOutputEntryKind {
+        Warning, Stop, Feedback, Context, Error
+    }
+);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookOutputEntry {
+    pub kind: HookOutputEntryKind,
+    pub text: String,
+}
+
+impl From<CoreHookOutputEntry> for HookOutputEntry {
+    fn from(value: CoreHookOutputEntry) -> Self {
+        Self {
+            kind: value.kind.into(),
+            text: value.text,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookRunSummary {
+    pub id: String,
+    pub event_name: HookEventName,
+    pub handler_type: HookHandlerType,
+    pub execution_mode: HookExecutionMode,
+    pub scope: HookScope,
+    pub source_path: PathBuf,
+    pub display_order: i64,
+    pub status: HookRunStatus,
+    pub status_message: Option<String>,
+    pub started_at: i64,
+    pub completed_at: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub entries: Vec<HookOutputEntry>,
+}
+
+impl From<CoreHookRunSummary> for HookRunSummary {
+    fn from(value: CoreHookRunSummary) -> Self {
+        Self {
+            id: value.id,
+            event_name: value.event_name.into(),
+            handler_type: value.handler_type.into(),
+            execution_mode: value.execution_mode.into(),
+            scope: value.scope.into(),
+            source_path: value.source_path,
+            display_order: value.display_order,
+            status: value.status.into(),
+            status_message: value.status_message,
+            started_at: value.started_at,
+            completed_at: value.completed_at,
+            duration_ms: value.duration_ms,
+            entries: value.entries.into_iter().map(Into::into).collect(),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -2371,6 +2476,46 @@ pub enum ThreadUnsubscribeStatus {
     Unsubscribed,
 }
 
+/// Parameters for `thread/increment_elicitation`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadIncrementElicitationParams {
+    /// Thread whose out-of-band elicitation counter should be incremented.
+    pub thread_id: String,
+}
+
+/// Response for `thread/increment_elicitation`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadIncrementElicitationResponse {
+    /// Current out-of-band elicitation count after the increment.
+    pub count: u64,
+    /// Whether timeout accounting is paused after applying the increment.
+    pub paused: bool,
+}
+
+/// Parameters for `thread/decrement_elicitation`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadDecrementElicitationParams {
+    /// Thread whose out-of-band elicitation counter should be decremented.
+    pub thread_id: String,
+}
+
+/// Response for `thread/decrement_elicitation`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadDecrementElicitationResponse {
+    /// Current out-of-band elicitation count after the decrement.
+    pub count: u64,
+    /// Whether timeout accounting remains paused after applying the decrement.
+    pub paused: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4107,6 +4252,15 @@ pub struct TurnStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct HookStartedNotification {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub run: HookRunSummary,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Usage {
     pub input_tokens: i32,
     pub cached_input_tokens: i32,
@@ -4119,6 +4273,15 @@ pub struct Usage {
 pub struct TurnCompletedNotification {
     pub thread_id: String,
     pub turn: Turn,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub run: HookRunSummary,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -5830,6 +5993,52 @@ mod tests {
 
         let back_to_v2 = SandboxPolicy::from(core_policy);
         assert_eq!(back_to_v2, v2_policy);
+    }
+
+    #[test]
+    fn ask_for_approval_reject_round_trips_request_permissions_flag() {
+        let v2_policy = AskForApproval::Reject {
+            sandbox_approval: true,
+            rules: false,
+            request_permissions: true,
+            mcp_elicitations: false,
+        };
+
+        let core_policy = v2_policy.to_core();
+        assert_eq!(
+            core_policy,
+            CoreAskForApproval::Reject(CoreRejectConfig {
+                sandbox_approval: true,
+                rules: false,
+                request_permissions: true,
+                mcp_elicitations: false,
+            })
+        );
+
+        let back_to_v2 = AskForApproval::from(core_policy);
+        assert_eq!(back_to_v2, v2_policy);
+    }
+
+    #[test]
+    fn ask_for_approval_reject_defaults_missing_request_permissions_to_false() {
+        let decoded = serde_json::from_value::<AskForApproval>(serde_json::json!({
+            "reject": {
+                "sandbox_approval": true,
+                "rules": false,
+                "mcp_elicitations": true,
+            }
+        }))
+        .expect("legacy reject approval policy should deserialize");
+
+        assert_eq!(
+            decoded,
+            AskForApproval::Reject {
+                sandbox_approval: true,
+                rules: false,
+                request_permissions: false,
+                mcp_elicitations: true,
+            }
+        );
     }
 
     #[test]

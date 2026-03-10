@@ -15,6 +15,7 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -58,6 +59,14 @@ fn exec_command_event(call_id: &str, command: &str) -> Result<Value> {
     });
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "exec_command", &args_str))
+}
+
+fn build_add_file_patch(patch_path: &Path, content: &str) -> String {
+    format!(
+        "*** Begin Patch\n*** Add File: {}\n+{}\n*** End Patch\n",
+        patch_path.display(),
+        content
+    )
 }
 
 fn workspace_write_excluding_tmp() -> SandboxPolicy {
@@ -288,6 +297,124 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
         "touch command should create the file"
     );
     assert_eq!(fs::read_to_string(&requested_file)?, "folder-grant-ok");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(target_os = "macos")]
+async fn approved_folder_write_request_permissions_unblocks_later_apply_patch_without_prompt()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = workspace_write_excluding_tmp();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let requested_dir = tempfile::tempdir()?;
+    let requested_file = requested_dir.path().join("allowed-patch.txt");
+    let requested_permissions = requested_directory_write_permissions(requested_dir.path());
+    let normalized_requested_permissions =
+        normalized_directory_write_permissions(requested_dir.path())?;
+    let patch = build_add_file_patch(&requested_file, "patched-via-request-permissions");
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-request-permissions-patch-1"),
+                request_permissions_tool_event(
+                    "permissions-call",
+                    "Allow patching outside the workspace",
+                    &requested_permissions,
+                )?,
+                ev_completed("resp-request-permissions-patch-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-request-permissions-patch-2"),
+                ev_apply_patch_function_call("apply-patch-call", &patch),
+                ev_completed("resp-request-permissions-patch-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-request-permissions-patch-3"),
+                ev_assistant_message("msg-request-permissions-patch-1", "done"),
+                ev_completed("resp-request-permissions-patch-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "patch outside the workspace",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
+    assert_eq!(
+        granted_permissions,
+        normalized_requested_permissions.clone()
+    );
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: RequestPermissionsResponse {
+                permissions: normalized_requested_permissions,
+                scope: PermissionGrantScope::Turn,
+            },
+        })
+        .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    match event {
+        EventMsg::TurnComplete(_) => {}
+        EventMsg::ApplyPatchApprovalRequest(approval) => {
+            panic!(
+                "unexpected apply_patch approval request after granted permissions: {:?}",
+                approval.call_id
+            )
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let patch_output = responses
+        .function_call_output_text("apply-patch-call")
+        .map(|output| json!({ "output": output }))
+        .unwrap_or_else(|| panic!("expected apply-patch-call output"));
+    let (exit_code, stdout) = parse_result(&patch_output);
+    assert!(exit_code.is_none() || exit_code == Some(0));
+    assert!(
+        stdout.contains("Success."),
+        "unexpected patch output: {stdout}"
+    );
+    assert_eq!(
+        fs::read_to_string(&requested_file)?,
+        "patched-via-request-permissions\n"
+    );
 
     Ok(())
 }

@@ -26,6 +26,11 @@ Supported transports:
 - stdio (`--listen stdio://`, default): newline-delimited JSON (JSONL)
 - websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
 
+When running with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
+
+- `GET /readyz` returns `200 OK` once the listener is accepting new connections.
+- `GET /healthz` currently always returns `200 OK`.
+
 Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
 Tracing/log output:
@@ -922,6 +927,8 @@ The client responds with `result.permissions`, which should be the granted subse
 Only the granted subset matters on the wire. Any permissions omitted from `result.permissions` are treated as denied, including omitted nested keys inside `result.permissions.macos`, so a sparse response like `{ "permissions": { "macos": { "accessibility": true } } }` grants only accessibility. Any permissions not present in the original request are ignored by the server.
 
 Within the same turn, granted permissions are sticky: later shell-like tool calls can automatically reuse the granted subset without reissuing a separate permission request.
+
+If the session approval policy uses `Reject` with `request_permissions: true`, the server does not send `item/permissions/requestApproval` to the client. Instead, the tool is auto-denied and resolves with an empty granted-permissions payload.
 
 ### Dynamic tool calls (experimental)
 

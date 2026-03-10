@@ -394,15 +394,17 @@ pub(crate) async fn handle_audio(
 }
 
 fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Option<String> {
-    let messages = handoff
-        .messages
+    let active_transcript = handoff
+        .active_transcript
         .iter()
-        .map(|message| format!("{}: {}", message.role, message.text))
+        .map(|entry| format!("{}: {}", entry.role, entry.text))
         .collect::<Vec<_>>()
         .join("\n");
-    (!messages.is_empty()).then_some(messages).or_else(|| {
-        (!handoff.input_transcript.is_empty()).then(|| handoff.input_transcript.clone())
-    })
+    (!active_transcript.is_empty())
+        .then_some(active_transcript)
+        .or_else(|| {
+            (!handoff.input_transcript.is_empty()).then(|| handoff.input_transcript.clone())
+        })
 }
 
 fn realtime_api_key(
@@ -603,22 +605,22 @@ mod tests {
     use super::RealtimeHandoffState;
     use super::realtime_text_from_handoff_request;
     use async_channel::bounded;
-    use codex_protocol::protocol::RealtimeHandoffMessage;
     use codex_protocol::protocol::RealtimeHandoffRequested;
+    use codex_protocol::protocol::RealtimeTranscriptEntry;
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn extracts_text_from_handoff_request_messages() {
+    fn extracts_text_from_handoff_request_active_transcript() {
         let handoff = RealtimeHandoffRequested {
             handoff_id: "handoff_1".to_string(),
             item_id: "item_1".to_string(),
             input_transcript: "ignored".to_string(),
-            messages: vec![
-                RealtimeHandoffMessage {
+            active_transcript: vec![
+                RealtimeTranscriptEntry {
                     role: "user".to_string(),
                     text: "hello".to_string(),
                 },
-                RealtimeHandoffMessage {
+                RealtimeTranscriptEntry {
                     role: "assistant".to_string(),
                     text: "hi there".to_string(),
                 },
@@ -636,7 +638,7 @@ mod tests {
             handoff_id: "handoff_1".to_string(),
             item_id: "item_1".to_string(),
             input_transcript: "ignored".to_string(),
-            messages: vec![],
+            active_transcript: vec![],
         };
         assert_eq!(
             realtime_text_from_handoff_request(&handoff),
@@ -650,7 +652,7 @@ mod tests {
             handoff_id: "handoff_1".to_string(),
             item_id: "item_1".to_string(),
             input_transcript: String::new(),
-            messages: vec![],
+            active_transcript: vec![],
         };
         assert_eq!(realtime_text_from_handoff_request(&handoff), None);
     }
