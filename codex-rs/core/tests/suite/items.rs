@@ -270,8 +270,8 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
-    let call_id = "ig_image_saved_to_tmp_default";
-    let expected_saved_path = std::path::Path::new("/tmp").join(format!("{call_id}.png"));
+    let call_id = "ig_image_saved_to_temp_dir_default";
+    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
     let _ = std::fs::remove_file(&expected_saved_path);
 
     let first_response = sse(vec![
@@ -324,7 +324,7 @@ async fn image_generation_call_event_is_emitted_when_image_save_fails() -> anyho
     let server = start_mock_server().await;
 
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
-    let expected_saved_path = std::path::Path::new("/tmp").join("ig_invalid.png");
+    let expected_saved_path = std::env::temp_dir().join("ig_invalid.png");
     let _ = std::fs::remove_file(&expected_saved_path);
 
     let first_response = sse(vec![

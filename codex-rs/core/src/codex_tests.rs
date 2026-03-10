@@ -3122,10 +3122,16 @@ async fn build_initial_context_describes_default_image_save_location() {
 
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
+    let image_output_dir = crate::stream_events_utils::default_image_generation_output_dir();
+    let expected_text = format!(
+        "Generated images are saved to {} as {} by default.",
+        image_output_dir.display(),
+        image_output_dir.join("<image_id>.png").display(),
+    );
     assert!(
-        developer_texts.iter().any(|text| {
-            text.contains("Generated images are saved to /tmp as /tmp/<image_id>.png by default.")
-        }),
+        developer_texts
+            .iter()
+            .any(|text| text.contains(expected_text.as_str())),
         "expected initial context to describe the default image save location, got {developer_texts:?}"
     );
 }
