@@ -796,11 +796,13 @@ struct CachedAuth {
     auth: Option<CodexAuth>,
     /// Callback used to refresh external auth by asking the parent app for new tokens.
     external_refresher: Option<Arc<dyn ExternalAuthRefresher>>,
-    poisoned_managed_auth: Option<PoisonedManagedAuth>,
+    /// Permanent refresh failure cached for the current managed auth snapshot so
+    /// later refresh attempts for the same credentials fail fast without network.
+    permanent_refresh_failure: Option<PermanentRefreshFailure>,
 }
 
 #[derive(Clone, Debug)]
-struct PoisonedManagedAuth {
+struct PermanentRefreshFailure {
     auth_dot_json: AuthDotJson,
     error: RefreshTokenFailedError,
 }
@@ -817,11 +819,11 @@ impl Debug for CachedAuth {
                 &self.external_refresher.as_ref().map(|_| "present"),
             )
             .field(
-                "poisoned_managed_auth",
+                "permanent_refresh_failure",
                 &self
-                    .poisoned_managed_auth
+                    .permanent_refresh_failure
                     .as_ref()
-                    .map(|poisoned| poisoned.error.reason),
+                    .map(|failure| failure.error.reason),
             )
             .finish()
     }
@@ -1060,7 +1062,7 @@ impl AuthManager {
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,
                 external_refresher: None,
-                poisoned_managed_auth: None,
+                permanent_refresh_failure: None,
             }),
             enable_codex_api_key_env,
             auth_credentials_store_mode,
@@ -1073,7 +1075,7 @@ impl AuthManager {
         let cached = CachedAuth {
             auth: Some(auth),
             external_refresher: None,
-            poisoned_managed_auth: None,
+            permanent_refresh_failure: None,
         };
 
         Arc::new(Self {
@@ -1090,7 +1092,7 @@ impl AuthManager {
         let cached = CachedAuth {
             auth: Some(auth),
             external_refresher: None,
-            poisoned_managed_auth: None,
+            permanent_refresh_failure: None,
         };
         Arc::new(Self {
             codex_home,
@@ -1108,7 +1110,7 @@ impl AuthManager {
 
     pub fn refresh_failure(&self) -> Option<RefreshTokenFailedError> {
         let auth = self.auth_cached()?;
-        self.refresh_failure_for_auth(&auth)
+        self.permanent_refresh_failure_for_auth(&auth)
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
@@ -1188,17 +1190,20 @@ impl AuthManager {
         }
     }
 
-    fn refresh_failure_for_auth(&self, auth: &CodexAuth) -> Option<RefreshTokenFailedError> {
+    fn permanent_refresh_failure_for_auth(
+        &self,
+        auth: &CodexAuth,
+    ) -> Option<RefreshTokenFailedError> {
         let auth_dot_json = auth.get_current_auth_json()?;
         self.inner
             .read()
             .ok()
-            .and_then(|cached| cached.poisoned_managed_auth.clone())
-            .filter(|poisoned| poisoned.auth_dot_json == auth_dot_json)
-            .map(|poisoned| poisoned.error)
+            .and_then(|cached| cached.permanent_refresh_failure.clone())
+            .filter(|failure| failure.auth_dot_json == auth_dot_json)
+            .map(|failure| failure.error)
     }
 
-    fn poison_managed_auth_if_unchanged(
+    fn record_permanent_refresh_failure_if_unchanged(
         &self,
         attempted_auth: &CodexAuth,
         error: &RefreshTokenFailedError,
@@ -1214,7 +1219,7 @@ impl AuthManager {
                 .and_then(CodexAuth::get_current_auth_json)
                 .is_some_and(|current| current == attempted_auth_dot_json);
             if current_auth_matches {
-                guard.poisoned_managed_auth = Some(PoisonedManagedAuth {
+                guard.permanent_refresh_failure = Some(PermanentRefreshFailure {
                     auth_dot_json: attempted_auth_dot_json,
                     error: error.clone(),
                 });
@@ -1236,18 +1241,18 @@ impl AuthManager {
         if let Ok(mut guard) = self.inner.write() {
             let previous = guard.auth.as_ref();
             let changed = !AuthManager::auths_equal(previous, new_auth.as_ref());
-            let poisoned_auth_still_matches = guard
-                .poisoned_managed_auth
+            let permanent_refresh_failure_still_matches = guard
+                .permanent_refresh_failure
                 .as_ref()
-                .and_then(|poisoned| {
+                .and_then(|failure| {
                     new_auth
                         .as_ref()
                         .and_then(CodexAuth::get_current_auth_json)
-                        .map(|current| current == poisoned.auth_dot_json)
+                        .map(|current| current == failure.auth_dot_json)
                 })
                 .unwrap_or(false);
-            if !poisoned_auth_still_matches {
-                guard.poisoned_managed_auth = None;
+            if !permanent_refresh_failure_still_matches {
+                guard.permanent_refresh_failure = None;
             }
             tracing::info!("Reloaded auth, changed: {changed}");
             guard.auth = new_auth;
@@ -1325,7 +1330,7 @@ impl AuthManager {
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
         let auth_before_reload = self.auth_cached();
         if let Some(auth_before_reload) = auth_before_reload.as_ref()
-            && let Some(error) = self.refresh_failure_for_auth(auth_before_reload)
+            && let Some(error) = self.permanent_refresh_failure_for_auth(auth_before_reload)
         {
             return Err(RefreshTokenError::Permanent(error));
         }
@@ -1359,7 +1364,7 @@ impl AuthManager {
             Some(auth) => auth,
             None => return Ok(()),
         };
-        if let Some(error) = self.refresh_failure_for_auth(&auth) {
+        if let Some(error) = self.permanent_refresh_failure_for_auth(&auth) {
             return Err(RefreshTokenError::Permanent(error));
         }
 
@@ -1381,7 +1386,7 @@ impl AuthManager {
             CodexAuth::ApiKey(_) => Ok(()),
         };
         if let Err(RefreshTokenError::Permanent(error)) = &result {
-            self.poison_managed_auth_if_unchanged(&attempted_auth, error);
+            self.record_permanent_refresh_failure_if_unchanged(&attempted_auth, error);
         }
         result
     }
