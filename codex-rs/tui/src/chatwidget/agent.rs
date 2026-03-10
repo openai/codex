@@ -7,7 +7,8 @@
 //!
 //! 1. Receives `Op` values from the `ChatWidget` and translates them into
 //!    app-server client requests (`turn/start`, `turn/interrupt`, approvals,
-//!    etc.).
+//!    etc.), while forwarding a small set of legacy thread ops directly to the
+//!    backing `CodexThread` until app-server grows first-class equivalents.
 //! 2. Receives server events (`ServerRequest`, `ServerNotification`, legacy
 //!    `JSONRPCNotification`) from the app-server and converts them into
 //!    `EventMsg` values that the TUI already knows how to render.
@@ -907,6 +908,40 @@ async fn reject_server_request(
     }
 }
 
+async fn forward_op_to_thread(
+    thread_manager: &ThreadManager,
+    thread_id: &str,
+    op: Op,
+    app_event_tx: &AppEventSender,
+) {
+    let op_type = serde_json::to_value(&op)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    let thread_id = match ThreadId::from_string(thread_id) {
+        Ok(thread_id) => thread_id,
+        Err(err) => {
+            send_error_event(
+                app_event_tx,
+                format!("failed to parse in-process thread id `{thread_id}`: {err}"),
+            );
+            return;
+        }
+    };
+
+    if let Err(err) = thread_manager.send_op(thread_id, op).await {
+        send_error_event(
+            app_event_tx,
+            format!("failed to forward `{op_type}` to in-process thread: {err}"),
+        );
+    }
+}
+
 fn local_only_deferred_message(action_name: &str) -> String {
     format!("{action_name} is temporarily unavailable in in-process local-only mode")
 }
@@ -1589,6 +1624,7 @@ async fn process_in_process_command(
     request_ids: &mut RequestIdSequencer,
     pending_server_requests: &mut PendingServerRequests,
     client: &InProcessAppServerClient,
+    thread_manager: &ThreadManager,
     app_event_tx: &AppEventSender,
 ) -> bool {
     match op {
@@ -2253,31 +2289,65 @@ async fn process_in_process_command(
             );
         }
         Op::ReloadUserConfig => {
-            tracing::debug!("reload_user_config handled locally in TUI in-process mode");
+            forward_op_to_thread(
+                thread_manager,
+                thread_id,
+                Op::ReloadUserConfig,
+                app_event_tx,
+            )
+            .await;
         }
         Op::Undo => {
             send_warning_event(app_event_tx, local_only_deferred_message("Undo"));
         }
-        Op::OverrideTurnContext { .. } => {
-            send_warning_event(
+        Op::OverrideTurnContext {
+            cwd,
+            approval_policy,
+            sandbox_policy,
+            windows_sandbox_level,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+        } => {
+            forward_op_to_thread(
+                thread_manager,
+                thread_id,
+                Op::OverrideTurnContext {
+                    cwd,
+                    approval_policy,
+                    sandbox_policy,
+                    windows_sandbox_level,
+                    model,
+                    effort,
+                    summary,
+                    service_tier,
+                    collaboration_mode,
+                    personality,
+                },
                 app_event_tx,
-                local_only_deferred_message("OverrideTurnContext"),
-            );
+            )
+            .await;
         }
         Op::DropMemories => {
-            send_warning_event(app_event_tx, local_only_deferred_message("DropMemories"));
+            forward_op_to_thread(thread_manager, thread_id, Op::DropMemories, app_event_tx).await;
         }
         Op::UpdateMemories => {
-            send_warning_event(app_event_tx, local_only_deferred_message("UpdateMemories"));
+            forward_op_to_thread(thread_manager, thread_id, Op::UpdateMemories, app_event_tx).await;
         }
-        Op::RunUserShellCommand { .. } => {
-            send_warning_event(
+        Op::RunUserShellCommand { command } => {
+            forward_op_to_thread(
+                thread_manager,
+                thread_id,
+                Op::RunUserShellCommand { command },
                 app_event_tx,
-                local_only_deferred_message("RunUserShellCommand"),
-            );
+            )
+            .await;
         }
         Op::ListMcpTools => {
-            send_warning_event(app_event_tx, local_only_deferred_message("ListMcpTools"));
+            forward_op_to_thread(thread_manager, thread_id, Op::ListMcpTools, app_event_tx).await;
         }
         Op::ResolveElicitation {
             server_name,
@@ -2375,13 +2445,15 @@ async fn process_in_process_command(
 ///
 /// This loop is responsible for keeping the TUI's existing `Op`-driven model
 /// working on top of app-server. It forwards supported ops as typed
-/// `ClientRequest`/`ClientNotification` messages, translates server requests
-/// back into UI events, and preserves thread-local bookkeeping such as current
-/// turn id and pending approval state.
+/// `ClientRequest`/`ClientNotification` messages, routes a small legacy subset
+/// straight to the backing thread manager, translates server requests back
+/// into UI events, and preserves thread-local bookkeeping such as current turn
+/// id and pending approval state.
 async fn run_in_process_agent_loop(
     mut codex_op_rx: tokio::sync::mpsc::UnboundedReceiver<Op>,
     mut thread_scoped_op_rx: tokio::sync::mpsc::UnboundedReceiver<ThreadScopedOp>,
     mut client: InProcessAppServerClient,
+    thread_manager: Arc<ThreadManager>,
     config: Config,
     thread_id: String,
     mut session_configured: SessionConfiguredEvent,
@@ -2406,6 +2478,7 @@ async fn run_in_process_agent_loop(
                             &mut request_ids,
                             &mut pending_server_requests,
                             &client,
+                            thread_manager.as_ref(),
                             &app_event_tx,
                         ).await;
                         if should_shutdown {
@@ -2429,6 +2502,7 @@ async fn run_in_process_agent_loop(
                             &mut request_ids,
                             &mut pending_server_requests,
                             &client,
+                            thread_manager.as_ref(),
                             &app_event_tx,
                         ).await;
                         if should_shutdown {
@@ -2899,6 +2973,7 @@ pub(crate) fn spawn_agent(
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
         let mut request_ids = RequestIdSequencer::new();
+        let thread_manager = Arc::clone(&server);
         let client = match InProcessAppServerClient::start(in_process_start_args(
             &config,
             server,
@@ -2958,6 +3033,7 @@ pub(crate) fn spawn_agent(
             codex_op_rx,
             thread_scoped_op_rx,
             client,
+            thread_manager,
             config,
             thread_id,
             session_configured,
@@ -3027,9 +3103,10 @@ mod tests {
     async fn assert_realtime_op_reports_expected_method(op: Op, expected_method: &str) {
         let config = test_config().await;
         let session_id = ThreadId::new();
+        let thread_manager = test_thread_manager(&config);
         let client = InProcessAppServerClient::start(in_process_start_args(
             &config,
-            test_thread_manager(&config),
+            Arc::clone(&thread_manager),
             codex_arg0::Arg0DispatchPaths::default(),
             Vec::new(),
             CloudRequirementsLoader::default(),
@@ -3051,6 +3128,7 @@ mod tests {
             &mut request_ids,
             &mut pending_server_requests,
             &client,
+            thread_manager.as_ref(),
             &app_event_tx,
         )
         .await;
@@ -3083,12 +3161,13 @@ mod tests {
         bool,
         tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
         InProcessAppServerClient,
+        Arc<ThreadManager>,
+        ThreadId,
     ) {
-        let session_id = ThreadId::new();
-        let thread_id = session_id.to_string();
+        let thread_manager = test_thread_manager(config);
         let client = InProcessAppServerClient::start(in_process_start_args(
             config,
-            test_thread_manager(config),
+            Arc::clone(&thread_manager),
             codex_arg0::Arg0DispatchPaths::default(),
             Vec::new(),
             CloudRequirementsLoader::default(),
@@ -3100,6 +3179,18 @@ mod tests {
         let mut current_turn_id = None;
         let mut request_ids = RequestIdSequencer::new();
         let mut pending_server_requests = PendingServerRequests::default();
+        let thread_start = send_request_with_response::<ThreadStartResponse>(
+            &client,
+            ClientRequest::ThreadStart {
+                request_id: request_ids.next(),
+                params: ThreadStartParams::default(),
+            },
+            "thread/start",
+        )
+        .await
+        .expect("thread/start");
+        let thread_id = thread_start.thread.id;
+        let session_id = ThreadId::from_string(&thread_id).expect("valid thread id");
         let should_shutdown = process_in_process_command(
             op,
             &thread_id,
@@ -3109,10 +3200,11 @@ mod tests {
             &mut request_ids,
             &mut pending_server_requests,
             &client,
+            thread_manager.as_ref(),
             &app_event_tx,
         )
         .await;
-        (should_shutdown, rx, client)
+        (should_shutdown, rx, client, thread_manager, session_id)
     }
 
     #[tokio::test]
@@ -4061,7 +4153,7 @@ mod tests {
     #[tokio::test]
     async fn list_custom_prompts_emits_response_event_locally() {
         let config = test_config().await;
-        let (should_shutdown, mut rx, client) =
+        let (should_shutdown, mut rx, client, _thread_manager, _session_id) =
             process_single_op(&config, Op::ListCustomPrompts).await;
         assert_eq!(should_shutdown, false);
 
@@ -4083,9 +4175,10 @@ mod tests {
             .expect("config");
         let session_id = ThreadId::new();
         let thread_id = session_id.to_string();
+        let thread_manager = test_thread_manager(&config);
         let client = InProcessAppServerClient::start(in_process_start_args(
             &config,
-            test_thread_manager(&config),
+            Arc::clone(&thread_manager),
             codex_arg0::Arg0DispatchPaths::default(),
             Vec::new(),
             CloudRequirementsLoader::default(),
@@ -4109,6 +4202,7 @@ mod tests {
             &mut request_ids,
             &mut pending_server_requests,
             &client,
+            thread_manager.as_ref(),
             &app_event_tx,
         )
         .await;
@@ -4126,6 +4220,7 @@ mod tests {
             &mut request_ids,
             &mut pending_server_requests,
             &client,
+            thread_manager.as_ref(),
             &app_event_tx,
         )
         .await;
@@ -4144,22 +4239,27 @@ mod tests {
         client.shutdown().await.expect("shutdown in-process client");
     }
 
-    #[tokio::test]
-    async fn reload_user_config_is_a_local_noop() {
-        let config = test_config().await;
-        let (should_shutdown, mut rx, client) =
-            process_single_op(&config, Op::ReloadUserConfig).await;
+    async fn assert_forwarded_op(config: &Config, op: Op) {
+        let (should_shutdown, _rx, client, thread_manager, session_id) =
+            process_single_op(config, op.clone()).await;
         assert_eq!(should_shutdown, false);
-
-        if let Ok(Some(event)) = timeout(Duration::from_millis(200), rx.recv()).await {
-            panic!("did not expect an app event: {event:?}");
-        }
+        assert_eq!(
+            thread_manager.captured_ops_for_testing(),
+            vec![(session_id, op)]
+        );
 
         client.shutdown().await.expect("shutdown in-process client");
     }
 
+    #[tokio::test]
+    async fn reload_user_config_is_forwarded_to_thread() {
+        let config = test_config().await;
+        assert_forwarded_op(&config, Op::ReloadUserConfig).await;
+    }
+
     async fn assert_local_only_warning_for_op(config: &Config, op: Op, expected_message: &str) {
-        let (should_shutdown, mut rx, client) = process_single_op(config, op).await;
+        let (should_shutdown, mut rx, client, _thread_manager, _session_id) =
+            process_single_op(config, op).await;
         assert_eq!(should_shutdown, false);
 
         let event = next_codex_event(&mut rx).await;
@@ -4172,9 +4272,10 @@ mod tests {
     #[tokio::test]
     async fn review_op_sets_current_turn_id_for_follow_up_interrupts() {
         let config = test_config().await;
+        let thread_manager = test_thread_manager(&config);
         let client = InProcessAppServerClient::start(in_process_start_args(
             &config,
-            test_thread_manager(&config),
+            Arc::clone(&thread_manager),
             codex_arg0::Arg0DispatchPaths::default(),
             Vec::new(),
             CloudRequirementsLoader::default(),
@@ -4216,6 +4317,7 @@ mod tests {
             &mut request_ids,
             &mut pending_server_requests,
             &client,
+            thread_manager.as_ref(),
             &app_event_tx,
         )
         .await;
@@ -4238,6 +4340,7 @@ mod tests {
             &mut request_ids,
             &mut pending_server_requests,
             &client,
+            thread_manager.as_ref(),
             &app_event_tx,
         )
         .await;
@@ -4258,57 +4361,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deferred_op_emits_explicit_local_only_warning() {
+    async fn undo_still_emits_explicit_local_only_warning() {
         let config = test_config().await;
-        let deferred_ops = vec![
-            (
-                Op::Undo,
-                "Undo is temporarily unavailable in in-process local-only mode",
-            ),
-            (
-                Op::OverrideTurnContext {
-                    cwd: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
-                    windows_sandbox_level: None,
-                    model: None,
-                    effort: None,
-                    summary: None,
-                    service_tier: None,
-                    collaboration_mode: None,
-                    personality: None,
-                },
-                "OverrideTurnContext is temporarily unavailable in in-process local-only mode",
-            ),
-            (
-                Op::DropMemories,
-                "DropMemories is temporarily unavailable in in-process local-only mode",
-            ),
-            (
-                Op::UpdateMemories,
-                "UpdateMemories is temporarily unavailable in in-process local-only mode",
-            ),
-            (
-                Op::RunUserShellCommand {
-                    command: "echo hello".to_string(),
-                },
-                "RunUserShellCommand is temporarily unavailable in in-process local-only mode",
-            ),
-            (
-                Op::ListMcpTools,
-                "ListMcpTools is temporarily unavailable in in-process local-only mode",
-            ),
+        assert_local_only_warning_for_op(
+            &config,
+            Op::Undo,
+            "Undo is temporarily unavailable in in-process local-only mode",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn override_turn_context_is_forwarded_to_thread() {
+        let config = test_config().await;
+        assert_forwarded_op(
+            &config,
+            Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn legacy_core_ops_are_forwarded_to_thread() {
+        let config = test_config().await;
+        let forwarded_ops = vec![
+            Op::DropMemories,
+            Op::UpdateMemories,
+            Op::RunUserShellCommand {
+                command: "echo hello".to_string(),
+            },
+            Op::ListMcpTools,
         ];
 
-        for (op, expected_warning) in deferred_ops {
-            assert_local_only_warning_for_op(&config, op, expected_warning).await;
+        for op in forwarded_ops {
+            assert_forwarded_op(&config, op).await;
         }
     }
 
     #[tokio::test]
     async fn resolve_elicitation_without_pending_request_warns() {
         let config = test_config().await;
-        let (should_shutdown, mut rx, client) = process_single_op(
+        let (should_shutdown, mut rx, client, _thread_manager, _session_id) = process_single_op(
             &config,
             Op::ResolveElicitation {
                 server_name: "test-server".to_string(),
