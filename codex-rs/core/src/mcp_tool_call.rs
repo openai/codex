@@ -849,7 +849,7 @@ fn build_mcp_tool_approval_question(
     }
     options.push(RequestUserInputQuestionOption {
         label: MCP_TOOL_APPROVAL_CANCEL.to_string(),
-        description: "Cancel this tool call".to_string(),
+        description: "Cancel this tool call.".to_string(),
     });
 
     RequestUserInputQuestion {
