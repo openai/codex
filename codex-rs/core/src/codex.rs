@@ -727,7 +727,8 @@ impl TurnContext {
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {
-        self.features.apps_enabled_cached(self.auth_manager.as_deref())
+        self.features
+            .apps_enabled_cached(self.auth_manager.as_deref())
     }
 
     pub(crate) async fn with_model(&self, model: String, models_manager: &ModelsManager) -> Self {
