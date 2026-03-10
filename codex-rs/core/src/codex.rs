@@ -2861,6 +2861,7 @@ impl Session {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
                     permissions: PermissionProfile::default(),
+                    scope: PermissionGrantScope::Turn,
                 });
             }
             AskForApproval::Reject(reject_config)
@@ -2868,6 +2869,7 @@ impl Session {
             {
                 return Some(RequestPermissionsResponse {
                     permissions: PermissionProfile::default(),
+                    scope: PermissionGrantScope::Turn,
                 });
             }
             AskForApproval::OnFailure
