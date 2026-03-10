@@ -732,6 +732,7 @@
                   "type": "boolean"
                 },
                 "request_permissions": {
+                  "default": false,
                   "type": "boolean"
                 },
                 "rules": {
@@ -743,7 +744,6 @@
               },
               "required": [
                 "mcp_elicitations",
-                "request_permissions",
                 "rules",
                 "sandbox_approval"
               ],
