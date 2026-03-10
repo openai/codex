@@ -3118,11 +3118,18 @@ async fn build_initial_context_uses_previous_realtime_state() {
 
 #[tokio::test]
 async fn build_initial_context_describes_default_image_save_location() {
-    let (session, mut turn_context) = make_session_and_context().await;
-    turn_context
-        .features
-        .enable(Feature::ImageGeneration)
-        .expect("enable image generation feature");
+    let (session, turn_context) = make_session_and_context().await;
+    session
+        .replace_history(
+            vec![ResponseItem::ImageGenerationCall {
+                id: "ig-test".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("a tiny blue square".to_string()),
+                result: "Zm9v".to_string(),
+            }],
+            None,
+        )
+        .await;
 
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
@@ -3141,7 +3148,7 @@ async fn build_initial_context_describes_default_image_save_location() {
 }
 
 #[tokio::test]
-async fn build_initial_context_omits_default_image_save_location_when_disabled() {
+async fn build_initial_context_omits_default_image_save_location_without_image_history() {
     let (session, turn_context) = make_session_and_context().await;
 
     let initial_context = session.build_initial_context(&turn_context).await;
@@ -3151,7 +3158,7 @@ async fn build_initial_context_omits_default_image_save_location_when_disabled()
         !developer_texts
             .iter()
             .any(|text| text.contains("Generated images are saved to")),
-        "expected initial context to omit image save instructions when image generation is disabled, got {developer_texts:?}"
+        "expected initial context to omit image save instructions without image history, got {developer_texts:?}"
     );
 }
 
