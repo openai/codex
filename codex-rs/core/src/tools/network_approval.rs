@@ -479,14 +479,12 @@ impl NetworkApprovalService {
                         )
                         .await;
                     }
-                } else {
-                    if let Some(owner_call) = owner_call.as_ref() {
-                        self.record_call_outcome(
-                            &owner_call.registration_id,
-                            NetworkApprovalOutcome::DeniedByUser,
-                        )
-                        .await;
-                    }
+                } else if let Some(owner_call) = owner_call.as_ref() {
+                    self.record_call_outcome(
+                        &owner_call.registration_id,
+                        NetworkApprovalOutcome::DeniedByUser,
+                    )
+                    .await;
                 }
                 PendingApprovalDecision::Deny
             }
