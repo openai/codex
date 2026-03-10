@@ -3383,13 +3383,13 @@ mod tests {
             ),
         );
         let conversation = thread_manager.start_thread(config).await?.thread;
-        let assessment = codex_protocol::protocol::GuardianAssessmentEvent {
+        let in_progress_assessment = codex_protocol::protocol::GuardianAssessmentEvent {
             id: "guardian-network-1".to_string(),
             turn_id: event_turn_id.clone(),
-            status: codex_protocol::protocol::GuardianAssessmentStatus::Approved,
-            risk_score: Some(18),
-            risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::Low),
-            rationale: Some("Allowed outbound request.".to_string()),
+            status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+            risk_score: None,
+            risk_level: None,
+            rationale: None,
             action: Some(serde_json::json!({
                 "tool": "network_access",
                 "target": "https://example.com",
@@ -3398,6 +3398,15 @@ mod tests {
                 "port": 443,
             })),
         };
+        let approved_assessment = codex_protocol::protocol::GuardianAssessmentEvent {
+            id: "guardian-network-1".to_string(),
+            turn_id: event_turn_id.clone(),
+            status: codex_protocol::protocol::GuardianAssessmentStatus::Approved,
+            risk_score: Some(18),
+            risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::Low),
+            rationale: Some("Allowed outbound request.".to_string()),
+            action: None,
+        };
         {
             let mut state = thread_state.lock().await;
             state.track_current_turn_event(&EventMsg::TurnStarted(TurnStartedEvent {
@@ -3405,13 +3414,18 @@ mod tests {
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }));
-            state.track_current_turn_event(&EventMsg::GuardianAssessment(assessment.clone()));
+            state.track_current_turn_event(&EventMsg::GuardianAssessment(
+                in_progress_assessment.clone(),
+            ));
+            state.track_current_turn_event(&EventMsg::GuardianAssessment(
+                approved_assessment.clone(),
+            ));
         }
 
         apply_bespoke_event_handling(
             Event {
                 id: event_turn_id.clone(),
-                msg: EventMsg::GuardianAssessment(assessment),
+                msg: EventMsg::GuardianAssessment(approved_assessment),
             },
             conversation_id,
             conversation,
