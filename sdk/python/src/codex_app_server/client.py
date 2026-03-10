@@ -91,10 +91,25 @@ def _installed_codex_path() -> Path:
     return bundled_codex_path()
 
 
-def _resolve_codex_bin(config: "AppServerConfig") -> Path:
+@dataclass(frozen=True)
+class CodexBinResolverOps:
+    installed_codex_path: Callable[[], Path]
+    which: Callable[[str], str | None]
+    path_exists: Callable[[Path], bool]
+
+
+def _default_codex_bin_resolver_ops() -> CodexBinResolverOps:
+    return CodexBinResolverOps(
+        installed_codex_path=_installed_codex_path,
+        which=shutil.which,
+        path_exists=lambda path: path.exists(),
+    )
+
+
+def resolve_codex_bin(config: "AppServerConfig", ops: CodexBinResolverOps) -> Path:
     if config.codex_bin is not None:
         codex_bin = Path(config.codex_bin)
-        if not codex_bin.exists():
+        if not ops.path_exists(codex_bin):
             raise FileNotFoundError(
                 f"Codex binary not found at {codex_bin}. Set AppServerConfig.codex_bin "
                 "to a valid binary path."
@@ -102,9 +117,9 @@ def _resolve_codex_bin(config: "AppServerConfig") -> Path:
         return codex_bin
 
     try:
-        return _installed_codex_path()
+        return ops.installed_codex_path()
     except FileNotFoundError:
-        path_codex = shutil.which("codex")
+        path_codex = ops.which("codex")
         if path_codex is not None:
             return Path(path_codex)
 
@@ -113,6 +128,10 @@ def _resolve_codex_bin(config: "AppServerConfig") -> Path:
         f"{RUNTIME_PKG_NAME} dependency, make `codex` available on PATH for local "
         "development, or set AppServerConfig.codex_bin explicitly."
     )
+
+
+def _resolve_codex_bin(config: "AppServerConfig") -> Path:
+    return resolve_codex_bin(config, _default_codex_bin_resolver_ops())
 
 
 @dataclass(slots=True)

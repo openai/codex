@@ -15,7 +15,7 @@ import types
 import typing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, get_args, get_origin
+from typing import Any, Callable, Sequence, get_args, get_origin
 
 
 def repo_root() -> Path:
@@ -309,6 +309,14 @@ class PublicFieldSpec:
     py_name: str
     annotation: str
     required: bool
+
+
+@dataclass(frozen=True)
+class CliOps:
+    generate_types: Callable[[], None]
+    stage_python_sdk_package: Callable[[Path, str, str], Path]
+    stage_python_runtime_package: Callable[[Path, str, Path], Path]
+    current_sdk_version: Callable[[], str]
 
 
 def _annotation_to_source(annotation: Any) -> str:
@@ -654,7 +662,7 @@ def generate_types() -> None:
     generate_public_api_flat_methods()
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Single SDK maintenance entrypoint")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -698,24 +706,43 @@ def main() -> None:
         required=True,
         help="Version to write into the staged runtime package",
     )
-    args = parser.parse_args()
+    return parser
 
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    return build_parser().parse_args(list(argv) if argv is not None else None)
+
+
+def default_cli_ops() -> CliOps:
+    return CliOps(
+        generate_types=generate_types,
+        stage_python_sdk_package=stage_python_sdk_package,
+        stage_python_runtime_package=stage_python_runtime_package,
+        current_sdk_version=current_sdk_version,
+    )
+
+
+def run_command(args: argparse.Namespace, ops: CliOps) -> None:
     if args.command == "generate-types":
-        generate_types()
+        ops.generate_types()
     elif args.command == "stage-sdk":
-        generate_types()
-        stage_python_sdk_package(
+        ops.generate_types()
+        ops.stage_python_sdk_package(
             args.staging_dir,
-            args.sdk_version or current_sdk_version(),
+            args.sdk_version or ops.current_sdk_version(),
             args.runtime_version,
         )
     elif args.command == "stage-runtime":
-        stage_python_runtime_package(
+        ops.stage_python_runtime_package(
             args.staging_dir,
             args.runtime_version,
             args.runtime_binary.resolve(),
         )
 
+
+def main(argv: Sequence[str] | None = None, ops: CliOps | None = None) -> None:
+    args = parse_args(argv)
+    run_command(args, ops or default_cli_ops())
     print("Done.")
 
 

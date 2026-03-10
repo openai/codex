@@ -148,120 +148,146 @@ def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
     assert not any((staged / "src" / "codex_app_server").glob("bin/**"))
 
 
-def test_stage_sdk_runs_type_generation_before_staging(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
     script = _load_update_script_module()
     calls: list[str] = []
-
-    monkeypatch.setattr(script, "generate_types", lambda: calls.append("generate_types"))
-    monkeypatch.setattr(script, "stage_python_sdk_package", lambda *args: calls.append("stage_sdk"))
-    monkeypatch.setattr(
-        sys,
-        "argv",
+    args = script.parse_args(
         [
-            "update_sdk_artifacts.py",
             "stage-sdk",
             str(tmp_path / "sdk-stage"),
             "--runtime-version",
             "1.2.3",
-        ],
+        ]
     )
 
-    script.main()
+    def fake_generate_types() -> None:
+        calls.append("generate_types")
+
+    def fake_stage_sdk_package(_staging_dir: Path, _sdk_version: str, _runtime_version: str) -> Path:
+        calls.append("stage_sdk")
+        return tmp_path / "sdk-stage"
+
+    def fake_stage_runtime_package(_staging_dir: Path, _runtime_version: str, _runtime_binary: Path) -> Path:
+        raise AssertionError("runtime staging should not run for stage-sdk")
+
+    def fake_current_sdk_version() -> str:
+        return "0.2.0"
+
+    ops = script.CliOps(
+        generate_types=fake_generate_types,
+        stage_python_sdk_package=fake_stage_sdk_package,
+        stage_python_runtime_package=fake_stage_runtime_package,
+        current_sdk_version=fake_current_sdk_version,
+    )
+
+    script.run_command(args, ops)
 
     assert calls == ["generate_types", "stage_sdk"]
 
 
-def test_stage_runtime_stages_binary_without_type_generation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> None:
     script = _load_update_script_module()
     fake_binary = tmp_path / script.runtime_binary_name()
     fake_binary.write_text("fake codex\n")
     calls: list[str] = []
-
-    monkeypatch.setattr(script, "generate_types", lambda: calls.append("generate_types"))
-    monkeypatch.setattr(script, "stage_python_runtime_package", lambda *args: calls.append("stage_runtime"))
-    monkeypatch.setattr(
-        sys,
-        "argv",
+    args = script.parse_args(
         [
-            "update_sdk_artifacts.py",
             "stage-runtime",
             str(tmp_path / "runtime-stage"),
             str(fake_binary),
             "--runtime-version",
             "1.2.3",
-        ],
+        ]
     )
 
-    script.main()
+    def fake_generate_types() -> None:
+        calls.append("generate_types")
+
+    def fake_stage_sdk_package(_staging_dir: Path, _sdk_version: str, _runtime_version: str) -> Path:
+        raise AssertionError("sdk staging should not run for stage-runtime")
+
+    def fake_stage_runtime_package(_staging_dir: Path, _runtime_version: str, _runtime_binary: Path) -> Path:
+        calls.append("stage_runtime")
+        return tmp_path / "runtime-stage"
+
+    def fake_current_sdk_version() -> str:
+        return "0.2.0"
+
+    ops = script.CliOps(
+        generate_types=fake_generate_types,
+        stage_python_sdk_package=fake_stage_sdk_package,
+        stage_python_runtime_package=fake_stage_runtime_package,
+        current_sdk_version=fake_current_sdk_version,
+    )
+
+    script.run_command(args, ops)
 
     assert calls == ["stage_runtime"]
 
 
-def test_default_runtime_is_resolved_from_installed_runtime_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_runtime_is_resolved_from_installed_runtime_package(tmp_path: Path) -> None:
     from codex_app_server import client as client_module
 
     fake_binary = tmp_path / ("codex.exe" if client_module.os.name == "nt" else "codex")
     fake_binary.write_text("")
-    monkeypatch.setattr(client_module, "_installed_codex_path", lambda: fake_binary)
-    monkeypatch.setattr(client_module.shutil, "which", lambda _: None)
+    ops = client_module.CodexBinResolverOps(
+        installed_codex_path=lambda: fake_binary,
+        which=lambda _: None,
+        path_exists=lambda path: path == fake_binary,
+    )
 
     config = client_module.AppServerConfig()
     assert config.codex_bin is None
-    assert client_module._resolve_codex_bin(config) == fake_binary
+    assert client_module.resolve_codex_bin(config, ops) == fake_binary
 
 
-def test_explicit_codex_bin_override_takes_priority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_explicit_codex_bin_override_takes_priority(tmp_path: Path) -> None:
     from codex_app_server import client as client_module
 
     explicit_binary = tmp_path / ("custom-codex.exe" if client_module.os.name == "nt" else "custom-codex")
     explicit_binary.write_text("")
-    monkeypatch.setattr(
-        client_module,
-        "_installed_codex_path",
-        lambda: (_ for _ in ()).throw(AssertionError("packaged runtime should not be used")),
+    ops = client_module.CodexBinResolverOps(
+        installed_codex_path=lambda: (_ for _ in ()).throw(
+            AssertionError("packaged runtime should not be used")
+        ),
+        which=lambda _: None,
+        path_exists=lambda path: path == explicit_binary,
     )
-    monkeypatch.setattr(client_module.shutil, "which", lambda _: None)
 
     config = client_module.AppServerConfig(codex_bin=str(explicit_binary))
-    assert client_module._resolve_codex_bin(config) == explicit_binary
+    assert client_module.resolve_codex_bin(config, ops) == explicit_binary
 
 
-def test_default_runtime_falls_back_to_codex_on_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_default_runtime_falls_back_to_codex_on_path(tmp_path: Path) -> None:
     from codex_app_server import client as client_module
 
     path_binary = tmp_path / ("codex.exe" if client_module.os.name == "nt" else "codex")
     path_binary.write_text("")
-    monkeypatch.setattr(
-        client_module,
-        "_installed_codex_path",
-        lambda: (_ for _ in ()).throw(FileNotFoundError("missing packaged runtime")),
+    ops = client_module.CodexBinResolverOps(
+        installed_codex_path=lambda: (_ for _ in ()).throw(
+            FileNotFoundError("missing packaged runtime")
+        ),
+        which=lambda _: str(path_binary),
+        path_exists=lambda path: path == path_binary,
     )
-    monkeypatch.setattr(client_module.shutil, "which", lambda _: str(path_binary))
 
     config = client_module.AppServerConfig()
-    assert client_module._resolve_codex_bin(config) == path_binary
+    assert client_module.resolve_codex_bin(config, ops) == path_binary
 
 
-def test_default_runtime_error_mentions_supported_resolution_paths(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_default_runtime_error_mentions_supported_resolution_paths() -> None:
     from codex_app_server import client as client_module
 
-    monkeypatch.setattr(
-        client_module,
-        "_installed_codex_path",
-        lambda: (_ for _ in ()).throw(FileNotFoundError("missing packaged runtime")),
+    ops = client_module.CodexBinResolverOps(
+        installed_codex_path=lambda: (_ for _ in ()).throw(
+            FileNotFoundError("missing packaged runtime")
+        ),
+        which=lambda _: None,
+        path_exists=lambda _path: False,
     )
-    monkeypatch.setattr(client_module.shutil, "which", lambda _: None)
 
     with pytest.raises(FileNotFoundError) as exc_info:
-        client_module._resolve_codex_bin(client_module.AppServerConfig())
+        client_module.resolve_codex_bin(client_module.AppServerConfig(), ops)
 
     assert str(exc_info.value) == (
         "Unable to locate Codex. Install the published SDK build with its "
