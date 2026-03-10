@@ -3,12 +3,12 @@ use async_trait::async_trait;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::code_mode;
+use crate::tools::context::ContentToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::models::FunctionCallOutputBody;
 
 pub struct CodeModeHandler;
 
@@ -22,7 +22,7 @@ impl ToolHandler for CodeModeHandler {
         matches!(payload, ToolPayload::Custom { .. })
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -47,9 +47,9 @@ impl ToolHandler for CodeModeHandler {
         };
 
         let content_items = code_mode::execute(session, turn, tracker, code).await?;
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::ContentItems(content_items),
+        Ok(Box::new(ContentToolOutput {
+            content: content_items,
             success: Some(true),
-        })
+        }))
     }
 }

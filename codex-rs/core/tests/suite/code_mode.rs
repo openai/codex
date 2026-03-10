@@ -14,6 +14,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
+use regex_lite::Regex;
 use std::fs;
 use wiremock::MockServer;
 
@@ -62,6 +63,7 @@ async fn run_code_mode_turn(
     Ok((test, second_mock))
 }
 
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_return_exec_command_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -71,6 +73,8 @@ async fn code_mode_can_return_exec_command_output() -> Result<()> {
         &server,
         "use code_mode to run exec_command",
         r#"
+import { exec_command } from "tools.js";
+
 add_content(await exec_command({ cmd: "printf code_mode_exec_marker" }));
 "#,
         false,
@@ -84,7 +88,19 @@ add_content(await exec_command({ cmd: "printf code_mode_exec_marker" }));
         Some(false),
         "code_mode call failed unexpectedly: {output}"
     );
-    assert_eq!(output, "code_mode_exec_marker");
+    let regex = Regex::new(
+        r#"(?ms)^Chunk ID: [[:xdigit:]]+
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Process exited with code 0
+Original token count: [0-9]+
+Output:
+code_mode_exec_marker
+?$"#,
+    )?;
+    assert!(
+        regex.is_match(&output),
+        "expected exec_command output envelope to match regex, got: {output}"
+    );
 
     Ok(())
 }
@@ -98,7 +114,9 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     let patch = format!(
         "*** Begin Patch\n*** Add File: {file_name}\n+hello from code_mode\n*** End Patch\n"
     );
-    let code = format!("const items = await apply_patch({patch:?});\nadd_content(items);\n");
+    let code = format!(
+        "import {{ apply_patch }} from \"tools.js\";\nconst items = await apply_patch({patch:?});\nadd_content(items);\n"
+    );
 
     let (test, second_mock) =
         run_code_mode_turn(&server, "use code_mode to run apply_patch", &code, true).await?;

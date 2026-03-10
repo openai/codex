@@ -6,8 +6,9 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::TextToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::multi_agents::build_agent_spawn_config;
 use crate::tools::handlers::parse_arguments;
@@ -15,7 +16,6 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
@@ -183,7 +183,7 @@ impl ToolHandler for BatchJobHandler {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -223,7 +223,7 @@ mod spawn_agents_on_csv {
         session: Arc<Session>,
         turn: Arc<TurnContext>,
         arguments: String,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    ) -> Result<ToolOutputBox, FunctionCallError> {
         let args: SpawnAgentsOnCsvArgs = parse_arguments(arguments.as_str())?;
         if args.instruction.trim().is_empty() {
             return Err(FunctionCallError::RespondToModel(
@@ -456,10 +456,10 @@ mod spawn_agents_on_csv {
                 "failed to serialize spawn_agents_on_csv result: {err}"
             ))
         })?;
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
+        Ok(Box::new(TextToolOutput {
+            text: content,
             success: Some(true),
-        })
+        }))
     }
 }
 
@@ -469,7 +469,7 @@ mod report_agent_job_result {
     pub async fn handle(
         session: Arc<Session>,
         arguments: String,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    ) -> Result<ToolOutputBox, FunctionCallError> {
         let args: ReportAgentJobResultArgs = parse_arguments(arguments.as_str())?;
         if !args.result.is_object() {
             return Err(FunctionCallError::RespondToModel(
@@ -505,10 +505,10 @@ mod report_agent_job_result {
                     "failed to serialize report_agent_job_result result: {err}"
                 ))
             })?;
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
+        Ok(Box::new(TextToolOutput {
+            text: content,
             success: Some(true),
-        })
+        }))
     }
 }
 

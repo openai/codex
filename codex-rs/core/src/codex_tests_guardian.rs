@@ -8,12 +8,12 @@ use crate::features::Feature;
 use crate::guardian::GUARDIAN_SUBAGENT_NAME;
 use crate::protocol::AskForApproval;
 use crate::sandboxing::SandboxPermissions;
+use crate::tools::context::TextToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -32,6 +32,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
+
+fn expect_text_output(output: &dyn std::any::Any) -> String {
+    let Some(output) = output.downcast_ref::<TextToolOutput>() else {
+        panic!("unexpected tool output");
+    };
+    output.text.clone()
+}
 
 #[tokio::test]
 async fn guardian_allows_shell_additional_permissions_requests_past_policy_validation() {
@@ -152,13 +159,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         })
         .await;
 
-    let output = match resp.expect("expected Ok result") {
-        ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            ..
-        } => content,
-        _ => panic!("unexpected tool output"),
-    };
+    let output = expect_text_output(&*resp.expect("expected Ok result"));
 
     #[derive(Deserialize, PartialEq, Eq, Debug)]
     struct ResponseExecMetadata {

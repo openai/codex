@@ -3,6 +3,8 @@
 const readline = require('node:readline');
 const vm = require('node:vm');
 
+const { SourceTextModule, SyntheticModule } = vm;
+
 function createProtocol() {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -86,15 +88,84 @@ function createProtocol() {
 
 function readContentItems(context) {
   try {
-    const serialized = vm.runInContext(
-      'JSON.stringify(globalThis.__codexContentItems ?? [])',
-      context
-    );
+    const serialized = vm.runInContext('JSON.stringify(globalThis.__codexContentItems ?? [])', context);
     const contentItems = JSON.parse(serialized);
     return Array.isArray(contentItems) ? contentItems : [];
   } catch {
     return [];
   }
+}
+
+function isValidIdentifier(name) {
+  return /^[A-Za-z_$][0-9A-Za-z_$]*$/.test(name);
+}
+
+function createToolsNamespace(protocol, enabledTools) {
+  const tools = Object.create(null);
+
+  for (const { name } of enabledTools) {
+    const callTool = async (args) =>
+      protocol.request('tool_call', {
+        name: String(name),
+        input: args,
+      });
+    Object.defineProperty(tools, name, {
+      value: callTool,
+      configurable: false,
+      enumerable: true,
+      writable: false,
+    });
+  }
+
+  return Object.freeze(tools);
+}
+
+function createToolsModule(context, protocol, enabledTools) {
+  const tools = createToolsNamespace(protocol, enabledTools);
+  const exportNames = ['tools'];
+
+  for (const { name } of enabledTools) {
+    if (name !== 'tools' && isValidIdentifier(name)) {
+      exportNames.push(name);
+    }
+  }
+
+  const uniqueExportNames = [...new Set(exportNames)];
+
+  return new SyntheticModule(
+    uniqueExportNames,
+    function initToolsModule() {
+      this.setExport('tools', tools);
+      for (const exportName of uniqueExportNames) {
+        if (exportName !== 'tools') {
+          this.setExport(exportName, tools[exportName]);
+        }
+      }
+    },
+    { context }
+  );
+}
+
+async function runModule(context, protocol, request) {
+  const toolsModule = createToolsModule(context, protocol, request.enabled_tools ?? []);
+  const mainModule = new SourceTextModule(request.source, {
+    context,
+    identifier: 'code_mode_main.mjs',
+    importModuleDynamically(specifier) {
+      if (specifier === 'tools.js') {
+        return toolsModule;
+      }
+      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+    },
+  });
+
+  await mainModule.link(async (specifier) => {
+    if (specifier === 'tools.js') {
+      return toolsModule;
+    }
+    throw new Error(`Unsupported import in code_mode: ${specifier}`);
+  });
+  await mainModule.evaluate();
 }
 
 async function main() {
@@ -109,10 +180,7 @@ async function main() {
   });
 
   try {
-    await vm.runInContext(request.source, context, {
-      displayErrors: true,
-      microtaskMode: 'afterEvaluate',
-    });
+    await runModule(context, protocol, request);
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
