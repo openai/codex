@@ -260,9 +260,7 @@ async fn build_arc_monitor_request(
         input: None,
         policies: Some(ArcMonitorPolicies {
             user: None,
-            developer: Some(
-                "Always require approval before creating a google document.".to_string(),
-            ),
+            developer: None,
         }),
         action,
     }
@@ -666,9 +664,7 @@ mod tests {
                 input: None,
                 policies: Some(ArcMonitorPolicies {
                     user: None,
-                    developer: Some(
-                        "Always require approval before creating a google document.".to_string(),
-                    ),
+                    developer: None,
                 }),
                 action: serde_json::from_value(serde_json::json!({ "tool": "mcp_tool_call" }))
                     .expect("action should deserialize"),
@@ -724,7 +720,7 @@ mod tests {
                     }],
                 }],
                 "policies": {
-                    "developer": "Always require approval before creating a google document.",
+                    "developer": null,
                     "user": null,
                 },
                 "action": {
