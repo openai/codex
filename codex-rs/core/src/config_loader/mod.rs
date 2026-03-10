@@ -41,6 +41,7 @@ pub use codex_config::ConfigRequirementsToml;
 pub use codex_config::ConstrainedWithSource;
 pub use codex_config::FeatureRequirementsToml;
 pub use codex_config::FilesystemConstraints;
+pub use codex_config::FilesystemDenyReadPattern;
 pub use codex_config::LoaderOverrides;
 pub use codex_config::McpServerIdentity;
 pub use codex_config::McpServerRequirement;

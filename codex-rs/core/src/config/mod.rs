@@ -1211,10 +1211,23 @@ fn apply_managed_filesystem_constraints(
     filesystem_constraints: &crate::config_loader::FilesystemConstraints,
 ) {
     for deny_read in &filesystem_constraints.deny_read {
+        if deny_read.contains_glob() {
+            let pattern = deny_read.as_str().to_string();
+            if !file_system_sandbox_policy
+                .deny_read_patterns
+                .iter()
+                .any(|existing| existing == &pattern)
+            {
+                file_system_sandbox_policy.deny_read_patterns.push(pattern);
+            }
+            continue;
+        }
+
+        let Ok(path) = AbsolutePathBuf::try_from(deny_read.as_str()) else {
+            continue;
+        };
         let deny_entry = codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path {
-                path: deny_read.clone(),
-            },
+            path: codex_protocol::permissions::FileSystemPath::Path { path },
             access: codex_protocol::permissions::FileSystemAccessMode::None,
         };
         if !file_system_sandbox_policy
@@ -1937,6 +1950,16 @@ impl Config {
         }) = filesystem_requirements.as_ref()
             && !filesystem_requirements.deny_read.is_empty()
         {
+            let has_glob_patterns = filesystem_requirements
+                .deny_read
+                .iter()
+                .any(crate::config_loader::FilesystemDenyReadPattern::contains_glob);
+            if has_glob_patterns && !cfg!(target_os = "macos") {
+                startup_warnings.push(format!(
+                    "managed filesystem deny_read from {filesystem_requirements_source} only supports glob patterns on macOS; use literal paths on this platform"
+                ));
+            }
+
             let requirement_source = filesystem_requirements_source.clone();
             constrained_sandbox_policy
                 .value

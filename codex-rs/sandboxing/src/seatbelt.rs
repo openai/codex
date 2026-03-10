@@ -356,6 +356,99 @@ fn build_seatbelt_access_policy(
     }
 }
 
+fn build_seatbelt_deny_read_pattern_policy(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+) -> String {
+    if file_system_sandbox_policy.deny_read_patterns().is_empty() {
+        return String::new();
+    }
+
+    let mut policy_components = Vec::new();
+    for pattern in file_system_sandbox_policy.deny_read_patterns() {
+        let Some(regex) = seatbelt_regex_for_deny_read_pattern(pattern) else {
+            continue;
+        };
+        let regex = escape_seatbelt_regex(&regex);
+        policy_components.push(format!(r#"(deny file-read* (regex #"{regex}"))"#));
+        policy_components.push(format!(r#"(deny file-write-unlink (regex #"{regex}"))"#));
+    }
+
+    policy_components.join("\n")
+}
+
+fn seatbelt_regex_for_deny_read_pattern(pattern: &str) -> Option<String> {
+    if pattern.is_empty() {
+        return None;
+    }
+
+    let mut regex = String::from("^");
+    let mut chars = pattern.chars().peekable();
+    let mut saw_glob = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '*' => {
+                saw_glob = true;
+                if chars.peek() == Some(&'*') {
+                    chars.next();
+                    regex.push_str(".*");
+                } else {
+                    regex.push_str("[^/]*");
+                }
+            }
+            '?' => {
+                saw_glob = true;
+                regex.push_str("[^/]");
+            }
+            '[' => {
+                saw_glob = true;
+                let mut class = String::new();
+                let mut closed = false;
+                for class_ch in chars.by_ref() {
+                    if class_ch == ']' {
+                        closed = true;
+                        break;
+                    }
+                    class.push(class_ch);
+                }
+                if !closed {
+                    regex.push_str("\\[");
+                    regex.push_str(&regex_lite::escape(&class));
+                    continue;
+                }
+
+                regex.push('[');
+                let mut class_chars = class.chars();
+                if let Some(first) = class_chars.next() {
+                    match first {
+                        '!' => regex.push('^'),
+                        '^' => regex.push_str("\\^"),
+                        _ => regex.push(first),
+                    }
+                }
+                for class_ch in class_chars {
+                    match class_ch {
+                        '\\' => regex.push_str("\\\\"),
+                        _ => regex.push(class_ch),
+                    }
+                }
+                regex.push(']');
+            }
+            _ => regex.push_str(&regex_lite::escape(&ch.to_string())),
+        }
+    }
+
+    if !saw_glob {
+        regex.push_str("(/.*)?");
+    }
+    regex.push('$');
+    Some(regex)
+}
+
+fn escape_seatbelt_regex(regex: &str) -> String {
+    regex.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 fn create_seatbelt_command_args(
     command: Vec<String>,
@@ -470,10 +563,12 @@ pub fn create_seatbelt_command_args_for_policies(
         dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
 
     let include_platform_defaults = file_system_sandbox_policy.include_platform_defaults();
+    let deny_read_policy = build_seatbelt_deny_read_pattern_policy(file_system_sandbox_policy);
     let mut policy_sections = vec![
         MACOS_SEATBELT_BASE_POLICY.to_string(),
         file_read_policy,
         file_write_policy,
+        deny_read_policy,
         network_policy,
     ];
     if include_platform_defaults {

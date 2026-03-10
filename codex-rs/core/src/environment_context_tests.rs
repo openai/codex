@@ -228,7 +228,7 @@ fn equals_except_shell_compares_cwd_differences() {
 }
 
 #[test]
-fn equals_except_shell_compares_deny_read_paths() {
+fn equals_except_shell_compares_deny_read_patterns() {
     let context1 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
         fake_shell(),
@@ -284,7 +284,7 @@ fn equals_except_shell_ignores_shell() {
 }
 
 #[test]
-fn serialize_environment_context_with_deny_read_paths() {
+fn serialize_environment_context_with_deny_read_patterns() {
     let denied = vec!["/repo/.gitconfig".to_string(), "/repo/.ssh".to_string()];
     let context = EnvironmentContext::new(
         Some(test_path_buf("/repo")),
@@ -302,10 +302,10 @@ fn serialize_environment_context_with_deny_read_paths() {
   <shell>bash</shell>
   <current_date>2026-02-26</current_date>
   <timezone>America/Los_Angeles</timezone>
-  <deny_read_paths>
-    <path>/repo/.gitconfig</path>
-    <path>/repo/.ssh</path>
-  </deny_read_paths>
+  <deny_read_patterns>
+    <pattern>/repo/.gitconfig</pattern>
+    <pattern>/repo/.ssh</pattern>
+  </deny_read_patterns>
 </environment_context>"#,
         test_path_buf("/repo").display()
     );
