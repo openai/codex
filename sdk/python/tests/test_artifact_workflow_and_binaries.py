@@ -4,6 +4,7 @@ import ast
 import importlib.util
 import json
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,36 @@ def test_runtime_package_template_has_no_checked_in_binaries() -> None:
         for path in runtime_root.rglob("*")
         if path.is_file() and "__pycache__" not in path.parts
     ) == ["__init__.py"]
+
+
+def test_runtime_package_builds_platform_specific_wheels() -> None:
+    pyproject = tomllib.loads((ROOT.parent / "python-runtime" / "pyproject.toml").read_text())
+    hook_source = (ROOT.parent / "python-runtime" / "hatch_build.py").read_text()
+    hook_tree = ast.parse(hook_source)
+    initialize_fn = next(
+        node
+        for node in ast.walk(hook_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "initialize"
+    )
+    build_data_assignments = {
+        node.targets[0].slice.value: node.value.value
+        for node in initialize_fn.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Subscript)
+        and isinstance(node.targets[0].value, ast.Name)
+        and node.targets[0].value.id == "build_data"
+        and isinstance(node.targets[0].slice, ast.Constant)
+        and isinstance(node.targets[0].slice.value, str)
+        and isinstance(node.value, ast.Constant)
+    }
+
+    assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"] == {
+        "packages": ["src/codex_cli_bin"],
+        "include": ["src/codex_cli_bin/bin/**"],
+        "hooks": {"custom": {}},
+    }
+    assert build_data_assignments == {"pure_python": False, "infer_tag": True}
 
 
 def test_stage_runtime_release_copies_binary_and_sets_version(tmp_path: Path) -> None:
