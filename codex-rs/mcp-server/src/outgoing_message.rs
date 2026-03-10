@@ -386,6 +386,7 @@ mod tests {
                 "model": "gpt-4o",
                 "model_provider_id": "test-provider",
                 "approval_policy": "never",
+                "approval_review_policy": "manual-only",
                 "sandbox_policy": {
                     "type": "read-only"
                 },
@@ -455,6 +456,7 @@ mod tests {
                 "model": "gpt-4o",
                 "model_provider_id": "test-provider",
                 "approval_policy": "never",
+                "approval_review_policy": "manual-only",
                 "sandbox_policy": {
                     "type": "read-only"
                 },

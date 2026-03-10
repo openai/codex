@@ -98,8 +98,8 @@
     },
     "ApprovalReviewPolicy": {
       "enum": [
-        "manualOnly",
-        "autoOnly"
+        "manual-only",
+        "auto-only"
       ],
       "type": "string"
     },

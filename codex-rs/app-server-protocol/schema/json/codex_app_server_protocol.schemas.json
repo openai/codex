@@ -2671,6 +2671,7 @@
                   "$ref": "#/definitions/v2/ApprovalReviewPolicy"
                 }
               ],
+              "default": "manual-only",
               "description": "Whether approval requests remain manual or are automatically reviewed."
             },
             "cwd": {
@@ -2783,7 +2784,6 @@
           },
           "required": [
             "approval_policy",
-            "approval_review_policy",
             "cwd",
             "history_entry_count",
             "history_log_id",
@@ -9650,8 +9650,8 @@
       },
       "ApprovalReviewPolicy": {
         "enum": [
-          "manualOnly",
-          "autoOnly"
+          "manual-only",
+          "auto-only"
         ],
         "type": "string"
       },

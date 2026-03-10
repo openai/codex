@@ -2787,12 +2787,7 @@ mod tests {
                 aggregated_output: Some("exec command rejected by user".into()),
                 exit_code: Some(-1),
                 duration_ms: Some(0),
-                approval: Some(ItemApprovalState {
-                    status: ItemApprovalStatus::Declined,
-                    pending_kind: None,
-                    resolved_by: Some(ItemApprovalResolvedBy::User),
-                    automatic_review: None,
-                }),
+                approval: None,
             }
         );
         assert_eq!(
@@ -2805,12 +2800,7 @@ mod tests {
                     diff: "hello\n".into(),
                 }],
                 status: PatchApplyStatus::Declined,
-                approval: Some(ItemApprovalState {
-                    status: ItemApprovalStatus::Declined,
-                    pending_kind: None,
-                    resolved_by: Some(ItemApprovalResolvedBy::User),
-                    automatic_review: None,
-                }),
+                approval: None,
             }
         );
     }
@@ -3032,12 +3022,7 @@ mod tests {
                         diff: "hello\n".into(),
                     }],
                     status: PatchApplyStatus::InProgress,
-                    approval: Some(ItemApprovalState {
-                        status: ItemApprovalStatus::Pending,
-                        pending_kind: Some(ItemApprovalPendingKind::ManualRequest),
-                        resolved_by: None,
-                        automatic_review: None,
-                    }),
+                    approval: None,
                 },
             ]
         );

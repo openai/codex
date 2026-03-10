@@ -1562,15 +1562,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     };
     assert_eq!(id, "patch-call");
     assert_eq!(status, PatchApplyStatus::InProgress);
-    assert_eq!(
-        approval,
-        Some(codex_app_server_protocol::ItemApprovalState {
-            status: codex_app_server_protocol::ItemApprovalStatus::Pending,
-            pending_kind: Some(codex_app_server_protocol::ItemApprovalPendingKind::ManualRequest),
-            resolved_by: None,
-            automatic_review: None,
-        })
-    );
+    assert_eq!(approval, None);
     let started_changes = changes.clone();
 
     let server_req = timeout(
@@ -2144,15 +2136,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     };
     assert_eq!(id, "patch-call");
     assert_eq!(status, PatchApplyStatus::InProgress);
-    assert_eq!(
-        approval,
-        Some(codex_app_server_protocol::ItemApprovalState {
-            status: codex_app_server_protocol::ItemApprovalStatus::Pending,
-            pending_kind: Some(codex_app_server_protocol::ItemApprovalPendingKind::ManualRequest),
-            resolved_by: None,
-            automatic_review: None,
-        })
-    );
+    assert_eq!(approval, None);
     let started_changes = changes.clone();
 
     let server_req = timeout(
