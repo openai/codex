@@ -25,6 +25,7 @@ pub(crate) struct MentionItem {
     pub(crate) search_terms: Vec<String>,
     pub(crate) path: Option<String>,
     pub(crate) category_tag: Option<String>,
+    pub(crate) sort_rank: u8,
 }
 
 const MENTION_NAME_TRUNCATE_LEN: usize = 24;
@@ -130,14 +131,12 @@ impl SkillPopup {
         let filter = self.query.trim();
         let mut out: Vec<(usize, Option<Vec<usize>>, i32)> = Vec::new();
 
-        if filter.is_empty() {
-            for (idx, _mention) in self.mentions.iter().enumerate() {
-                out.push((idx, None, 0));
-            }
-            return out;
-        }
-
         for (idx, mention) in self.mentions.iter().enumerate() {
+            if filter.is_empty() {
+                out.push((idx, None, 0));
+                continue;
+            }
+
             let mut best_match: Option<(Option<Vec<usize>>, i32)> = None;
 
             if let Some((indices, score)) = fuzzy_match(&mention.display_name, filter) {
@@ -170,11 +169,15 @@ impl SkillPopup {
         }
 
         out.sort_by(|a, b| {
-            a.2.cmp(&b.2).then_with(|| {
-                let an = self.mentions[a.0].display_name.as_str();
-                let bn = self.mentions[b.0].display_name.as_str();
-                an.cmp(bn)
-            })
+            self.mentions[a.0]
+                .sort_rank
+                .cmp(&self.mentions[b.0].sort_rank)
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| {
+                    let an = self.mentions[a.0].display_name.as_str();
+                    let bn = self.mentions[b.0].display_name.as_str();
+                    an.cmp(bn)
+                })
         });
 
         out

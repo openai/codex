@@ -326,6 +326,9 @@
             "child_agents_md": {
               "type": "boolean"
             },
+            "code_mode": {
+              "type": "boolean"
+            },
             "codex_git_commit": {
               "type": "boolean"
             },
@@ -1804,6 +1807,9 @@
           "type": "boolean"
         },
         "child_agents_md": {
+          "type": "boolean"
+        },
+        "code_mode": {
           "type": "boolean"
         },
         "codex_git_commit": {
