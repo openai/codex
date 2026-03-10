@@ -264,13 +264,31 @@ mod send_input {
             .get_agent_nickname_and_role(receiver_thread_id)
             .await
             .unwrap_or((None, None));
-        if args.interrupt {
-            session
+        // Interruptive resend is modeled as "cancel the old turn, then queue replacement input".
+        // The follow-up handle suppresses the transient Interrupted status until the replacement
+        // either starts making progress or fails to submit.
+        let mut interrupt_follow_up = if args.interrupt {
+            Some(
+                session
+                    .services
+                    .agent_control
+                    .begin_interrupt_follow_up(receiver_thread_id)
+                    .await,
+            )
+        } else {
+            None
+        };
+        if args.interrupt
+            && let Err(err) = session
                 .services
                 .agent_control
                 .interrupt_agent(receiver_thread_id)
                 .await
-                .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+        {
+            if let Some(follow_up) = interrupt_follow_up.as_mut() {
+                follow_up.cancel();
+            }
+            return Err(collab_agent_error(receiver_thread_id, err));
         }
         session
             .send_event(
@@ -290,10 +308,16 @@ mod send_input {
             .send_input(receiver_thread_id, input_items)
             .await
             .map_err(|err| collab_agent_error(receiver_thread_id, err));
+        if let Some(follow_up) = interrupt_follow_up.as_mut() {
+            match &result {
+                Ok(_) => follow_up.commit(),
+                Err(_) => follow_up.cancel(),
+            }
+        }
         let status = session
             .services
             .agent_control
-            .get_status(receiver_thread_id)
+            .get_reportable_status(receiver_thread_id)
             .await;
         session
             .send_event(
@@ -458,6 +482,7 @@ mod resume_agent {
 
 pub(crate) mod wait {
     use super::*;
+    use crate::agent::control::wait_for_reportable_status;
     use crate::agent::status::is_final;
     use futures::FutureExt;
     use futures::StreamExt;
@@ -546,10 +571,17 @@ pub(crate) mod wait {
             match session.services.agent_control.subscribe_status(*id).await {
                 Ok(rx) => {
                     let status = rx.borrow().clone();
-                    if is_final(&status) {
+                    if is_final(&status)
+                        && session
+                            .services
+                            .agent_control
+                            .is_status_reportable_immediately(*id, &status)
+                            .await
+                    {
                         initial_final_statuses.push((*id, status));
+                    } else {
+                        status_rxs.push((*id, rx));
                     }
-                    status_rxs.push((*id, rx));
                 }
                 Err(CodexErr::ThreadNotFound(_)) => {
                     initial_final_statuses.push((*id, AgentStatus::NotFound));
@@ -643,23 +675,11 @@ pub(crate) mod wait {
     async fn wait_for_final_status(
         session: Arc<Session>,
         thread_id: ThreadId,
-        mut status_rx: Receiver<AgentStatus>,
+        status_rx: Receiver<AgentStatus>,
     ) -> Option<(ThreadId, AgentStatus)> {
-        let mut status = status_rx.borrow().clone();
-        if is_final(&status) {
-            return Some((thread_id, status));
-        }
-
-        loop {
-            if status_rx.changed().await.is_err() {
-                let latest = session.services.agent_control.get_status(thread_id).await;
-                return is_final(&latest).then_some((thread_id, latest));
-            }
-            status = status_rx.borrow().clone();
-            if is_final(&status) {
-                return Some((thread_id, status));
-            }
-        }
+        let status =
+            wait_for_reportable_status(&session.services.agent_control, thread_id, status_rx).await;
+        is_final(&status).then_some((thread_id, status))
     }
 }
 
@@ -982,10 +1002,16 @@ mod tests {
     use crate::tools::context::FunctionToolOutput;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::ModeKind;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::InitialHistory;
     use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnAbortedEvent;
+    use codex_protocol::protocol::TurnCompleteEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use serde_json::json;
@@ -994,6 +1020,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Mutex;
+    use tokio::task::yield_now;
     use tokio::time::timeout;
 
     fn invocation(
@@ -1914,6 +1941,125 @@ mod tests {
             result,
             wait::WaitResult {
                 status: HashMap::from([(agent_id, AgentStatus::Shutdown)]),
+                timed_out: false
+            }
+        );
+        assert_eq!(success, None);
+    }
+
+    #[tokio::test]
+    async fn wait_prefers_later_completion_after_interruptive_resend() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.config.as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({
+                "ids": [agent_id.to_string()],
+                "timeout_ms": MIN_WAIT_TIMEOUT_MS
+            })),
+        );
+        let mut wait_task = tokio::spawn(async move { MultiAgentHandler.handle(invocation).await });
+
+        yield_now().await;
+        manager
+            .agent_control()
+            .mark_interrupt_follow_up_pending(agent_id)
+            .await;
+
+        let interrupted_turn = thread.thread.codex.session.new_default_turn().await;
+        thread
+            .thread
+            .codex
+            .session
+            .send_event(
+                interrupted_turn.as_ref(),
+                EventMsg::TurnStarted(TurnStartedEvent {
+                    turn_id: interrupted_turn.sub_id.clone(),
+                    model_context_window: None,
+                    collaboration_mode_kind: ModeKind::Default,
+                }),
+            )
+            .await;
+        thread
+            .thread
+            .codex
+            .session
+            .send_event(
+                interrupted_turn.as_ref(),
+                EventMsg::TurnAborted(TurnAbortedEvent {
+                    turn_id: Some(interrupted_turn.sub_id.clone()),
+                    reason: TurnAbortReason::Interrupted,
+                }),
+            )
+            .await;
+
+        let early = timeout(Duration::from_millis(100), &mut wait_task).await;
+        assert!(
+            early.is_err(),
+            "wait should not resolve on the interrupted turn while a follow-up is still pending"
+        );
+
+        manager
+            .agent_control()
+            .mark_interrupt_follow_up_committed(agent_id)
+            .await;
+
+        let completed_turn = thread.thread.codex.session.new_default_turn().await;
+        thread
+            .thread
+            .codex
+            .session
+            .send_event(
+                completed_turn.as_ref(),
+                EventMsg::TurnStarted(TurnStartedEvent {
+                    turn_id: completed_turn.sub_id.clone(),
+                    model_context_window: None,
+                    collaboration_mode_kind: ModeKind::Default,
+                }),
+            )
+            .await;
+        thread
+            .thread
+            .codex
+            .session
+            .send_event(
+                completed_turn.as_ref(),
+                EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: completed_turn.sub_id.clone(),
+                    last_agent_message: Some("done".to_string()),
+                }),
+            )
+            .await;
+
+        let output = timeout(Duration::from_secs(1), wait_task)
+            .await
+            .expect("wait should complete after the redirected turn finishes")
+            .expect("wait task should join")
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            success,
+            ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: wait::WaitResult =
+            serde_json::from_str(&content).expect("wait result should be json");
+        assert_eq!(
+            result,
+            wait::WaitResult {
+                status: HashMap::from([(
+                    agent_id,
+                    AgentStatus::Completed(Some("done".to_string()))
+                )]),
                 timed_out: false
             }
         );
