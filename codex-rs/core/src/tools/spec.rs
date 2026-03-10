@@ -2412,7 +2412,8 @@ mod tests {
                                     "nested": {}
                                 }
                             }
-                        }
+                        },
+                        "required": ["result"]
                     },
                     "isError": {
                         "type": "boolean"
@@ -3481,7 +3482,7 @@ mod tests {
                 },
                 description: "Do something cool".to_string(),
                 strict: false,
-                output_schema: None,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             })
         );
     }
@@ -3720,7 +3721,7 @@ mod tests {
                 },
                 description: "Search docs".to_string(),
                 strict: false,
-                output_schema: None,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             })
         );
     }
@@ -3772,7 +3773,7 @@ mod tests {
                 },
                 description: "Pagination".to_string(),
                 strict: false,
-                output_schema: None,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             })
         );
     }
@@ -3828,7 +3829,7 @@ mod tests {
                 },
                 description: "Tags".to_string(),
                 strict: false,
-                output_schema: None,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             })
         );
     }
@@ -3882,7 +3883,7 @@ mod tests {
                 },
                 description: "AnyOf Value".to_string(),
                 strict: false,
-                output_schema: None,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             })
         );
     }
@@ -4141,7 +4142,7 @@ Examples of valid command strings:
                 },
                 description: "Do something cool".to_string(),
                 strict: false,
-                output_schema: None,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             })
         );
     }
