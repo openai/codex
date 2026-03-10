@@ -2256,34 +2256,50 @@ impl ChatWidget {
     }
 
     fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping exec approval event before session configured");
+            return;
+        };
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_exec_approval(ev),
-            |s| s.handle_exec_approval_now(ev2),
+            |q| q.push_exec_approval(thread_id, ev),
+            |s| s.handle_exec_approval_for_thread(thread_id, ev2),
         );
     }
 
     fn on_apply_patch_approval_request(&mut self, _id: String, ev: ApplyPatchApprovalRequestEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping apply_patch approval event before session configured");
+            return;
+        };
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_apply_patch_approval(ev),
-            |s| s.handle_apply_patch_approval_now(ev2),
+            |q| q.push_apply_patch_approval(thread_id, ev),
+            |s| s.handle_apply_patch_approval_for_thread(thread_id, ev2),
         );
     }
 
     fn on_elicitation_request(&mut self, ev: ElicitationRequestEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping elicitation request before session configured");
+            return;
+        };
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_elicitation(ev),
-            |s| s.handle_elicitation_request_now(ev2),
+            |q| q.push_elicitation(thread_id, ev),
+            |s| s.handle_elicitation_request_for_thread(thread_id, ev2),
         );
     }
 
     fn on_request_permissions(&mut self, ev: RequestPermissionsEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping request_permissions event before session configured");
+            return;
+        };
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_request_permissions(ev),
-            |s| s.handle_request_permissions_now(ev2),
+            |q| q.push_request_permissions(thread_id, ev),
+            |s| s.handle_request_permissions_for_thread(thread_id, ev2),
         );
     }
 
@@ -2294,7 +2310,12 @@ impl ChatWidget {
         };
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_user_input(ev),
+            |q| {
+                q.push_user_input(ThreadUserInputRequest {
+                    thread_id,
+                    request: ev,
+                })
+            },
             |s| {
                 s.handle_request_user_input_now(ThreadUserInputRequest {
                     thread_id,
@@ -2992,11 +3013,11 @@ impl ChatWidget {
         self.had_work_activity = true;
     }
 
-    pub(crate) fn handle_exec_approval_now(&mut self, ev: ExecApprovalRequestEvent) {
-        let Some(thread_id) = self.thread_id() else {
-            tracing::warn!("dropping exec approval event before session configured");
-            return;
-        };
+    pub(crate) fn handle_exec_approval_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+        ev: ExecApprovalRequestEvent,
+    ) {
         self.flush_answer_stream_with_separator();
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
@@ -3018,11 +3039,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_apply_patch_approval_now(&mut self, ev: ApplyPatchApprovalRequestEvent) {
-        let Some(thread_id) = self.thread_id() else {
-            tracing::warn!("dropping apply_patch approval event before session configured");
-            return;
-        };
+    pub(crate) fn handle_apply_patch_approval_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+        ev: ApplyPatchApprovalRequestEvent,
+    ) {
         self.flush_answer_stream_with_separator();
 
         let request = ApprovalRequest::ApplyPatch {
@@ -3042,11 +3063,11 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn handle_elicitation_request_now(&mut self, ev: ElicitationRequestEvent) {
-        let Some(thread_id) = self.thread_id() else {
-            tracing::warn!("dropping elicitation request before session configured");
-            return;
-        };
+    pub(crate) fn handle_elicitation_request_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+        ev: ElicitationRequestEvent,
+    ) {
         self.flush_answer_stream_with_separator();
 
         self.notify(Notification::ElicitationRequested {
@@ -3070,11 +3091,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_request_permissions_now(&mut self, ev: RequestPermissionsEvent) {
-        let Some(thread_id) = self.thread_id() else {
-            tracing::warn!("dropping request_permissions event before session configured");
-            return;
-        };
+    pub(crate) fn handle_request_permissions_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+        ev: RequestPermissionsEvent,
+    ) {
         self.flush_answer_stream_with_separator();
         self.notify(Notification::PermissionsRequested {
             summary: ev

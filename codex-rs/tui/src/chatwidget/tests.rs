@@ -14,6 +14,7 @@ use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::history_cell::UserHistoryCell;
+use crate::streaming::controller::StreamController;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
@@ -2091,6 +2092,23 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
     ));
 }
 
+fn next_submit_thread_op(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> (ThreadId, Op) {
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::SubmitThreadOp { thread_id, op }) => return (thread_id, op),
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => {
+                panic!("expected submit-thread op event but queue was empty")
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected submit-thread op event but channel closed")
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2942,61 +2960,135 @@ async fn handle_request_user_input_sets_pending_notification() {
 }
 
 #[tokio::test]
+async fn deferred_request_user_input_keeps_originating_thread_after_switch() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let original_thread_id = ThreadId::new();
+    let switched_thread_id = ThreadId::new();
+    chat.thread_id = Some(original_thread_id);
+    chat.stream_controller = Some(StreamController::new(None));
+
+    chat.on_request_user_input(RequestUserInputEvent {
+        call_id: "call-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        questions: vec![RequestUserInputQuestion {
+            id: "q1".to_string(),
+            header: "Need input".to_string(),
+            question: "Need input".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![RequestUserInputQuestionOption {
+                label: "Yes".to_string(),
+                description: String::new(),
+            }]),
+        }],
+    });
+
+    chat.thread_id = Some(switched_thread_id);
+    chat.stream_controller = None;
+    chat.flush_interrupt_queue();
+    let _ = chat.bottom_pane.on_ctrl_c();
+
+    let (thread_id, op) = next_submit_thread_op(&mut rx);
+    assert_eq!(thread_id, original_thread_id);
+    assert_eq!(op, Op::Interrupt);
+}
+
+#[tokio::test]
+async fn deferred_request_permissions_keeps_originating_thread_after_switch() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let original_thread_id = ThreadId::new();
+    let switched_thread_id = ThreadId::new();
+    chat.thread_id = Some(original_thread_id);
+    chat.stream_controller = Some(StreamController::new(None));
+
+    chat.on_request_permissions(
+        codex_protocol::request_permissions::RequestPermissionsEvent {
+            call_id: "perm-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            reason: Some("need access".to_string()),
+            permissions: codex_protocol::models::PermissionProfile::default(),
+        },
+    );
+
+    chat.thread_id = Some(switched_thread_id);
+    chat.stream_controller = None;
+    chat.flush_interrupt_queue();
+    let _ = chat.bottom_pane.on_ctrl_c();
+
+    let (thread_id, op) = next_submit_thread_op(&mut rx);
+    assert_eq!(thread_id, original_thread_id);
+    assert_matches!(
+        op,
+        Op::RequestPermissionsResponse {
+            id,
+            response: codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions,
+            },
+        } if id == "perm-1"
+            && permissions == codex_protocol::models::PermissionProfile::default()
+    );
+}
+
+#[tokio::test]
 async fn approval_handlers_drop_requests_before_session_is_configured() {
     let (mut exec_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    exec_chat.handle_exec_approval_now(ExecApprovalRequestEvent {
-        call_id: "call-1".to_string(),
-        approval_id: None,
-        turn_id: "turn-1".to_string(),
-        command: vec!["echo".to_string(), "hello".to_string()],
-        cwd: PathBuf::from("/tmp/project"),
-        reason: Some("needs approval".to_string()),
-        network_approval_context: None,
-        proposed_execpolicy_amendment: None,
-        proposed_network_policy_amendments: None,
-        additional_permissions: None,
-        skill_metadata: None,
-        available_decisions: None,
-        parsed_cmd: Vec::new(),
-    });
+    exec_chat.on_exec_approval_request(
+        "call-1".to_string(),
+        ExecApprovalRequestEvent {
+            call_id: "call-1".to_string(),
+            approval_id: None,
+            turn_id: "turn-1".to_string(),
+            command: vec!["echo".to_string(), "hello".to_string()],
+            cwd: PathBuf::from("/tmp/project"),
+            reason: Some("needs approval".to_string()),
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: None,
+            skill_metadata: None,
+            available_decisions: None,
+            parsed_cmd: Vec::new(),
+        },
+    );
     assert!(exec_chat.bottom_pane.no_modal_or_popup_active());
     assert!(exec_chat.pending_notification.is_none());
 
     let (mut patch_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    patch_chat.handle_apply_patch_approval_now(ApplyPatchApprovalRequestEvent {
-        call_id: "patch-1".to_string(),
-        turn_id: "turn-1".to_string(),
-        reason: Some("review patch".to_string()),
-        changes: HashMap::from([(
-            PathBuf::from("src/lib.rs"),
-            FileChange::Add {
-                content: "fn main() {}".to_string(),
-            },
-        )]),
-        grant_root: None,
-    });
+    patch_chat.on_apply_patch_approval_request(
+        "patch-1".to_string(),
+        ApplyPatchApprovalRequestEvent {
+            call_id: "patch-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            reason: Some("review patch".to_string()),
+            changes: HashMap::from([(
+                PathBuf::from("src/lib.rs"),
+                FileChange::Add {
+                    content: "fn main() {}".to_string(),
+                },
+            )]),
+            grant_root: None,
+        },
+    );
     assert!(patch_chat.bottom_pane.no_modal_or_popup_active());
     assert!(patch_chat.pending_notification.is_none());
 
     let (mut elicitation_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    elicitation_chat.handle_elicitation_request_now(
-        codex_protocol::approvals::ElicitationRequestEvent {
-            turn_id: Some("turn-1".to_string()),
-            server_name: "test-server".to_string(),
-            id: codex_protocol::mcp::RequestId::String("elicitation-1".to_string()),
-            request: codex_protocol::approvals::ElicitationRequest::Url {
-                meta: None,
-                message: "Need input".to_string(),
-                url: "https://example.com".to_string(),
-                elicitation_id: "elicitation-1".to_string(),
-            },
+    elicitation_chat.on_elicitation_request(codex_protocol::approvals::ElicitationRequestEvent {
+        turn_id: Some("turn-1".to_string()),
+        server_name: "test-server".to_string(),
+        id: codex_protocol::mcp::RequestId::String("elicitation-1".to_string()),
+        request: codex_protocol::approvals::ElicitationRequest::Url {
+            meta: None,
+            message: "Need input".to_string(),
+            url: "https://example.com".to_string(),
+            elicitation_id: "elicitation-1".to_string(),
         },
-    );
+    });
     assert!(elicitation_chat.bottom_pane.no_modal_or_popup_active());
     assert!(elicitation_chat.pending_notification.is_none());
 
     let (mut permissions_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    permissions_chat.handle_request_permissions_now(
+    permissions_chat.on_request_permissions(
         codex_protocol::request_permissions::RequestPermissionsEvent {
             call_id: "perm-1".to_string(),
             turn_id: "turn-1".to_string(),
