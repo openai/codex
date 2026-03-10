@@ -1082,14 +1082,18 @@ impl AuthManager {
         self.inner.read().ok().and_then(|c| c.auth.clone())
     }
 
-    fn current_external_auth_override(
-        &self,
-    ) -> Option<(Arc<dyn ExternalAuthRefresher>, Option<String>)> {
-        self.external_auth_overrides.read().ok().and_then(|guard| {
-            guard
-                .last()
-                .map(|entry| (entry.refresher.clone(), entry.forced_workspace_id.clone()))
-        })
+    fn current_external_auth_override(&self) -> Option<Arc<dyn ExternalAuthRefresher>> {
+        self.external_auth_overrides
+            .read()
+            .ok()
+            .and_then(|guard| guard.last().map(|entry| entry.refresher.clone()))
+    }
+
+    fn base_forced_chatgpt_workspace_id(&self) -> Option<String> {
+        self.forced_chatgpt_workspace_id
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
     fn remove_external_auth_override(&self, id: u64) {
@@ -1246,13 +1250,15 @@ impl AuthManager {
     }
 
     pub fn forced_chatgpt_workspace_id(&self) -> Option<String> {
-        if let Some((_, forced_workspace_id)) = self.current_external_auth_override() {
-            return forced_workspace_id;
+        if let Ok(guard) = self.external_auth_overrides.read()
+            && let Some(workspace_id) = guard
+                .iter()
+                .rev()
+                .find_map(|entry| entry.forced_workspace_id.clone())
+        {
+            return Some(workspace_id);
         }
-        self.forced_chatgpt_workspace_id
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone())
+        self.base_forced_chatgpt_workspace_id()
     }
 
     pub fn has_external_auth_refresher(&self) -> bool {
@@ -1395,8 +1401,8 @@ impl AuthManager {
         reason: ExternalAuthRefreshReason,
     ) -> Result<(), RefreshTokenError> {
         let (refresher, forced_chatgpt_workspace_id) =
-            if let Some((refresher, forced_workspace_id)) = self.current_external_auth_override() {
-                (Some(refresher), forced_workspace_id)
+            if let Some(refresher) = self.current_external_auth_override() {
+                (Some(refresher), self.forced_chatgpt_workspace_id())
             } else {
                 let refresher = match self.inner.read() {
                     Ok(guard) => guard.external_refresher.clone(),
