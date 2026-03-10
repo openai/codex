@@ -1,13 +1,12 @@
 //! Subprocess coverage for custom CA behavior that must build a real reqwest client.
 //!
-//! These tests intentionally run through `login_ca_probe` instead of calling the helper in-process:
-//! reqwest client construction is not hermetic on macOS sandboxed runs, and these cases also need
-//! exact control over inherited CA environment variables. The probe disables reqwest proxy
-//! autodetection because `reqwest::Client::builder().build()` can panic inside
-//! `system-configuration` while probing macOS proxy settings under seatbelt. The probe-level
-//! workaround keeps these tests focused on custom-CA success and failure instead of failing first
-//! on unrelated platform proxy discovery. These tests still stop at client construction: they
-//! verify CA file selection, PEM parsing, and user-facing errors, not a full TLS handshake.
+//! These tests intentionally run through `custom_ca_probe` and
+//! `build_reqwest_client_for_subprocess_tests` instead of calling the helper in-process. The
+//! detailed explanation of what "hermetic" means here lives in `codex_client::custom_ca`; these
+//! tests add the process-level half of that contract by scrubbing inherited CA environment
+//! variables before each subprocess launch. They still stop at client construction: the
+//! assertions here cover CA file selection, PEM parsing, and user-facing errors, not a full TLS
+//! handshake.
 
 use codex_utils_cargo_bin::cargo_bin;
 use std::fs;
@@ -32,8 +31,8 @@ fn write_cert_file(temp_dir: &TempDir, name: &str, contents: &str) -> std::path:
 
 fn run_probe(envs: &[(&str, &Path)]) -> std::process::Output {
     let mut cmd = Command::new(
-        cargo_bin("login_ca_probe")
-            .unwrap_or_else(|error| panic!("failed to locate login_ca_probe: {error}")),
+        cargo_bin("custom_ca_probe")
+            .unwrap_or_else(|error| panic!("failed to locate custom_ca_probe: {error}")),
     );
     // `Command` inherits the parent environment by default, so scrub CA-related variables first or
     // these tests can accidentally pass/fail based on the developer shell or CI runner.
@@ -43,7 +42,7 @@ fn run_probe(envs: &[(&str, &Path)]) -> std::process::Output {
         cmd.env(key, value);
     }
     cmd.output()
-        .unwrap_or_else(|error| panic!("failed to run login_ca_probe: {error}"))
+        .unwrap_or_else(|error| panic!("failed to run custom_ca_probe: {error}"))
 }
 
 #[test]
