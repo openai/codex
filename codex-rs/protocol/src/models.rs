@@ -495,8 +495,7 @@ impl DeveloperInstructions {
 
     pub fn realtime_start_message_with_instructions(instructions: &str) -> Self {
         DeveloperInstructions::new(format!(
-            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
-            instructions
+            "{REALTIME_CONVERSATION_OPEN_TAG}\n{instructions}\n{REALTIME_CONVERSATION_CLOSE_TAG}"
         ))
     }
 
