@@ -5221,30 +5221,31 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let mut remote_sync_error = None;
 
         if force_remote_sync {
             let auth = self.auth_manager.auth().await;
-            let sync_result = match plugins_manager
+            match plugins_manager
                 .sync_plugins_from_remote(&config, auth.as_ref())
                 .await
             {
-                Ok(sync_result) => sync_result,
-                Err(err) => {
-                    self.send_internal_error(
-                        request_id,
-                        format!("failed to sync remote plugin state: {err}"),
-                    )
-                    .await;
-                    return;
+                Ok(sync_result) => {
+                    info!(
+                        installed_plugin_ids = ?sync_result.installed_plugin_ids,
+                        enabled_plugin_ids = ?sync_result.enabled_plugin_ids,
+                        disabled_plugin_ids = ?sync_result.disabled_plugin_ids,
+                        uninstalled_plugin_ids = ?sync_result.uninstalled_plugin_ids,
+                        "completed plugin/list remote sync"
+                    );
                 }
-            };
-            info!(
-                installed_plugin_ids = ?sync_result.installed_plugin_ids,
-                enabled_plugin_ids = ?sync_result.enabled_plugin_ids,
-                disabled_plugin_ids = ?sync_result.disabled_plugin_ids,
-                uninstalled_plugin_ids = ?sync_result.uninstalled_plugin_ids,
-                "completed plugin/list remote sync"
-            );
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "plugin/list remote sync failed; returning local marketplace state"
+                    );
+                    remote_sync_error = Some(err.to_string());
+                }
+            }
 
             config = match self.load_latest_config(None).await {
                 Ok(config) => config,
@@ -5317,7 +5318,13 @@ impl CodexMessageProcessor {
         };
 
         self.outgoing
-            .send_response(request_id, PluginListResponse { marketplaces: data })
+            .send_response(
+                request_id,
+                PluginListResponse {
+                    marketplaces: data,
+                    remote_sync_error,
+                },
+            )
             .await;
     }
 

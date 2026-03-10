@@ -12517,6 +12517,12 @@
               "$ref": "#/definitions/v2/PluginMarketplaceEntry"
             },
             "type": "array"
+          },
+          "remoteSyncError": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

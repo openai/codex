@@ -456,6 +456,52 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
 }
 
 #[tokio::test]
+async fn plugin_list_force_remote_sync_returns_remote_sync_error_on_fail_open() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_plugin_sync_config(codex_home.path(), "https://chatgpt.com/backend-api/")?;
+    write_openai_curated_marketplace(codex_home.path(), &["linear"])?;
+    write_installed_plugin(&codex_home, "openai-curated", "linear")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            force_remote_sync: true,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    assert!(
+        response
+            .remote_sync_error
+            .as_deref()
+            .is_some_and(|message| message.contains("chatgpt authentication required"))
+    );
+    let curated_marketplace = response
+        .marketplaces
+        .into_iter()
+        .find(|marketplace| marketplace.name == "openai-curated")
+        .expect("expected openai-curated marketplace entry");
+    assert_eq!(
+        curated_marketplace
+            .plugins
+            .into_iter()
+            .map(|plugin| (plugin.id, plugin.installed, plugin.enabled))
+            .collect::<Vec<_>>(),
+        vec![("linear@openai-curated".to_string(), true, false)]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
@@ -501,6 +547,7 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
     )
     .await??;
     let response: PluginListResponse = to_response(response)?;
+    assert_eq!(response.remote_sync_error, None);
 
     let curated_marketplace = response
         .marketplaces

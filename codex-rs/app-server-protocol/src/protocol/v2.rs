@@ -2686,6 +2686,7 @@ pub struct PluginListParams {
 #[ts(export_to = "v2/")]
 pub struct PluginListResponse {
     pub marketplaces: Vec<PluginMarketplaceEntry>,
+    pub remote_sync_error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -6321,12 +6322,12 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(PluginListParams {
-                cwds: Some(vec![AbsolutePathBuf::try_from("/repo").unwrap()]),
+                cwds: None,
                 force_remote_sync: true,
             })
             .unwrap(),
             json!({
-                "cwds": ["/repo"],
+                "cwds": null,
                 "forceRemoteSync": true,
             }),
         );

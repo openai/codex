@@ -8986,6 +8986,12 @@
             "$ref": "#/definitions/PluginMarketplaceEntry"
           },
           "type": "array"
+        },
+        "remoteSyncError": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

@@ -430,13 +430,7 @@ impl PluginsManager {
         auth: Option<&CodexAuth>,
     ) -> Result<RemotePluginSyncResult, PluginRemoteSyncError> {
         info!("starting remote plugin sync");
-        let remote_plugins = match fetch_remote_plugin_status(config, auth).await {
-            Ok(remote_plugins) => remote_plugins,
-            Err(err) => {
-                warn!(error = %err, "skipping remote plugin sync because remote state could not be fetched");
-                return Ok(RemotePluginSyncResult::default());
-            }
-        };
+        let remote_plugins = fetch_remote_plugin_status(config, auth).await?;
         let configured_plugins = configured_plugins_from_stack(&config.config_layer_stack);
         let curated_marketplace_root = curated_plugins_repo_path(self.codex_home.as_path());
         let curated_marketplace_path = AbsolutePathBuf::try_from(
