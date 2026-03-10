@@ -1,7 +1,6 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
-use crate::config::types::BundledSkillsConfig;
 use crate::config::types::ApprovalReviewPolicy;
 use crate::config::types::BundledSkillsConfig;
 use crate::config::types::FeedbackConfigToml;
@@ -2825,6 +2824,47 @@ async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
             .as_ref()
             .and_then(|features| features.entries.get("guardian_approval")),
         Some(&true),
+    );
+    assert_eq!(
+        parsed
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        None,
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn set_feature_enabled_clears_default_false_feature_in_profile() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("guardian_approval", true)
+        .apply()
+        .await?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("guardian_approval", false)
+        .apply()
+        .await?;
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    let parsed: ConfigToml = toml::from_str(&serialized)?;
+    let profile = parsed
+        .profiles
+        .get("dev")
+        .expect("profile should be created");
+
+    assert_eq!(
+        profile
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        None,
     );
     assert_eq!(
         parsed

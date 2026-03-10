@@ -1,5 +1,6 @@
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
+use crate::features::Feature;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use anyhow::Context;
@@ -858,6 +859,10 @@ impl ConfigEditsBuilder {
     }
 
     /// Enable or disable a feature flag by key under the `[features]` table.
+    ///
+    /// Disabling a default-false feature clears the scoped key instead of
+    /// persisting `false`, so the config does not pin the feature once it
+    /// graduates to globally enabled.
     pub fn set_feature_enabled(mut self, key: &str, enabled: bool) -> Self {
         let segments = if let Some(profile) = self.profile.as_ref() {
             vec![
@@ -869,10 +874,14 @@ impl ConfigEditsBuilder {
         } else {
             vec!["features".to_string(), key.to_string()]
         };
-        self.edits.push(ConfigEdit::SetPath {
-            segments,
-            value: value(enabled),
-        });
+        if enabled || !Feature::from_key(key).is_some_and(|feature| !feature.default_enabled()) {
+            self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(enabled),
+            });
+        } else {
+            self.edits.push(ConfigEdit::ClearPath { segments });
+        }
         self
     }
 

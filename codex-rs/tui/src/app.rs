@@ -1002,18 +1002,7 @@ impl App {
                     },
                 ]);
             }
-            if effective_enabled {
-                builder = builder.set_feature_enabled(feature_key, true);
-            } else if feature.default_enabled() {
-                builder = builder.set_feature_enabled(feature_key, false);
-            } else {
-                // If the feature already default to `false`, we drop the key
-                // in the config file so that the user does not miss the feature
-                // once it gets globally released.
-                builder = builder.with_edits(vec![ConfigEdit::ClearPath {
-                    segments: vec!["features".to_string(), feature_key.to_string()],
-                }]);
-            }
+            builder = builder.set_feature_enabled(feature_key, effective_enabled);
         }
 
         if windows_sandbox_changed {
