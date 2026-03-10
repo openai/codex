@@ -402,6 +402,7 @@ impl PendingInteractiveReplayState {
 #[cfg(test)]
 mod tests {
     use super::super::ThreadEventStore;
+    use super::super::ThreadReplayItem;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::Op;
@@ -424,6 +425,17 @@ mod tests {
         }
     }
 
+    fn snapshot_events(snapshot: &super::super::ThreadEventSnapshot) -> Vec<&Event> {
+        snapshot
+            .replay_timeline
+            .iter()
+            .filter_map(|item| match item {
+                ThreadReplayItem::Event(event) => Some(event),
+                ThreadReplayItem::HistoryCell(_) => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn thread_event_snapshot_keeps_pending_request_user_input() {
         let mut store = ThreadEventStore::new(8);
@@ -441,9 +453,10 @@ mod tests {
         store.push_event(request);
 
         let snapshot = store.snapshot();
-        assert_eq!(snapshot.events.len(), 1);
+        let events = snapshot_events(&snapshot);
+        assert_eq!(events.len(), 1);
         assert!(matches!(
-            snapshot.events.first().map(|event| &event.msg),
+            events.first().map(|event| &event.msg),
             Some(EventMsg::RequestUserInput(_))
         ));
     }
@@ -454,9 +467,10 @@ mod tests {
         store.push_event(request_permissions_event("call-1", "turn-1"));
 
         let snapshot = store.snapshot();
-        assert_eq!(snapshot.events.len(), 1);
+        let events = snapshot_events(&snapshot);
+        assert_eq!(events.len(), 1);
         assert!(matches!(
-            snapshot.events.first().map(|event| &event.msg),
+            events.first().map(|event| &event.msg),
             Some(EventMsg::RequestPermissions(_))
         ));
     }
@@ -475,7 +489,7 @@ mod tests {
 
         let snapshot = store.snapshot();
         assert!(
-            snapshot.events.is_empty(),
+            snapshot_events(&snapshot).is_empty(),
             "resolved request_permissions prompt should not replay on thread switch"
         );
     }
@@ -503,7 +517,7 @@ mod tests {
 
         let snapshot = store.snapshot();
         assert!(
-            snapshot.events.is_empty(),
+            snapshot_events(&snapshot).is_empty(),
             "resolved request_user_input prompt should not replay on thread switch"
         );
     }
@@ -540,7 +554,7 @@ mod tests {
 
         let snapshot = store.snapshot();
         assert!(
-            snapshot.events.is_empty(),
+            snapshot_events(&snapshot).is_empty(),
             "resolved exec approval prompt should not replay on thread switch"
         );
     }
@@ -578,9 +592,10 @@ mod tests {
         });
 
         let snapshot = store.snapshot();
-        assert_eq!(snapshot.events.len(), 1);
+        let events = snapshot_events(&snapshot);
+        assert_eq!(events.len(), 1);
         assert!(matches!(
-            snapshot.events.first().map(|event| &event.msg),
+            events.first().map(|event| &event.msg),
             Some(EventMsg::RequestUserInput(ev)) if ev.call_id == "call-2"
         ));
     }
@@ -617,9 +632,10 @@ mod tests {
         });
 
         let snapshot = store.snapshot();
-        assert_eq!(snapshot.events.len(), 1);
+        let events = snapshot_events(&snapshot);
+        assert_eq!(events.len(), 1);
         assert!(matches!(
-            snapshot.events.first().map(|event| &event.msg),
+            events.first().map(|event| &event.msg),
             Some(EventMsg::RequestUserInput(ev)) if ev.call_id == "call-2"
         ));
     }
@@ -647,7 +663,7 @@ mod tests {
 
         let snapshot = store.snapshot();
         assert!(
-            snapshot.events.is_empty(),
+            snapshot_events(&snapshot).is_empty(),
             "resolved patch approval prompt should not replay on thread switch"
         );
     }
@@ -707,7 +723,8 @@ mod tests {
         });
 
         let snapshot = store.snapshot();
-        assert!(snapshot.events.iter().all(|event| {
+        let events = snapshot_events(&snapshot);
+        assert!(events.iter().all(|event| {
             !matches!(
                 &event.msg,
                 EventMsg::ExecApprovalRequest(_)
@@ -748,7 +765,7 @@ mod tests {
 
         let snapshot = store.snapshot();
         assert!(
-            snapshot.events.is_empty(),
+            snapshot_events(&snapshot).is_empty(),
             "resolved elicitation prompt should not replay on thread switch"
         );
     }

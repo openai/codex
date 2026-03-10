@@ -269,19 +269,23 @@ struct SessionSummary {
 #[derive(Debug, Clone)]
 struct ThreadEventSnapshot {
     session_configured: Option<Event>,
-    events: Vec<Event>,
+    replay_timeline: Vec<ThreadReplayItem>,
     input_state: Option<ThreadInputState>,
-    thread_history_cells: Vec<Arc<dyn HistoryCell>>,
+}
+
+#[derive(Debug, Clone)]
+enum ThreadReplayItem {
+    Event(Event),
+    HistoryCell(Arc<dyn HistoryCell>),
 }
 
 #[derive(Debug)]
 struct ThreadEventStore {
     session_configured: Option<Event>,
-    buffer: VecDeque<Event>,
+    replay_timeline: VecDeque<ThreadReplayItem>,
     user_message_ids: HashSet<String>,
     pending_interactive_replay: PendingInteractiveReplayState,
     input_state: Option<ThreadInputState>,
-    thread_history_cells: Vec<Arc<dyn HistoryCell>>,
     capacity: usize,
     active: bool,
 }
@@ -290,11 +294,10 @@ impl ThreadEventStore {
     fn new(capacity: usize) -> Self {
         Self {
             session_configured: None,
-            buffer: VecDeque::new(),
+            replay_timeline: VecDeque::new(),
             user_message_ids: HashSet::new(),
             pending_interactive_replay: PendingInteractiveReplayState::default(),
             input_state: None,
-            thread_history_cells: Vec::new(),
             capacity,
             active: false,
         }
@@ -339,38 +342,38 @@ impl ThreadEventStore {
         {
             return;
         }
-        self.buffer.push_back(event);
-        if self.buffer.len() > self.capacity
-            && let Some(removed) = self.buffer.pop_front()
-        {
-            self.pending_interactive_replay.note_evicted_event(&removed);
-            if matches!(removed.msg, EventMsg::UserMessage(_)) && !removed.id.is_empty() {
-                self.user_message_ids.remove(&removed.id);
-            }
-        }
+        self.replay_timeline
+            .push_back(ThreadReplayItem::Event(event));
+        self.evict_oldest_replay_item();
     }
 
     fn snapshot(&self) -> ThreadEventSnapshot {
         ThreadEventSnapshot {
             session_configured: self.session_configured.clone(),
-            // Thread switches replay buffered events into a rebuilt ChatWidget. Only replay
-            // interactive prompts that are still pending, or answered approvals/input will reappear.
-            events: self
-                .buffer
+            // Thread switches replay a rebuilt ChatWidget in app-loop order. Only replay
+            // interactive prompt events that are still pending, or answered approvals/input will
+            // reappear on thread switches.
+            replay_timeline: self
+                .replay_timeline
                 .iter()
-                .filter(|event| {
-                    self.pending_interactive_replay
+                .filter_map(|item| match item {
+                    ThreadReplayItem::Event(event) => self
+                        .pending_interactive_replay
                         .should_replay_snapshot_event(event)
+                        .then(|| ThreadReplayItem::Event(event.clone())),
+                    ThreadReplayItem::HistoryCell(cell) => {
+                        Some(ThreadReplayItem::HistoryCell(cell.clone()))
+                    }
                 })
-                .cloned()
                 .collect(),
             input_state: self.input_state.clone(),
-            thread_history_cells: self.thread_history_cells.clone(),
         }
     }
 
     fn push_thread_history_cell(&mut self, cell: Arc<dyn HistoryCell>) {
-        self.thread_history_cells.push(cell);
+        self.replay_timeline
+            .push_back(ThreadReplayItem::HistoryCell(cell));
+        self.evict_oldest_replay_item();
     }
 
     fn note_outbound_op(&mut self, op: &Op) {
@@ -378,16 +381,33 @@ impl ThreadEventStore {
     }
 
     fn current_turn_id(&self) -> Option<String> {
-        for event in self.buffer.iter().rev() {
-            match &event.msg {
-                EventMsg::TurnStarted(event) => return Some(event.turn_id.clone()),
-                EventMsg::TurnComplete(_)
-                | EventMsg::TurnAborted(_)
-                | EventMsg::ShutdownComplete => return None,
-                _ => {}
+        for item in self.replay_timeline.iter().rev() {
+            if let ThreadReplayItem::Event(event) = item {
+                match &event.msg {
+                    EventMsg::TurnStarted(event) => return Some(event.turn_id.clone()),
+                    EventMsg::TurnComplete(_)
+                    | EventMsg::TurnAborted(_)
+                    | EventMsg::ShutdownComplete => return None,
+                    _ => {}
+                }
             }
         }
         None
+    }
+
+    fn evict_oldest_replay_item(&mut self) {
+        while self.replay_timeline.len() > self.capacity {
+            let Some(removed) = self.replay_timeline.pop_front() else {
+                break;
+            };
+            let ThreadReplayItem::Event(event) = removed else {
+                continue;
+            };
+            self.pending_interactive_replay.note_evicted_event(&event);
+            if matches!(event.msg, EventMsg::UserMessage(_)) && !event.id.is_empty() {
+                self.user_message_ids.remove(&event.id);
+            }
+        }
     }
 
     fn op_can_change_pending_replay_state(op: &Op) -> bool {
@@ -1831,12 +1851,14 @@ impl App {
         self.chat_widget.set_queue_autosend_suppressed(true);
         self.chat_widget
             .restore_thread_input_state(snapshot.input_state);
-        for event in snapshot.events {
-            self.handle_codex_event_replay(event);
-        }
-        if !snapshot.thread_history_cells.is_empty() {
-            self.has_emitted_history_lines = true;
-            self.transcript_cells.extend(snapshot.thread_history_cells);
+        for item in snapshot.replay_timeline {
+            match item {
+                ThreadReplayItem::Event(event) => self.handle_codex_event_replay(event),
+                ThreadReplayItem::HistoryCell(cell) => {
+                    self.app_event_tx
+                        .send(AppEvent::InsertReplayHistoryCell(cell));
+                }
+            }
         }
         self.chat_widget.set_queue_autosend_suppressed(false);
         if resume_restored_queue {
@@ -2543,6 +2565,9 @@ impl App {
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell.into());
             }
+            AppEvent::InsertReplayHistoryCell(cell) => {
+                self.insert_history_cell(tui, cell);
+            }
             AppEvent::InsertThreadHistoryCell { thread_id, cell } => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(channel) = self.thread_event_channels.get(&thread_id) {
@@ -2587,7 +2612,7 @@ impl App {
                 self.handle_routed_thread_event(thread_id, event).await?;
             }
             AppEvent::Exit(mode) => {
-                return Ok(self.handle_exit_mode(mode));
+                return Ok(self.handle_exit_mode(mode).await);
             }
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
@@ -3626,14 +3651,14 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
-    fn handle_exit_mode(&mut self, mode: ExitMode) -> AppRunControl {
+    async fn handle_exit_mode(&mut self, mode: ExitMode) -> AppRunControl {
         match mode {
             ExitMode::ShutdownFirst => {
                 // Mark the thread we are explicitly shutting down for exit so
                 // its shutdown completion does not trigger agent failover.
                 self.pending_shutdown_exit_thread_id =
                     self.active_thread_id.or(self.chat_widget.thread_id());
-                if self.chat_widget.submit_op(Op::Shutdown) {
+                if self.submit_shutdown_for_exit().await {
                     AppRunControl::Continue
                 } else {
                     self.pending_shutdown_exit_thread_id = None;
@@ -3644,6 +3669,38 @@ impl App {
                 self.pending_shutdown_exit_thread_id = None;
                 AppRunControl::Exit(ExitReason::UserRequested)
             }
+        }
+    }
+
+    async fn submit_shutdown_for_exit(&mut self) -> bool {
+        let Some(thread_id) = self.pending_shutdown_exit_thread_id else {
+            return false;
+        };
+
+        if self.active_session_events_via_app_server && self.primary_thread_id == Some(thread_id) {
+            crate::session_log::log_outbound_op(&Op::Shutdown);
+            match self.server.get_thread(thread_id).await {
+                Ok(thread) => match thread.submit(Op::Shutdown).await {
+                    Ok(_) => {
+                        self.note_active_thread_outbound_op(&Op::Shutdown).await;
+                        true
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            "failed to submit shutdown to primary app-server thread {thread_id}: {err}"
+                        );
+                        false
+                    }
+                },
+                Err(err) => {
+                    tracing::error!(
+                        "failed to find primary app-server thread {thread_id} for shutdown: {err}"
+                    );
+                    false
+                }
+            }
+        } else {
+            self.chat_widget.submit_op(Op::Shutdown)
         }
     }
 
@@ -4169,6 +4226,9 @@ mod tests {
     use crate::app_backtrack::BacktrackSelection;
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
+    use crate::chatwidget::ChatWidget;
+    use crate::chatwidget::ChatWidgetInit;
+    use crate::chatwidget::InProcessAgentContext;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::chatwidget::tests::set_chatgpt_auth;
     use crate::file_search::FileSearchManager;
@@ -4177,6 +4237,7 @@ mod tests {
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
     use crate::multi_agents::AgentPickerThreadEntry;
+    use crate::tui::FrameRequester;
     use assert_matches::assert_matches;
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
@@ -4781,15 +4842,14 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![Event {
+                replay_timeline: vec![ThreadReplayItem::Event(Event {
                     id: "turn-complete".to_string(),
                     msg: EventMsg::TurnComplete(TurnCompleteEvent {
                         turn_id: "turn-1".to_string(),
                         last_agent_message: None,
                     }),
-                }],
+                })],
                 input_state: Some(input_state),
-                thread_history_cells: Vec::new(),
             },
             true,
         );
@@ -4864,15 +4924,14 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![Event {
+                replay_timeline: vec![ThreadReplayItem::Event(Event {
                     id: "turn-complete".to_string(),
                     msg: EventMsg::TurnComplete(TurnCompleteEvent {
                         turn_id: "turn-1".to_string(),
                         last_agent_message: None,
                     }),
-                }],
+                })],
                 input_state: Some(input_state),
-                thread_history_cells: Vec::new(),
             },
             false,
         );
@@ -4945,9 +5004,8 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![],
+                replay_timeline: vec![],
                 input_state: Some(input_state),
-                thread_history_cells: Vec::new(),
             },
             true,
         );
@@ -5020,25 +5078,24 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![
-                    Event {
+                replay_timeline: vec![
+                    ThreadReplayItem::Event(Event {
                         id: "older-turn-complete".to_string(),
                         msg: EventMsg::TurnComplete(TurnCompleteEvent {
                             turn_id: "turn-0".to_string(),
                             last_agent_message: None,
                         }),
-                    },
-                    Event {
+                    }),
+                    ThreadReplayItem::Event(Event {
                         id: "latest-turn-started".to_string(),
                         msg: EventMsg::TurnStarted(TurnStartedEvent {
                             turn_id: "turn-1".to_string(),
                             model_context_window: None,
                             collaboration_mode_kind: Default::default(),
                         }),
-                    },
+                    }),
                 ],
                 input_state: Some(input_state),
-                thread_history_cells: Vec::new(),
             },
             true,
         );
@@ -5207,9 +5264,8 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![],
+                replay_timeline: vec![],
                 input_state: Some(input_state),
-                thread_history_cells: Vec::new(),
             },
             true,
         );
@@ -5308,9 +5364,8 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![],
+                replay_timeline: vec![],
                 input_state: Some(input_state),
-                thread_history_cells: Vec::new(),
             },
             true,
         );
@@ -5384,15 +5439,14 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![Event {
+                replay_timeline: vec![ThreadReplayItem::Event(Event {
                     id: "turn-aborted".to_string(),
                     msg: EventMsg::TurnAborted(TurnAbortedEvent {
                         turn_id: Some("turn-1".to_string()),
                         reason: TurnAbortReason::ReviewEnded,
                     }),
-                }],
+                })],
                 input_state: Some(input_state),
-                thread_history_cells: Vec::new(),
             },
             true,
         );
@@ -5406,6 +5460,67 @@ mod tests {
             new_op_rx.try_recv().is_err(),
             "replayed interrupted turns should restore queued input for editing, not submit it"
         );
+    }
+
+    #[tokio::test]
+    async fn replay_thread_snapshot_keeps_local_history_cells_in_rollback_order() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session_configured: None,
+                replay_timeline: vec![
+                    ThreadReplayItem::HistoryCell(Arc::new(UserHistoryCell {
+                        message: "first local prompt".to_string(),
+                        text_elements: Vec::new(),
+                        local_image_paths: Vec::new(),
+                        remote_image_urls: Vec::new(),
+                    })),
+                    ThreadReplayItem::Event(Event {
+                        id: "rollback".to_string(),
+                        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+                    }),
+                    ThreadReplayItem::HistoryCell(Arc::new(UserHistoryCell {
+                        message: "second local prompt".to_string(),
+                        text_elements: Vec::new(),
+                        local_image_paths: Vec::new(),
+                        remote_image_urls: Vec::new(),
+                    })),
+                ],
+                input_state: None,
+            },
+            false,
+        );
+
+        assert!(
+            app.transcript_cells.is_empty(),
+            "snapshot replay should enqueue local cells instead of appending them directly"
+        );
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertReplayHistoryCell(cell) => app.transcript_cells.push(cell),
+                AppEvent::InsertHistoryCell(cell) => app.transcript_cells.push(cell.into()),
+                AppEvent::ApplyThreadRollback { num_turns } => {
+                    crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
+                        &mut app.transcript_cells,
+                        num_turns,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(user_messages, vec!["second local prompt".to_string()]);
     }
 
     #[tokio::test]
@@ -7569,7 +7684,7 @@ mod tests {
         let thread_id = ThreadId::new();
         app.active_thread_id = Some(thread_id);
 
-        let control = app.handle_exit_mode(ExitMode::ShutdownFirst);
+        let control = app.handle_exit_mode(ExitMode::ShutdownFirst).await;
 
         assert_eq!(app.pending_shutdown_exit_thread_id, None);
         assert!(matches!(
@@ -7584,11 +7699,75 @@ mod tests {
         let thread_id = ThreadId::new();
         app.active_thread_id = Some(thread_id);
 
-        let control = app.handle_exit_mode(ExitMode::ShutdownFirst);
+        let control = app.handle_exit_mode(ExitMode::ShutdownFirst).await;
 
         assert_eq!(app.pending_shutdown_exit_thread_id, Some(thread_id));
         assert!(matches!(control, AppRunControl::Continue));
         assert_eq!(op_rx.try_recv(), Ok(Op::Shutdown));
+    }
+
+    #[tokio::test]
+    async fn shutdown_first_exit_submits_primary_app_server_shutdown_to_core_thread() {
+        let mut app = make_test_app().await;
+        let (thread_scoped_op_tx, mut thread_scoped_op_rx) = unbounded_channel();
+        let (codex_op_tx, mut codex_op_rx) = unbounded_channel();
+        let new_thread = app
+            .server
+            .start_thread(app.config.clone())
+            .await
+            .expect("start thread");
+        let thread = Arc::clone(&new_thread.thread);
+        let thread_id = new_thread.thread_id;
+        let resolved_model =
+            codex_core::test_support::get_model_offline(app.config.model.as_deref());
+
+        app.chat_widget = ChatWidget::new_with_op_sender(
+            ChatWidgetInit {
+                config: app.config.clone(),
+                frame_requester: FrameRequester::test_dummy(),
+                app_event_tx: app.app_event_tx.clone(),
+                initial_user_message: None,
+                enhanced_keys_supported: false,
+                auth_manager: app.auth_manager.clone(),
+                models_manager: app.server.get_models_manager(),
+                feedback: codex_feedback::CodexFeedback::new(),
+                is_first_run: false,
+                feedback_audience: FeedbackAudience::External,
+                model: Some(resolved_model.clone()),
+                startup_tooltip_override: None,
+                status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+                session_telemetry: test_session_telemetry(&app.config, resolved_model.as_str()),
+                in_process_context: InProcessAgentContext {
+                    arg0_paths: Arg0DispatchPaths::default(),
+                    cli_kv_overrides: Vec::new(),
+                    cloud_requirements: CloudRequirementsLoader::default(),
+                },
+            },
+            codex_op_tx,
+            Some(thread_scoped_op_tx),
+            Some(thread_id),
+        );
+        app.active_session_events_via_app_server = true;
+        app.active_thread_id = Some(thread_id);
+        app.primary_thread_id = Some(thread_id);
+
+        let control = app.handle_exit_mode(ExitMode::ShutdownFirst).await;
+
+        assert_eq!(app.pending_shutdown_exit_thread_id, Some(thread_id));
+        assert!(matches!(control, AppRunControl::Continue));
+        assert_eq!(thread_scoped_op_rx.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(codex_op_rx.try_recv(), Err(TryRecvError::Empty));
+
+        time::timeout(std::time::Duration::from_secs(5), async move {
+            loop {
+                let event = thread.next_event().await.expect("thread event");
+                if matches!(event.msg, EventMsg::ShutdownComplete) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("expected primary thread to shut down through core");
     }
 
     #[tokio::test]
