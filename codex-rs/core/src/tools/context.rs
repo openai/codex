@@ -6,10 +6,12 @@ use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ShellToolCallParams;
 use codex_utils_string::take_bytes_at_char_boundary;
+use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -61,62 +63,108 @@ impl ToolPayload {
     }
 }
 
-#[derive(Clone)]
-pub enum ToolOutput {
-    Function {
-        // Canonical output body for function-style tools. This may be plain text
-        // or structured content items.
-        body: FunctionCallOutputBody,
-        success: Option<bool>,
-    },
-    Mcp {
-        result: Result<CallToolResult, String>,
-    },
+pub trait ToolOutput: Any + Send {
+    fn log_preview(&self) -> String;
+
+    fn success_for_logging(&self) -> bool;
+
+    fn into_response(self: Box<Self>, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 }
 
-impl ToolOutput {
-    pub fn log_preview(&self) -> String {
-        match self {
-            ToolOutput::Function { body, .. } => {
-                telemetry_preview(&body.to_text().unwrap_or_default())
-            }
-            ToolOutput::Mcp { result } => format!("{result:?}"),
-        }
+pub type ToolOutputBox = Box<dyn ToolOutput>;
+
+pub struct McpToolOutput {
+    pub result: Result<CallToolResult, String>,
+}
+
+impl ToolOutput for McpToolOutput {
+    fn log_preview(&self) -> String {
+        format!("{:?}", self.result)
     }
 
-    pub fn success_for_logging(&self) -> bool {
-        match self {
-            ToolOutput::Function { success, .. } => success.unwrap_or(true),
-            ToolOutput::Mcp { result } => result.is_ok(),
-        }
+    fn success_for_logging(&self) -> bool {
+        self.result.is_ok()
     }
 
-    pub fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        match self {
-            ToolOutput::Function { body, success } => {
-                // `custom_tool_call` is the Responses API item type for freeform
-                // tools (`ToolSpec::Freeform`, e.g. freeform `apply_patch` or
-                // `js_repl`).
-                if matches!(payload, ToolPayload::Custom { .. }) {
-                    return ResponseInputItem::CustomToolCallOutput {
-                        call_id: call_id.to_string(),
-                        output: FunctionCallOutputPayload { body, success },
-                    };
-                }
-
-                // Function-style outputs (JSON function tools, including dynamic
-                // tools and MCP adaptation) preserve the exact body shape.
-                ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.to_string(),
-                    output: FunctionCallOutputPayload { body, success },
-                }
-            }
-            // Direct MCP response path for MCP tool result envelopes.
-            ToolOutput::Mcp { result } => ResponseInputItem::McpToolCallOutput {
-                call_id: call_id.to_string(),
-                result,
-            },
+    fn into_response(self: Box<Self>, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+        let Self { result } = *self;
+        ResponseInputItem::McpToolCallOutput {
+            call_id: call_id.to_string(),
+            result,
         }
+    }
+}
+
+pub struct TextToolOutput {
+    pub text: String,
+    pub success: Option<bool>,
+}
+
+impl ToolOutput for TextToolOutput {
+    fn log_preview(&self) -> String {
+        telemetry_preview(&self.text)
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.success.unwrap_or(true)
+    }
+
+    fn into_response(self: Box<Self>, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        let Self { text, success } = *self;
+        function_tool_response(
+            call_id,
+            payload,
+            FunctionCallOutputBody::Text(text),
+            success,
+        )
+    }
+}
+
+pub struct ContentToolOutput {
+    pub content: Vec<FunctionCallOutputContentItem>,
+    pub success: Option<bool>,
+}
+
+impl ToolOutput for ContentToolOutput {
+    fn log_preview(&self) -> String {
+        telemetry_preview(
+            &FunctionCallOutputBody::ContentItems(self.content.clone())
+                .to_text()
+                .unwrap_or_default(),
+        )
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.success.unwrap_or(true)
+    }
+
+    fn into_response(self: Box<Self>, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        let Self { content, success } = *self;
+        function_tool_response(
+            call_id,
+            payload,
+            FunctionCallOutputBody::ContentItems(content),
+            success,
+        )
+    }
+}
+
+fn function_tool_response(
+    call_id: &str,
+    payload: &ToolPayload,
+    body: FunctionCallOutputBody,
+    success: Option<bool>,
+) -> ResponseInputItem {
+    if matches!(payload, ToolPayload::Custom { .. }) {
+        return ResponseInputItem::CustomToolCallOutput {
+            call_id: call_id.to_string(),
+            output: FunctionCallOutputPayload { body, success },
+        };
+    }
+
+    ResponseInputItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload { body, success },
     }
 }
 
@@ -163,7 +211,6 @@ fn telemetry_preview(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::models::FunctionCallOutputContentItem;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -171,10 +218,10 @@ mod tests {
         let payload = ToolPayload::Custom {
             input: "patch".to_string(),
         };
-        let response = ToolOutput::Function {
-            body: FunctionCallOutputBody::Text("patched".to_string()),
+        let response = Box::new(TextToolOutput {
+            text: "patched".to_string(),
             success: Some(true),
-        }
+        })
         .into_response("call-42", &payload);
 
         match response {
@@ -193,10 +240,10 @@ mod tests {
         let payload = ToolPayload::Function {
             arguments: "{}".to_string(),
         };
-        let response = ToolOutput::Function {
-            body: FunctionCallOutputBody::Text("ok".to_string()),
+        let response = Box::new(TextToolOutput {
+            text: "ok".to_string(),
             success: Some(true),
-        }
+        })
         .into_response("fn-1", &payload);
 
         match response {
@@ -215,8 +262,8 @@ mod tests {
         let payload = ToolPayload::Custom {
             input: "patch".to_string(),
         };
-        let response = ToolOutput::Function {
-            body: FunctionCallOutputBody::ContentItems(vec![
+        let response = Box::new(ContentToolOutput {
+            content: vec![
                 FunctionCallOutputContentItem::InputText {
                     text: "line 1".to_string(),
                 },
@@ -227,9 +274,9 @@ mod tests {
                 FunctionCallOutputContentItem::InputText {
                     text: "line 2".to_string(),
                 },
-            ]),
+            ],
             success: Some(true),
-        }
+        })
         .into_response("call-99", &payload);
 
         match response {
@@ -257,12 +304,10 @@ mod tests {
 
     #[test]
     fn log_preview_uses_content_items_when_plain_text_is_missing() {
-        let output = ToolOutput::Function {
-            body: FunctionCallOutputBody::ContentItems(vec![
-                FunctionCallOutputContentItem::InputText {
-                    text: "preview".to_string(),
-                },
-            ]),
+        let output = ContentToolOutput {
+            content: vec![FunctionCallOutputContentItem::InputText {
+                text: "preview".to_string(),
+            }],
             success: Some(true),
         };
 

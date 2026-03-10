@@ -1,4 +1,3 @@
-use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -13,8 +12,9 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::TextToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -107,7 +107,7 @@ impl ToolHandler for ApplyPatchHandler {
         true
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -140,10 +140,10 @@ impl ToolHandler for ApplyPatchHandler {
                 match apply_patch::apply_patch(turn.as_ref(), changes).await {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
-                        Ok(ToolOutput::Function {
-                            body: FunctionCallOutputBody::Text(content),
+                        Ok(Box::new(TextToolOutput {
+                            text: content,
                             success: Some(true),
-                        })
+                        }))
                     }
                     InternalApplyPatchInvocation::DelegateToExec(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
@@ -204,10 +204,10 @@ impl ToolHandler for ApplyPatchHandler {
                             Some(&tracker),
                         );
                         let content = emitter.finish(event_ctx, out).await?;
-                        Ok(ToolOutput::Function {
-                            body: FunctionCallOutputBody::Text(content),
+                        Ok(Box::new(TextToolOutput {
+                            text: content,
                             success: Some(true),
-                        })
+                        }))
                     }
                 }
             }
@@ -241,7 +241,7 @@ pub(crate) async fn intercept_apply_patch(
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
     tool_name: &str,
-) -> Result<Option<ToolOutput>, FunctionCallError> {
+) -> Result<Option<ToolOutputBox>, FunctionCallError> {
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
@@ -255,10 +255,10 @@ pub(crate) async fn intercept_apply_patch(
             match apply_patch::apply_patch(turn.as_ref(), changes).await {
                 InternalApplyPatchInvocation::Output(item) => {
                     let content = item?;
-                    Ok(Some(ToolOutput::Function {
-                        body: FunctionCallOutputBody::Text(content),
+                    Ok(Some(Box::new(TextToolOutput {
+                        text: content,
                         success: Some(true),
-                    }))
+                    })))
                 }
                 InternalApplyPatchInvocation::DelegateToExec(apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
@@ -317,10 +317,10 @@ pub(crate) async fn intercept_apply_patch(
                         tracker.as_ref().copied(),
                     );
                     let content = emitter.finish(event_ctx, out).await?;
-                    Ok(Some(ToolOutput::Function {
-                        body: FunctionCallOutputBody::Text(content),
+                    Ok(Some(Box::new(TextToolOutput {
+                        text: content,
                         success: Some(true),
-                    }))
+                    })))
                 }
             }
         }

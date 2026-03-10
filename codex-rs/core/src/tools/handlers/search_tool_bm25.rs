@@ -3,7 +3,6 @@ use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngineBuilder;
 use codex_app_server_protocol::AppInfo;
-use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -13,8 +12,9 @@ use crate::connectors;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
+use crate::tools::context::TextToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -78,7 +78,7 @@ impl ToolHandler for SearchToolBm25Handler {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
         let ToolInvocation {
             payload,
             session,
@@ -141,10 +141,10 @@ impl ToolHandler for SearchToolBm25Handler {
                 "tools": [],
             })
             .to_string();
-            return Ok(ToolOutput::Function {
-                body: FunctionCallOutputBody::Text(content),
+            return Ok(Box::new(TextToolOutput {
+                text: content,
                 success: Some(true),
-            });
+            }));
         }
 
         let documents: Vec<Document<usize>> = entries
@@ -184,10 +184,10 @@ impl ToolHandler for SearchToolBm25Handler {
         })
         .to_string();
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
+        Ok(Box::new(TextToolOutput {
+            text: content,
             success: Some(true),
-        })
+        }))
     }
 }
 
