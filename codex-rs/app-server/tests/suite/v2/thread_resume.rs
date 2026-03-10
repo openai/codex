@@ -1247,6 +1247,12 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
             diff: "new line\n".to_string(),
         }],
         status: PatchApplyStatus::InProgress,
+        approval: Some(codex_app_server_protocol::ItemApprovalState {
+            status: codex_app_server_protocol::ItemApprovalStatus::Pending,
+            pending_kind: Some(codex_app_server_protocol::ItemApprovalPendingKind::ManualRequest),
+            resolved_by: None,
+            automatic_review: None,
+        }),
     };
     assert_eq!(original_started, expected_file_change);
 
