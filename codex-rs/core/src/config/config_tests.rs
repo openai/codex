@@ -3322,7 +3322,7 @@ model = "gpt-5"
             .agent_roles
             .get("researcher")
             .and_then(|role| role.config_file.as_ref()),
-        Some(&home_agents_dir.join("researcher.toml"))
+        Some(&standalone_agents_dir.join("researcher.toml"))
     );
     assert_eq!(
         config
