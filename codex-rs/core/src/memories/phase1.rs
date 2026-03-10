@@ -4,6 +4,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::types::MemoriesConfig;
+use crate::contextual_user_message::is_memory_excluded_contextual_user_fragment;
 use crate::error::CodexErr;
 use crate::memories::metrics;
 use crate::memories::phase_one;
@@ -463,16 +464,14 @@ mod job {
     }
 
     /// Serializes filtered stage-1 memory items for prompt inclusion.
-    fn serialize_filtered_rollout_response_items(
+    pub(super) fn serialize_filtered_rollout_response_items(
         items: &[RolloutItem],
     ) -> crate::error::Result<String> {
         let filtered = items
             .iter()
             .filter_map(|item| {
-                if let RolloutItem::ResponseItem(item) = item
-                    && should_persist_response_item_for_memories(item)
-                {
-                    Some(item.clone())
+                if let RolloutItem::ResponseItem(item) = item {
+                    sanitize_response_item_for_memories(item)
                 } else {
                     None
                 }
@@ -480,6 +479,44 @@ mod job {
             .collect::<Vec<_>>();
         serde_json::to_string(&filtered).map_err(|err| {
             CodexErr::InvalidRequest(format!("failed to serialize rollout memory: {err}"))
+        })
+    }
+
+    fn sanitize_response_item_for_memories(item: &ResponseItem) -> Option<ResponseItem> {
+        let ResponseItem::Message {
+            id,
+            role,
+            content,
+            end_turn,
+            phase,
+        } = item
+        else {
+            return should_persist_response_item_for_memories(item).then(|| item.clone());
+        };
+
+        if role == "developer" {
+            return None;
+        }
+
+        if role != "user" {
+            return Some(item.clone());
+        }
+
+        let content = content
+            .iter()
+            .filter(|content_item| !is_memory_excluded_contextual_user_fragment(content_item))
+            .cloned()
+            .collect::<Vec<_>>();
+        if content.is_empty() {
+            return None;
+        }
+
+        Some(ResponseItem::Message {
+            id: id.clone(),
+            role: role.clone(),
+            content,
+            end_turn: *end_turn,
+            phase: phase.clone(),
         })
     }
 }
