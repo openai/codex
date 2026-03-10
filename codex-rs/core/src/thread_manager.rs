@@ -25,7 +25,6 @@ use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -145,18 +144,19 @@ pub(crate) struct ThreadManagerState {
 
 impl ThreadManager {
     pub fn new(
-        codex_home: PathBuf,
+        config: &Config,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
-        model_catalog: Option<ModelsResponse>,
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
+        let codex_home = config.codex_home.clone();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new(
             codex_home.clone(),
             Arc::clone(&plugins_manager),
+            config.bundled_skills_enabled(),
         ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {
@@ -166,7 +166,7 @@ impl ThreadManager {
                 models_manager: Arc::new(ModelsManager::new(
                     codex_home,
                     auth_manager.clone(),
-                    model_catalog,
+                    config.model_catalog.clone(),
                     collaboration_modes_config,
                 )),
                 skills_manager,
@@ -216,6 +216,7 @@ impl ThreadManager {
         let skills_manager = Arc::new(SkillsManager::new(
             codex_home.clone(),
             Arc::clone(&plugins_manager),
+            true,
         ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {

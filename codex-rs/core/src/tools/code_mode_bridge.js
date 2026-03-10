@@ -1,7 +1,5 @@
-(async () => {
 const __codexEnabledTools = __CODE_MODE_ENABLED_TOOLS_PLACEHOLDER__;
 const __codexEnabledToolNames = __codexEnabledTools.map((tool) => tool.name);
-const __codexToolKinds = new Map(__codexEnabledTools.map((tool) => [tool.name, tool.kind]));
 const __codexContentItems = [];
 
 function __codexCloneContentItem(item) {
@@ -31,26 +29,6 @@ function __codexNormalizeContentItems(value) {
   return [__codexCloneContentItem(value)];
 }
 
-async function __codexCallTool(name, args) {
-  const toolKind = __codexToolKinds.get(name);
-  if (toolKind === undefined) {
-    throw new Error(`Tool "${name}" is not enabled in code_mode`);
-  }
-  if (toolKind === 'freeform') {
-    if (typeof args !== 'string') {
-      throw new TypeError(`Tool "${name}" expects a string input`);
-    }
-    return await __codex_tool_call(name, args);
-  }
-  if (args === undefined) {
-    return await __codex_tool_call(name, '{}');
-  }
-  if (!args || typeof args !== 'object' || Array.isArray(args)) {
-    throw new TypeError(`Tool "${name}" expects a JSON object for arguments`);
-  }
-  return await __codex_tool_call(name, JSON.stringify(args));
-}
-
 Object.defineProperty(globalThis, '__codexContentItems', {
   value: __codexContentItems,
   configurable: true,
@@ -71,7 +49,7 @@ globalThis.add_content = (value) => {
 globalThis.tools = new Proxy(Object.create(null), {
   get(_target, prop) {
     const name = String(prop);
-    return async (args) => __codexCallTool(name, args);
+    return async (args) => __codex_tool_call(name, args);
   },
 });
 
@@ -86,7 +64,7 @@ globalThis.console = Object.freeze({
 for (const name of __codexEnabledToolNames) {
   if (/^[A-Za-z_$][0-9A-Za-z_$]*$/.test(name) && !(name in globalThis)) {
     Object.defineProperty(globalThis, name, {
-      value: async (args) => __codexCallTool(name, args),
+      value: async (args) => __codex_tool_call(name, args),
       configurable: true,
       enumerable: false,
       writable: false,
@@ -95,4 +73,3 @@ for (const name of __codexEnabledToolNames) {
 }
 
 __CODE_MODE_USER_CODE_PLACEHOLDER__
-})();

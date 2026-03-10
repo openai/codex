@@ -55,6 +55,7 @@ struct EnabledTool {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum HostToNodeMessage {
     Init {
+        enabled_tools: Vec<EnabledTool>,
         source: String,
     },
     Response {
@@ -69,7 +70,8 @@ enum NodeToHostMessage {
     ToolCall {
         id: String,
         name: String,
-        input: String,
+        #[serde(default)]
+        input: Option<JsonValue>,
     },
     Result {
         content_items: Vec<JsonValue>,
@@ -88,7 +90,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     section.push_str("- `code_mode` is a freeform/custom tool. Direct `code_mode` calls must send raw JavaScript tool input. Do not wrap code in JSON, quotes, or markdown code fences.\n");
     section.push_str("- Direct tool calls remain available while `code_mode` is enabled.\n");
     section.push_str("- `code_mode` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.\n");
-    section.push_str("- Call nested tools with `await tools[name](args)` or identifier wrappers like `await exec_command(args)` when the tool name is a valid JavaScript identifier. Nested tool calls resolve to arrays of content items.\n");
+    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to arrays of content items.\n");
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
     );
@@ -111,7 +113,7 @@ pub(crate) async fn execute(
     };
     let enabled_tools = build_enabled_tools(&exec);
     let source = build_source(&code, &enabled_tools).map_err(FunctionCallError::RespondToModel)?;
-    execute_node(exec, source)
+    execute_node(exec, source, enabled_tools)
         .await
         .map_err(FunctionCallError::RespondToModel)
 }
@@ -119,11 +121,13 @@ pub(crate) async fn execute(
 async fn execute_node(
     exec: ExecContext,
     source: String,
+    enabled_tools: Vec<EnabledTool>,
 ) -> Result<Vec<FunctionCallOutputContentItem>, String> {
     let node_path = resolve_compatible_node(exec.turn.config.js_repl_node_path.as_deref()).await?;
 
     let env = create_env(&exec.turn.shell_environment_policy, None);
     let mut cmd = tokio::process::Command::new(&node_path);
+    cmd.arg("--experimental-vm-modules");
     cmd.arg("--eval");
     cmd.arg(CODE_MODE_RUNNER_SOURCE);
     cmd.current_dir(&exec.turn.cwd);
@@ -157,7 +161,14 @@ async fn execute_node(
         String::from_utf8_lossy(&buf).trim().to_string()
     });
 
-    write_message(&mut stdin, &HostToNodeMessage::Init { source }).await?;
+    write_message(
+        &mut stdin,
+        &HostToNodeMessage::Init {
+            enabled_tools: enabled_tools.clone(),
+            source,
+        },
+    )
+    .await?;
 
     let mut stdout_lines = BufReader::new(stdout).lines();
     let mut final_content_items = None;
@@ -275,7 +286,11 @@ fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
     out
 }
 
-async fn call_nested_tool(exec: ExecContext, tool_name: String, input: String) -> Vec<JsonValue> {
+async fn call_nested_tool(
+    exec: ExecContext,
+    tool_name: String,
+    input: Option<JsonValue>,
+) -> Vec<JsonValue> {
     if tool_name == "code_mode" {
         return error_content_items_json("code_mode cannot invoke itself".to_string());
     }
@@ -336,27 +351,39 @@ fn tool_kind_for_name(specs: &[ToolSpec], tool_name: &str) -> Result<CodeModeToo
 fn build_nested_tool_payload(
     specs: &[ToolSpec],
     tool_name: &str,
-    input: String,
+    input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
     let actual_kind = tool_kind_for_name(specs, tool_name)?;
     match actual_kind {
-        CodeModeToolKind::Function => {
-            validate_function_arguments(tool_name, &input)?;
-            Ok(ToolPayload::Function { arguments: input })
-        }
-        CodeModeToolKind::Freeform => Ok(ToolPayload::Custom { input }),
+        CodeModeToolKind::Function => build_function_tool_payload(tool_name, input),
+        CodeModeToolKind::Freeform => build_freeform_tool_payload(tool_name, input),
     }
 }
 
-fn validate_function_arguments(tool_name: &str, input: &str) -> Result<(), String> {
-    let value: JsonValue = serde_json::from_str(input)
-        .map_err(|err| format!("tool `{tool_name}` expects a JSON object for arguments: {err}"))?;
-    if value.is_object() {
-        Ok(())
-    } else {
-        Err(format!(
-            "tool `{tool_name}` expects a JSON object for arguments"
-        ))
+fn build_function_tool_payload(
+    tool_name: &str,
+    input: Option<JsonValue>,
+) -> Result<ToolPayload, String> {
+    let arguments = match input {
+        None => "{}".to_string(),
+        Some(JsonValue::Object(map)) => serde_json::to_string(&JsonValue::Object(map))
+            .map_err(|err| format!("failed to serialize tool `{tool_name}` arguments: {err}"))?,
+        Some(_) => {
+            return Err(format!(
+                "tool `{tool_name}` expects a JSON object for arguments"
+            ));
+        }
+    };
+    Ok(ToolPayload::Function { arguments })
+}
+
+fn build_freeform_tool_payload(
+    tool_name: &str,
+    input: Option<JsonValue>,
+) -> Result<ToolPayload, String> {
+    match input {
+        Some(JsonValue::String(input)) => Ok(ToolPayload::Custom { input }),
+        _ => Err(format!("tool `{tool_name}` expects a string input")),
     }
 }
 

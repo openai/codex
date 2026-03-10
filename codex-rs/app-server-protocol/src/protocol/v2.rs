@@ -201,6 +201,7 @@ pub enum AskForApproval {
     Reject {
         sandbox_approval: bool,
         rules: bool,
+        #[serde(default)]
         request_permissions: bool,
         mcp_elicitations: bool,
     },
@@ -5976,6 +5977,28 @@ mod tests {
 
         let back_to_v2 = AskForApproval::from(core_policy);
         assert_eq!(back_to_v2, v2_policy);
+    }
+
+    #[test]
+    fn ask_for_approval_reject_defaults_missing_request_permissions_to_false() {
+        let decoded = serde_json::from_value::<AskForApproval>(serde_json::json!({
+            "reject": {
+                "sandbox_approval": true,
+                "rules": false,
+                "mcp_elicitations": true,
+            }
+        }))
+        .expect("legacy reject approval policy should deserialize");
+
+        assert_eq!(
+            decoded,
+            AskForApproval::Reject {
+                sandbox_approval: true,
+                rules: false,
+                request_permissions: false,
+                mcp_elicitations: true,
+            }
+        );
     }
 
     #[test]

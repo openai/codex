@@ -73,6 +73,8 @@ async fn code_mode_can_return_exec_command_output() -> Result<()> {
         &server,
         "use code_mode to run exec_command",
         r#"
+import { exec_command } from "tools.js";
+
 add_content(await exec_command({ cmd: "printf code_mode_exec_marker" }));
 "#,
         false,
@@ -112,7 +114,9 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     let patch = format!(
         "*** Begin Patch\n*** Add File: {file_name}\n+hello from code_mode\n*** End Patch\n"
     );
-    let code = format!("const items = await apply_patch({patch:?});\nadd_content(items);\n");
+    let code = format!(
+        "import {{ apply_patch }} from \"tools.js\";\nconst items = await apply_patch({patch:?});\nadd_content(items);\n"
+    );
 
     let (test, second_mock) =
         run_code_mode_turn(&server, "use code_mode to run apply_patch", &code, true).await?;

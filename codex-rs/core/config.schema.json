@@ -284,6 +284,16 @@
         }
       ]
     },
+    "BundledSkillsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -1323,6 +1333,7 @@
           "type": "boolean"
         },
         "request_permissions": {
+          "default": false,
           "description": "Reject approval prompts related to built-in permission requests.",
           "type": "boolean"
         },
@@ -1337,7 +1348,6 @@
       },
       "required": [
         "mcp_elicitations",
-        "request_permissions",
         "rules",
         "sandbox_approval"
       ],
@@ -1463,6 +1473,9 @@
     "SkillsConfig": {
       "additionalProperties": false,
       "properties": {
+        "bundled": {
+          "$ref": "#/definitions/BundledSkillsConfig"
+        },
         "config": {
           "items": {
             "$ref": "#/definitions/SkillConfig"

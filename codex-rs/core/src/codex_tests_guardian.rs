@@ -282,6 +282,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let skills_manager = Arc::new(SkillsManager::new(
         config.codex_home.clone(),
         Arc::clone(&plugins_manager),
+        true,
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let file_watcher = Arc::new(FileWatcher::noop());

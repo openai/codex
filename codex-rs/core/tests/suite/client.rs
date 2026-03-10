@@ -815,10 +815,9 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
     let thread_manager = ThreadManager::new(
-        codex_home.path().to_path_buf(),
+        &config,
         auth_manager,
         SessionSource::Exec,
-        config.model_catalog.clone(),
         CollaborationModesConfig {
             default_mode_request_user_input: config
                 .features
