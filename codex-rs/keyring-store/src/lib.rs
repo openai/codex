@@ -7,9 +7,13 @@ use tracing::trace;
 
 mod split_json;
 
+pub use split_json::JsonKeyringError;
 pub use split_json::SplitJsonKeyringError;
+pub use split_json::delete_json_from_keyring;
 pub use split_json::delete_split_json_from_keyring;
+pub use split_json::load_json_from_keyring;
 pub use split_json::load_split_json_from_keyring;
+pub use split_json::save_json_to_keyring;
 pub use split_json::save_split_json_to_keyring;
 
 #[derive(Debug)]

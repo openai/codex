@@ -45,9 +45,9 @@ use tracing::warn;
 
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
-use codex_keyring_store::delete_split_json_from_keyring;
-use codex_keyring_store::load_split_json_from_keyring;
-use codex_keyring_store::save_split_json_to_keyring;
+use codex_keyring_store::delete_json_from_keyring;
+use codex_keyring_store::load_json_from_keyring;
+use codex_keyring_store::save_json_to_keyring;
 use rmcp::transport::auth::AuthorizationManager;
 use tokio::sync::Mutex;
 
@@ -158,24 +158,15 @@ fn load_oauth_tokens_from_keyring<K: KeyringStore>(
     url: &str,
 ) -> Result<Option<StoredOAuthTokens>> {
     let key = compute_store_key(server_name, url)?;
-    if let Some(value) = load_split_json_from_keyring(keyring_store, KEYRING_SERVICE, &key)
+    let Some(value) = load_json_from_keyring(keyring_store, KEYRING_SERVICE, &key)
         .map_err(|err| Error::msg(err.to_string()))?
-    {
-        let mut tokens: StoredOAuthTokens = serde_json::from_value(value)
-            .context("failed to deserialize OAuth tokens from keyring")?;
-        refresh_expires_in_from_timestamp(&mut tokens);
-        return Ok(Some(tokens));
-    }
-    match keyring_store.load(KEYRING_SERVICE, &key) {
-        Ok(Some(serialized)) => {
-            let mut tokens: StoredOAuthTokens = serde_json::from_str(&serialized)
-                .context("failed to deserialize OAuth tokens from keyring")?;
-            refresh_expires_in_from_timestamp(&mut tokens);
-            Ok(Some(tokens))
-        }
-        Ok(None) => Ok(None),
-        Err(error) => Err(Error::new(error.into_error())),
-    }
+    else {
+        return Ok(None);
+    };
+    let mut tokens: StoredOAuthTokens =
+        serde_json::from_value(value).context("failed to deserialize OAuth tokens from keyring")?;
+    refresh_expires_in_from_timestamp(&mut tokens);
+    Ok(Some(tokens))
 }
 
 pub fn save_oauth_tokens(
@@ -204,14 +195,8 @@ fn save_oauth_tokens_with_keyring<K: KeyringStore>(
 ) -> Result<()> {
     let value = serde_json::to_value(tokens).context("failed to serialize OAuth tokens")?;
     let key = compute_store_key(server_name, &tokens.url)?;
-    match save_split_json_to_keyring(keyring_store, KEYRING_SERVICE, &key, &value) {
+    match save_json_to_keyring(keyring_store, KEYRING_SERVICE, &key, &value) {
         Ok(()) => {
-            if let Err(error) = keyring_store.delete(KEYRING_SERVICE, &key) {
-                warn!(
-                    "failed to remove legacy OAuth tokens from keyring: {}",
-                    error.message()
-                );
-            }
             if let Err(error) = delete_oauth_tokens_from_file(&key) {
                 warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
             }
@@ -257,7 +242,7 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
     url: &str,
 ) -> Result<bool> {
     let key = compute_store_key(server_name, url)?;
-    let split_removed = match delete_split_json_from_keyring(keyring_store, KEYRING_SERVICE, &key) {
+    let keyring_removed = match delete_json_from_keyring(keyring_store, KEYRING_SERVICE, &key) {
         Ok(removed) => removed,
         Err(error) => {
             let message = error.to_string();
@@ -271,23 +256,8 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
             }
         }
     };
-    let legacy_removed = match keyring_store.delete(KEYRING_SERVICE, &key) {
-        Ok(removed) => removed,
-        Err(error) => {
-            let message = error.message();
-            warn!("failed to delete OAuth tokens from keyring: {message}");
-            match store_mode {
-                OAuthCredentialsStoreMode::Auto | OAuthCredentialsStoreMode::Keyring => {
-                    return Err(error.into_error())
-                        .context("failed to delete OAuth tokens from keyring");
-                }
-                OAuthCredentialsStoreMode::File => false,
-            }
-        }
-    };
-
     let file_removed = delete_oauth_tokens_from_file(&key)?;
-    Ok(split_removed || legacy_removed || file_removed)
+    Ok(keyring_removed || file_removed)
 }
 
 #[derive(Clone)]
@@ -631,6 +601,8 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use codex_keyring_store::CredentialStoreError;
+    use codex_keyring_store::load_json_from_keyring;
+    use codex_keyring_store::save_json_to_keyring;
     use codex_keyring_store::save_split_json_to_keyring;
     use keyring::Error as KeyringError;
     use pretty_assertions::assert_eq;
@@ -776,12 +748,28 @@ mod tests {
         let expected = tokens.clone();
         let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
         let value = serde_json::to_value(&tokens)?;
-        save_split_json_to_keyring(&store, KEYRING_SERVICE, &key, &value)?;
+        save_json_to_keyring(&store, KEYRING_SERVICE, &key, &value)?;
 
         let loaded =
             super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?
                 .expect("tokens should load from keyring");
         assert_tokens_match_without_expiry(&loaded, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn load_oauth_tokens_supports_split_json_compatibility() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
+        let value = serde_json::to_value(&tokens)?;
+        save_split_json_to_keyring(&store, KEYRING_SERVICE, &key, &value)?;
+
+        let loaded =
+            super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?
+                .expect("tokens should load from split-json compatibility format");
+        assert_tokens_match_without_expiry(&loaded, &tokens);
         Ok(())
     }
 
@@ -856,7 +844,16 @@ mod tests {
 
         let fallback_path = super::fallback_file_path()?;
         assert!(!fallback_path.exists(), "fallback file should be removed");
-        assert!(store.saved_value(&key).is_none());
+        #[cfg(windows)]
+        assert!(
+            store.saved_secret(&key).is_none(),
+            "windows should not store the full JSON record under the base key"
+        );
+        #[cfg(not(windows))]
+        assert!(
+            store.saved_secret(&key).is_some(),
+            "non-windows should store the full JSON record as one secret"
+        );
         let stored =
             super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?
                 .expect("value saved to keyring");
@@ -890,6 +887,10 @@ mod tests {
             tokens.token_response.0.access_token().secret().as_str()
         );
         assert!(mock_keyring.saved_value(&key).is_none());
+        assert!(
+            load_json_from_keyring(&mock_keyring, KEYRING_SERVICE, &key)?.is_none(),
+            "keyring should not point at saved OAuth tokens when save fails"
+        );
         Ok(())
     }
 
@@ -912,7 +913,10 @@ mod tests {
             &tokens.url,
         )?;
         assert!(removed);
-        assert!(!store.contains(&key));
+        assert!(
+            load_json_from_keyring(&store, KEYRING_SERVICE, &key)?.is_none(),
+            "keyring entry should be removed"
+        );
         assert!(!super::fallback_file_path()?.exists());
         Ok(())
     }
@@ -937,7 +941,10 @@ mod tests {
             &tokens.url,
         )?;
         assert!(removed);
-        assert!(!store.contains(&key));
+        assert!(
+            load_json_from_keyring(&store, KEYRING_SERVICE, &key)?.is_none(),
+            "keyring entry should be removed"
+        );
         assert!(
             super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?
                 .is_none()
