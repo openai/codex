@@ -3047,6 +3047,7 @@ pub struct SessionConfiguredEvent {
     pub approval_policy: AskForApproval,
 
     /// Whether approval requests remain manual or are automatically reviewed.
+    #[serde(default)]
     pub approval_review_policy: ApprovalReviewPolicy,
 
     /// How to sandbox commands executed in the system
