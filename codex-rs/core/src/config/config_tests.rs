@@ -5434,8 +5434,8 @@ async fn approval_review_policy_defaults_to_manual_only_without_guardian_feature
 }
 
 #[tokio::test]
-async fn approval_review_policy_backfills_to_auto_only_from_guardian_feature() -> std::io::Result<()>
-{
+async fn approval_review_policy_stays_manual_only_when_guardian_feature_is_enabled()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -5452,7 +5452,7 @@ guardian_approval = true
 
     assert_eq!(
         config.approval_review_policy,
-        ApprovalReviewPolicy::AutoOnly
+        ApprovalReviewPolicy::ManualOnly
     );
     Ok(())
 }

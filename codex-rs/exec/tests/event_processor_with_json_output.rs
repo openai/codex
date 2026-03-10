@@ -96,6 +96,7 @@ fn session_configured_produces_thread_started_event() {
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::Never,
+            approval_review_policy: codex_protocol::config_types::ApprovalReviewPolicy::ManualOnly,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,

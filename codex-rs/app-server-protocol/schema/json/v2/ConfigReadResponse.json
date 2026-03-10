@@ -96,6 +96,13 @@
     "AppToolsConfig": {
       "type": "object"
     },
+    "ApprovalReviewPolicy": {
+      "enum": [
+        "manualOnly",
+        "autoOnly"
+      ],
+      "type": "string"
+    },
     "AppsConfig": {
       "properties": {
         "_default": {
@@ -201,6 +208,17 @@
               "type": "null"
             }
           ]
+        },
+        "approval_review_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalReviewPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional default approval review mode."
         },
         "compact_prompt": {
           "type": [
@@ -577,6 +595,17 @@
               "type": "null"
             }
           ]
+        },
+        "approval_review_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalReviewPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional approval review mode override for this profile."
         },
         "chatgpt_base_url": {
           "type": [

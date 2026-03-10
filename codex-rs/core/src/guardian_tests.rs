@@ -6,7 +6,6 @@ use crate::config_loader::FeatureRequirementsToml;
 use crate::config_loader::NetworkConstraints;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
-use crate::features::Feature;
 use crate::test_support;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::config_types::ApprovalReviewPolicy;
@@ -238,11 +237,6 @@ async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
     let (_session, mut turn) = crate::codex::make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config.approval_review_policy = ApprovalReviewPolicy::ManualOnly;
-    config
-        .features
-        .enable(Feature::GuardianApproval)
-        .expect("test config should allow guardian_approval");
-    turn.features = config.features.clone();
     turn.config = Arc::new(config.clone());
 
     assert!(!routes_approval_to_guardian(&turn));

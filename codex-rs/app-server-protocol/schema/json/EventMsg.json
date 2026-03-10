@@ -93,6 +93,13 @@
         }
       ]
     },
+    "ApprovalReviewPolicy": {
+      "enum": [
+        "manual-only",
+        "auto-only"
+      ],
+      "type": "string"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -1110,6 +1117,14 @@
               ],
               "description": "When to escalate for approval for execution"
             },
+            "approval_review_policy": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ApprovalReviewPolicy"
+                }
+              ],
+              "description": "Whether approval requests remain manual or are automatically reviewed."
+            },
             "cwd": {
               "description": "Working directory that should be treated as the *root* of the session.",
               "type": "string"
@@ -1220,6 +1235,7 @@
           },
           "required": [
             "approval_policy",
+            "approval_review_policy",
             "cwd",
             "history_entry_count",
             "history_log_id",
@@ -7420,6 +7436,14 @@
           ],
           "description": "When to escalate for approval for execution"
         },
+        "approval_review_policy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalReviewPolicy"
+            }
+          ],
+          "description": "Whether approval requests remain manual or are automatically reviewed."
+        },
         "cwd": {
           "description": "Working directory that should be treated as the *root* of the session.",
           "type": "string"
@@ -7530,6 +7554,7 @@
       },
       "required": [
         "approval_policy",
+        "approval_review_policy",
         "cwd",
         "history_entry_count",
         "history_log_id",

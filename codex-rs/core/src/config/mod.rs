@@ -1760,6 +1760,7 @@ pub struct ConfigOverrides {
     pub review_model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
+    pub approval_review_policy: Option<ApprovalReviewPolicy>,
     pub sandbox_mode: Option<SandboxMode>,
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<ServiceTier>>,
@@ -1924,6 +1925,7 @@ impl Config {
             review_model: override_review_model,
             cwd,
             approval_policy: approval_policy_override,
+            approval_review_policy: approval_review_policy_override,
             sandbox_mode,
             model_provider,
             service_tier: service_tier_override,
@@ -2132,16 +2134,10 @@ impl Config {
             );
             approval_policy = constrained_approval_policy.value();
         }
-        let approval_review_policy = config_profile
-            .approval_review_policy
+        let approval_review_policy = approval_review_policy_override
+            .or(config_profile.approval_review_policy)
             .or(cfg.approval_review_policy)
-            .unwrap_or_else(|| {
-                if features.enabled(Feature::GuardianApproval) {
-                    ApprovalReviewPolicy::AutoOnly
-                } else {
-                    ApprovalReviewPolicy::ManualOnly
-                }
-            });
+            .unwrap_or(ApprovalReviewPolicy::ManualOnly);
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);

@@ -233,6 +233,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             service_tier: None,
             cwd: None,
             approval_policy: None,
+            approval_review_policy: None,
             sandbox: None,
             config: None,
             service_name: None,

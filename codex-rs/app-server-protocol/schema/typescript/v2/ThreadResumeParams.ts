@@ -5,6 +5,7 @@ import type { Personality } from "../Personality";
 import type { ResponseItem } from "../ResponseItem";
 import type { ServiceTier } from "../ServiceTier";
 import type { JsonValue } from "../serde_json/JsonValue";
+import type { ApprovalReviewPolicy } from "./ApprovalReviewPolicy";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxMode } from "./SandboxMode";
 
@@ -31,7 +32,11 @@ history?: Array<ResponseItem> | null, /**
 path?: string | null, /**
  * Configuration overrides for the resumed thread, if any.
  */
-model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, /**
+model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**
+ * Override whether approvals stay manual or are automatically reviewed
+ * for this thread and subsequent turns.
+ */
+approvalReviewPolicy?: ApprovalReviewPolicy | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, /**
  * If true, persist additional rollout EventMsg variants required to
  * reconstruct a richer thread history on subsequent resume/fork/read.
  */

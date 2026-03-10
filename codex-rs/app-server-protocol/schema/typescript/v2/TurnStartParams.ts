@@ -7,6 +7,7 @@ import type { ReasoningEffort } from "../ReasoningEffort";
 import type { ReasoningSummary } from "../ReasoningSummary";
 import type { ServiceTier } from "../ServiceTier";
 import type { JsonValue } from "../serde_json/JsonValue";
+import type { ApprovalReviewPolicy } from "./ApprovalReviewPolicy";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
@@ -18,6 +19,10 @@ cwd?: string | null, /**
  * Override the approval policy for this turn and subsequent turns.
  */
 approvalPolicy?: AskForApproval | null, /**
+ * Override whether approvals stay manual or are automatically reviewed
+ * for this turn and subsequent turns.
+ */
+approvalReviewPolicy?: ApprovalReviewPolicy | null, /**
  * Override the sandbox policy for this turn and subsequent turns.
  */
 sandboxPolicy?: SandboxPolicy | null, /**

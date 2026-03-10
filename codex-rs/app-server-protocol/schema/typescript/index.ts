@@ -15,6 +15,7 @@ export type { AgentStatus } from "./AgentStatus";
 export type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 export type { ApplyPatchApprovalRequestEvent } from "./ApplyPatchApprovalRequestEvent";
 export type { ApplyPatchApprovalResponse } from "./ApplyPatchApprovalResponse";
+export type { ApprovalReviewPolicy } from "./ApprovalReviewPolicy";
 export type { AskForApproval } from "./AskForApproval";
 export type { AuthMode } from "./AuthMode";
 export type { BackgroundEventEvent } from "./BackgroundEventEvent";

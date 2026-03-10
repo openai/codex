@@ -6894,8 +6894,7 @@ impl ChatWidget {
                 items.push(SelectionItem {
                     name: base_name.clone(),
                     description: base_description.clone(),
-                    is_current: (current_review_policy == ApprovalReviewPolicy::ManualOnly
-                        || !guardian_approval_enabled)
+                    is_current: current_review_policy == ApprovalReviewPolicy::ManualOnly
                         && Self::preset_matches_current(current_approval, current_sandbox, &preset),
                     actions: default_actions,
                     dismiss_on_select: true,
@@ -6903,7 +6902,9 @@ impl ChatWidget {
                     ..Default::default()
                 });
 
-                if guardian_approval_enabled {
+                if guardian_approval_enabled
+                    || current_review_policy == ApprovalReviewPolicy::AutoOnly
+                {
                     items.push(SelectionItem {
                         name: "Smart Approvals".to_string(),
                         description: Some(
