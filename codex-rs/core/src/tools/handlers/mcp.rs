@@ -33,10 +33,10 @@ impl crate::tools::context::ToolOutput for McpHandlerOutput {
         }
     }
 
-    fn into_response(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         match self {
-            Self::Mcp(output) => output.into_response(call_id, payload),
-            Self::Function(output) => output.into_response(call_id, payload),
+            Self::Mcp(output) => output.to_response_item(call_id, payload),
+            Self::Function(output) => output.to_response_item(call_id, payload),
         }
     }
 }

@@ -75,10 +75,10 @@ pub trait ToolOutput: Send {
 
     fn success_for_logging(&self) -> bool;
 
-    fn into_response(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
-        response_input_to_code_mode_result(self.into_response("", payload))
+        response_input_to_code_mode_result(self.to_response_item("", payload))
     }
 }
 
@@ -95,7 +95,7 @@ impl ToolOutput for McpToolOutput {
         self.result.is_ok()
     }
 
-    fn into_response(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
         ResponseInputItem::McpToolCallOutput {
             call_id: call_id.to_string(),
             result: self.result.clone(),
@@ -142,7 +142,7 @@ impl ToolOutput for FunctionToolOutput {
         self.success.unwrap_or(true)
     }
 
-    fn into_response(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         function_tool_response(call_id, payload, self.body.clone(), self.success)
     }
 }
@@ -170,7 +170,7 @@ impl ToolOutput for ExecCommandToolOutput {
         true
     }
 
-    fn into_response(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         function_tool_response(
             call_id,
             payload,
@@ -384,7 +384,7 @@ mod tests {
             input: "patch".to_string(),
         };
         let response = FunctionToolOutput::from_text("patched".to_string(), Some(true))
-            .into_response("call-42", &payload);
+            .to_response_item("call-42", &payload);
 
         match response {
             ResponseInputItem::CustomToolCallOutput { call_id, output } => {
@@ -403,7 +403,7 @@ mod tests {
             arguments: "{}".to_string(),
         };
         let response = FunctionToolOutput::from_text("ok".to_string(), Some(true))
-            .into_response("fn-1", &payload);
+            .to_response_item("fn-1", &payload);
 
         match response {
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
@@ -436,7 +436,7 @@ mod tests {
             ],
             Some(true),
         )
-        .into_response("call-99", &payload);
+        .to_response_item("call-99", &payload);
 
         match response {
             ResponseInputItem::CustomToolCallOutput { call_id, output } => {
@@ -525,7 +525,7 @@ mod tests {
             original_token_count: Some(10),
             session_command: None,
         }
-        .into_response("call-42", &payload);
+        .to_response_item("call-42", &payload);
 
         match response {
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
